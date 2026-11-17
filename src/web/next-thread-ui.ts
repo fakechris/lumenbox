@@ -32,7 +32,7 @@ function threadStart() {
   $("find-close").addEventListener("click", closeFind);
   $("thread-export").addEventListener("click", function () {
     var agent = next.agents[chat.agentId], name = agent ? agent.name : "";
-    var link = el("a"), url = URL.createObjectURL(new Blob([threadMarkdown(chat.entries, name, t("ui.next.thread.you"))], { type: "text/markdown" }));
+    var link = el("a"), url = URL.createObjectURL(new Blob([threadMarkdown(conversationEntries(), name, t("ui.next.thread.you"))], { type: "text/markdown" }));
     link.href = url; link.download = (name || "conversation") + "-" + new Date().toISOString().slice(0, 10) + ".md";
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);

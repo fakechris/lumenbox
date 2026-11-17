@@ -319,3 +319,44 @@ test("a computer that is not there says why in words a person can act on: no Doc
   const why = (docker: unknown, own = "b1") => pageFunction("boxWhy", { boxes: { own, state: docker === undefined ? null : { docker } } })({ id: "b1" });
   assert.deepEqual([why({ state: "no-binary" }), why({ state: "no-engine" }), why(undefined), why({ state: "no-binary" }, "other")], ["missing", "stopped", "offline", "offline"]);
 });
+
+test("an agent's topics stay its own: a refresh keeps the older ones, a stale read gives way, search sees them in time order (INV-1896)", async () => {
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  const pending: { url: string; resolve: (value: unknown) => void; reject: (error: unknown) => void }[] = [];
+  const getJson = (url: string) => new Promise((resolve, reject) => { pending.push({ url, resolve, reject }); });
+  const row = (id: string, at: string, extra: Record<string, unknown> = {}) => ({ id, lastAt: at, firstLine: `asked in ${id}`, ...extra });
+  const chat = { agentId: "bob", conversation: "main", conversations: [] as { id: string }[], conversationsTotal: 0, topicsFor: "bob", topics: {} as Record<string, { entries?: unknown[] }>,
+    topicExtra: [], topicAsked: 0, olderPending: false, focus: "", entries: [] as unknown[] };
+  const globals = { chat, next: { view: "chat", agents: {} }, getJson, encodeURIComponent, render: () => {}, topicsOf: () => {}, topicsSeen: () => {}, postJson: () => Promise.resolve({}), refreshSoon: () => {}, failed: () => {} };
+
+  const load = pageFunction("loadConversations", globals);
+  chat.conversations = [row("main", "1"), row("t9", "2"), row("t8", "1")]; // t8 came from an older page the person asked for
+  load("bob", 0);
+  pending.shift()!.resolve({ conversations: [row("main", "3"), row("t10", "3"), row("t9", "2")], total: 40 });
+  await settle();
+  assert.deepEqual(chat.conversations.map(item => item.id), ["main", "t10", "t9", "t8"], "the newest page is refreshed and the older topic stays");
+  load("bob", 4); load("bob", 4);
+  assert.equal(pending.length, 1, "an older page is asked for once while it is on its way");
+  pending.shift()!.resolve({ conversations: [row("t8", "1"), row("t7", "0")], total: 40 });
+  await settle();
+  assert.deepEqual(chat.conversations.map(item => item.id), ["main", "t10", "t9", "t8", "t7"], "and what it brings is added once");
+
+  const open = pageFunction("openTopic", globals);
+  open("t9", true); open("t9", true); // a turn ended while the first read was on its way
+  const [first, second] = [pending.shift()!, pending.shift()!];
+  second.resolve([{ kind: "text", role: "assistant", text: "after the turn" }]); await settle();
+  first.resolve([{ kind: "text", role: "assistant", text: "before the turn" }]); await settle();
+  assert.deepEqual(chat.topics.t9!.entries, [{ kind: "text", role: "assistant", text: "after the turn" }], "the older read does not overwrite the newer");
+  chat.focus = "t7"; open("t7", true);
+  pending.shift()!.reject(new Error("offline")); await settle();
+  assert.equal(chat.focus, "", "a topic asked for by a link that cannot be read is not asked for again on its own");
+  assert.equal(chat.topics.t7, undefined);
+
+  const doorOf = pageFunction("doorOf", {}), marked = pageFunction("marked", {});
+  const entries = pageFunction("conversationEntries", { chat, doorOf, marked, topicTime: pageFunction("topicTime", { String }) });
+  chat.conversations = [row("main", "z"), row("feishu-room-t1", "2026-11-16T02:00:00Z", { lastReply: { text: "answered", at: "2026-11-16T02:00:00Z" } })];
+  chat.topics = {};
+  chat.entries = [{ kind: "text", role: "user", text: "early", at: "2026-11-16T01:00:00Z" }, { kind: "text", role: "user", text: "late", at: "2026-11-16T03:00:00Z" }];
+  assert.deepEqual(JSON.parse(JSON.stringify((entries() as { text: string; source?: string }[]).map(entry => [entry.text, entry.source ?? null]))),
+    [["early", null], ["asked in feishu-room-t1", "feishu"], ["answered", null], ["late", null]], "a topic stands at its time, marked with its chat");
+});

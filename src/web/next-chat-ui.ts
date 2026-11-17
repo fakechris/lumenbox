@@ -8,7 +8,7 @@
  */
 export const NEXT_CHAT_JS = `
 var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "", changing: "", tail: 0,
-  topics: {}, topicLive: {}, topicSeen: {}, topicExtra: [], focus: "", focusAsked: "" };
+  topicsFor: "", topics: {}, topicLive: {}, topicSeen: {}, topicExtra: [], topicAsked: 0, olderPending: false, focus: "", focusAsked: "" };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -73,10 +73,7 @@ function renderSide() {
 function openChat(agentId) {
   chat.find = ""; $("find").hidden = true; $("find-text").value = "";
   // Another agent's half-written words and its thread are not this one's.
-  if (agentId !== chat.agentId) {
-    chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.conversations = []; chat.plan = null; chat.liveSurfaces = {};
-    chat.topics = {}; chat.topicLive = {}; chat.topicSeen = {}; chat.topicExtra = []; chat.focusAsked = "";
-  }
+  if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.plan = null; chat.liveSurfaces = {}; }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
   if (next.agents[agentId] && next.agents[agentId].boxId) chat.box = next.agents[agentId].boxId; // an agent on another computer brings its computer with it
   history.replaceState(null, "", "?agent=" + encodeURIComponent(agentId));
@@ -156,7 +153,7 @@ function clip(text, limit) { text = String(text || "").replace(/\\s+/g, " "); re
  * Entries drawn as a person reads them: adjacent steps become one fold, the host's notes are left out. between(entry) gives
  * what goes before an entry in time (the agent's topics, in its own conversation); what it gives is drawn after the steps so far.
  */
-function drawEntries(target, entries, between) {
+function drawEntries(target, entries, between, conversation) {
   var steps = [], lastAsk = null, drawn = {};
   function flush() {
     if (steps.length === 0) return;
@@ -171,7 +168,7 @@ function drawEntries(target, entries, between) {
       (entry.tools || []).forEach(function (tool) {
         if (!tool.surface || tool.isError) return;
         flush();
-        target.appendChild(feedSurface(tool.surface.surfaceId, tool.surface.title, tool.surface.messages || [], true));
+        target.appendChild(feedSurface(tool.surface.surfaceId, tool.surface.title, tool.surface.messages || [], true, conversation));
         drawn[tool.surface.surfaceId] = true;
       });
       steps = steps.concat((entry.tools || []).filter(function (tool) { return !tool.question && !(tool.surface && !tool.isError); }));
@@ -183,9 +180,9 @@ function drawEntries(target, entries, between) {
     if (entry.kind === "text") { var said = bubble(entry); said.dataset.entry = index; target.appendChild(said); }
     else if (entry.kind === "peer") target.appendChild(fold(t("ui.next.chat.team", { n: (entry.messages || []).length }), (entry.messages || []).map(function (message) { return { head: message.from, text: clip(message.text, 300) }; })));
     else if (entry.kind === "sent") target.appendChild(sentRow(entry));
-    else if (entry.kind === "background") target.appendChild(backgroundRow(entry));
+    else if (entry.kind === "background") target.appendChild(backgroundRow(entry, conversation));
     else if (entry.kind === "status") target.appendChild(statusRow(entry));
-    else if (entry.kind === "trigger" && entry.skipped) target.appendChild(earlierRow(entry));
+    else if (entry.kind === "trigger" && entry.skipped) target.appendChild(earlierRow(entry, conversation));
   });
   flush();
   return { lastAsk: lastAsk, drawn: drawn };
@@ -194,9 +191,10 @@ function drawEntries(target, entries, between) {
 /** The agent's one conversation: what was said here, with its topics in other chats set among it by time. */
 function renderThread(view) {
   var thread = el("div", "thread"), agent = next.agents[chat.agentId];
-  // Looking for something: only what was said that holds it, and none of the cards around it.
+  topicsOf(chat.agentId);
+  // Looking for something: only what was said that holds it, here and in the topics, and none of the cards around it.
   if (chat.find) {
-    var found = chat.entries.filter(function (entry) { return threadFinds(entry, chat.find); });
+    var found = conversationEntries().filter(function (entry) { return threadFinds(entry, chat.find); });
     found.forEach(function (entry) { thread.appendChild(bubble(entry)); });
     renderThreadTools(found.length); view.appendChild(thread);
     return;

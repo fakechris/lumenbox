@@ -64,7 +64,7 @@ function planIsMine() {
 }
 
 /** Work nobody asked for in this conversation, as one line: how much there was, and the way into it. */
-function backgroundRow(entry) {
+function backgroundRow(entry, conversation) {
   var box = el("details", "fold"), body = el("ul"), when = entry.to || entry.from;
   box.appendChild(el("summary", "", t("ui.next.chat.background", { turns: entry.turns, steps: entry.steps }) + (when ? " · " + agoText(when) : "")));
   box.appendChild(el("div", "why", t("ui.next.chat.backgroundWhy")));
@@ -72,7 +72,7 @@ function backgroundRow(entry) {
   box.addEventListener("toggle", function () {
     if (!box.open || box.dataset.read) return;
     box.dataset.read = "1";
-    getJson("/api/transcript?agent=" + encodeURIComponent(chat.agentId) + "&conversation=" + encodeURIComponent(chat.conversation) + "&span=" + entry.first + "-" + entry.last).then(function (got) {
+    getJson("/api/transcript?agent=" + encodeURIComponent(chat.agentId) + "&conversation=" + encodeURIComponent(conversation || chat.conversation) + "&span=" + entry.first + "-" + entry.last).then(function (got) {
       if (got.more) body.appendChild(el("li", "why", t("ui.next.chat.backgroundMore", { n: got.more })));
       (got.entries || []).forEach(function (row) {
         var line = el("li");
@@ -95,10 +95,13 @@ function statusRow(entry) {
   return box;
 }
 
-/** What is older than what is drawn: asked for, it is read. */
-function earlierRow(entry) {
+/** What is older than what is drawn: asked for, it is read, in the conversation or the open topic it stands in. */
+function earlierRow(entry, conversation) {
   var more = el("button", "elsewhere", t("ui.next.chat.earlier", { n: entry.skipped }));
-  more.addEventListener("click", function () { chat.tail = (chat.tail || 400) * 4; chat.loadedFor = ""; loadThread(); });
+  more.addEventListener("click", function () {
+    if (conversation && conversation !== chat.conversation) { openTopic(conversation, false, ((chat.topics[conversation] || {}).tail || 400) * 4); return; }
+    chat.tail = (chat.tail || 400) * 4; chat.loadedFor = ""; loadThread();
+  });
   return more;
 }
 

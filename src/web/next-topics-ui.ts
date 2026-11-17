@@ -26,15 +26,53 @@ function doorMark(door) {
 }
 function doorOf(conversation) { var door = /^(feishu|dingtalk|telegram)/.exec(conversation || ""); return door ? door[1] : ""; }
 
-/** The agent's conversations, thirty at a time with each one's last answer: the first page replaces the list, a later one adds to it. */
+/** The topic state is one agent's: whichever way another agent was chosen, what was open for the last one is forgotten. */
+function topicsOf(agentId) {
+  if (chat.topicsFor === agentId) return;
+  chat.topicsFor = agentId; chat.topics = {}; chat.topicLive = {}; chat.topicSeen = {}; chat.topicExtra = []; chat.focusAsked = "";
+  chat.conversations = []; chat.conversationsTotal = 0; chat.olderPending = false;
+}
+
+/**
+ * The agent's conversations, thirty at a time with each one's last answer. The first page is the newest: read again, it
+ * refreshes those rows and keeps the older ones the person asked for. A later page adds to the list, once.
+ */
 function loadConversations(id, offset) {
+  if (offset) { if (chat.olderPending) return; chat.olderPending = true; }
   getJson("/api/conversations?agent=" + encodeURIComponent(id) + "&replies=1&limit=30&offset=" + offset).then(function (got) {
+    if (offset) chat.olderPending = false;
     if (chat.agentId !== id) return;
-    chat.conversations = (offset ? chat.conversations : []).concat(got.conversations || []); chat.conversationsTotal = got.total || chat.conversations.length;
+    topicsOf(id);
+    var fresh = got.conversations || [], have = {};
+    (offset ? chat.conversations : fresh).forEach(function (row) { have[row.id] = true; });
+    chat.conversations = offset ? chat.conversations.concat(fresh.filter(function (row) { return !have[row.id]; }))
+      : fresh.concat(chat.conversations.filter(function (row) { return !have[row.id]; })); // a new topic moves the page down: keep by id, not by place
+    chat.conversationsTotal = got.total || chat.conversations.length;
     topicsSeen(id);
     if (next.view === "chat") render();
-  }, function () {});
+  }, function () { if (offset) chat.olderPending = false; });
 }
+
+/** Everything said with the agent, here and in its topics, in time order: what search looks through and export writes. */
+function conversationEntries() {
+  var blocks = chat.conversations.concat(chat.topicExtra).filter(function (row) { return row.id !== chat.conversation; }).map(function (row) {
+    var door = doorOf(row.id), state = chat.topics[row.id];
+    var said = state && state.entries ? state.entries.map(function (entry) { return marked(entry, door); }) : [{ kind: "text", role: "user", text: row.firstLine || "", source: door || undefined }]
+      .concat(row.lastReply ? [{ kind: "text", role: "assistant", text: row.lastReply.text }] : []);
+    return { at: topicTime(row), entries: said };
+  }).sort(function (x, y) { return x.at.localeCompare(y.at); });
+  var out = [];
+  chat.entries.forEach(function (entry) {
+    var at = entry.at || entry.to || entry.from;
+    while (at && blocks.length && blocks[0].at < String(at)) out = out.concat(blocks.shift().entries);
+    out.push(entry);
+  });
+  blocks.forEach(function (block) { out = out.concat(block.entries); });
+  return out;
+}
+
+/** Said in the chat, so marked with it: the record of a topic carries the chat in its name, not on each line. */
+function marked(entry, door) { return entry.kind === "text" && entry.role === "user" && !entry.source && door ? Object.assign({}, entry, { source: door }) : entry; }
 
 /** A topic whose last answer is on screen has been read there: its count is cleared as the main conversation's is. */
 function topicsSeen(id) {
@@ -81,8 +119,7 @@ function topicNode(row, results, unread) {
   node.dataset.topic = id; foot.classList.add("topic-foot");
   if (state && state.entries) {
     var body = el("div", "topic-body");
-    // Said in the chat, so marked with it: the record of a topic carries the chat in its name, not on each line.
-    drawEntries(body, state.entries.map(function (entry) { return entry.kind === "text" && entry.role === "user" && !entry.source && door ? Object.assign({}, entry, { source: door }) : entry; }));
+    drawEntries(body, state.entries.map(function (entry) { return marked(entry, door); }), null, id);
     node.appendChild(body);
   } else {
     var asked = el("div", "msg-me"), mark = doorMark(door);
@@ -105,23 +142,36 @@ function topicNode(row, results, unread) {
   return node;
 }
 
-/** Quiet while the page is being drawn: the answer's arrival draws it again. */
-function openTopic(id, quiet) {
-  var agentId = chat.agentId;
-  chat.topics[id] = { loading: true };
+/**
+ * Read a topic, or read an open one again (what is shown stays until the new read lands). Only the newest read is kept.
+ * Quiet while the page is being drawn: the answer's arrival draws it again. A longer \`tail\` reads further back.
+ */
+function openTopic(id, quiet, tail) {
+  var agentId = chat.agentId, was = chat.topics[id] || {}, request = ++chat.topicAsked;
+  chat.topics[id] = { entries: was.entries, loading: true, request: request, tail: tail || was.tail || 0 };
   if (!quiet) render();
-  getJson("/api/transcript?sent=1&requests=1&agent=" + encodeURIComponent(agentId) + "&conversation=" + encodeURIComponent(id)).then(function (entries) {
-    if (chat.agentId !== agentId || !chat.topics[id]) return;
-    chat.topics[id] = { entries: entries };
+  var url = "/api/transcript?sent=1&requests=1" + (chat.topics[id].tail ? "&tail=" + chat.topics[id].tail : "");
+  getJson(url + "&agent=" + encodeURIComponent(agentId) + "&conversation=" + encodeURIComponent(id)).then(function (entries) {
+    var state = chat.topics[id];
+    if (chat.agentId !== agentId || !state || state.request !== request) return;
+    chat.topics[id] = { entries: entries, request: request, tail: state.tail };
     postJson("/api/agents/viewed", { id: agentId, conversation: id }).then(refreshSoon, function () {});
     render();
-  }, function (error) { delete chat.topics[id]; failed(error); render(); });
+  }, function (error) {
+    var state = chat.topics[id];
+    if (chat.agentId !== agentId || !state || state.request !== request) return;
+    // Not opened: the person may open it again; a topic asked for by a link is not asked for again on its own.
+    if (state.entries) chat.topics[id] = { entries: state.entries, request: request, tail: state.tail }; else delete chat.topics[id];
+    if (chat.focus === id) chat.focus = "";
+    failed(error); render();
+  });
 }
 
 /** Older topics than the thirty newest, asked for. */
 function olderTopicsButton() {
   if (!(chat.conversationsTotal > chat.conversations.length)) return null;
   var more = el("button", "elsewhere", t("ui.next.chat.older", { n: chat.conversationsTotal - chat.conversations.length }));
+  more.disabled = chat.olderPending;
   more.addEventListener("click", function () { loadConversations(chat.agentId, chat.conversations.length); });
   return more;
 }
@@ -132,14 +182,16 @@ function focusTopic(view) {
   if (!id) return false;
   var node = Array.prototype.filter.call(view.querySelectorAll("[data-topic]"), function (candidate) { return candidate.dataset.topic === id; })[0];
   if (!node) {
-    // Older than the topics loaded: read that one by name, once.
+    // Older than the topics loaded: read that one by name, once; an answer for another agent or another ask is not this one's.
     if (chat.focusAsked !== id) {
+      var agentId = chat.agentId;
       chat.focusAsked = id;
-      getJson("/api/conversations?agent=" + encodeURIComponent(chat.agentId) + "&ids=" + encodeURIComponent(id)).then(function (got) {
+      getJson("/api/conversations?agent=" + encodeURIComponent(agentId) + "&replies=1&ids=" + encodeURIComponent(id)).then(function (got) {
+        if (chat.agentId !== agentId || chat.focusAsked !== id) return;
         chat.topicExtra = chat.topicExtra.concat(got.conversations || []);
         if (!(got.conversations || []).length) chat.focus = ""; // gone, or never this agent's: the conversation as it is
         render();
-      }, function () { chat.focus = ""; render(); });
+      }, function () { if (chat.agentId === agentId && chat.focusAsked === id) { chat.focus = ""; render(); } });
     }
     return false;
   }
@@ -165,6 +217,6 @@ function topicEvent(event) {
   if (event.type !== "prompt" && event.type !== "turn_finished" && event.type !== "turn_failed" && event.type !== "turn_interrupted") return;
   if (event.type !== "prompt") delete chat.topicLive[id];
   loadConversations(chat.agentId, 0);
-  if (chat.topics[id] && chat.topics[id].entries) openTopic(id, true);
+  if (chat.topics[id]) openTopic(id, true); // open or still opening: read again, and the read under way gives way to this one
 }
 `;
