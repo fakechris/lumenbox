@@ -1,7 +1,7 @@
 import { readPause, writePause } from "../agents/pause.ts";
 import { GovernanceLedger, resourceKey, routineResource } from "./work-governance.ts";
 import { ResultChecks } from "./result-check-policy.ts";
-import { runResultCheck } from "./result-check-runner.ts";
+import { runResultCheck } from "./result-check-runner.ts"; import { settleDelivered, settleReviews, type SettleWorld } from "./review-settle.ts";
 import { requestsResultCheck } from "./task-delivery.ts";
 import { taskAttentionChanged, taskWorkId } from "./task-attention.ts"; import { taskHasStanding } from "./turn-standing.ts"; import { HeardRecord } from "../agents/heard-record.ts";
 import { continueAcrossBudget, longRequestLimits } from "./long-request.ts";
@@ -863,6 +863,9 @@ export class Orchestrator {
     }).catch(error => console.error(`[check] ${task.id}: ${error instanceof Error ? error.message : String(error)}`)).finally(() => this.auditing.delete(task.id));
   }
 
+  /** What the settle rule reads (INV-1904): the board, who is an agent, whether a check of the result runs. The board sweep calls settleReviews, hourly and at start. */
+  settleWorld(): SettleWorld { return { board: this.tasks ?? { get: () => undefined, list: () => [] }, isAgent: id => this.registry.has(id), checking: task => this.auditing.has(task.id) || this.resultChecks.running(task) }; }
+  settleReviews(now = new Date()): string[] { return this.tasks ? settleReviews(this.tasks, this.settleWorld(), now) : []; }
   /** The box workspace as path→hash, or undefined when there is no box to ask. */
   private async workspaceManifest(): Promise<Map<string, string> | undefined> {
     if (this.box === undefined) return undefined;
@@ -892,6 +895,7 @@ export class Orchestrator {
         ? undefined
         : (options.tasks ?? new TaskStore(undefined, line => console.error(`[tasks] ${line}`), this.receipts));
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeAudit(task));
+    if (this.tasks !== undefined) this.tasks.onChange(task => { if (task.status === "review") setImmediate(() => settleDelivered(this.tasks!, task.id, this.settleWorld())); }); // INV-1904
     if (this.tasks !== undefined) this.tasks.onChange(task => this.maybeLearnFrom(task));
     this.scopes = options.scopes === null ? undefined : (options.scopes ?? new ScopeStore());
     this.bundles = options.bundles ?? new BundleStore();

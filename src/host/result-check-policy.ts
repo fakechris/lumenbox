@@ -194,7 +194,9 @@ export class ResultChecks {
         : { policy: { mode: "manual" as const }, rounds: 0, dispatches: 0, calls: 0, reservedCost: 0, plans: [] },
     );
   }
-  begin(task: Task, reviewers: string[]): { plan?: CheckPlan; reason?: string } {
+  /** Whether a check of this task's current evidence is running: it speaks before anything settles the result (INV-1904). */
+  running(task: Task): boolean { return this.snapshot(task).plans.some(plan => plan.taskId === task.id && plan.digest === evidenceDigest(task) && this.active(task, plan.id)); }
+  begin(task: Task, reviewers: string[]): { plan?: CheckPlan; reason?: string; decide?: true } { // decide: an authorized check cannot run, so a person decides (INV-1904)
     const account = this.accounts.get(keyOf(task));
     if (!account || account.goal !== checkGoal(task) || account.policy.mode === "manual")
       return { reason: "No automatic check was authorized for this goal; the result awaits your inspection." };
@@ -210,7 +212,7 @@ export class ResultChecks {
       return { reason: "This evidence already has a check activity; unchanged evidence is not dispatched again." };
     const policy = account.policy;
     if (policy.mode === "files" && account.rounds >= 3)
-      return { reason: "The deterministic check round limit is exhausted; a person decides." };
+      return { reason: "The deterministic check round limit is exhausted; a person decides.", decide: true };
     if (
       policy.mode === "model" &&
       (reviewers.length !== policy.reviewers ||
@@ -219,10 +221,10 @@ export class ResultChecks {
         account.calls >= policy.maxCalls ||
         account.reservedCost >= policy.maxCost)
     )
-      return { reason: "The check's total budget or eligible reviewer limit is exhausted; a person decides." };
+      return { reason: "The check's total budget or eligible reviewer limit is exhausted; a person decides.", decide: true };
     const startedAt = account.startedAt ?? this.now(),
       deadline = startedAt + (policy.mode === "model" ? policy.maxMs : 60_000);
-    if (deadline <= this.now()) return { reason: "The check's cumulative time allowance is exhausted; a person decides." };
+    if (deadline <= this.now()) return { reason: "The check's cumulative time allowance is exhausted; a person decides.", decide: true };
     const plan: CheckPlan = {
       id: randomUUID(),
       taskId: task.id,

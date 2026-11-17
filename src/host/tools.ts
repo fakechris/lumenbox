@@ -1701,8 +1701,8 @@ evidence: {
         "something a teammate or the user will want to track, take a task before working " +
         "it so nobody duplicates you, move it as it progresses, and put a note on it when " +
         "something a successor needs to know happens. Statuses: open (nobody on it), " +
-        "doing, blocked (say why in the note), review (finished, awaiting acceptance), " +
-        "done, dropped. If a task names a reviewer, only the reviewer can move it to " +
+        "doing, blocked (say why in the note), review (finished; a person's request ends there unless they must look first), " +
+        "done, dropped. When a person says an ended result is wrong, update it back to doing. If a task names a reviewer, only the reviewer can move it to " +
         "done. Use submit to deliver your result, request_check to check a submitted result, and accept for authorized acceptance. Use handoff to report incomplete execution without requesting a check. A refusal never submits work. " +
         "Your own live tasks are already in your instructions every turn; `list` is for " +
         "seeing the whole board. Use `read` with an id for the current full description of " +
@@ -1726,6 +1726,7 @@ evidence: {
           waiting_on: { type: "string", description: "For update: who or what this is waiting for outside the box (a supplier, a deploy window, somebody on leave). It is still asked about, but never archived for not moving — waiting is not abandonment. Empty string clears it." },
           blocked_by: { type: "array", items: { type: "string" }, description: "For create or update: the ids of the tasks this one cannot start before (\"t12\"). The whole set: update replaces it, [] clears it. A task with an unfinished blocker is listed as blocked by it, cannot be taken, and its assignee is woken when the last one closes. A cycle is refused." },
           parent: { type: "string", description: "For create: the task this one is a part of, which then waits on it. Defaults to the task you are doing in this conversation, so splitting your task into pieces for teammates makes it wait for them; \"none\" for work that is not part of it." },
+          sign_off: { type: "boolean", description: "For update: true when the person asked to see the result before it counts as done (\"show me first\"). Otherwise a delivered result ends without asking them." },
           snooze_until: { type: "string", description: "For update: leave it alone until this date or instant (YYYY-MM-DD or ISO). The answer to a nudge that is \"not now\" — the board stays quiet about it until then. Empty string looks again now." },
           reason: { type: "string", description: "For propose_close: why this task should be closed, in one sentence the requester can read. They have two days to object; their silence closes it." },
           title: { type: "string", description: "For create: one line of what is to be done." },
@@ -5109,7 +5110,7 @@ export async function dispatchTool(
             ...(typeof input.due === "string" && input.due.trim() !== "" ? { due: input.due } : {}),
             ...(typeof input.waiting_on === "string" ? { waitingOn: input.waiting_on.trim() === "" ? null : input.waiting_on } : {}),
             ...(typeof input.snooze_until === "string" ? { snoozeUntil: input.snooze_until.trim() === "" ? null : input.snooze_until } : {}),
-            ...(checked.length > 0 ? { checked } : {}),
+            ...(checked.length > 0 ? { checked } : {}), ...(typeof input.sign_off === "boolean" ? { signOff: input.sign_off } : {}),
             ...(typeof input.note === "string" && input.note.trim() !== ""
               ? { note: input.note }
               : {}),

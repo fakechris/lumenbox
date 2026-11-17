@@ -249,7 +249,7 @@ import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "..
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import {workRootSummary} from "../host/work-root-store.ts";
-import { stageWorldOf, taskStage } from "../host/task-stage.ts";
+import { stageWorldOf, taskStage } from "../host/task-stage.ts"; import { signOffView } from "../host/review-settle.ts";
 import { ChangeFeed, feedForks } from "./mcp-watch.ts";
 import { InvoluteConsumer } from "../host/involute-inbox.ts";
 import { mayAnswerFrom } from "../host/involute-askers.ts";
@@ -2161,7 +2161,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // tasks nudge their requester where the task lives, twice, then are archived; a close
   // nobody objected to in time closes. Each event is one line where the task came from.
   const boardTimer = setInterval(() => {
-    const board = orchestrator.tasks;
+    const board = orchestrator.tasks; for (const line of orchestrator.settleReviews()) log(`tasks: ${line}`); // quietly: the end of asking is not news for the room (INV-1904)
     if (board === undefined) return;
     // One message per room per sweep, inside the room's budget for the day (INV-535).
     // Four rails each speaking for itself is how a person ends up with twenty notices
@@ -2211,7 +2211,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       });
     }
   }, 3_600_000);
-  boardTimer.unref();
+  boardTimer.unref(); setImmediate(() => { for (const line of orchestrator.settleReviews()) log(`tasks: ${line}`); }); // and once at start, for reviews older than the rule
 
   /**
    * Questions people put to our agents on a work item (INV-553, docs/54 §A).
@@ -2960,7 +2960,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return { box, agent: id => registry.has(id) && box(registry.boxOf(id).id) };
   }
   const taskActive = (task: Task) => task.workRoot ? orchestrator.bus.workExecutions(task.workRoot.state.id).length>0 || orchestrator.jobWatch.workJobs(task.workRoot.state.id).length>0 : task.assigneeId !== undefined && task.conversation !== undefined && (orchestrator.bus.isActive(task.assigneeId, task.conversation) || orchestrator.jobWatch.openJobs(task.assigneeId, task.conversation).length > 0);
-  const checkPending = (task: Task) => orchestrator.resultChecks.snapshot(task).plans.some(plan => plan.taskId === task.id && plan.digest === evidenceDigest(task) && orchestrator.resultChecks.active(task, plan.id));
+  const checkPending = (task: Task) => orchestrator.resultChecks.running(task);
   const sideDoorStage = (task: Task) => stageWorldOf(task, { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending });
   const taskListPages = new TaskListPages();
   const taskExecutions = new TaskExecutions({ namespace: registry.box.id, turns: orchestrator.turns ?? { executionRecords: () => ({ records: [], partial: true }) }, registry });
@@ -3882,8 +3882,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         let readingBuilt = false; let readingWorld: Parameters<typeof stageWorldOf<Task>>[1] | undefined; const childReferences = new Map<string, string[]>(), readingCache = new Map<string, ReturnType<typeof workReading>>();
         const readingFor = (task: Task) => { if (!readingBuilt) { readingBuilt = true; for (const row of orchestrator.tasks?.list() ?? []) if (row.origin?.parentId && mayReadTask(row)) { const ids = childReferences.get(row.origin.parentId) ?? []; ids.push(row.id); childReferences.set(row.origin.parentId, ids); } } let reading = readingCache.get(task.id); if (!reading) { const reference = (id: string, relation: "parent" | "dependency" | "collaboration") => workReference(id, relation, id => orchestrator.tasks?.get(id), mayReadTask); readingWorld ??= { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending }; reading = workReading(task, { stage: stageWorldOf(task, readingWorld!), checks: orchestrator.resultChecks.snapshot(task), verdicts: orchestrator.verifications.recordsFor(task.id, evidenceDigest(task)), references: [...(task.origin?.parentId ? [reference(task.origin.parentId, "parent")] : []), ...(task.blockedBy ?? []).map(id => reference(id, "dependency")), ...(childReferences.get(task.id) ?? []).map(id => reference(id, "collaboration"))] }); readingCache.set(task.id, reading); } return reading; };
         if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => ({ ...taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), reading: readingFor(orchestrator.tasks!.get(id)!) }), send })) return;
-        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, reading: readingFor(task), work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
-        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), reading: readingFor(task), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
+        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, reading: readingFor(task), work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id)), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), reading: readingFor(task), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id)), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(taskView) ?? [] });
           return;

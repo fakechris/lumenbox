@@ -30,6 +30,7 @@ import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus } from "../agents/bus.ts";
 import { AgentRegistry } from "../agents/registry.ts";
+import { settleDelivered } from "./review-settle.ts";
 import type { BoxClient } from "../box/client.ts";
 import { AcpDelegates } from "./acp-delegate.ts";
 import type { HistoryEntry } from "./compaction.ts";
@@ -577,6 +578,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   if (options.tasks !== undefined) watchDependencies(options.tasks, (task, text) => { bus.deliverSystem(task.assigneeId!, text, task.conversation ?? "main", taskWorkId(task,bus)); });
   goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
   options.tasks?.onChange(task => taskAttentionChanged(bus, task));
+  // A person's delivered request ends unless their word changes something (INV-1904), wired as the orchestrator wires it; episodes run no result checks.
+  const board = options.tasks; board?.onChange(task => { if (task.status === "review") setImmediate(() => settleDelivered(board, task.id, { board, isAgent: id => registry.has(id), checking: () => false })); });
   jobWatch = options.jobWatch?.({ bus, box });
   goalGate = options.goalGate?.({ bus, registry, tasks: options.tasks, files });
 

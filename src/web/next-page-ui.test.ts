@@ -127,14 +127,16 @@ test("a result waiting for the person says where it came from and what was repor
   const originOf = pageFunction("originOf", { next: { agents: { mia: {}, ada: {} } }, MSG: { "ui.next.origin.feishu": "x", "ui.next.origin.web": "x" }, t, agentName, agoText: () => "3d" });
   assert.deepEqual(["feishu-zongheng:ou_1", "web", "ada", "mcp:k"].map(requester => originOf({ requester })),
     ["ui.next.origin.feishu", "ui.next.origin.web", "ui.next.origin.agent(Ada)", "ui.next.origin.other"], "the door it came through, or the agent that started it");
+  const signOffLines = pageFunction("signOffLines", { el, t });
   const resultCard = pageFunction("resultCard", {
-    el, t, agentName, originOf, chat, agoText: () => "3d", rich: (text: string, cls: string) => el("div", cls, text), toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
+    el, t, agentName, originOf, chat, signOffLines, agoText: () => "3d", rich: (text: string, cls: string) => el("div", cls, text), toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
     render: () => {}, document: { querySelector: () => null },
     openPanel: (id: string) => opened.push(id), postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
   });
-  const row = { id: "t1", title: "October report", assigneeId: "mia", requester: "feishu:ou_1", createdAt: "2026-11-01T00:00:00.000Z", deliverables: files, report: { at: "2026-11-02T00:00:00.000Z", by: "ada", note: "Checked: **cannot be accepted as is**." } };
+  const row = { id: "t1", title: "October report", assigneeId: "mia", requester: "feishu:ou_1", createdAt: "2026-11-01T00:00:00.000Z", deliverables: files, report: { at: "2026-11-02T00:00:00.000Z", by: "ada", note: "Checked: **cannot be accepted as is**." }, signOffBecause: ["files", "remarked"] };
   const card = resultCard(row) as Fake;
   assert.ok(card.kids.some(kid => kid.text === "ui.next.origin.feishu · 3d"), "where the request came from");
+  assert.deepEqual(card.kids.filter(kid => kid.text.startsWith("ui.next.because.")).map(kid => kid.text), ["ui.next.because.files6", "ui.next.because.remarked"], "why it waits for the person (INV-1904)");
   assert.ok(card.kids.some(kid => kid.cls === "report" && kid.text.includes("cannot be accepted")), "what was reported is on the card");
   assert.equal(card.kids.filter(kid => kid.cls === "file").length, 4);
   assert.ok(card.kids.some(kid => kid.text === "ui.next.chat.moreFiles2"), "the rest are counted, not listed");

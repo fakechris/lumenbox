@@ -34,7 +34,7 @@ import { clampDescription, dueOf, type TaskContract } from "./task-fields.ts";
 import { refuseUnknownAgents, type TaskAgents } from "./task-agents.ts"; import { notReady, openBlockers, PLAN_ACTOR, refuseBlockers } from "./task-deps.ts"; import { inferLevel, type Level } from "./autonomy-level.ts"; import type { Discovery } from "./discovery.ts";
 
 import { alignTaskProgress, type TaskProgressState, TaskProgressReceiver } from "./task-progress.ts";
-import { checkpointTasks, retireClosed } from "./task-progress-storage.ts";
+import { checkpointTasks, retireClosed } from "./task-progress-storage.ts"; import { SETTLE_ACTOR } from "./review-settle.ts";
 export { clampContract, clampDescription, DESCRIPTION_LIMIT, dueOf, type TaskContract } from "./task-fields.ts";
 
 /** What each task is now, plus a grace period on closed ones so a person asking about something just finished still gets an answer. */
@@ -79,6 +79,7 @@ export interface TaskChange {
   note?: string;
   /** The turn (run) an agent made this change in, when it was an agent. */
   run?: string; reply?: true; // reply: the note is the agent's final reply to a side-door task (INV-1676), task-reply.ts
+  closed?: "delivery" | "lapsed"; decide?: true; // INV-1904, review-settle.ts: ended without a person's word (never an acceptance); a check that could not settle it, so a person decides
   /**
    * The review gate redirected this move: the assignee tried to accept its own work.
    *
@@ -148,7 +149,7 @@ export interface Task {
   goal?: { area: string; commitment?: string };
   /** What the agent pursues until a gate it does not own says it is met (docs/74, INV-769); `status` follows it. Not `goal`, the person's own. */
   pursuit?: Pursuit;
-  flag?: TaskFlag; deliverables?: TaskDeliverable[]; // flag: a supervisor's raised attention (INV-1509), holds until the status moves, task-flag.ts; deliverables: the files marked as what it produced, snapshotted off the box (INV-1663), task-deliverables.ts
+  signOff?: true; flag?: TaskFlag; deliverables?: TaskDeliverable[]; // flag: a supervisor's raised attention (INV-1509), holds until the status moves, task-flag.ts; deliverables: the files marked as what it produced, snapshotted off the box (INV-1663), task-deliverables.ts; signOff: the person asked to look at the result before it counts as done (INV-1904, review-settle.ts)
   /** Leave it alone until this instant: the answer to a nudge that is "not now" (INV-532). */
   snoozeUntil?: string;
   /** How often the requester has been nudged about an overdue or idle task, and when last. */
@@ -224,7 +225,7 @@ const HARNESS_ACTORS: ReadonlySet<string> = new Set([
   "restart",
   "host",
   "web",
-  "audit-guard", "review-guard", PLAN_ACTOR, // the K-reviewer record moving a task it settled (INV-1614); an Orchestrate plan closing its item cards (INV-1740)
+  "audit-guard", "review-guard", PLAN_ACTOR, SETTLE_ACTOR, // the K-reviewer record moving a task it settled (INV-1614); an Orchestrate plan closing its item cards (INV-1740)
 ]);
 
 /** Kept on each task so a snapshot stays one line, not a graph. */
@@ -332,7 +333,7 @@ export class TaskStore {
     pursuit?: Pursuit;
     mandate?: { source?: string; rulesHash?: string }; // What the mandate rests on (INV-1457).
     blockedBy?: string[]; level?: Level; discovery?: Discovery; // blockedBy: what it waits on (INV-1740); level: a person's own setting (INV-1650), else the rule infers one; discovery: from a sensing routine (INV-1652), always a proposal
-    now?: Date; durable?: boolean; workRoot?: TaskWorkRoot;
+    now?: Date; durable?: boolean; workRoot?: TaskWorkRoot; signOff?: boolean;
   }): Task | undefined {
     const title = input.title.replace(/\s+/g, " ").trim().slice(0, 200);
     if (title === "") return undefined;
@@ -358,7 +359,7 @@ export class TaskStore {
       ...(input.goal !== undefined && input.goal.area.trim() !== ""
         ? { goal: { area: input.goal.area.trim().slice(0, 80), ...(input.goal.commitment?.trim() ? { commitment: input.goal.commitment.trim().slice(0, 500) } : {}) } }
         : {}),
-      ...(input.pursuit !== undefined ? { pursuit: input.pursuit } : {}),
+      ...(input.pursuit !== undefined ? { pursuit: input.pursuit } : {}), ...(input.signOff === true ? { signOff: true as const } : {}),
       level: input.level ?? inferred.level, levelBy: input.level !== undefined ? input.requester : "rule", createdAt: at,
       updatedAt: at,
       history: [{ at, by: input.requester, status: input.pursuit !== undefined ? taskStatusFor(input.pursuit) : "open", note: `${input.proposedBy !== undefined ? "proposed, awaiting a person's commit" : input.pursuit !== undefined ? "goal set by the person" : "created"} · L${input.level ?? inferred.level}${input.level !== undefined ? " set by the requester" : ` by rule: ${inferred.reasons.join("; ")}`}` }],
@@ -510,7 +511,7 @@ export class TaskStore {
       /** What it is waiting for outside this box, or null to say it no longer is. */
       waitingOn?: string | null; blockedBy?: string[]; // what it waits on, the whole set (INV-1740); empty clears it
       /** Leave it alone until this date or instant, or null to look again now. */
-      snoozeUntil?: string | null;
+      snoozeUntil?: string | null; closed?: TaskChange["closed"]; decide?: true; signOff?: boolean;
     },
     by: string,
     run?: string,
@@ -626,7 +627,7 @@ export class TaskStore {
       ...(status === "done" && changes.checked !== undefined && changes.checked.length > 0
         ? { checked: changes.checked.map(line => line.slice(0, 120)).slice(0, 12) }
         : {}),
-      ...(run !== undefined ? { run } : {}),
+      ...(run !== undefined ? { run } : {}), ...(status === "done" && changes.closed !== undefined ? { closed: changes.closed } : {}), ...(changes.decide ? { decide: true as const } : {}),
     };
     if (change.note === undefined) {
       // A snooze or a waiting-on with nothing else said is still a decision about the
@@ -650,6 +651,7 @@ export class TaskStore {
       ...(changes.due !== undefined ? (changes.due === null ? { due: undefined } : dueOf(changes.due) !== undefined ? { due: dueOf(changes.due)! } : {}) : {}), ...(changes.level !== undefined ? { level: changes.level, levelBy: by } : {}), // INV-1650
       ...(changes.waitingOn !== undefined ? (changes.waitingOn === null || changes.waitingOn.trim() === "" ? { waitingOn: undefined } : { waitingOn: changes.waitingOn.replace(/\s+/g, " ").trim().slice(0, 120) }) : {}), ...(changes.blockedBy !== undefined ? { blockedBy: changes.blockedBy.length > 0 ? [...changes.blockedBy] : undefined } : {}),
       ...(changes.snoozeUntil !== undefined ? (changes.snoozeUntil === null ? { snoozeUntil: undefined } : dueOf(changes.snoozeUntil) !== undefined ? { snoozeUntil: dueOf(changes.snoozeUntil)! } : {}) : {}),
+      ...(changes.signOff !== undefined ? { signOff: changes.signOff ? true as const : undefined } : {}),
       updatedAt: at,
       history: [...task.history, change].slice(-HISTORY_LIMIT),
     };

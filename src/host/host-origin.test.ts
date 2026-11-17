@@ -180,7 +180,7 @@ test("adding a reviewer after submission still permits that reviewer's explicit 
     const tasks = new TaskStore(null), capture: ModelCapture = { params: [] };
     const orch = new Orchestrator({ registry, useBox: false, inbox: null, mcp: null, hooks: null, tasks, extensions: null, pendingWork: null,
       client: fakeModel(() => ({ id: "check", type: "message", role: "assistant", model: "test", content: [{ type: "text", text: "Status: complete\nIntegrity: clean\nContract audit: aligned\nNext action: none" }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 10, output_tokens: 4 } } as never), { capture }) });
-    const task = tasks.create({ title: "Install the package", requester: "person", assigneeId: worker.id })!;
+    const task = tasks.create({ title: "Install the package", requester: "person", assigneeId: worker.id, signOff: true })!; // the person asked to see it: delivery alone does not end it (INV-1904)
     tasks.deliveryCommand(task.id, "submit", worker.id);
     await orch.settle(); assert.equal(capture.params.length, 0);
     tasks.update(task.id, { reviewerId: reviewer.id }, "person");

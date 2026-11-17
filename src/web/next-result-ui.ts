@@ -26,11 +26,32 @@ function originOf(row) {
   return from + (row.createdAt ? " · " + agoText(row.createdAt) : "");
 }
 
-/** The name on a conversation: what was first said in it, where the list has it. */
+/** First lines of conversations read by name, for those older than the loaded list (INV-1904). */
+var conversationNames = {};
+/** The name on a conversation: what was first said in it, else the door it came through. */
 function conversationLabel(id) {
   if (!id || id === "main") return t("ui.next.chat.main");
-  var row = chat.conversations.filter(function (entry) { return entry.id === id; })[0];
-  return row && row.firstLine ? clip(row.firstLine, 40) : t("ui.next.chat.another");
+  var row = chat.conversations.concat(chat.topicExtra || []).filter(function (entry) { return entry.id === id; })[0];
+  var first = (row && row.firstLine) || conversationNames[id];
+  if (first) return clip(first, 40);
+  return doorOf(id) ? t("ui.next.chat.anotherAt", { channel: t("ui.next.door." + doorOf(id)) }) : t("ui.next.chat.another");
+}
+/** Reads one conversation's first line by id, once, and says when it has it. */
+function nameConversation(agentId, id, then) {
+  if (!agentId || !id || id === "main" || conversationNames[id] !== undefined) return;
+  conversationNames[id] = "";
+  getJson("/api/conversations?agent=" + encodeURIComponent(agentId) + "&ids=" + encodeURIComponent(id)).then(function (got) {
+    var row = (got.conversations || [])[0];
+    if (row && row.firstLine) { conversationNames[id] = row.firstLine; then(); }
+  }, function () {});
+}
+
+/** Why a result waits for the person, one line per reason, saying what their word changes (INV-1904). */
+function signOffLines(task) {
+  return (task.signOffBecause || []).map(function (reason) {
+    var n = reason === "blocks" ? (task.blocks || []).length : reason === "files" ? (task.deliverables || []).length : 0;
+    return el("div", "why", t("ui.next.because." + reason, n ? { n: n } : undefined));
+  });
 }
 
 /** Something the chat was sent that is not the agent speaking: a notice in LumenBox's own voice, a card, a file. */
@@ -127,6 +148,7 @@ function resultCard(row) {
   var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes")), open = el("button", "act", t("ui.next.act.details"));
   card.dataset.result = row.id;
   card.appendChild(el("div", "card-head", t("ui.next.chat.review")));
+  signOffLines(row).forEach(function (line) { card.appendChild(line); });
   card.appendChild(el("div", "", row.title));
   card.appendChild(el("div", "why", originOf(row)));
   if (report && report.note) {

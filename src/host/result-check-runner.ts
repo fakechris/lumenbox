@@ -17,8 +17,8 @@ interface Dependencies {
 export async function runResultCheck(task: Task, deps: Dependencies): Promise<void> {
   const policy = deps.checks.snapshot(task).policy;
   const reviewers = policy.mode === "model" ? pickReviewers(task, deps.candidates(), policy.reviewers) : [];
-  const { plan, reason } = deps.checks.begin(task, reviewers);
-  if (!plan) { deps.tasks.update(task.id, { note: reason ?? "Check held for inspection." }, REVIEW_ACTOR); return; }
+  const { plan, reason, decide } = deps.checks.begin(task, reviewers);
+  if (!plan) { deps.tasks.update(task.id, { note: reason ?? "Check held for inspection.", ...(decide ? { decide } : {}) }, REVIEW_ACTOR); return; }
   let stopReason = "Check finished; business acceptance remains separate.";
   try {
     if (policy.mode === "files") {
@@ -37,7 +37,7 @@ export async function runResultCheck(task: Task, deps: Dependencies): Promise<vo
       const current = deps.tasks.get(task.id);
       if (!current || !deps.checks.active(current, plan.id)) { stopReason = "Check cancelled, expired or evidence changed."; return; }
       deps.verifications.add({ taskId: task.id, digest: plan.digest, reviewerId: "host:files", verdict, basis: basis.join("; ") });
-      deps.tasks.update(task.id, { status: verdict === "fail" ? "doing" : "review", note: `File check ${verdict}: ${basis.join("; ")}. ${verdict === "pass" ? "These file conditions passed; the user's acceptance remains separate." : "A person decides the next step."}`.slice(0, 1000) }, REVIEW_ACTOR);
+      deps.tasks.update(task.id, { status: verdict === "fail" ? "doing" : "review", ...(verdict === "none" ? { decide: true as const } : {}), note: `File check ${verdict}: ${basis.join("; ")}. ${verdict === "pass" ? "These file conditions passed; the user's acceptance remains separate." : "A person decides the next step."}`.slice(0, 1000) }, REVIEW_ACTOR);
       stopReason = `Deterministic file check: ${verdict}.`;
       return;
     }
@@ -59,6 +59,6 @@ export async function runResultCheck(task: Task, deps: Dependencies): Promise<vo
     const recorded = deps.checks.snapshot(task).plans.find(row => row.id === plan.id)?.reason;
     deps.checks.stop(task, plan.id, recorded ?? stopReason);
     const latest = deps.tasks.get(task.id);
-    if (recorded && latest?.status === "review" && evidenceDigest(latest) === plan.digest) deps.tasks.update(task.id, { note: `Result check stopped: ${recorded}` }, REVIEW_ACTOR);
+    if (recorded && latest?.status === "review" && evidenceDigest(latest) === plan.digest) deps.tasks.update(task.id, { note: `Result check stopped: ${recorded}`, decide: true }, REVIEW_ACTOR);
   }
 }

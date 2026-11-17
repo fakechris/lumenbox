@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: user-work
-     updated: 2026-11-12
+     updated: 2026-11-17
 -->
 # 99. A person's work: requests, work, and what happens inside it
 
@@ -103,12 +103,39 @@ the contract and `taskStage` is its one implementation:
 | 进行中 | execution `running`, or `waiting` on the next slice |
 | 等你回答 / 等你批准 | execution `waiting` on the person |
 | 卡住了 | execution `waiting` on a tool, a computer, or after repeated failure; or a ceiling reached |
-| 待验收 | acceptance `submitted` |
-| 完成 | acceptance `accepted`, or execution `finished` where nothing was submitted |
+| 待验收 | acceptance `submitted`, and a reason from §4.1 holds |
+| 完成 | acceptance `accepted`; execution `finished` where nothing was submitted; or ended without asking (§4.1) |
 | 已停止 | execution `stopped` |
 
 A model ending its turn, a command exiting 0, and a process being killed are observations. None of
 them is `accepted`.
+
+### 4.1 When acceptance is asked for (INV-1904)
+
+On 2026-11-17 the inbox asked for an Accept on an answer given in a Feishu chat 27 days earlier.
+Nothing waited on it, nothing had been handed over, and the answer had been read the day it was
+given. Every request a person made ended in `submitted`, so every finished request became a button.
+A person's word is asked for only where it changes something
+(`src/host/review-settle.ts`, `signOffReasons`):
+
+| Reason | Why the word matters | Shown |
+|---|---|---|
+| `blocks` | Live work waits on this result and would start on something nobody looked at | 确认后，等着它的 n 件事会开始 |
+| `files` | Files were handed over; a file is looked at before it is used | 交给你 n 个文件，用之前先看一眼 |
+| `asked` | The person asked to see it first (`Task.signOff`, set from the conversation), or a person is named to review it | 你要求做完先给你过目 |
+| `undecided` | A check could not settle it and said a person decides (`TaskChange.decide`) | 检查没能下结论，需要你来判断 |
+| `remarked` | Somebody wrote about the result after it was delivered | 交付之后有人对结果提了意见 |
+
+Otherwise a person's request ends when its result is delivered — after any check of it, and after a
+named agent reviewer's verdict. A request nobody answered for seven days
+(`AGENTBOX_REVIEW_LAPSE_DAYS`) ends too, unless live work waits on it. Neither is `accepted`: the
+change carries `closed: "delivery"` or `closed: "lapsed"` and says no person accepted it, so a count
+of accepted work (docs/75) never includes it. A person who says the result is wrong reopens it
+(the agent moves it back to `doing`).
+
+This is the one exception to "silence is never consent to close work" (docs/51 §0, INV-532): the
+ending is recorded as the end of asking, never as agreement. Goals and pursuits keep the rule
+whole — they close only by the gate or the person's word.
 
 ## 5. Attention
 
