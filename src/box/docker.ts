@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
+import { boxNetworkArguments, describeOutbound, gateNameFor, networkNameFor, outboundPlan, prepareBoxNetwork, removeGate, startGate, stopGate, type OutboundPlan } from "./box-network.ts";
 import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts"; import { redactSecretAssignments, secretsOutOfArgs } from "./secret-env.ts"; import { runContainer } from "./run-container.ts";
 
 const execFileAsync = promisify(execFile);
@@ -90,16 +91,7 @@ export function boxImageRef(version: string = packageVersion()): string {
 
 export const DEFAULT_IMAGE = boxImageRef();
 
-/**
- * The private network a box lives on. One per container, named after it.
- *
- * Derived rather than stored, so the name is the same from create, from teardown and
- * from a person reading `docker network ls` — a network whose name has to be looked up
- * somewhere is a network that gets orphaned.
- */
-export function networkNameFor(containerName: string): string {
-  return `${containerName}-net`;
-}
+export { networkNameFor } from "./box-network.ts";
 
 export interface BoxConfig {
   /** Member-owned boxes never inherit installation credentials or publication settings. */
@@ -547,8 +539,33 @@ export async function dockerEnvironment(timeoutMs = 15_000): Promise<DockerEnvir
   }
 }
 
+/**
+ * A publication bound to one address.
+ *
+ * The empty middle field is load-bearing: `127.0.0.1::7777` means "this address, a port of
+ * Docker's choosing", while `127.0.0.1:7777` means "host port 127.0.0.1" and is rejected. A
+ * real two-tenant run found this; the unit tests could not, because Docker was faked there.
+ */
+const publishOn = (address: string, hostPort: number, containerPort: number) =>
+  hostPort > 0 ? `${address}:${hostPort}:${containerPort}` : `${address}::${containerPort}`;
+
 export class BoxManager {
   constructor(readonly config: BoxConfig) {}
+
+  /** Whether this box is to be confined to its relay (INV-816, box-network.ts), from how it is started. */
+  private outbound(): OutboundPlan {
+    return outboundPlan(this.config, process.env);
+  }
+
+  /** Where the daemon is published: on the box, or on its gate when the box is confined. */
+  private boxdPublication(): string {
+    return publishOn(this.config.isolated ? "127.0.0.1" : publishAddress(), this.config.boxdPort, BOXD_PORT);
+  }
+
+  /** What this box's outbound traffic is, read from the engine: one line for whoever starts or attaches to it. */
+  describeOutbound(): Promise<string> {
+    return describeOutbound(docker, this.config.containerName, this.outbound());
+  }
 
   async dockerAvailable(): Promise<boolean> {
     return (await dockerEnvironment()).state === "ok";
@@ -574,19 +591,15 @@ export class BoxManager {
     }
   }
 
-  /** Resolves the host port Docker assigned to a container port. */
+  /** Resolves the host port Docker assigned to a container port: on the box, or on the gate that publishes for a confined one. */
   private async publishedPort(containerPort: number): Promise<number | undefined> {
-    try {
-      const out = await docker(
-        ["port", this.config.containerName, `${containerPort}/tcp`],
-        20_000
-      );
+    for (const container of [this.config.containerName, gateNameFor(this.config.containerName)]) {
+      const out = await docker(["port", container, `${containerPort}/tcp`], 20_000).catch(() => "");
       // Output lines look like "0.0.0.0:49173" or "[::]:49173".
       const match = /:(\d+)\s*$/m.exec(out);
-      return match ? Number(match[1]) : undefined;
-    } catch {
-      return undefined;
+      if (match) return Number(match[1]);
     }
+    return undefined;
   }
 
   async status(): Promise<BoxStatus> {
@@ -665,59 +678,13 @@ export class BoxManager {
   /** Exposed for the test that pins where the daemon is published. */
   runArguments(cpus?: string): string[] {
     const { config } = this;
-    /**
-     * The same thing, bound to one address.
-     *
-     * The empty middle field is load-bearing: `127.0.0.1::7777` means "this address, a port of
-     * Docker's choosing", while `127.0.0.1:7777` means "host port 127.0.0.1" and is rejected. A
-     * real two-tenant run found this; the unit tests could not, because Docker was faked there.
-     */
-    const publishOn = (address: string, hostPort: number, containerPort: number) =>
-      hostPort > 0
-        ? `${address}:${hostPort}:${containerPort}`
-        : `${address}::${containerPort}`;
-
     return [
       "run",
       "--detach",
       "--name",
       config.containerName,
-      // Only the daemon is published, and only to loopback. It proxies every desktop's
-      // noVNC, so the number of desktops is not fixed by port mappings chosen at create
-      // time — but that also makes this one port the way into every desktop in the box.
-      //
-      // It was published on all interfaces. Measured on a running installation before
-      // the fix: from the machine's LAN address, `/health` answered and a WebSocket
-      // upgrade to `/vnc/1/websockify` returned 101 and streamed the desktop — no token,
-      // because the RFB upgrade is deliberately unauthenticated on the reasoning that
-      // only the host's loopback proxy can reach it. That reasoning was sound and the
-      // publication contradicted it: anyone on the same network could watch and drive
-      // the agents' screens. The daemon's bearer token never entered it.
-      //
-      // A remote Docker engine is the one case that needs a routable publication, and it
-      // is opt-in: AGENTBOX_BOXD_PUBLISH_ADDRESS, set by someone who has read this.
-      "--publish",
-      publishOn(config.isolated ? "127.0.0.1" : publishAddress(), config.boxdPort, BOXD_PORT),
-      // Its own bridge, so a box is not on the same subnet as every other container.
-      //
-      // Worth having and **not sufficient**, which is measured rather than assumed.
-      // Docker's default bridge puts every container on one subnet, so a box was
-      // reachable from any container by address. Giving each box its own network is the
-      // usual answer and is widely believed to isolate them — on Docker 29 with OrbStack
-      // it does not: a container on the default bridge reached this box's daemon at its
-      // private-network address, because DOCKER-FORWARD accepts forwarding out of every
-      // bridge. Tested by running a container and fetching /health; it answered.
-      //
-      // So this is one layer of several, kept because it costs nothing and does isolate
-      // on engines that implement the isolation chains — and the daemon's own upgrade
-      // path was authenticated (src/boxd/main.ts) rather than left resting on it.
-      // Enforcing the property here would mean writing host firewall rules for an engine
-      // whose rules live inside a VM, which is a promise this process cannot keep.
-      //
-      // The host reaches the daemon through its published loopback port, and the box
-      // reaches the internet through this network's own gateway.
-      "--network",
-      networkNameFor(config.containerName),
+      // The network, the daemon's publication and the relay: one home, box-network.ts, because a confined box (INV-816) wires all three differently.
+      ...boxNetworkArguments(config.containerName, this.outbound(), this.boxdPublication()),
       "--env",
       `BOXD_TOKEN=${config.token}`,
       "--env",
@@ -739,22 +706,6 @@ export class BoxManager {
       // A ceiling: once unset because agent work runs under nice inside the box, which says nothing about
       // the machine a desktop box always shares — agent scans held a Mac at load 50 for hours (INV-1552).
       ...(cpus ? ["--cpus", cpus] : []),
-      // Egress, when a relay was named. host.docker.internal resolves on Docker Desktop
-      // already; the mapping is what makes the same name work on a Linux engine, so the
-      // relay address does not have to change per platform.
-      // Always, not only with the egress relay: the MCP face (docs/33) reaches this host by
-      // the same name, and on a Linux engine the name exists only through this mapping.
-      "--add-host",
-      "host.docker.internal:host-gateway",
-      ...(!config.isolated && process.env.AGENTBOX_EGRESS_RELAY
-        ? [
-            "--env",
-            `AGENTBOX_EGRESS_RELAY=${process.env.AGENTBOX_EGRESS_RELAY}`,
-            ...(process.env.AGENTBOX_EGRESS_TOKEN
-              ? ["--env", `AGENTBOX_EGRESS_TOKEN=${process.env.AGENTBOX_EGRESS_TOKEN}`]
-              : []),
-          ]
-        : []),
       // Two named volumes, because everything else in the container is disposable and
       // these two things are not: what the agents made, and what they logged into.
       // Without them, `box up --recreate` — which is also what upgrading the image
@@ -845,6 +796,7 @@ export class BoxManager {
       }
     }
 
+    if (state !== "missing") await startGate(docker, this.config.containerName); // a confined box is reached through its gate; one that has none is untouched
     if (state === "missing") {
       await ensureLocalImage(
         this.config.image,
@@ -852,7 +804,7 @@ export class BoxManager {
         onOutput,
       );
       onOutput?.(`starting container ${this.config.containerName}`);
-      await this.ensureNetwork();
+      await prepareBoxNetwork(docker, { containerName: this.config.containerName, image: this.config.image, publish: this.boxdPublication(), plan: this.outbound() });
       await runContainer({ run: () => docker(this.runArguments(), 120_000), state: () => this.state(), start: () => docker(["start", this.config.containerName], 60_000), remove: () => docker(["rm", "--force", this.config.containerName], 60_000), say: line => onOutput?.(line) }); // a run that hangs or fails is settled by what it left (INV-1561)
     } else if (state === "exited" || state === "created") {
       onOutput?.(`restarting container ${this.config.containerName}`);
@@ -876,6 +828,7 @@ export class BoxManager {
 
     const client = new BoxClient({ baseUrl: status.boxdUrl, token: this.config.token });
     await this.waitForHealthy(client, onOutput);
+    onOutput?.(await this.describeOutbound());
     if (this.config.withHost === true && status.uiUrl !== undefined) {
       await this.waitForUi(status.uiUrl, onOutput);
     }
@@ -970,32 +923,16 @@ export class BoxManager {
     );
   }
 
-  /**
-   * The box's own network, created if it is not there.
-   *
-   * Idempotent by inspect-then-create, and tolerant of the race between two `box up`
-   * runs: "already exists" is the outcome we wanted.
-   */
-  private async ensureNetwork(): Promise<void> {
-    const name = networkNameFor(this.config.containerName);
-    const existing = await docker(["network", "inspect", name], 30_000).catch(() => undefined);
-    if (existing !== undefined) return;
-    try {
-      await docker(["network", "create", name], 60_000);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      if (!/already exists/i.test(detail)) throw error;
-    }
-  }
-
   async down(options: { remove?: boolean } = {}): Promise<void> {
     const state = await this.state();
     if (state === "missing") return;
     if (state === "running" || state === "paused" || state === "restarting") {
       await docker(["stop", "--timeout", "10", this.config.containerName], 60_000);
     }
+    await stopGate(docker, this.config.containerName);
     if (options.remove) {
       await docker(["rm", "--force", this.config.containerName], 60_000);
+      await removeGate(docker, this.config.containerName);
       // The network goes with the container that owned it. Swallowed: a network still
       // holding another endpoint refuses removal, and that refusal must not fail a
       // teardown whose container is already gone. An orphan is visible in

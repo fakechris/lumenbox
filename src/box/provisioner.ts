@@ -137,6 +137,8 @@ export class DockerBoxProvisioner implements BoxProvisioner {
     assertCompatible(await client.health(), this.label);
     // A box that was already running when this app started gets its ceiling here, not at its next restart (INV-1552).
     await ensureCpuLimit(this.manager.config.containerName, chosenBoxCpus(), line => console.error(`[box] ${line}`));
+    // Said at every start, confined or not: whether the relay is this box's only way out is a fact a person should not have to probe for (INV-816).
+    console.error(`[box] ${await this.manager.describeOutbound().catch(error => `outbound: could not be read (${error instanceof Error ? error.message : String(error)})`)}`);
     return client;
   }
 

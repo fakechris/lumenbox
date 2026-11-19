@@ -21,7 +21,7 @@ this file and the headers disagree. Edit the header, not this table.
 |---|---|---|---|
 | [01-requirements](01-requirements.md) | Requirements | current | 2026-08-22 |
 | [02-product](02-product.md) | Product | current | 2026-11-06 |
-| [03-architecture](03-architecture.md) | Architecture | current | 2026-09-22 |
+| [03-architecture](03-architecture.md) | Architecture | current | 2026-11-19 |
 | [04-design](04-design.md) | Design | current | 2026-09-27 |
 | [05-data](05-data.md) | Data | current | 2026-11-11 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-11-06 |
@@ -66,13 +66,13 @@ this file and the headers disagree. Edit the header, not this table.
 
 | doc | title | status | updated |
 |---|---|---|---|
-| [06-deployment](06-deployment.md) | Deployment | current | 2026-11-04 |
+| [06-deployment](06-deployment.md) | Deployment | current | 2026-11-19 |
 | [12-upgrades](12-upgrades.md) | Upgrading somebody's box | current | 2026-11-06 |
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
 | [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-11-07 |
-| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-11-06 |
+| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-11-19 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
@@ -90,7 +90,7 @@ this file and the headers disagree. Edit the header, not this table.
 |---|---|---|---|
 | [07-review](07-review.md) | Review against the specification | current | 2026-08-20 |
 | [09-tenancy](09-tenancy.md) | Tenancy: teams, users, and who may drive which agent | superseded by [22-domain-model](22-domain-model.md) — §3 retires per-agent visibility; §0 sets uniformity | 2026-08-19 |
-| [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-11-02 |
+| [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-11-19 |
 | [14-from-outside-reading](14-from-outside-reading.md) | Ideas taken from outside reading | current | 2026-08-26 |
 | [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-11-01 |
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-10-20 |
