@@ -123,6 +123,25 @@ test("a solution page needs its frontmatter and its four paragraphs; a page that
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("docs/evals/ keeps only reports of a measured run: a stand-in's page, a hand-written one or a misnamed one is refused (INV-1772)", () => {
+  const { lintEvalReports } = awaitImported;
+  assert.deepEqual(lintEvalReports(join(docs, "evals")), [], "every kept report is a measurement");
+  const dir = mkdtempSync(join(tmpdir(), "evals-"));
+  try {
+    const page = measured => `<!-- eval-report: REPORT-2026-11-19\n     measured: ${measured}\n     split: test\n-->\n# Evaluation report\n`;
+    writeFileSync(join(dir, "REPORT-2026-11-19.md"), page("yes"));
+    assert.deepEqual(lintEvalReports(dir), []);
+    writeFileSync(join(dir, "REPORT-2026-11-19.md"), page("no — a deterministic stand-in answered; these numbers measure nothing"));
+    assert.match(lintEvalReports(dir)[0], /a stand-in's page is not a result/);
+    writeFileSync(join(dir, "REPORT-2026-11-19.md"), "# Evaluation report\n\nPass rate 97%.\n");
+    assert.match(lintEvalReports(dir)[0], /no eval-report header/);
+    writeFileSync(join(dir, "REPORT-2026-11-20.md"), page("yes"));
+    assert.ok(lintEvalReports(dir).some(p => /header says eval-report: REPORT-2026-11-19, filename says REPORT-2026-11-20/.test(p)));
+    writeFileSync(join(dir, "notes.md"), "x");
+    assert.ok(lintEvalReports(dir).some(p => /evals\/notes\.md: a page in docs\/evals\/ is a report/.test(p)));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("user-facing pages use the glossary's words, and the glossary names every concept in five columns (INV-1657)", () => {
   const { lintVocabulary, parseGlossary, GLOSSARY } = awaitImported;
   assert.deepEqual(lintVocabulary(root), [], lintVocabulary(root).join("\n"));
