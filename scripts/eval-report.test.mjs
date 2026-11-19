@@ -1,7 +1,7 @@
 /** The eval command on the stand-in: a second run costs nothing, and a stand-in's page cannot be filed as a result (INV-1772). */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -33,6 +33,18 @@ test("run --fake writes a record and a page marked as no measurement; run again 
     assert.deepEqual(b.tasks, a.tasks);
     assert.match(second.text, /NOT A MEASUREMENT/, "with no --report the page is printed, still labelled");
 
+    // The judges ran after the attempts, on the stand-in too, and are on the record with who they were.
+    assert.deepEqual(a.judges.model, { provider: "fake", model: "deterministic stand-in" });
+    assert.equal(a.judges.verdicts.length, a.tasks.length * 2, "every steward attempt has a question");
+    assert.deepEqual(b.judges.calls, { made: 0, cached: a.judges.calls.made });
+    const { judges: _dropped, ...bare } = b;
+    writeFileSync(join(dir, "c.json"), JSON.stringify(bare));
+    const judged = await collect(["judge", join(dir, "c.json"), "--fake", "--offline", "--cache", join(dir, "cache")]);
+    assert.match(judged.text, /0 calls made/, "a record judged later is asked the same questions, from the cache");
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "c.json"), "utf8")).judges.verdicts, a.judges.verdicts);
+    await assert.rejects(collect(["label-sheet", join(dir, "a.json"), "--out", join(dir, "sheet.jsonl")]), /no judged output of a real model/, "a stand-in's outputs are not put in front of a person to label");
+    await assert.rejects(collect(["judge", join(dir, "a.json")]), /stand-in's/, "nor in front of a real judge");
+
     const again = await collect(["report", join(dir, "b.json"), "--baseline", join(dir, "a.json")]);
     assert.match(again.text, /not comparable\*\* \| one side was answered by a stand-in/, "two stand-in runs are not a comparison of anything");
     assert.match((await collect(["trend", "--dir", dir])).text, /No evaluation results/, "only files named eval-*.json are results");
@@ -46,9 +58,10 @@ test("a stand-in's page is refused in docs/evals/, and plan counts calls without
   await assert.rejects(collect(["run", "--fake", "--only", "steward.", "--k", "1", "--report", target]), /may not be written into docs\/evals/);
   assert.equal(existsSync(target), false);
   const plan = await collect(["plan", "--only", "steward.", "--k", "3"]);
-  assert.match(plan.text, /^(\d+) tasks from the test split × 3 attempts: at most (\d+) model calls/);
-  const [, tasks, calls] = /^(\d+) tasks .* at most (\d+) model calls/.exec(plan.text);
+  const [, tasks, calls, judgeCalls] = /^(\d+) tasks from the test split × 3 attempts: at most (\d+) model calls, and (\d+) judge calls after them/.exec(plan.text);
   assert.equal(Number(calls), Number(tasks) * 3);
+  assert.equal(Number(judgeCalls), Number(tasks) * 3, "one judge question per steward attempt");
+  assert.match((await collect(["plan", "--only", "skill.", "--k", "3"])).text, /and 0 judge calls/, "which skill was opened is decided by code alone");
   await assert.rejects(collect(["plan", "--split", "train"]), /--split needs dev or test/);
 });
 

@@ -12,6 +12,8 @@
  */
 
 import { priceOf, type Rates } from "../host/spend.ts";
+import type { ModelSection } from "../host/scorecard.ts";
+import { type Calibration, calibrate, type HumanLabel, MIN_LABELS } from "./calibration.ts";
 import type { EvalRun, TaskResult, TokenUse } from "./runner.ts";
 import { bootstrapInterval, failureUpperBound, type Interval, minimumDetectableDifference, type PairedComparison, pairedComparison, passAtAndHatK } from "./stats.ts";
 
@@ -50,6 +52,15 @@ export interface Summary {
   };
   byFailureType: GroupRow[];
   bySubject: GroupRow[];
+  /** Present when judges were asked. `calibration` is absent for a stand-in: there is nothing a person's label could be held against. */
+  judges?: {
+    model: { provider: string; model: string };
+    promptVersion: string;
+    skipped: number;
+    use: TokenUse;
+    rows: { question: string; asked: number; present: number; invalid: number }[];
+    calibration?: Calibration;
+  };
   comparison?: { comparable: false; why: string } | ({ comparable: true; baselineCommit: string; baselineAt: string; dropped: number } & PairedComparison);
 }
 
@@ -83,7 +94,7 @@ export function incomparable(now: EvalRun, baseline: EvalRun): string | undefine
   return undefined;
 }
 
-export function summarise(run: EvalRun, options: { baseline?: EvalRun; rates?: Rates } = {}): Summary {
+export function summarise(run: EvalRun, options: { baseline?: EvalRun; rates?: Rates; labels?: readonly HumanLabel[] } = {}): Summary {
   const attempts = run.tasks.flatMap(task => task.attempts);
   const passed = attempts.filter(attempt => attempt.pass).length;
   const rates = run.tasks.filter(task => task.attempts.length > 0).map(task => task.attempts.filter(attempt => attempt.pass).length / task.attempts.length);
@@ -115,6 +126,20 @@ export function summarise(run: EvalRun, options: { baseline?: EvalRun; rates?: R
     }
   }
 
+  let judges: Summary["judges"];
+  if (run.judges !== undefined) {
+    const section = run.judges;
+    const standIn = run.fake || section.model.provider === "fake";
+    judges = {
+      model: section.model, promptVersion: section.promptVersion, skipped: section.skipped, use: section.use,
+      rows: [...new Set(section.verdicts.map(verdict => verdict.question))].sort().map(question => {
+        const mine = section.verdicts.filter(verdict => verdict.question === question);
+        return { question, asked: mine.length, present: mine.filter(v => v.verdict === "present").length, invalid: mine.filter(v => v.verdict === "invalid").length };
+      }),
+      ...(standIn ? {} : { calibration: calibrate(section, options.labels ?? []) }),
+    };
+  }
+
   return {
     tasks: run.tasks.length,
     attempts: attempts.length,
@@ -133,5 +158,50 @@ export function summarise(run: EvalRun, options: { baseline?: EvalRun; rates?: R
     byFailureType: groupBy(run.tasks, task => task.failureType),
     bySubject: groupBy(run.tasks, task => task.subject),
     ...(comparison !== undefined ? { comparison } : {}),
+    ...(judges !== undefined ? { judges } : {}),
+  };
+}
+
+/**
+ * The release scorecard's `model` entry from a record (scorecard.ts): the four numbers and what
+ * limits them. A stand-in's record, or one of the dev split, fills nothing — the entry stays
+ * SKIPPED and says why, because a card that showed those numbers would be read as a measurement.
+ */
+export function scorecardModelSection(run: EvalRun, summary: Summary, record: string): ModelSection {
+  if (run.fake) return { status: "skipped", reason: "the evaluation record is from a stand-in, not a model" };
+  if (run.split !== "test") return { status: "skipped", reason: `the evaluation record is the ${run.split} split; a release is read from test` };
+  if (summary.passRate === undefined || summary.passHatK === undefined || summary.passAtK === undefined || summary.detectableDifference === undefined) {
+    return { status: "skipped", reason: "the evaluation record holds no attempt" };
+  }
+  const comparison = summary.comparison;
+  const calibration = summary.judges?.calibration;
+  const gated = calibration?.questions.filter(one => one.kappa !== undefined) ?? [];
+  const models = Object.values(run.models);
+  return {
+    status: "ran",
+    provider: [...new Set(models.map(model => model.provider))].join(" + "),
+    model: [...new Set(models.map(model => model.model))].join(" + "),
+    fixtureVersion: run.corpus.version,
+    runs: run.k,
+    eval: {
+      record, split: run.split, tasks: summary.tasks, k: run.k,
+      passRate: summary.passRate, passHatK: summary.passHatK, passAtK: summary.passAtK, detectableDifference: summary.detectableDifference,
+      comparison: comparison === undefined
+        ? { verdict: "NO_BASELINE", why: "there is no earlier record to compare with" }
+        : !comparison.comparable
+          ? { verdict: "NOT_COMPARABLE", why: comparison.why }
+          : { verdict: comparison.verdict, why: comparison.why, paired: comparison.paired, worse: comparison.worse, better: comparison.better },
+      judges: calibration?.calibrated === true
+        ? {
+            calibrated: true,
+            note: `${calibration.matched} labels; may gate: ${calibration.questions.filter(one => one.mayGate).map(one => one.question).join(", ") || "none"}`,
+            kappa: Object.fromEntries(gated.map(one => [one.question, one.kappa!])),
+            mayGate: calibration.questions.filter(one => one.mayGate).map(one => one.question),
+          }
+        : { calibrated: false, note: summary.judges === undefined ? "no judge was asked" : `${calibration?.matched ?? 0} of ${MIN_LABELS} labels` },
+      ...(summary.cost.tokensPerPass !== undefined
+        ? { cost: { tokensPerPass: summary.cost.tokensPerPass, ...(summary.cost.usdPerPass !== undefined ? { usdPerPass: summary.cost.usdPerPass } : {}) } }
+        : {}),
+    },
   };
 }

@@ -13,7 +13,7 @@ import { type EvalTask, loadCorpus } from "./corpus.ts";
 import { renderReport, renderTrend } from "./report.ts";
 import { callBudget, type EvalRun, runEval, type Tier } from "./runner.ts";
 import { SUBJECT_TABLE } from "./subjects.ts";
-import { summarise } from "./summary.ts";
+import { scorecardModelSection, summarise } from "./summary.ts";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const corpus = loadCorpus(join(root, "evals/corpus"));
@@ -165,6 +165,19 @@ test("the page says in its first lines whether anything was measured, carries th
   }
   assert.match(page, /Judge not calibrated — may not gate/, "no judge has been checked against a person's labels, and the page must say so until one has");
   assert.match(renderTrend([{ run: fake, summary: summarise(fake) }])[0]!, /STAND-IN, not a measurement/);
+});
+
+test("the scorecard's model entry is read off a measured test record: the four numbers and the comparison; a dev record fills nothing", () => {
+  const baseline = recorded(passes(30, 30));
+  const run = recorded(passes(20, 30));
+  const entry = scorecardModelSection(run, summarise(run, { baseline }), "eval-test.json");
+  assert.deepEqual([entry.status, entry.provider, entry.model, entry.fixtureVersion, entry.runs], ["ran", "p", "m", "v", 1]);
+  assert.deepEqual([entry.eval!.tasks, entry.eval!.passRate.estimate, entry.eval!.passHatK, entry.eval!.comparison.verdict, entry.eval!.comparison.worse], [30, 2 / 3, 2 / 3, "REVIEW", 10]);
+  assert.ok(entry.eval!.detectableDifference > 0.2, "thirty tasks cannot show a small change, and the card carries that");
+  assert.deepEqual(entry.eval!.judges, { calibrated: false, note: "no judge was asked" });
+  assert.equal(scorecardModelSection(run, summarise(run), "f").eval!.comparison.verdict, "NO_BASELINE");
+  const dev = recorded(passes(3, 3), { split: "dev" });
+  assert.deepEqual(scorecardModelSection(dev, summarise(dev), "f"), { status: "skipped", reason: "the evaluation record is the dev split; a release is read from test" });
 });
 
 test("the call budget is tasks × attempts × the most calls an attempt can make", () => {

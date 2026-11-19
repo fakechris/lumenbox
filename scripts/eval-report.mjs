@@ -18,13 +18,20 @@
  *                                            says so in its first line, nothing is written unless
  *                                            --out/--cache/--report name a place, and docs/evals/
  *                                            is refused
+ *     --no-judges                            code graders only; skip the judge questions
+ *   npm run eval -- judge <result.json> [--out <file>] [--fake]       ask the judge questions of a
+ *                                            record already made; its attempts are not run again
+ *   npm run eval -- label-sheet <result.json> [--count 30] [--out <file>]
+ *                                            the outputs a person labels to calibrate the judges:
+ *                                            fill in "label" (present / absent) and "by" on each
+ *                                            line and save it under evals/labels/
  *   npm run eval -- report <result.json> [--baseline <result.json>]   print the page again
  *   npm run eval -- trend [--dir <results>]  one line per past run, oldest first
  *   npm run eval -- build-corpus [--check]   rewrite evals/corpus/ from the repository's own
  *                                            material (src/evals/corpus-build.ts); --check only says
  *
  * Not part of `npm test` and not a gate: CI never runs a model. The pieces live in src/evals/ —
- * corpus, graders, subjects, cache, runner, stats, summary, report — and this file only wires them
+ * corpus, graders, subjects, cache, runner, judges, calibration, stats, summary, report — and this file only wires them
  * to a provider, a clock and the disk. Credentials are read by the provider client from the
  * operator's configuration, as every live script does, and never printed.
  */
@@ -38,6 +45,7 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("..", import.meta.url));
 const CORPUS_DIR = join(root, "evals/corpus");
 const REPORTS_DIR = join(root, "docs/evals");
+const LABELS_DIR = join(root, "evals/labels");
 
 function parseArgs(argv) {
   const flag = name => {
@@ -96,26 +104,24 @@ async function plan(args, out) {
   const { callBudget } = await import("../src/evals/runner.ts");
   const { split, tasks, k } = await chosenTasks(args);
   const budget = callBudget(tasks, SUBJECT_TABLE, k);
-  out(`${tasks.length} tasks from the ${split} split × ${k} attempts: at most ${budget.total} model calls, none of them judges.`);
+  const { judgeCallBudget } = await import("../src/evals/judges.ts");
+  const judged = args.has("--no-judges") ? 0 : judgeCallBudget(tasks, k);
+  out(`${tasks.length} tasks from the ${split} split × ${k} attempts: at most ${budget.total} model calls, and ${judged} judge calls after them.`);
   for (const [name, cell] of Object.entries(budget.bySubject)) {
     out(`  ${name.padEnd(12)} ${String(cell.tasks).padStart(3)} tasks  ≤ ${String(cell.calls).padStart(4)} calls  (${SUBJECT_TABLE[name].tier} model)`);
   }
+  if (judged > 0) out(`  ${"judge".padEnd(12)} ${String(judged / k).padStart(3)} tasks  ≤ ${String(judged).padStart(4)} calls  (summary model; one question per attempt whose failure type has one)`);
   out("An episode stops at its cap and usually ends sooner; calls already in the cache are not made again.");
   return 0;
 }
 
-async function run(args, out) {
-  const fake = args.has("--fake");
-  const { split, tasks, k } = await chosenTasks(args);
-  const { SUBJECT_TABLE } = await import("../src/evals/subjects.ts");
-  const { runEval } = await import("../src/evals/runner.ts");
-  const { FileCache } = await import("../src/evals/cache.ts");
-  const { summarise } = await import("../src/evals/summary.ts");
-  const { renderReport } = await import("../src/evals/report.ts");
+/**
+ * The models a command runs on, per tier, with the operator's rates and home. Everything read from
+ * the operator's own home is read here, before a scratch home replaces it. A stand-in run reads
+ * none of it: no provider, no rates, no home.
+ */
+async function modelTiers(args, fake, out) {
   const { resolveProvider, createClient, summaryRuntimeFor } = await import("../src/host/provider.ts");
-
-  // Everything read from the operator's own home is read here, before the scratch home replaces it:
-  // the provider, the rates, and where results and the cache are kept.
   let tiers;
   let rates = {};
   let home;
@@ -139,6 +145,20 @@ async function run(args, out) {
     tiers = { primary: { model: call(client), profile: provider }, summary: { model: call(cheap.client), profile: cheap.profile } };
     out(`provider: ${provider.label} ${provider.model}; side calls: ${cheap.profile.label} ${cheap.profile.model}`);
   }
+  return { tiers, rates, home };
+}
+
+async function run(args, out) {
+  const fake = args.has("--fake");
+  const { split, tasks, k } = await chosenTasks(args);
+  const { SUBJECT_TABLE } = await import("../src/evals/subjects.ts");
+  const { runEval } = await import("../src/evals/runner.ts");
+  const { FileCache } = await import("../src/evals/cache.ts");
+  const { summarise } = await import("../src/evals/summary.ts");
+  const { renderReport } = await import("../src/evals/report.ts");
+  const { judgeRun } = await import("../src/evals/judges.ts");
+  const { loadLabels } = await import("../src/evals/calibration.ts");
+  const { tiers, rates, home } = await modelTiers(args, fake, out);
   const resultsDir = home !== undefined ? join(home, "scorecards") : undefined;
   const cacheDir = args.flag("--cache") ?? (home !== undefined ? join(home, "eval-cache") : undefined);
   const at = new Date().toISOString();
@@ -172,7 +192,17 @@ async function run(args, out) {
     rmSync(scratch, { recursive: true, force: true });
   }
 
-  const summary = summarise(result, { ...(baseline !== undefined ? { baseline } : {}), rates });
+  if (!args.has("--no-judges")) {
+    result.judges = await judgeRun(result, tasks, {
+      model: tiers.summary.model, profile: tiers.summary.profile,
+      ...(fake ? { fake: { presentShare: Number(args.flag("--wrong") ?? 0.2) } } : {}),
+      ...(cacheDir !== undefined ? { cache: new FileCache(cacheDir) } : {}),
+      offline: args.has("--offline"),
+    });
+    out(`judges: ${result.judges.verdicts.length} verdicts, ${result.judges.calls.made} calls made, ${result.judges.calls.cached} from the cache`);
+  }
+
+  const summary = summarise(result, { ...(baseline !== undefined ? { baseline } : {}), rates, labels: loadLabels(LABELS_DIR) });
   const page = renderReport(result, summary, { name });
   if (outFile !== undefined) {
     writeFile(outFile, `${JSON.stringify(result, null, 2)}\n`);
@@ -186,16 +216,66 @@ async function run(args, out) {
   return 0;
 }
 
+/** The record a command was pointed at: the first argument that is not a flag or a flag's value. */
+function recordArgument(args, command) {
+  const file = args.rest.find((arg, at) => !arg.startsWith("--") && !(args.rest[at - 1] ?? "").startsWith("--"));
+  if (file === undefined) throw new Error(`${command} needs a result file`);
+  return file;
+}
+
+/** The corpus tasks a record was run from, for the judges' context. */
+async function tasksOf(record) {
+  const { loadCorpus } = await import("../src/evals/corpus.ts");
+  return loadCorpus(CORPUS_DIR)[record.split];
+}
+
+async function judge(args, out) {
+  const file = recordArgument(args, "judge");
+  const fake = args.has("--fake");
+  const record = readRun(file);
+  if (record.fake && !fake) throw new Error("this record is a stand-in's: asking a real judge about it would spend money on nothing (use --fake)");
+  const { judgeRun } = await import("../src/evals/judges.ts");
+  const { FileCache } = await import("../src/evals/cache.ts");
+  const { tiers, home } = await modelTiers(args, fake, out);
+  const cacheDir = args.flag("--cache") ?? (home !== undefined ? join(home, "eval-cache") : undefined);
+  record.judges = await judgeRun(record, await tasksOf(record), {
+    model: tiers.summary.model, profile: tiers.summary.profile,
+    ...(fake ? { fake: { presentShare: Number(args.flag("--wrong") ?? 0.2) } } : {}),
+    ...(cacheDir !== undefined ? { cache: new FileCache(cacheDir) } : {}),
+    offline: args.has("--offline"),
+  });
+  const target = args.flag("--out") ?? file;
+  writeFile(target, `${JSON.stringify(record, null, 2)}\n`);
+  out(`judges: ${record.judges.verdicts.length} verdicts by ${record.judges.model.provider} ${record.judges.model.model}, ${record.judges.calls.made} calls made, ${record.judges.calls.cached} from the cache`);
+  out(`result: ${target}`);
+  return 0;
+}
+
+async function labelSheet(args, out) {
+  const file = recordArgument(args, "label-sheet");
+  const record = readRun(file);
+  const { selectForLabelling, MIN_LABELS } = await import("../src/evals/calibration.ts");
+  const rows = selectForLabelling(record, await tasksOf(record), { count: Number(args.flag("--count") ?? MIN_LABELS) });
+  const target = args.flag("--out") ?? join(LABELS_DIR, `labels-${record.at.slice(0, 10)}.jsonl`);
+  if (existsSync(target)) throw new Error(`${target} exists; labels already given are not overwritten. Name another file with --out.`);
+  writeFile(target, `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+  out(`${rows.length} outputs to label: ${target}`);
+  out('On each line set "label" to "present" or "absent" — is the failure the question asks about in this output? — and "by" to your name.');
+  if (rows.length < MIN_LABELS) out(`Fewer than the ${MIN_LABELS} a calibration needs: this record has no more judged outputs.`);
+  return 0;
+}
+
 async function report(args, out) {
-  const file = args.rest.find(arg => !arg.startsWith("--") && args.rest[args.rest.indexOf(arg) - 1] !== "--baseline");
-  if (file === undefined) throw new Error("report needs a result file");
+  const file = recordArgument(args, "report");
   const { summarise } = await import("../src/evals/summary.ts");
   const { renderReport } = await import("../src/evals/report.ts");
   const result = readRun(file);
   const baselineFile = args.flag("--baseline");
   let rates = {};
   if (!result.fake) rates = (await import("../src/host/provider-fallback.ts")).configuredRates();
-  out(renderReport(result, summarise(result, { ...(baselineFile !== undefined ? { baseline: readRun(baselineFile) } : {}), rates }), { name: `REPORT-${result.at.slice(0, 10)}` }));
+  const { loadLabels } = await import("../src/evals/calibration.ts");
+  const summary = summarise(result, { ...(baselineFile !== undefined ? { baseline: readRun(baselineFile) } : {}), rates, labels: loadLabels(LABELS_DIR) });
+  out(renderReport(result, summary, { name: `REPORT-${result.at.slice(0, 10)}` }));
   return 0;
 }
 
@@ -227,7 +307,7 @@ async function buildCorpusCommand(args, out) {
   return args.has("--check") && stale > 0 ? 1 : 0;
 }
 
-const COMMANDS = { run, plan, report, trend, "build-corpus": buildCorpusCommand };
+const COMMANDS = { run, plan, judge, "label-sheet": labelSheet, report, trend, "build-corpus": buildCorpusCommand };
 
 export async function main(argv, out = line => console.log(line)) {
   const args = parseArgs(argv);
