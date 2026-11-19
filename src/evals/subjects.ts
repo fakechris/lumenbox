@@ -26,11 +26,11 @@ import { filesRead } from "../host/skill-evals.ts";
 import { parseSkillFile, SKILLS_DIR, skillFrom } from "../host/skills.ts";
 import { starterSkillsWithEvals } from "../host/starter-skills.ts";
 import { TEACH_MAX_TOKENS } from "../host/teach.ts";
-import { absenceProbe, type TeachFixture, teachingCueFor } from "../host/teach-evals.ts";
+import { absenceProbe, teachingCueFor } from "../host/teach-evals.ts";
 import { fakeModel } from "../host/testing/fake-model.ts";
 import type { ModelCall } from "./cache.ts";
 import type { EvalTask, SubjectName } from "./corpus.ts";
-import type { Observation } from "./graders.ts";
+import { type Observation, teachFixtureOf } from "./graders.ts";
 
 export interface SubjectContext {
   model: ModelCall;
@@ -117,7 +117,7 @@ const teach: Subject = {
   tier: "primary",
   maxCalls: () => 1,
   async run(task, context): Promise<Observation> {
-    const fixture = { id: String(task.input.fixture), trace: task.input.trace, expect: task.gold.scorer?.expect ?? {}, reference: task.gold.answer ?? "" } as unknown as TeachFixture;
+    const fixture = teachFixtureOf(task);
     // The cue must not carry the answer key: a pass that came from reading it would be no pass.
     const leaked = absenceProbe(fixture);
     if (leaked !== undefined) return { output: "", labels: [], state: {}, infra: leaked };

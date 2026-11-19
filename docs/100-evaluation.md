@@ -26,13 +26,17 @@ change it could have seen. A number without those three reads as more than it is
 | subjects | `src/evals/subjects.ts` | how a task is put to the product: `episode`, `auto-review`, `steward`, `teach` — and each one's stand-in |
 | cache | `src/evals/cache.ts` | model calls keyed by request, task version and recipe |
 | runner | `src/evals/runner.ts` | every task k times; the record of each attempt |
+| judges | `src/evals/judges.ts` | one yes-or-no question per failure type, the quote check, the judge's model and question version on the record |
+| calibration | `src/evals/calibration.ts` | the label file, the sheet a person fills in, kappa and catch rate per question, "may not gate" |
 | statistics | `src/evals/stats.ts` | intervals, pass^k, McNemar, the detectable difference, kappa |
 | summary | `src/evals/summary.ts` | from a record to the numbers; when two runs may be compared |
 | page | `src/evals/report.ts` | the report and the trend lines |
+| golden trend | `src/evals/golden-trend.ts` | `agentbox golden` runs kept and read back |
 | command | `scripts/eval-report.mjs` (`npm run eval`) | the provider, the clock and the disk |
 
 Each piece takes the others as arguments. A new way to run a task is one more subject; a new
-comparison is a function over two records.
+comparison is a function over two records. The judges run over a record, not inside the runner,
+so a record can be judged later, by another judge, or beside the record it is compared with.
 
 ## The corpus
 
@@ -94,7 +98,8 @@ npm run eval -- run       # the test split, 3 attempts a task, on the configured
 ```
 
 `run` is the one command that spends money. On the test split as it stands it makes **at most 672
-model calls**: 75 tasks × 3 attempts × the most calls an attempt can make.
+model calls**, 75 tasks × 3 attempts × the most calls an attempt can make, **and then 87 judge
+calls**.
 
 | subject | tasks | calls per attempt | at most | model |
 |---|---|---|---|---|
@@ -102,8 +107,9 @@ model calls**: 75 tasks × 3 attempts × the most calls an attempt can make.
 | `steward` | 15 | 1 | 45 | the cheap side-call model |
 | `auto-review` | 9 | 1 | 27 | the cheap side-call model |
 | `teach` | 4 | 1 | 12 | the agent's own |
+| judges | 29 | 1 | 87 | the cheap side-call model |
 
-An episode stops at its cap and usually ends sooner. No judge is called: every grader is code.
+An episode stops at its cap and usually ends sooner. `--no-judges` leaves the last row out.
 Each `episode` call carries the full system prompt and tool list, about thirty thousand input
 tokens.
 
@@ -145,13 +151,60 @@ tested without a provider. Its numbers measure nothing. The page says so in its 
 title, nothing is written unless a path is given, and `docs-lint` refuses a report in
 `docs/evals/` whose header does not say `measured: yes`.
 
-## Not a gate, and what is not here yet
+## Judges, and when one may be believed
+
+Passing is decided by code graders. What code cannot decide — whether a reviewer's reason rests on
+what the person said, whether a taught skill could be followed by someone who never saw the
+demonstration — is asked of a judge, second and apart:
+
+- **One yes-or-no question per failure type** (`JUDGE_QUESTIONS`): is this failure present in this
+  output. Never a score. A failure type that code decides completely, such as which skill was
+  opened, has no question.
+- **A verdict must quote the output.** Code looks for the quote in the text the judge was shown; a
+  verdict whose quote is not there is `invalid`, counted apart, neither yes nor no.
+- **The judge is on the record**: its provider, model and the version of its questions. A
+  reworded question is a different judge.
+- **A verdict never changes the pass rate.** Verdicts are shown beside it.
+
+A judge is a model's opinion until it has been held against a person. To calibrate:
+
+```
+npm run eval -- label-sheet ~/.agentbox/scorecards/eval-test-<time>-<commit>.json
+```
+
+writes `evals/labels/labels-<date>.jsonl`: thirty outputs of the test split, spread over the
+questions and over the judge's two answers, each with the question, what the system was given and
+what it answered — and without the judge's verdict. On each line a person sets `"label"` to
+`"present"` or `"absent"` and `"by"` to their name, and commits the file. A line left unfilled is
+not a label. A label is about an output, matched by its digest, so the same labels check any
+judge that answered that question on that output.
+
+From the labels, per question: Cohen's kappa, and the catch rate — of the outputs a person said
+have the failure, the share the judge found. An `invalid` verdict counts against the judge. Two
+people labelling one output differently leaves it out.
+
+- Under **30** matched labels nothing is calibrated: every page and the scorecard say **judge not
+  calibrated — may not gate**. There are no labels in the repository today, so that is what every
+  page says.
+- With 30 or more, a question **may gate** at kappa **0.6** or above on at least 10 of its own
+  labels; otherwise it is marked **may not gate** with the reason.
+
+## The release scorecard and the golden tasks
+
+`npm run release:scorecard -- --eval <record> [--eval-baseline <earlier record>]` fills the
+scorecard's `model` entry from a record instead of leaving it `skipped`: the pass rate and its
+interval, pass^k, the comparison, the detectable difference, and the judges' standing. REVIEW
+there is a drop beyond noise (accepted by a named person with `--accept "eval=<name>"`); a
+comparison that settles nothing is INCOMPLETE. A stand-in's record, or one of the dev split,
+leaves the entry `skipped` and says why.
+
+`agentbox golden <provider>` now keeps each run as
+`~/.agentbox/scorecards/golden-<model>-<time>.json`, and `agentbox golden --trend` prints, per
+model, each task's last runs side by side and the latest run against the one before under the
+same rule: one red row is INCOMPLETE, not a regression.
+
+## Not a gate
 
 CI does not run this and nothing gates on it. A gate comes after a measured run, sized against the
-detectable difference that run reports.
-
-Every page says **judge not calibrated — may not gate**: there are no judges yet. Still to come
-under the same item: binary judge questions, one per failure type, that must quote their evidence;
-calibration of each judge against at least thirty outputs a person has labelled, with kappa and
-catch rate, and "may not gate" below 0.6; the release scorecard's `model` entry filled from a
-record instead of `skipped`; and the golden tasks' results kept as a trend beside these.
+detectable difference that run reports, and on a judge's verdict only for a question marked "may
+gate".
