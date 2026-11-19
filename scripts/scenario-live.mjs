@@ -50,7 +50,7 @@ const flag = name => {
  * `expect` is deliberately soft: these are conduct judgements, and a red cell is a thing to
  * look at rather than a build failure.
  */
-const SCENARIOS = [
+export const SCENARIOS = [
   {
     name: "team",
     say: "Build me a five-agent content team: a scout, a brief writer, a drafter, a fact checker and an analyst. They share /home/box/work/content-team.",
