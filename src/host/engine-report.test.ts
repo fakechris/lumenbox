@@ -403,3 +403,16 @@ test("settling reads the engine's report first: from the face, else the file; a 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a delegation that wrote files that are run later says so to the agent that delegated, from the tree and from the engine's own report (INV-1861)", () => {
+  const note = delegateEndedNote("job-1", "claude: set up CI", {
+    outcome: "done",
+    why: "claude reported it completed (exit code 0)",
+    worktree: { kind: "repo", modified: 1, untracked: 0, unpushed: 0, runLater: [".github/workflows/ci.yml"] },
+    // A hook the engine committed is not in the tree's loose changes; its report names it.
+    delivery: { done: [{ what: "added a pre-commit hook", evidence: { kind: "path", path: ".husky/pre-commit" } }, { what: "wrote the docs", evidence: { kind: "path", path: "docs/ci.md" } }], not_done: [], problems: [], verdict: "done" },
+  });
+  assert.match(note, /files that are run later, under somebody else's authority, and nobody was asked: \.github\/workflows\/ci\.yml, \.husky\/pre-commit\. Read each one, and tell the person/);
+  assert.doesNotMatch(note, /docs\/ci\.md,|, docs\/ci\.md/, "an ordinary file the report names is not one of them");
+  assert.doesNotMatch(delegateEndedNote("job-2", "claude: fix", { outcome: "done", why: "ok", worktree: { kind: "repo", modified: 1, untracked: 0 } }), /run later/, "and a run that wrote none is not told anything");
+});

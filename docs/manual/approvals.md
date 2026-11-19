@@ -4,7 +4,7 @@
      status: current
      covers: approval
      audience: user
-     updated: 2026-11-06
+     updated: 2026-11-19
 -->
 # Approvals
 
@@ -20,6 +20,13 @@ is not there, nothing starts and a card says what is missing.
 
 "Always" is not a blanket yes: it allows that one exact action, for that agent only, until you
 revoke it. Check Settings → Mine → Standing approvals.
+
+A write to a **file that is run later** always asks, whatever the agent's tool permissions: a
+git hook, a CI workflow, a script in `package.json`, a Makefile, a shell startup file, a
+scheduled job. Such a file is run afterwards by something else, with someone else's rights, so
+the card says "This file will be run later" and who runs it. A change to `package.json` asks
+only when its scripts change. Your organisation can allow these writes for one project with a
+rule ([Rules reference](reference-rules.md)).
 
 ## How to do it
 
@@ -69,6 +76,9 @@ revoke it. Check Settings → Mine → Standing approvals.
 - *This session* lasts until the app restarts.
 - An agent's *allowed* never lifts an *ask* or a *deny* your organisation set.
 - Some tools that only talk to you are allowed or off, never *ask me*.
+- A file that is run later is recognised by its path, and in a shell command when the command
+  plainly writes it (a redirection, `tee`, `cp`, `mv`). A program that writes such a file itself
+  is not seen. A task at L1 or L2 is refused such a write instead of asking.
 
 ## Next
 

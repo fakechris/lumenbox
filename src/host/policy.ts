@@ -30,7 +30,7 @@ import type { WorkReturn } from "../agents/work-attention.ts";
  * architecture exists to avoid. Limits arrive as configuration; enforcement is local.
  */
 
-import { hostBoxWrite } from "./host-box.ts";
+import { hostBoxWrite } from "./host-box.ts"; import { runLaterOf, type RunLaterFinding } from "./run-later-paths.ts"; import { runLaterAction } from "./run-later-words.ts";
 import { SENSITIVE_INPUT_TTL_MS, type SensitiveInput } from "../protocol/sensitive-input.ts";
 import { classifyShell } from "./shell-readonly.ts";
 import { envNumber } from "../config.ts";
@@ -106,7 +106,7 @@ export type PolicyRequest =
        */
       irreversible?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; why?: string; // why (INV-1651): the agent's one-line case, shown as its claim, never in the fingerprint; taskLevel (INV-1650): the level of the task this call serves; outward calls ask below L5 and are refused below L3; set by dispatch from the board
       /** The agent lives on the person's own machine (INV-438): a write there asks unless an operator's allow rule lifts it (INV-1700). Set by dispatch, never by the model. */
-      onHostBox?: true; returnTo?: WorkReturn;
+      onHostBox?: true; returnTo?: WorkReturn; runLater?: RunLaterFinding; // runLater (INV-1861): a file that is run later, found by its contents (a package.json's scripts); set by dispatch — a path alone is judged here
       /** The turn this call belongs to, for the taint rule (INV-1309): set by dispatch, never by the model. */
       turnId?: string;
       /** The model's tool_use id this check is for (INV-1664): ties the verdict to the step the chat draws. Set by dispatch. */
@@ -128,7 +128,7 @@ export type PolicyDecision =
 
 /** An action waiting for a person. Survives a restart, because the person's answer is worth keeping. */
 export interface PendingApproval {
-  id: string; returnTo?: WorkReturn; grantFingerprint?: string;
+  id: string; returnTo?: WorkReturn; grantFingerprint?: string; runLater?: RunLaterFinding; // runLater (INV-1861): the file is run later, and by whom — the card says so
   /**
    * A hash of the exact action as it was described to the person.
    *
@@ -245,7 +245,7 @@ type PolicyEvent =
   | { at: string; kind: "reply-refused"; purpose: string; chatKey: string; reason: string } // A host push whose purpose's claim did not hold (INV-1459).
   | { at: string; kind: "observed"; slug: string; would: string } // A routine in observe mode was triggered and did not run (INV-1458).
   | { at: string; kind: "resume"; agentId: string; by: string }
-  | { at: string; kind: "approval-requested"; returnTo?: WorkReturn; grantFingerprint?: string; id: string; fingerprint: string; agentId: string; description: string; action?: string; harnessResumes?: boolean; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5 } // why/taskLevel: the card's background survives a restart (INV-1651)
+  | { at: string; kind: "approval-requested"; returnTo?: WorkReturn; grantFingerprint?: string; id: string; fingerprint: string; agentId: string; description: string; action?: string; runLater?: RunLaterFinding; harnessResumes?: boolean; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5 } // why/taskLevel: the card's background survives a restart (INV-1651)
   | { at: string; kind: "approval-granted"; id: string; by: string }
   | { at: string; kind: "approval-granted-session"; id: string; by: string }
   | {
@@ -611,8 +611,8 @@ export class PolicyGate {
     this.lastTaint = taintOf(request, this.taint, this.egressAllow(request.agentId));
     // What the call does to the world (INV-691). The box's finding outranks the declaration:
     // a click is `self` until the box says this click pays.
-    const effect = sideEffectOf(request.tool, request.input);
-    const tier: SideEffectTier = request.irreversible !== undefined ? "irreversible" : effect.tier;
+    const effect = sideEffectOf(request.tool, request.input); const later = request.runLater ?? runLaterOf(request.tool, request.input); // a write to a file that is run later is its own tier (INV-1861)
+    const tier: SideEffectTier = request.irreversible !== undefined ? "irreversible" : later !== undefined ? "run-later" : effect.tier;
     this.lastTier = tier;
     this.lastWouldAsk = false;
     const gate: TierGateMode = this.limits.tierGate ?? "shadow";
@@ -641,11 +641,11 @@ export class PolicyGate {
     // AGENTBOX_APPROVAL_TOOLS would, and an operator's allow rule lifts it the same way.
     const tierWouldAsk = gate !== "off" && tierAsks(tier); const byLevel = request.taskLevel !== undefined ? levelAllows(request.taskLevel, tier) : "allow"; /* the task's own level (INV-1650): a refusal says where the task stops; an ask joins the card below */ if (byLevel === "deny") return { decision: { allow: false, reason: `This task is at L${request.taskLevel}: it stops before acting on the world — hand back what you have (a summary at L1, a plan at L2) and say what the next step would be.` } };
     const hostBoxAsk = request.onHostBox === true ? hostBoxWrite(request.tool, request.input) : undefined;
-    const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk) || byLevel === "ask" || hostBoxAsk !== undefined;
+    const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk) || byLevel === "ask" || hostBoxAsk !== undefined || later !== undefined;
     const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined || this.lastTaint !== undefined;
     const asks = rule?.effect === "ask" || mustAsk || (configuredAsk && rule?.effect !== "allow");
     this.lastAsks = askReasons({ ...(rule !== undefined ? { rule } : {}), hostCommand: request.tool === "RunOnHost", ...(request.irreversible !== undefined ? { irreversible: request.irreversible } : {}), tainted: this.lastTaint !== undefined,
-      approvalList: this.needsApproval({ ...request, irreversible: undefined }) && request.tool !== "RunOnHost", ...(gate === "enforce" && tierWouldAsk ? { tierEnforced: tier } : {}), ...(byLevel === "ask" && request.taskLevel !== undefined ? { levelAsks: request.taskLevel } : {}), ...(hostBoxAsk !== undefined ? { hostBoxWrite: hostBoxAsk } : {}) });
+      approvalList: this.needsApproval({ ...request, irreversible: undefined }) && request.tool !== "RunOnHost", ...(gate === "enforce" && tierWouldAsk ? { tierEnforced: tier } : {}), ...(byLevel === "ask" && request.taskLevel !== undefined ? { levelAsks: request.taskLevel } : {}), ...(hostBoxAsk !== undefined ? { hostBoxWrite: hostBoxAsk } : {}), ...(later !== undefined ? { runLater: later.path } : {}) });
     if (!asks) {
       // Shadow: allowed as before, and the row says a person would have been asked.
       this.lastWouldAsk = gate === "shadow" && tierWouldAsk && rule?.effect !== "allow";
@@ -747,7 +747,7 @@ export class PolicyGate {
       agentId: request.agentId,
       agentName: request.agentName, ...(request.returnTo ? {returnTo:request.returnTo,grantFingerprint:actionFingerprint} : {}),
       description,
-      ...(effect.action !== undefined ? { action: effect.action } : {}),
+      ...(later !== undefined ? { action: runLaterAction(later), runLater: later } : effect.action !== undefined ? { action: effect.action } : {}),
       requestedAt: this.now().toISOString(), ...(request.why !== undefined ? { why: request.why } : {}), ...(request.taskLevel !== undefined ? { taskLevel: request.taskLevel } : {}),
       ...(this.lastTaint !== undefined ? { onceOnly: true as const } : {}),
     };
@@ -766,7 +766,7 @@ export class PolicyGate {
         id: approval.id,
         fingerprint,
         agentId: approval.agentId, ...(approval.returnTo ? {returnTo:approval.returnTo,grantFingerprint:approval.grantFingerprint} : {}),
-        description,
+        description, ...(approval.runLater !== undefined ? { runLater: approval.runLater } : {}),
         ...(approval.action !== undefined ? { action: approval.action } : {}), ...(approval.why !== undefined ? { why: approval.why } : {}), ...(approval.taskLevel !== undefined ? { taskLevel: approval.taskLevel } : {}),
       },
     };
@@ -1043,7 +1043,7 @@ export class PolicyGate {
             fingerprint: event.fingerprint,
             agentId: event.agentId, ...(event.returnTo ? {returnTo:event.returnTo,grantFingerprint:event.grantFingerprint} : {}),
             agentName: "",
-            description: event.description,
+            description: event.description, ...(event.runLater !== undefined ? { runLater: event.runLater } : {}),
             ...(event.action !== undefined ? { action: event.action } : {}), ...(event.why !== undefined ? { why: event.why } : {}), ...(event.taskLevel !== undefined ? { taskLevel: event.taskLevel } : {}),
             ...(event.harnessResumes === true ? { harnessResumes: true } : {}),
             requestedAt: event.at,

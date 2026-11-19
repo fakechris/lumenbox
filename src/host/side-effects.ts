@@ -22,6 +22,10 @@
  * - `credential` — touches a secret, runs on the person's own machine, or changes who can act.
  * - `irreversible` — never declared per tool: the box found that *this call* would pay, publish,
  *   delete or authorise, and the host marks the request.
+ * - `run-later` — never declared per tool either: this call writes a file that something else runs
+ *   afterwards under somebody else's authority — a git hook, a CI workflow, a package script, a
+ *   shell startup file (run-later-paths.ts, INV-1861). It asks whatever the tier gate's mode, as a
+ *   write on the person's own machine does; an operator's allow rule lifts it for a project.
  *
  * Clicks and typing in a browser page are `self` on purpose. Most of them navigate, and a gate that
  * counted every click would bury the few that matter; the box's deterministic irreversible check is
@@ -34,7 +38,7 @@
 import { MCP_SEPARATOR } from "./mcp.ts";
 import { engineToolNames } from "./engine-tools.ts";
 
-export type SideEffectTier = "observe" | "self" | "reach" | "spend" | "credential" | "irreversible";
+export type SideEffectTier = "observe" | "self" | "reach" | "spend" | "credential" | "irreversible" | "run-later";
 
 export interface SideEffect {
   tier: SideEffectTier;

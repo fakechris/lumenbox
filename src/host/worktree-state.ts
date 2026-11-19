@@ -9,12 +9,18 @@
  * push. A directory that is not a repository is said to be one; a repository with no upstream
  * reports changes but no unpushed count; a check that does not answer in time is `unknown`
  * rather than a stuck settlement.
+ *
+ * It also names the changed files that are run later (INV-1861, run-later-paths.ts): a delegated
+ * engine edits with its own tools, which the policy gate never sees, so its work is checked here,
+ * when the result is recorded. Read from the same status, so it covers what is still loose in the
+ * tree — not what the engine already committed, and not `.git/` itself, which git does not list.
  */
 import type { BoxClient } from "../box/client.ts";
 import { quoteForShell } from "./presets.ts";
+import { packageRunChanges, runLaterUnder } from "./run-later-paths.ts";
 
 export type WorktreeState =
-  | { kind: "repo"; modified: number; untracked: number; unpushed?: number }
+  | { kind: "repo"; modified: number; untracked: number; unpushed?: number; /** Changed files that are run later, as git names them. */ runLater?: string[] }
   | { kind: "not-a-repo" }
   | { kind: "unknown"; why: string };
 
@@ -44,12 +50,48 @@ export function parseWorktree(stdout: string): WorktreeState {
   return { kind: "repo", modified, untracked, ...(unpushed !== undefined ? { unpushed } : {}) };
 }
 
+/** The paths a status names, as git wrote them: the new name of a rename, and a directory git reported whole keeps its slash. */
+export function changedPaths(stdout: string): string[] {
+  const statusAt = stdout.indexOf("__STATUS__");
+  const unpushedAt = stdout.indexOf("__UNPUSHED__");
+  if (statusAt < 0 || unpushedAt < 0) return [];
+  return stdout.slice(statusAt + "__STATUS__".length, unpushedAt).split("\n").filter(line => line.length > 3)
+    .map(line => line.slice(3).split(" -> ").at(-1)!.replace(/^"(.*)"$/, "$1"));
+}
+
+/** How many changed package.json files have their contents compared: each is one more question to the box. */
+const PACKAGE_CHECKS = 5;
+
+/**
+ * Which of the changed files are run later. A path decides for all but a package.json, which is
+ * compared with what the last commit held — only a change to its scripts counts (`packageRunChanges`).
+ */
+async function runLaterChanges(box: Pick<BoxClient, "exec">, cwd: string, paths: readonly string[], timeoutMs: number): Promise<string[]> {
+  const out: string[] = [];
+  let compared = 0;
+  for (const path of paths) {
+    const entry = runLaterUnder(path);
+    if (entry === undefined) continue;
+    if (entry.byContent !== true) { out.push(path); continue; }
+    if (compared >= PACKAGE_CHECKS) continue;
+    compared += 1;
+    const quoted = quoteForShell(path);
+    const read = await box.exec(`cd ${quoteForShell(cwd)} && { git show HEAD:./${quoted} 2>/dev/null; echo; echo "__AFTER__"; cat -- ${quoted}; }`, { timeoutMs });
+    const at = read.stdout.indexOf("__AFTER__");
+    if (at >= 0 && packageRunChanges(read.stdout.slice(0, at), read.stdout.slice(at + "__AFTER__".length)).length > 0) out.push(path);
+  }
+  return out;
+}
+
 /** Asks the box; never throws — a failure to ask is an `unknown` with the reason. */
 export async function worktreeState(box: Pick<BoxClient, "exec">, cwd: string, timeoutMs = WORKTREE_TIMEOUT_MS): Promise<WorktreeState> {
   try {
     const result = await box.exec(worktreeCommand(cwd), { timeoutMs });
     if (result.timed_out) return { kind: "unknown", why: `git did not answer within ${Math.round(timeoutMs / 1000)}s` };
-    return parseWorktree(result.stdout);
+    const state = parseWorktree(result.stdout);
+    if (state.kind !== "repo") return state;
+    const runLater = await runLaterChanges(box, cwd, changedPaths(result.stdout), timeoutMs);
+    return runLater.length > 0 ? { ...state, runLater } : state;
   } catch (error) {
     return { kind: "unknown", why: error instanceof Error ? error.message : String(error) };
   }
@@ -63,6 +105,7 @@ export function describeWorktree(state: WorktreeState): string {
     ...(state.modified > 0 ? [`${state.modified} modified`] : []),
     ...(state.untracked > 0 ? [`${state.untracked} untracked`] : []),
     ...(state.unpushed !== undefined && state.unpushed > 0 ? [`${state.unpushed} unpushed`] : []),
+    ...(state.runLater !== undefined ? [`changed files that are run later: ${state.runLater.join(", ")}`] : []),
   ];
   if (parts.length === 0) return state.unpushed === undefined ? "clean (no upstream to compare with)" : "clean";
   return parts.join(", ");

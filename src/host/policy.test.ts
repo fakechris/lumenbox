@@ -1122,3 +1122,62 @@ test("once approval stays with its work while explicit session and standing gran
     assert.equal(restored.pending().length,0,"a standing grant does not leave its old work question pending");
   } finally {cleanup();}
 });
+
+test("a write to a file that is run later asks in any box, says who will run it, is refused below L3, and a rule lifts it for one project (INV-1861)", async () => {
+  const { runLaterWords } = await import("./run-later-words.ts");
+  const { cleanup, path } = fixture();
+  try {
+    const limits = { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" as const };
+    const rules = rulesIn(join(path, "..", "rules"), {
+      "shop-ci": "---\neffect: allow\ntool: write_file, edit_file\npath: /home/box/work/shop/.github\n---\nThe shop project's CI is the agents' to maintain.\n",
+    });
+    const gate = new PolicyGate({ path, limits, rules });
+    const call = (tool: string, input: Record<string, unknown>, extra: Partial<Extract<PolicyRequest, { kind: "tool" }>> = {}): PolicyRequest => ({ kind: "tool", agentId: "agent-1", agentName: "Ada", tool, input, ...extra });
+    const hook = { path: "/home/box/work/shop/.git/hooks/pre-commit", content: "#!/bin/sh\nnpm test\n" };
+
+    // A Docker box, no task, the tier gate off, nothing on the approval lists: it asks all the same.
+    const asked = gate.check(call("write_file", hook));
+    assert.ok(!asked.allow && asked.approval !== undefined, "a card, not a refusal");
+    assert.deepEqual(asked.approval.runLater, { path: hook.path, by: "git" }, "the card knows which file and who runs it");
+    assert.match(asked.approval.description, /npm test/, "and shows the exact write");
+    for (const locale of ["zh", "en"] as const) {
+      const words = runLaterWords(asked.approval.runLater!, locale);
+      assert.ok(words.includes(hook.path) && !words.includes("ui.consent"), `${locale}: the sentence names the file`);
+      assert.notEqual(words, runLaterWords({ path: hook.path, by: "ci" }, locale), `${locale}: and who runs it`);
+    }
+    assert.deepEqual(new PolicyGate({ path, limits, rules }).pending()[0]?.runLater, { path: hook.path, by: "git" }, "the card says the same after a restart");
+    assert.equal(gate.grant(asked.approval.id, "user", "once"), true);
+    assert.equal(gate.check(call("write_file", hook)).allow, true, "a person's yes lets that write through");
+    assert.equal(gate.check(call("write_file", hook)).allow, false, "once");
+
+    for (const taskLevel of [3, 4, 5] as const) {
+      const decision = gate.check(call("write_file", { ...hook, content: `# L${taskLevel}\n` }, { taskLevel }));
+      assert.ok(!decision.allow && decision.approval !== undefined, `L${taskLevel} asks: a task's level is not consent to what runs under someone else's authority`);
+    }
+    for (const taskLevel of [1, 2] as const) {
+      const decision = gate.check(call("write_file", { ...hook, content: `# L${taskLevel}\n` }, { taskLevel }));
+      assert.ok(!decision.allow && decision.approval === undefined && decision.reason.includes(`L${taskLevel}`), `L${taskLevel} is refused outright`);
+    }
+
+    const shell = gate.check(call("bash", { command: "echo 'npm test' > /home/box/work/shop/.husky/pre-push" }));
+    assert.ok(!shell.allow && shell.approval?.runLater?.by === "git", "a shell redirection into one asks too");
+    assert.equal(gate.check(call("write_file", { path: "/home/box/work/shop/src/index.ts", content: "x" })).allow, true, "an ordinary file does not");
+    assert.equal(gate.check(call("bash", { command: "npm test > /home/box/work/shop/test.log" })).allow, true, "nor an ordinary redirection");
+
+    assert.equal(gate.check(call("write_file", { path: "/home/box/work/shop/.github/workflows/ci.yml", content: "on: push\n" })).allow, true, "the operator's rule lifts it for that project");
+    assert.equal(gate.check(call("write_file", { path: "/home/box/work/blog/.github/workflows/ci.yml", content: "on: push\n" })).allow, false, "and for no other");
+
+    // A package.json is judged by dispatch, which has read what it held; the gate takes its finding.
+    const edit = { path: "/home/box/work/shop/package.json", old: '"test": "node --test"', new: '"test": "node --test", "postinstall": "node setup.js"' };
+    assert.equal(gate.check(call("edit_file", edit)).allow, true, "by its path alone a package.json does not ask");
+    const scripts = gate.check(call("edit_file", edit, { runLater: { path: edit.path, by: "packages" } }));
+    assert.ok(!scripts.allow && scripts.approval?.runLater?.by === "packages", "with its scripts changed it does");
+
+    const engine = gate.check(call("engine:Write", { file_path: "/home/box/work/shop/.mcp.json", content: "{}" }, { delegated: { jobId: "job-1" } }));
+    assert.ok(!engine.allow && engine.approval === undefined, "a delegated engine that cannot wait for a person is refused, not waved through");
+    const onHost = gate.check(call("write_file", { path: "/Users/p/proj/Makefile", content: "all:\n" }, { onHostBox: true }));
+    assert.ok(!onHost.allow && onHost.approval?.runLater?.by === "build", "on the person's own machine the card says the same");
+  } finally {
+    cleanup();
+  }
+});
