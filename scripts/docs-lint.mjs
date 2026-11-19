@@ -116,6 +116,7 @@ export function lintDocs(dir) {
     }
   }
   problems.push(...lintSolutions(join(dir, "solutions")));
+  problems.push(...lintEvalReports(join(dir, "evals")));
   return { docs, problems };
 }
 
@@ -372,6 +373,31 @@ export function lintManual(dir) {
     if (owners.length > 1) problems.push(`two current manual pages cover ${concept}: ${owners.join(", ")}. One concept, one page; merge them or supersede one.`);
   }
   return { pages, problems };
+}
+
+/**
+ * The evaluation reports (INV-1772): `docs/evals/REPORT-<date>.md`, written by
+ * `scripts/eval-report.mjs` and kept as results. Outside the numbered documents — a report is a
+ * dated measurement, not a design — but each opens with the generator's own header, and that
+ * header must say a model was measured. The runner can also be driven by a deterministic
+ * stand-in, whose page looks like a result and measures nothing; one of those found where results
+ * are kept is the failure this refuses.
+ */
+export function lintEvalReports(dir) {
+  const problems = [];
+  if (!existsSync(dir)) return problems;
+  for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
+    const at = `evals/${file}`;
+    const name = /^(REPORT-\d{4}-\d{2}-\d{2})\.md$/.exec(file)?.[1];
+    if (name === undefined) { problems.push(`${at}: a page in docs/evals/ is a report named REPORT-<yyyy-mm-dd>.md.`); continue; }
+    const text = readFileSync(join(dir, file), "utf8");
+    const end = text.indexOf("-->");
+    if (!text.startsWith("<!-- eval-report:") || end < 0) { problems.push(`${at}: no eval-report header. A report is written by scripts/eval-report.mjs, not by hand.`); continue; }
+    const fields = Object.fromEntries(text.slice(5, end).split("\n").flatMap(line => { const kv = /^\s*([a-z-]+):\s*(.*)$/.exec(line); return kv ? [[kv[1], kv[2].trim()]] : []; }));
+    if (fields["eval-report"] !== name) problems.push(`${at}: header says eval-report: ${fields["eval-report"] ?? "(none)"}, filename says ${name}.`);
+    if (fields.measured !== "yes") problems.push(`${at}: measured: ${fields.measured ?? "(none)"}. Only a run against a model is kept in docs/evals/; a stand-in's page is not a result.`);
+  }
+  return problems;
 }
 
 /**

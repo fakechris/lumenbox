@@ -15,7 +15,7 @@ import type { BoxClass } from "../box/access.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { type DurableState, renderDurableBlocks } from "./durable.ts";
 import { conversationOfTask, renderPursuit } from "./goal-mode.ts";
-import { renderHistoryBlock } from "./history.ts";
+import { renderHistoryBlock } from "./history.ts"; import { DELIVERY_ORDER } from "./delivery-report.ts";
 import {
   type MemoryRecall,
   type MemoryRecord,
@@ -981,8 +981,8 @@ function renderWrapUp(context: PromptContext): string {
     "what you asked and why. If nothing worked, say what you tried and what you need. " +
     "When results of work you started earlier arrive as messages, the wrap-up you write " +
     "after the last one restates the whole deliverable — everything that was asked, all of " +
-    "what came back — not a reaction to the piece that landed last. One complete paragraph " +
-    "beats a status line."
+    "what came back — not a reaction to the piece that landed last. " +
+    DELIVERY_ORDER
   );
 }
 

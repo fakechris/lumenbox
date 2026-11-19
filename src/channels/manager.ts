@@ -351,6 +351,7 @@ export interface ChannelManagerDeps {
    * `attach_next`). Asked once per delivered reply; whatever comes back is appended.
    */
   attachToReply?: (chatKey: string) => string | undefined; /** "分了 N 个子任务，M 个完成" when the task's turns forked (INV-1667); absent or undefined, no line. */ forkTally?: (taskId: string) => string | undefined;
+  /** What the member's result note says was not done or not verified, when the reply left that out (INV-1922, delivery-report.ts). */ limitsOwed?: (taskId: string, reply: string) => string | undefined;
   /**
    * Told of every admitted message from a person, for routines that listen for a phrase. Fired
    * beside the ordinary handling, never instead of it; the callee decides what, if anything, runs.
@@ -2259,10 +2260,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         }
         else if (review.mode() === "shadow") void review.review(input).catch(() => {});
       }
-      // A routine result that was judged not worth an interruption rides along here, under
-      // the reply the person was waiting for anyway (INV-776).
-      const attached = this.deps.attachToReply?.(targetChatKey) ?? this.deps.attachToReply?.(chatKey);
-      const trailer = [suggestion, attached, taskId !== undefined ? this.deps.forkTally?.(taskId) : undefined].filter((part): part is string => part !== undefined).join("\n\n");
+      // A routine result judged not worth an interruption rides along here, under the reply the person was waiting for anyway (INV-776).
+      const attached = this.deps.attachToReply?.(targetChatKey) ?? this.deps.attachToReply?.(chatKey), ofTask = taskId !== undefined ? [this.deps.forkTally?.(taskId), this.deps.limitsOwed?.(taskId, reply)] : [];
+      const trailer = [suggestion, attached, ...ofTask].filter((part): part is string => part !== undefined).join("\n\n");
       if (reply.trim() !== interim) {
         await deliver(`${reply.trim() === "" ? EMPTY_REPLY_NOTE : reply}${trailer === "" ? "" : `\n\n${trailer}`}`);
       } else {

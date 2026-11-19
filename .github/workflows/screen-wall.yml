@@ -1,0 +1,43 @@
+# The wall between a confined command and a Mac's own screen, measured on a real macOS (INV-1756).
+#
+# `npm test` proves the Seatbelt profile says what it should. It cannot prove macOS refuses what
+# the profile says, and that may never be tried on a person's machine: a refusal that is wrong
+# posts input into their session. A hosted runner is a session nobody is sitting at, and it holds
+# Screen Recording, Accessibility and event posting, so the bare control really works there.
+#
+# Not on every push: it runs when the profile, the lists it refuses or the measurement itself
+# change, and by hand — for a new macOS, before its name is added to what was measured.
+name: screen-wall
+
+on:
+  pull_request:
+    paths:
+      - src/host/host-sandbox.ts
+      - src/boxd/confinement.ts
+      - src/cua/macos-executor.ts
+      - scripts/screen-wall/**
+      - .github/workflows/screen-wall.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every macOS a hosted runner still offers; older ones are not measured.
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      # SHA-pinned, as in ci.yml.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: measure
+        run: bash scripts/screen-wall/measure.sh

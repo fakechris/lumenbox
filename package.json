@@ -30,6 +30,7 @@
     "test:ci": "node scripts/test-floor.mjs",
     "test:layout": "node scripts/ui-layout.mjs && node scripts/ui-next-layout.mjs",
     "flaky": "node scripts/flaky.mjs",
+    "eval": "node --experimental-transform-types scripts/eval-report.mjs",
     "check": "npm run typecheck && npm run lint && npm run arch && npm run test:ci",
     "arch": "node scripts/arch-ratchet.mjs",
     "app": "electron .",

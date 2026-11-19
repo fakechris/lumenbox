@@ -1744,7 +1744,7 @@ evidence: {
           },
           note: {
             type: "string",
-            description: "For update: what happened — a blocker, a finding, a handoff note.",
+            description: "For update: what happened — a blocker, a finding, a handoff note. For submit: the result, in the delivery order.",
           }, level: { type: "integer", minimum: 1, maximum: 5, description: "For create or update: how far the AI may take it alone, 1–5 (L1 tidy, L2 propose, L3 partial, L4 do it with outward steps confirmed, L5 end to end). Inferred by rule when absent; say why if you set it." },
           ...DISCOVERY_FIELDS, propose: { // the discovery fields: INV-1652
             type: "boolean",

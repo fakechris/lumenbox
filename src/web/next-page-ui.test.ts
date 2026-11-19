@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { NEXT_PAGE } from "./page-locale.ts";
 import { nextLogic } from "./next-logic-ui.ts";
+import { DELIVERY_BRIEF, DELIVERY_SECTIONS, deliveryLabel } from "../host/delivery-report.ts";
 
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
@@ -128,8 +129,10 @@ test("a result waiting for the person says where it came from and what was repor
   assert.deepEqual(["feishu-zongheng:ou_1", "web", "ada", "mcp:k"].map(requester => originOf({ requester })),
     ["ui.next.origin.feishu", "ui.next.origin.web", "ui.next.origin.agent(Ada)", "ui.next.origin.other"], "the door it came through, or the agent that started it");
   const signOffLines = pageFunction("signOffLines", { el, t });
+  const rich = (text: string, cls: string) => el("div", cls, text);
+  const reportBlock = pageFunction("reportBlock", { el, t, rich }) as (report: unknown, keys: readonly string[]) => Fake;
   const resultCard = pageFunction("resultCard", {
-    el, t, agentName, originOf, chat, signOffLines, agoText: () => "3d", rich: (text: string, cls: string) => el("div", cls, text), toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
+    reportBlock, REPORT_BRIEF: DELIVERY_BRIEF, el, t, agentName, originOf, chat, signOffLines, agoText: () => "3d", rich, toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
     render: () => {}, document: { querySelector: () => null },
     openPanel: (id: string) => opened.push(id), postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
   });
@@ -153,6 +156,22 @@ test("a result waiting for the person says where it came from and what was repor
   assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/tasks/update", { id: "t1", status: "done" }], ["/api/tasks/update", { id: "t1", status: "doing", note: "Drop the 536-tool claim." }]]);
   const bare = resultCard({ id: "t2", title: "Nothing left behind", assigneeId: "mia", requester: "web" }) as Fake;
   assert.ok(bare.kids.some(kid => kid.text === "ui.next.chat.noReport"), "an empty result says it is empty");
+  // INV-1922: a result written as a delivery is drawn by its parts. The card shows the short form; what was not
+  // verified is on it without a click, and a delivery that never said is told apart from one that said "none".
+  const { lastReport } = await import("./task-board-record.ts");
+  const note = "The export keeps the time zone.\nMain change: src/export.ts:41, the DST branch.\nOther changes: renamed a helper.\nVerified: 12 tests on 3f2a9c1.\nNot done or limits: not run on the live account.\nNext: you confirm one export.";
+  const delivered = lastReport({ createdAt: "2026-11-01T00:00:00.000Z", history: [{ at: "2026-11-02T00:00:00.000Z", by: "mia", note: `${note}${" and more".repeat(200)}` }] } as never)!;
+  const parts = (block: Fake) => block.kids.map(kid => [kid.dataset.part, kid.kids.map(inner => inner.text).join(" | ")]);
+  const onCard = (resultCard({ ...row, report: delivered }) as Fake).kids.find(kid => kid.cls === "parts")!;
+  assert.deepEqual(parts(onCard).map(([key]) => key), ["result", "main", "limits", "next"], "the card is the short form; the rest is one click away");
+  assert.deepEqual(parts(onCard)[2], ["limits", "ui.next.report.limits | not run on the live account."], "read from the whole note, so a long one does not lose it to the cut");
+  assert.deepEqual(parts(reportBlock(delivered, DELIVERY_SECTIONS)).map(([key]) => key), [...DELIVERY_SECTIONS], "the panel shows every part");
+  const silent = lastReport({ createdAt: "2026-11-01T00:00:00.000Z", history: [{ at: "2026-11-02T00:00:00.000Z", by: "mia", note: "Fixed.\nMain change: src/export.ts\nNext: you confirm." }] } as never)!;
+  assert.deepEqual(parts(reportBlock(silent, DELIVERY_BRIEF))[2], ["limits", "ui.next.report.limits | ui.next.report.unstated"], "left out is said, not hidden");
+  assert.equal(reportBlock({ note: "Checked: fine." }, DELIVERY_BRIEF).cls, "report", "a note not written as a delivery is shown as it was written");
+  // The page names a part by the word a member is asked to write it under: one name per part, in both languages.
+  const { MESSAGES } = await import("../i18n/messages.ts");
+  for (const key of DELIVERY_SECTIONS.slice(1)) for (const locale of ["zh", "en"] as const) assert.equal(MESSAGES[locale][`ui.next.report.${key}`], deliveryLabel(key, locale), key);
 });
 
 test("a draft waiting to be sent and a proposal to close are decided on their inbox rows", async () => {
