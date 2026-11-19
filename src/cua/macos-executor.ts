@@ -51,6 +51,18 @@ import type { ComputerAction, DesktopCapabilities, DesktopObservation, MouseButt
  * whatever it starts, and a shell running these would reach the screen past every gate.
  */
 export const SCREEN_PROGRAMS = ["/usr/sbin/screencapture", "/usr/bin/osascript", "/usr/bin/osacompile", "/usr/bin/automator", "/usr/bin/shortcuts"] as const;
+/**
+ * What a program needs to reach this screen without those — one the agent compiled itself, or a
+ * copy of one of them under another name (INV-1756). Measured on macOS 15.8 and 26.7, never on a
+ * person's session (`scripts/screen-wall/measure.sh`, docs/solutions/native-screen-never-asks-macos.md):
+ * posting an event, moving the pointer, capturing a display and listing the windows each stop
+ * without the window server's service; a ScreenCaptureKit capture stops without `replayd` and
+ * needs nothing else; Accessibility stops without `com.apple.axserver`, which it looks up in the
+ * other application's own namespace rather than the session's.
+ */
+export const SCREEN_SERVICES = ["com.apple.windowserver.active", "com.apple.replayd", "com.apple.axserver"] as const;
+/** And the one way in that is not a Mach lookup: the HID system's own user client, which posts a pointer event with no window server. */
+export const SCREEN_USER_CLIENTS = ["IOHIDParamUserClient"] as const;
 
 export const MACOS_DESKTOP_CAPABILITIES = { backend: "macos-cg", platform: "darwin", semantic_actions: [], background_semantic: false, observation_refs: false } as const satisfies DesktopCapabilities;
 
