@@ -39,7 +39,7 @@ import { HostSandbox, sandboxViolations, type WrappedCommand } from "../host/hos
 import { mirrorOnUnixSocket } from "../host/host-egress.ts";
 import { STATE_VARIABLES, stateName } from "../host/box-paths.ts";
 import type { Roots } from "./headless.ts";
-import { SCREEN_PROGRAMS } from "../cua/macos-executor.ts";
+import { SCREEN_PROGRAMS, SCREEN_SERVICES, SCREEN_USER_CLIENTS } from "../cua/macos-executor.ts";
 
 /** Refused before anything ran: the box answers 403, the host reads it as refused. */
 export class ConfinementRefused extends Error {}
@@ -102,10 +102,14 @@ export interface ConfinementOptions {
   systemTmp?: string;
   /**
    * The node opened the machine's own screen (INV-1707): the programs that capture or drive it do
-   * not start in a command, so the screen is reached through the computer tool and its gates only.
+   * not start in a command, and the services a program of the agent's own would reach it through are
+   * refused (INV-1756), so the screen is reached through the computer tool and its gates only.
    */
   screenOpen?: boolean;
 }
+
+/** What a command may not start, look up or open where the node's own screen is open (INV-1707, INV-1756). */
+const SCREEN_WALL = { denyExec: SCREEN_PROGRAMS, denyServices: SCREEN_SERVICES, denyUserClients: SCREEN_USER_CLIENTS };
 
 function real(path: string): string {
   try {
@@ -140,7 +144,7 @@ export function confinementFor(options: ConfinementOptions): Confine | undefined
       readOnly: repositories.filter(entry => entry.mode === "ro").map(entry => entry.path),
       loopbackPorts: port === undefined ? [] : [port],
       hideCredentials: true,
-      ...(options.screenOpen === true ? { denyExec: SCREEN_PROGRAMS } : {}),
+      ...(options.screenOpen === true ? SCREEN_WALL : {}),
       ...privateTmp(),
     };
   };

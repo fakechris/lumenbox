@@ -80,7 +80,17 @@ export interface SandboxRules {
    * the computer tool's gates with the screen permission the node's app holds.
    */
   denyExec?: readonly string[];
+  /**
+   * Mach services that may not be looked up, and IOKit user clients that may not be opened (macOS
+   * only): refusing to start a program stops nothing the agent compiles itself, or a copy of the
+   * program under another name. Where the screen is open these are what such a program reaches it
+   * through (INV-1756).
+   */
+  denyServices?: readonly string[];
+  denyUserClients?: readonly string[];
 }
+
+type Refusals = Pick<SandboxRules, "denyExec" | "denyServices" | "denyUserClients">;
 
 export interface WrappedCommand {
   command: string;
@@ -230,11 +240,13 @@ export class HostSandbox {
     // What is hidden is not writable either: a rw grant of a parent must not reopen it.
     const denied = [...this.deniedPaths(writable.filter(path => path !== this.tmp)), ...readOnly, ...hidden].filter((path, index, all) => all.indexOf(path) === index);
     const ports = [...new Set(rules.loopbackPorts ?? [])];
+    const refused = [...(rules.denyServices ?? []), ...(rules.denyUserClients ?? [])];
     const words = [
       `writes only under ${writable.join(", ")}`,
       `never under ${denied.map(path => path.replace(this.home, "~")).join(", ")}`,
       ...(hidden.length > 0 ? [`no reads at all under ${hidden.map(path => path.replace(this.home, "~")).join(", ")}`] : []),
       ...(rules.denyExec !== undefined && rules.denyExec.length > 0 && this.mechanism === "sandbox-exec" ? [`these do not run: ${rules.denyExec.join(", ")}`] : []),
+      ...(refused.length > 0 && this.mechanism === "sandbox-exec" ? [`these system services are refused, whatever program asks: ${refused.join(", ")}`] : []),
       ...(hideSecrets && this.mechanism === "sandbox-exec" ? ["no Keychain: the securityd services are refused and /usr/bin/security does not run, so no stored login or password can be read"] : []),
       ...(hideSecrets && this.mechanism === "bwrap"
         ? [`a /tmp of its own (${rules.privateTmp === undefined ? "empty for each command" : real(rules.privateTmp)}): the shared ${[...new Set([this.systemTmp, this.tmp])].join(" and ")} and the sockets in them, made before the command or after, are not there`]
@@ -245,7 +257,7 @@ export class HostSandbox {
       ports.length > 0 ? `network only to loopback port${ports.length === 1 ? "" : "s"} ${ports.join(", ")} (the egress proxy, which applies the relay's allow list)` : "no network at all (no egress relay is configured for host processes)",
     ];
     return this.mechanism === "sandbox-exec"
-      ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports, hidden, hideSecrets, owned, rules.denyExec ?? []), ...(hideSecrets ? ["/usr/bin/env", ...SOCKET_VARIABLES.flatMap(name => ["-u", name])] : []), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
+      ? { command: "/usr/bin/sandbox-exec", args: ["-p", this.seatbelt(writable, denied, ports, hidden, hideSecrets, owned, rules), ...(hideSecrets ? ["/usr/bin/env", ...SOCKET_VARIABLES.flatMap(name => ["-u", name])] : []), command, ...args], env: {}, mechanism: "sandbox-exec", rules: words }
       : { command: "bwrap", args: this.bwrap(real(rules.runIn ?? cwd), writable, denied, ports, command, args, hidden, hideSecrets, readOnly, rules.privateTmp === undefined ? undefined : real(rules.privateTmp)), env: {}, mechanism: "bwrap", rules: words };
   }
 
@@ -283,7 +295,8 @@ export class HostSandbox {
     return [needed ? socket : dir];
   }
 
-  private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[], hidden: readonly string[] = [], hideSecrets = false, owned: readonly string[] = [], denyExec: readonly string[] = []): string {
+  private seatbelt(writable: readonly string[], denied: readonly string[], ports: readonly number[], hidden: readonly string[] = [], hideSecrets = false, owned: readonly string[] = [], refuse: Refusals = {}): string {
+    const { denyExec = [], denyServices = [], denyUserClients = [] } = refuse;
     // The Keychain is a service, not a file: without the Mach lookups nothing can ask securityd for an item (INV-1711).
     // The `security` binary is refused too, so the agent reads a plain "Operation not permitted"; a copy of it is stopped by the lookups.
     const keychain = [...KEYCHAIN_SERVICES.map(name => `(global-name ${sbplPath(name)})`), ...KEYCHAIN_SERVICE_PREFIXES.map(name => `(global-name-prefix ${sbplPath(name)})`)].join(" ");
@@ -297,6 +310,9 @@ export class HostSandbox {
       ...(hidden.length > 0 ? [`(deny file-read* ${hidden.map(path => `(subpath ${sbplPath(path)})`).join(" ")})`] : []),
       ...(hideSecrets ? [`(deny mach-lookup ${keychain})`, '(deny process-exec (literal "/usr/bin/security"))'] : []),
       ...(denyExec.length > 0 ? [`(deny process-exec ${denyExec.map(path => `(literal ${sbplPath(path)})`).join(" ")})`] : []),
+      // Both names: a service is looked up in the session's namespace or in another process's own (Accessibility's is the second).
+      ...(denyServices.length > 0 ? [`(deny mach-lookup ${denyServices.map(name => `(global-name ${sbplPath(name)}) (local-name ${sbplPath(name)})`).join(" ")})`] : []),
+      ...(denyUserClients.length > 0 ? [`(deny iokit-open ${denyUserClients.map(name => `(iokit-user-client-class ${sbplPath(name)})`).join(" ")})`] : []),
       "(deny network-outbound)",
       ...ports.map(port => `(allow network-outbound (remote ip "localhost:${port}"))`),
       // A host command keeps every Unix socket; the native box only its own (INV-1716). Measured 2026-11-07: with no
