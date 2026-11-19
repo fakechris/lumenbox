@@ -34,6 +34,17 @@ export function assertDisposable(name) {
   }
 }
 
+/**
+ * Refuses the installation's own box, for a harness that promises not to touch it (INV-1828).
+ * `liveName` is the default container name: an unset name resolves to it, so unset is refused too.
+ * It does not matter who named it — a flag, the shell, or the config file's `env` block.
+ */
+export function assertNotLiveBox(name, liveName) {
+  if (typeof name !== "string" || name === "" || name === liveName) {
+    throw new Error(`Refusing to run in "${liveName}": that is the installation's own box. This run creates its own ${EVAL_PREFIX}* box; \`--box use <name>\` takes another one.`);
+  }
+}
+
 /** Everything a created box leaves on the machine, named the way BoxManager names it. */
 export function teardownList(name, extras = {}) {
   assertDisposable(name);
@@ -80,10 +91,13 @@ const imagesOf = repo => (docker(["images", repo, "--format", "{{.Repository}}:{
  * Opens the box the flags ask for and returns its name and a `close()` that removes what this
  * run created (nothing, for `use` and `keep`). Sets AGENTBOX_CONTAINER and AGENTBOX_TOKEN for the
  * rest of the script. Installs SIGINT/SIGTERM handlers so an interrupted run cleans up too.
+ * `isolated` is for a harness that must never run in the installation's own box: naming it is
+ * refused before anything is read, written or started.
  */
-export async function openEvalBox({ argv = process.argv, runId = `${Date.now().toString(36)}`, log = console.log } = {}) {
+export async function openEvalBox({ argv = process.argv, runId = `${Date.now().toString(36)}`, log = console.log, isolated = false } = {}) {
   const chosen = boxMode(argv);
-  const { loadBoxToken, boxTokenPath, BoxManager, defaultBoxConfig } = await import("../../src/box/docker.ts");
+  const { loadBoxToken, boxTokenPath, BoxManager, defaultBoxConfig, DEFAULT_CONTAINER } = await import("../../src/box/docker.ts");
+  if (isolated && chosen.mode === "use") assertNotLiveBox(chosen.name, DEFAULT_CONTAINER);
   if (chosen.mode === "use") {
     process.env.AGENTBOX_CONTAINER = chosen.name;
     process.env.AGENTBOX_TOKEN ??= loadBoxToken(chosen.name);
