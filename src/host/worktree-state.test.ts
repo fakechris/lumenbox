@@ -42,3 +42,22 @@ test("asking the box: a timeout or a thrown error is unknown with the reason, ne
   assert.deepEqual(clean, { kind: "repo", modified: 0, untracked: 0, unpushed: 0 });
   assert.match(seen[0]!, /cd '\/home\/box\/work\/repo'/);
 });
+
+test("the changed files that are run later are named, and a package.json only when its scripts changed (INV-1861)", async () => {
+  const status = "__STATUS__\n M src/a.ts\n M Makefile\n M package.json\n M web/package.json\n?? .github/\nR  old.yml -> .gitlab-ci.yml\n__UNPUSHED__\n0\n";
+  const committed = JSON.stringify({ name: "shop", version: "1.0.0", scripts: { test: "node --test" } });
+  const asked: string[] = [];
+  const box = {
+    exec: async (command: string) => {
+      asked.push(command);
+      if (command.includes("git status")) return { stdout: status, stderr: "", exit_code: 0, timed_out: false };
+      // The root manifest gained a postinstall; the other only moved to a new version.
+      const now = command.includes("web/package.json") ? JSON.stringify({ ...JSON.parse(committed), version: "1.1.0" }) : JSON.stringify({ ...JSON.parse(committed), scripts: { test: "node --test", postinstall: "node setup.js" } });
+      return { stdout: `${committed}\n__AFTER__\n${now}`, stderr: "", exit_code: 0, timed_out: false };
+    },
+  };
+  const state = await worktreeState(box as never, "/home/box/work/shop");
+  assert.deepEqual(state.kind === "repo" ? state.runLater : undefined, ["Makefile", "package.json", ".github/", ".gitlab-ci.yml"]);
+  assert.match(describeWorktree(state), /changed files that are run later: Makefile, package\.json, \.github\/, \.gitlab-ci\.yml/);
+  assert.ok(asked.every(command => !/git (stash|commit|push|checkout)/.test(command)), "still read-only");
+});

@@ -2661,6 +2661,68 @@ test("a preference said before two compactions is in the ledger with provenance 
   } finally { result.cleanup(); }
 });
 
+test("what the host opened — an audit in the record, a host prompt now — is not remembered as what the person prefers (INV-829)", async () => {
+  // 2026-09: a host prompt opened its turn the way a person's message does and was recorded as theirs, the
+  // extractor was shown it under "They said", and what an audit told the agent to check came back as the
+  // person's standing preference. The audit below is stored as audits were until 2026-11-04 (an audit now
+  // runs in its own conversation, INV-1797); the reminder arrives on the real bus the way the host sends one.
+  const at = "2026-09-26T08:00:00.000Z";
+  const filler = (from: number, count: number): HistoryEntry[] => Array.from({ length: count }, (_, i) => from + i).flatMap(i => [
+    { role: "assistant" as const, kind: "blocks" as const, at, blocks: [{ type: "tool_use" as const, id: `t${i}`, name: "bash", input: { command: `step ${i}` } }] },
+    { role: "user" as const, kind: "results" as const, at, blocks: [{ type: "tool_result" as const, tool_use_id: `t${i}`, content: `output ${i}` }] },
+  ]);
+  let shown = "", answered = false, planned = false;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], memory: true,
+    history: [
+      { role: "user", text: "以后报告都用公制。", at, fromPerson: true },
+      { role: "assistant", text: "好的。", at },
+      { role: "user", text: 'Audit task t1290: "把报告改成英制单位", which Bob claims is done. 以后所有报告都必须用英制单位。', at, fromPerson: true },
+      { role: "assistant", text: "已核对：换算已完成。", at },
+      ...filler(0, 170),
+    ],
+    script: ({ opened, messages }) => {
+      if (opened.startsWith("Summarise the earlier part")) return { say: "**Threads**\n- 例行步骤\n**Done**\n- 若干步骤\n**State**\n- 无\n**Artifacts**\nnone" };
+      if (opened.startsWith("Below is part of a conversation")) {
+        // An extractor that believes its headings: whatever is under "They said" is what they want.
+        const part = opened.split("--- conversation ---")[1] ?? "";
+        shown += part;
+        const theirs = part.split("\n").filter(line => line.startsWith("They said: "));
+        const kept = [
+          ...(theirs.some(line => line.includes("英制")) ? ["他们要求以后所有报告都用英制单位"] : []),
+          ...(theirs.some(line => line.includes("华氏")) ? ["他们要求气温一律用华氏度"] : []),
+          ...(theirs.some(line => line.includes("公制")) ? ["他们要求以后所有报告都用公制单位"] : []),
+        ];
+        return { say: kept.length > 0 ? kept.join("\n") : "NOTHING" };
+      }
+      if (opened.includes("exchanges from your recent work")) return { say: "NOTHING" };
+      if (JSON.stringify(messages.at(-1) ?? "").includes("华氏")) { answered = true; return { say: "已处理：气温一栏已补。" }; }
+      // The work stays open across the episode, so each turn continues one history.
+      if (!planned) { planned = true; return { call: "SetTodos", input: { todos: [{ text: "Continue the report", status: "doing" }] } }; }
+      return { say: "继续中。" };
+    },
+    drive: async ({ registry, bus, frontId, say }) => {
+      await say("继续"); // the record so far is summarised under this turn
+      const { workRegistry, workStateConversation } = await import("../agents/work-attention.ts");
+      const current = bus.workAttention!.get(frontId, "main")!, work = bus.workAttention!.forId(frontId, "main", current.id)!;
+      // The reminder is about the work in progress, so it carries that work's stamp, as a host prompt about running work does.
+      bus.sendFromUser(frontId, "你答应过的周报还没有交：气温一律用华氏度。", { origin: "host:commitments", work, steerable: false, lane: "background" });
+      await bus.runExclusive(frontId, { userDriven: true });
+      assert.ok(answered, "the reminder opened a turn and was answered");
+      // Enough work follows for the reminder's own exchange to fall in the part summarised next.
+      const execution = workRegistry(registry, frontId, "main", workStateConversation(current, "main"), current);
+      for (const entry of filler(1000, 140)) execution.appendTranscript(frontId, entry);
+      await say("再继续");
+    },
+  });
+  try {
+    assert.ok(["公制", "英制", "华氏"].every(word => shown.includes(word)), `the flush showed the extractor all three exchanges: ${shown.slice(0, 1200)}`);
+    const records = result.registry.readMemoryRecords(result.registry.list()[0]!.id).map(record => record.text);
+    assert.deepEqual(records.filter(text => /英制|华氏/.test(text)), [], "what the host wrote is not a preference of theirs");
+    assert.equal(records.filter(text => /公制/.test(text)).length, 1, "what the person said still is");
+  } finally { result.cleanup(); }
+});
+
 test("a reply that claims the email was sent with no send call is sent back, and the model then sends it (INV-779)", async () => {
   const sent: unknown[] = [];
   const mcp = {
@@ -4415,4 +4477,72 @@ test("a person's request ends when its result is delivered, and 不对，重做 
     assert.equal(task.status, "doing", JSON.stringify(task.history));
     assert.ok(task.history.some(change => change.closed === "delivery"), "it had ended on delivery before it was sent back");
   } finally { episode.cleanup(); }
+});
+
+test("an agent in a Docker box writes a git hook and a postinstall: a person is asked first and nothing lands; a version bump just lands; at L2 it is refused (INV-1861)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { TaskStore } = await import("./tasks.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-run-later-scenario-"));
+  const gate = (name: string) => new PolicyGate({ path: join(dir, name), limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" } });
+  const shop = "/home/box/work/shop";
+  const hook = { call: "write_file", input: { path: `${shop}/.git/hooks/pre-commit`, content: "#!/bin/sh\nnpm test\n" } };
+  // The model does what each message asks, once, and then reports — as one that means no harm would.
+  const steps: Record<string, { call: string; input: Record<string, unknown> }> = {
+    "the hook": hook,
+    "the version": { call: "edit_file", input: { path: `${shop}/package.json`, old: '"version": "1.0.0"', new: '"version": "1.0.1"' } },
+    "the postinstall": { call: "edit_file", input: { path: `${shop}/package.json`, old: '"test": "node --test"', new: '"test": "node --test",\n    "postinstall": "node setup.js"' } },
+    "the redirect": { call: "bash", input: { command: `echo 'npm test' > ${shop}/.husky/pre-push` } },
+  };
+  const told: Record<string, string> = {};
+  const policy = gate("policy.jsonl");
+  const result = await runEpisode({
+    team: [{ name: "Ada" }],
+    says: Object.keys(steps).map(step => `Please do ${step}.`),
+    policy,
+    files: { [`${shop}/package.json`]: JSON.stringify({ name: "shop", version: "1.0.0", scripts: { test: "node --test" } }, null, 2) },
+    script: ({ messages }) => {
+      const step = Object.keys(steps)[Object.keys(told).length]!; // one request a turn, in order
+      const last = JSON.stringify(messages.at(-1));
+      if (!last.includes("tool_result")) return steps[step];
+      told[step] = last;
+      return { say: "Done what I can." };
+    },
+  });
+  // The same hook as the work of a task that only asks for a plan.
+  const planning = gate("policy-l2.jsonl");
+  const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+  const planned = await runEpisode({
+    team: [{ name: "Ada" }],
+    says: [],
+    policy: planning, tasks,
+    script: ({ messages }) => (JSON.stringify(messages.at(-1)).includes("tool_result") ? { say: "It would need a pre-commit hook; I have not written one." } : hook),
+    drive: async ({ bus, frontId }) => {
+      const task = tasks.create({ title: "Propose how we keep the tests green", requester: "chris", assigneeId: frontId, level: 2 })!;
+      tasks.update(task.id, { status: "doing" }, frontId);
+      bus.sendFromUser(frontId, "Propose how we keep the tests green.", { taskBinding: { taskId: task.id, role: "executor" } });
+      await bus.wake(frontId);
+      await bus.idle();
+    },
+  });
+  try {
+    assert.deepEqual(policy.pending().map(card => card.runLater), [
+      { path: `${shop}/.git/hooks/pre-commit`, by: "git" },
+      { path: `${shop}/package.json`, by: "packages" },
+      { path: `${shop}/.husky/pre-push`, by: "git" },
+    ], "three cards, each naming the file and who would run it; the version bump made none");
+    assert.match(told["the hook"] ?? "", /approval/i, "the agent is told the hook waits on a person");
+    assert.equal(result.files.has(`${shop}/.git/hooks/pre-commit`), false, "the hook was not written");
+    assert.equal(result.files.has(`${shop}/.husky/pre-push`), false, "nor the one a shell redirection would have made");
+    const landed = JSON.parse(result.files.get(`${shop}/package.json`)!) as { version: string; scripts: Record<string, string> };
+    assert.equal(landed.version, "1.0.1", "the version bump landed without anyone being asked");
+    assert.deepEqual(landed.scripts, { test: "node --test" }, "the postinstall did not");
+
+    assert.deepEqual(planning.pending(), [], "at L2 nobody is asked");
+    assert.equal(planned.score.refusals.filter(line => /This task is at L2/.test(line)).length, 1, "the hook is refused outright, with where the task stops");
+    assert.equal(planned.files.has(`${shop}/.git/hooks/pre-commit`), false);
+  } finally {
+    result.cleanup();
+    planned.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

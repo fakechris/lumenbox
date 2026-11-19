@@ -105,6 +105,7 @@ import {
 } from "./template.ts";
 import { describeDeferred } from "./tool-roster.ts";
 import { guardShellCommand } from "./ui-automation-guard.ts";
+import { runLaterContentCheck, toolGateRequest } from "./run-later-gate.ts";
 import type { Vault } from "./vault.ts";
 import { canSearch, type FetchedPage, fetchPage, guardUrl, isSearchEngine, MAX_TEXT, pageReadOutcome, searchWeb, WebError } from "./web.ts";
 import { poppyCall, poppyJoin, poppyToolDefinitions } from "./poppy-tools.ts";
@@ -2575,17 +2576,8 @@ export async function dispatchTool(
 ): Promise<ToolOutcome> {
   // Before the switch, so no tool added later can bypass it. A refusal comes back as a tool error:
   // the model sees why, and can stop or ask, rather than retrying into a wall.
-  const decision = context.policy?.check({
-    kind: "tool", ...(context.work ? {returnTo:{work:context.work,conversation:context.conversation ?? MAIN_CONVERSATION}} : {}),
-    agentId: context.agent.id,
-    agentName: context.agent.profile.name,
-    tool: name,
-    input: splitWhy(input).input, ...(splitWhy(input).why !== undefined ? { why: splitWhy(input).why } : {}), // the agent's case rides beside the action, never inside it (INV-1651)
-    // Whose turn this is, so a rule a person wrote about their own routine work applies from whichever door they drove it (INV-156); and the level of the task this turn is doing (INV-1650).
-    ...(context.caller?.userId !== undefined ? { principalId: context.caller.userId } : {}), ...(levelOfCurrentTask(context) !== undefined ? { taskLevel: levelOfCurrentTask(context) } : {}),
-    ...(context.callerName !== undefined ? { principalName: context.callerName } : {}), ...(context.boxKind === "host" ? { onHostBox: true as const } : {}), // a write on the person's own machine asks (INV-1700)
-    ...(context.turnId !== undefined ? { turnId: context.turnId } : {}), ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}), // the step the verdict is drawn on (INV-1664)
-  });
+  // Who is calling, for whom, on which task and machine: one request (run-later-gate.ts), asked again by a file tool whose write runs later (INV-1861).
+  const decision = context.policy?.check(toolGateRequest(name, input, context));
   if (decision !== undefined && !decision.allow) {
     return { text: decision.reason, isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
   }
@@ -3748,6 +3740,9 @@ export async function dispatchTool(
       }
 
       const updated = templateStamp(context, path, existing.content.replace(oldText, newText));
+      // A package.json whose scripts this edit changes is a file that is run later: a person is asked first (INV-1861).
+      const editRunsLater = await runLaterContentCheck(context, box, name, input, path, updated, existing.content);
+      if (editRunsLater !== undefined) return editRunsLater;
       const named = skillSlugOf(path, skillsOf(context)) !== undefined ? namesControlSurface(updated) : undefined;
       if (named !== undefined) {
         return {
@@ -3844,6 +3839,8 @@ export async function dispatchTool(
         };
       }
       const written = templateStamp(context, path, content);
+      const writeRunsLater = await runLaterContentCheck(context, box, name, input, path, written); // the same question for a whole-file write (INV-1861)
+      if (writeRunsLater !== undefined) return writeRunsLater;
       const writeContract = await skillWriteRefusal(box, path, written, skillsOf(context)); // INV-1375: the skill's skill.yaml, if any
       if (writeContract !== undefined) return { text: `Not written: ${writeContract}`, isError: true };
       // A standing file (INV-777) is capped, and its host copy — the one that counts — is written

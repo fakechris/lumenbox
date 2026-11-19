@@ -24,7 +24,8 @@
 
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import { TEMPLATE_CUE } from "./template.ts";
-import { type HistoryEntry, isHostAuthored } from "./compaction.ts";
+import type { HistoryEntry } from "./compaction.ts";
+import { isHostAuthored } from "./legacy-host-prompts.ts";
 
 /** The hidden cue for an agent's first turn (prompt.ts firstRunCue). Its home is here so the table can name it. */
 export const FIRST_RUN_CUE = "[first run]";
@@ -203,7 +204,7 @@ function statementAround(lines: readonly string[], index: number): string {
 }
 
 /** The host parts that queue prompts to an agent (INV-1571). Each is shown as `[from the host (host:<part>)]`. */
-export const HOST_ORIGINS: ReadonlySet<string> = new Set(["audit", "commitments", "fork", "jobs", "orchestrate", "pause", "questions", "superseded-result"]);
+export const HOST_ORIGINS: ReadonlySet<string> = new Set(["audit", "commitments", "fork", "jobs", "orchestrate", "pause", "questions", "retry", "superseded-result"]);
 
 /** `<host_notification source="…">` wrappers the host writes into turns. */
 export const NOTIFICATION_SOURCES: ReadonlySet<string> = new Set(["box", "goal", "pause"]);
@@ -221,4 +222,5 @@ export const PERSON_VOICE: ReadonlySet<string> = new Set([
   "improve", // `agentbox improve`'s read-only replays, in a fork conversation
   "pause-resume", // the resume note, marked by its own <host_notification source="pause"> opening
   "involute", // a request a person addressed to this agent on the work board
+  "cue", // a first-run or template cue, marked by its own opening: the host's text, set off by a person who is waiting on it
 ]);

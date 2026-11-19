@@ -26,7 +26,8 @@
 import { envNumber } from "../config.ts";
 import { AGENT_WAKE_CUE } from "../agents/bus.ts";
 import type Anthropic from "@anthropic-ai/sdk";
-import { LEGACY_HOST_PROMPTS } from "./legacy-host-prompts.ts";
+import { isHostAuthored } from "./legacy-host-prompts.ts";
+import { entryChannel } from "./model-text.ts";
 
 /**
  * Characters per token, and the per-message overhead the API adds.
@@ -457,12 +458,7 @@ export const PINNED_USER_CHARS = 2_000;
  * longer demonstrates, newest tools first, capped. Results are trimmed hard — the
  * schema a weak model imitates lives in the call, not in what came back.
  */
-/** Written by the host to the model, as opposed to said by a person or a teammate. */
-export function isHostAuthored(entry: HistoryEntry): boolean {
-  if ("kind" in entry) return false;
-  if (entry.host === true) return true;
-  return entry.role === "user" && LEGACY_HOST_PROMPTS.some(pattern => pattern.test(entry.text));
-}
+export { isHostAuthored }; // its home is beside the list it reads (legacy-host-prompts.ts)
 
 export function choosePinnedEntries(
   older: readonly HistoryEntry[],
@@ -607,6 +603,12 @@ export const USER_ANCHOR_PREFIX = "the person said: ";
  */
 const WAKE_BOUNDARY = `\n\n---\n\n${AGENT_WAKE_CUE}`;
 
+/** A turn's text up to that separator: the part that is not scaffolding or colleagues, whoever wrote it. */
+export function beforeWake(text: string): string {
+  const boundary = text.indexOf(WAKE_BOUNDARY);
+  return boundary === -1 ? text : text.slice(0, boundary);
+}
+
 /**
  * The words in a user-role entry that a person actually typed, or undefined when none are
  * theirs (INV-799).
@@ -617,12 +619,14 @@ const WAKE_BOUNDARY = `\n\n---\n\n${AGENT_WAKE_CUE}`;
  * it their messages come first, before the `---` and the `[agent]` wake that any peer
  * messages of the same turn are rendered under. That boundary is written by us, and a
  * peer's own lines are quoted, so a colleague cannot write past it into the person's part.
+ *
+ * The stamp alone is not enough (INV-829): until 2026-11-19 a first-run or template cue opened
+ * its turn the way a person's message does and was stamped as theirs. Whose text it is, is the
+ * channel table's call — a host stamp, a wake, a cue and a host opening are none of them a person.
  */
 export function personAuthoredText(entry: HistoryEntry): string | undefined {
-  if ("kind" in entry || entry.role !== "user" || entry.fromPerson !== true || isHostAuthored(entry)) return undefined;
-  if (entry.text.startsWith(AGENT_WAKE_CUE)) return undefined;
-  const boundary = entry.text.indexOf(WAKE_BOUNDARY);
-  return boundary === -1 ? entry.text : entry.text.slice(0, boundary);
+  if ("kind" in entry || entry.role !== "user" || entry.fromPerson !== true || entryChannel(entry) !== "person") return undefined;
+  return beforeWake(entry.text);
 }
 
 /** One thing the person said in a summarised range, verbatim, and where it lives. */

@@ -263,47 +263,70 @@ test("a crash after inbox admission but before the receipt retries the same root
 	}
 });
 
-test("historical recovery uses human provenance, is idempotent, and never assigns a mixed turn's tool calls", async () => {
+test("historical recovery restores what ingress evidence shows a person sent, holds the rest as unknown, and never runs anything (INV-1808)", async () => {
 	const { recoverUserRequests } = await import("./work-recovery.ts");
 	const f = fixture();
 	try {
-		f.registry.appendTranscript(f.agent.id, {
-			role: "user",
-			fromPerson: true,
-			text: "Install the skill",
-			at: "2026-11-10T00:00:00Z",
-			causedBy: ["lost-install"],
-			turnId: "mixed-old-turn",
-		});
-		f.registry.appendTranscript(f.agent.id, {
-			role: "user",
-			host: true,
-			fromPerson: true,
-			text: "Create an audit probe",
-			causedBy: ["probe"],
-			at: "2026-11-10T00:00:01Z",
-		});
-		const preview = recoverUserRequests(f.registry, f.tasks, f.agent.id);
-		assert.equal(preview.requests.length, 1);
-		assert.equal(f.tasks.list().length, 0);
-		const result = recoverUserRequests(f.registry, f.tasks, f.agent.id, true);
-		assert.equal(result.requests.length, 1);
-		assert.equal(
-			recoverUserRequests(f.registry, f.tasks, f.agent.id, true).requests
-				.length,
-			0,
-		);
-		const task = f.tasks.list()[0]!;
-		assert.equal(task.title, "Install the skill");
-		assert.equal(task.sourceMessageId, "lost-install");
-		assert.equal(task.workRoot?.state.unresolved, true);
-		assert.equal(task.progress, undefined);
+		// The protocol the host wrote for an audit, as it was stored until 2026-11-04: a person's stamp, no host stamp.
+		const protocol = 'Audit task t1290: "fix the import", which Bob claims is done.\n\nRead their work with ReadHistory and inspect the evidence.';
+		const at = (second: number) => `2026-11-10T00:00:${String(second).padStart(2, "0")}Z`;
+		const opened = (text: string, id: string, second: number, more: Record<string, unknown> = {}) =>
+			f.registry.appendTranscript(f.agent.id, { role: "user", text, at: at(second), causedBy: [id], turnId: `turn-${id}`, ...more } as never);
+		opened("Install the skill", "door-install", 0, { fromPerson: true }); // a chat door let it in
+		opened(protocol, "old-audit", 1, { fromPerson: true }); // the old stamp, and nothing at the door
+		opened("[scheduled] Send the weekly report.", "old-routine", 2, { fromPerson: true }); // from before routines were marked
+		opened("[webhook] This turn was started by something calling this routine's URL.", "old-webhook", 3, { fromPerson: true });
+		opened("[scheduled] Send the weekly report.", "new-routine", 4); // marked, and heard as a routine
+		opened("Create an audit probe", "probe", 5, { fromPerson: true, host: true }); // the host's own stamp wins over the person's
+		opened(protocol, "quoted", 6, { fromPerson: true }); // a person pasting the same protocol back, heard as theirs
+		opened("Fix the report from last week", "old-web", 7, { fromPerson: true }); // a real request nothing vouches for
+		opened("[first run] You were just created by chris and nobody has said anything yet.", "cue", 8, { fromPerson: true }); // heard as the person's before INV-829
+		const door = { schema: "lumenbox.message/v1" as const, id: "door-install", channel: "feishu-personal", chatKey: "feishu:chat-1", identity: "ou_chris", senderLabel: "Chris", conversationKey: "feishu:chat-1", receivedAt: at(0), text: "Install the skill\nfrom the attached package", textChars: 42 };
+		const heardRows: Record<string, import("../agents/heard-record.ts").HeardRow> = {
+			"door-install": { id: "door-install", at: at(0), conversation: "main", speaker: { by: "person", principal: "chris" }, asked: true },
+			"new-routine": { id: "new-routine", at: at(4), conversation: "main", speaker: { by: "routine" }, asked: true },
+			quoted: { id: "quoted", at: at(6), conversation: "main", speaker: { by: "person", principal: "chris" }, asked: true },
+			cue: { id: "cue", at: at(8), conversation: "main", speaker: { by: "person", principal: "chris" }, asked: true },
+		};
+		const evidence = { door: (id: string) => (id === door.id ? door : undefined), heard: (_agent: string, id: string) => heardRows[id] };
+
+		// The old stamp proves nothing by itself: with no evidence, nothing is a person's request.
+		const blind = recoverUserRequests(f.registry, f.tasks, f.agent.id);
+		assert.deepEqual(blind.requests, []);
+		assert.ok(blind.unknown.some(row => row.source === "door-install") && !blind.unknown.some(row => row.source === "probe"));
+
+		const preview = recoverUserRequests(f.registry, f.tasks, f.agent.id, { evidence });
+		assert.deepEqual(preview.requests.map(row => [row.source, row.evidence]), [["door-install", "door"], ["quoted", "heard"]], "what a person sent, including their quote of the host's own protocol");
+		assert.deepEqual(preview.unknown.map(row => row.source).sort(), ["cue", "old-audit", "old-routine", "old-web", "old-webhook"], "a stamp with no evidence is unknown, whatever the text reads like");
+		assert.equal(preview.unknown.find(row => row.source === "old-audit")!.reads, "host", "what it reads like is a note for the person deciding");
+		assert.equal(f.tasks.list().length, 0, "a preview writes nothing");
+
+		const result = recoverUserRequests(f.registry, f.tasks, f.agent.id, { apply: true, evidence });
+		assert.equal(result.requests.length, 2);
+		assert.equal(recoverUserRequests(f.registry, f.tasks, f.agent.id, { apply: true, evidence }).requests.length, 0, "a second run restores nothing twice");
+		assert.equal(f.tasks.list().length, 2, "no host prompt and no unknown became a request");
+		const task = f.tasks.list().find(row => row.sourceMessageId === "door-install")!;
+		assert.equal(task.description, door.text, "the words are the door's copy, whole");
+		assert.deepEqual([task.requester, task.workRoot!.state.principal, task.conversation, task.workRoot!.historical!.epoch], ["chris", "chris", "main", 0]);
+		assert.deepEqual([task.workRoot!.historical!.channel, task.workRoot!.historical!.chatKey, task.workRoot!.historical!.identity], ["feishu-personal", "feishu:chat-1", "ou_chris"], "the door it came through is kept, not replaced by the web");
+		assert.equal(task.workRoot!.state.unresolved, true);
+		assert.equal(task.progress, undefined, "the turn's tool steps are not attributed to it");
+		assert.equal(f.tasks.list().find(row => row.sourceMessageId === "quoted")!.description, protocol);
+
+		// A person vouches for one unknown entry by name. That is recorded; the others stay unknown.
+		assert.throws(() => recoverUserRequests(f.registry, f.tasks, f.agent.id, { apply: true, evidence, confirm: { sources: ["old-web"], by: " " } }), /name of the person/);
+		const vouched = recoverUserRequests(f.registry, f.tasks, f.agent.id, { apply: true, evidence, confirm: { sources: ["old-web", "no-such-source"], by: "chris" } });
+		assert.deepEqual(vouched.requests.map(row => [row.source, row.evidence, row.confirmedBy]), [["old-web", "confirmed", "chris"]]);
+		assert.deepEqual(vouched.unmatched, ["no-such-source"]);
+		const confirmedTask = f.tasks.list().find(row => row.sourceMessageId === "old-web")!;
+		assert.equal(confirmedTask.workRoot!.historical!.confirmedBy, "chris");
+		assert.ok(confirmedTask.workRoot!.historical!.confirmedAt);
+		assert.equal(confirmedTask.workRoot!.state.principal, undefined, "who asked is still not known, and is not made up");
+		assert.equal(f.tasks.list().length, 3);
 		assert.equal(f.inbox.pending().length, 0, "migration is not execution");
 		f.reopen();
-		assert.equal(
-			f.focus.valid(f.focus.byId("lost-install")!, f.agent.id),
-			false,
-		);
+		assert.equal(f.focus.valid(f.focus.byId("door-install")!, f.agent.id), false);
+		assert.equal(f.tasks.list().find(row => row.sourceMessageId === "old-web")!.workRoot!.historical!.confirmedBy, "chris", "the confirmation survives a restart");
 	} finally {
 		f.cleanup();
 	}

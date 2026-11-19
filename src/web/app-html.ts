@@ -4111,7 +4111,7 @@ function drawItem(item) {
       // what is read here, so anything shortened would be consent to something else.
       html = '<div class="chead"><span class="dot"></span>' + (pending ? "Consent needed &mdash; " + esc(nameOf(current)) + " {{ui.app.is-waiting}}" : "{{ui.app.consent}}") + "</div>" +
         // What the tool does, in the host's words (INV-691) — above the verbatim action, never in it.
-        (item.action ? '<div class="note" style="font-weight:600">' + esc(item.action) + (item.taskLevel ? ' <span class="chip" style="font-size:10px">{{ui.app.task-l}}' + esc(String(item.taskLevel)) + "</span>" : "") + "</div>" : "") + (item.why ? '<div class="note"><b>' + esc(nameOf(item.agentId)) + " {{ui.app.says}}</b> {{ui.app.its-own-words-not-checked}} " + esc(item.why) + "</div>" : "") + // the background and the agent's claim, apart from the verbatim action (INV-1651)
+        ((item.runLater ? (item.action = t("ui.consent.runLater", { path: item.runLater.path, who: t("ui.consent.runLaterBy." + item.runLater.by) })) : item.action) ? '<div class="note" style="font-weight:600">' + esc(item.action) + (item.taskLevel ? ' <span class="chip" style="font-size:10px">{{ui.app.task-l}}' + esc(String(item.taskLevel)) + "</span>" : "") + "</div>" : "") + (item.why ? '<div class="note"><b>' + esc(nameOf(item.agentId)) + " {{ui.app.says}}</b> {{ui.app.its-own-words-not-checked}} " + esc(item.why) + "</div>" : "") + // the background and the agent's claim, apart from the verbatim action (INV-1651)
         "<code></code>" +
         (pending
           ? '<div class="note">{{ui.app.each-button-says-what-it}}</div>' +
@@ -4675,7 +4675,7 @@ function reconcileCards(pending, secretRequests, handovers) {
   pending.forEach(function (p) {
     if (p.agentId !== current) return;
     alive["consent:" + p.id] = true;
-    showCard("consent:" + p.id, { card: "consent", id: p.id, agentId: p.agentId, description: p.description, action: p.action, why: p.why, taskLevel: p.taskLevel, at: p.requestedAt });
+    showCard("consent:" + p.id, { card: "consent", id: p.id, agentId: p.agentId, description: p.description, action: p.action, runLater: p.runLater, why: p.why, taskLevel: p.taskLevel, at: p.requestedAt });
   });
   secretRequests.forEach(function (r) {
     if (r.agentId !== current) return;
@@ -6057,7 +6057,7 @@ stream.onmessage = function (raw) {
   }
 
   if (e.type === "approval_pending") {
-    if (e.agentId === current) showCard("consent:" + e.id, { card: "consent", id: e.id, agentId: e.agentId, description: e.description, action: e.action, why: e.why, taskLevel: e.taskLevel });
+    if (e.agentId === current) showCard("consent:" + e.id, { card: "consent", id: e.id, agentId: e.agentId, description: e.description, action: e.action, runLater: e.runLater, why: e.why, taskLevel: e.taskLevel });
     return;
   }
   if (e.type === "approval_settled") {

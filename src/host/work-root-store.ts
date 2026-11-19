@@ -19,7 +19,13 @@ export interface TaskWorkRoot {
   cancellation?: CancelledWork;
   automatic?: true;
   requests?: RootRequest[];
-  historical?: { epoch: number; turnId?: string; sourceIds: string[] };
+  /** A request restored from the record (INV-1808): where it was, and what showed that a person made it. */
+  historical?: {
+    epoch: number; turnId?: string; sourceIds: string[];
+    evidence?: "door" | "heard" | "confirmed"; channel?: string; chatKey?: string; identity?: string;
+    /** For `confirmed`: nothing at the door vouched for it, this person did. */
+    confirmedBy?: string; confirmedAt?: string;
+  };
 }
 /** A root whose shape can be read at all. One that cannot is left on its task and never loaded (INV-1822). */
 const soundRoot = (task: Task): task is Task & { workRoot: TaskWorkRoot } =>
@@ -277,8 +283,13 @@ export class TaskWorkRoots implements RootPersistence {
       turnId?: string;
       text: string;
       sourceIds: string[];
+      evidence: "door" | "heard" | "confirmed";
+      principal?: string; channel?: string; chatKey?: string; identity?: string;
+      confirmedBy?: string; confirmedAt?: string;
     },
   ) {
+    // Who asked is what the evidence says and nothing more: an unknown principal is left unknown, not called "web".
+    const requester = record.principal ?? (record.channel !== undefined ? `${record.channel}:${record.identity}` : "unverified");
     const existing = this.tasks().find(
       task =>
         task.sourceMessageId === record.source ||
@@ -291,7 +302,7 @@ export class TaskWorkRoots implements RootPersistence {
       conversation: record.conversation,
       generation: 0,
       epoch: record.epoch,
-      principal: "web",
+      ...(record.principal !== undefined ? { principal: record.principal } : {}),
       status: "waiting",
       reason: "Historical request; execution and completion unverified",
       messages: record.sourceIds,
@@ -307,6 +318,9 @@ export class TaskWorkRoots implements RootPersistence {
         epoch: record.epoch,
         turnId: record.turnId,
         sourceIds: record.sourceIds,
+        evidence: record.evidence,
+        ...(record.channel !== undefined ? { channel: record.channel, chatKey: record.chatKey, identity: record.identity } : {}),
+        ...(record.confirmedBy !== undefined ? { confirmedBy: record.confirmedBy, confirmedAt: record.confirmedAt } : {}),
       },
     };
     const title = record.text.split("\n")[0]!.slice(0, 180) || "Historical user request";
@@ -314,7 +328,7 @@ export class TaskWorkRoots implements RootPersistence {
       return this.create({
         title,
         description: record.text,
-        requester: "web",
+        requester,
         sourceMessageId: record.source,
         assigneeId: agentId,
         conversation: record.conversation,

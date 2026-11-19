@@ -1909,15 +1909,15 @@ ${outcome.text}`;
     }
   }
 
-  // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a
-  // resume and a first run all arrive as `fromId: "user"` because that is what opens a turn.
+  // A person, as opposed to the harness wearing the person's shape: a timer, a webhook, a resume and a first run all arrive as `fromId: "user"`, which is only what opens a turn.
   let personOpened = inbound.some(message => message.fromId === "user" && message.synthetic !== true);
+  const cued = inbound.some(message => inboundChannel(message) === "cue"); // the host's text, set off by a person who is waiting on what it starts (INV-829)
   /**
    * Whether the person is a party to this conversation at all: they opened this turn, or they
    * have spoken here before. False for a worker that only ever hears from teammates.
    */
   const personIsHere =
-    personOpened || personHasSpoken(registry.readTranscript(agent.id, conversation) as TranscriptEntry[]);
+    personOpened || cued || personHasSpoken(registry.readTranscript(agent.id, conversation) as TranscriptEntry[]);
   /**
    * How far this turn is from a person (INV-1277): 0 when a person opened it, else one past the
    * deepest teammate message that woke it. Every message this turn sends carries it, and the bus
@@ -1933,7 +1933,7 @@ ${outcome.text}`;
    * continues work somebody asked for.
    */
   let silenceOffered =
-    deps.resumeOf === undefined && (!personOpened || inbound.every(message => message.addressed === false));
+    deps.resumeOf === undefined && !cued && (!personOpened || inbound.every(message => message.addressed === false));
 
   const turnText = buildTurnPrompt(inbound);
   // Ends of jobs this conversation was not woken for (INV-1613): said once, beside the message, not in the transcript.
