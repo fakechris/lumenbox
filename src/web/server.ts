@@ -238,7 +238,7 @@ import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
-import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { Teller } from "../host/tell.ts";
+import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { Teller } from "../host/tell.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
@@ -2016,7 +2016,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         );
       }
     }
-  chats = channels; orchestrator.outboxDrafts.connect({ chatFor: draft => chatTarget(draft, { canSend: key => channels.adapterFor(key)?.sendToChat !== undefined, chatOf: conversation => conversations.chatKeyFor(conversation) }), deliver: (draft, chatKey) => channels.tryPushToChat(chatKey, draft.body, { kind: "draft", id: draft.id }).then(result => ({ delivered: result.delivered, ...(result.why !== undefined ? { detail: result.why } : {}) })), tell: (agentId, conversation, text, work) => { orchestrator.bus.deliverSystem(agentId, text, conversation,work?.id); }, note: (taskId, text) => { orchestrator.tasks?.update(taskId, { note: text }, "outbox"); }, log }); // an answered Outbox draft is carried, noted and told (INV-1739)
+  chats = channels; orchestrator.scheduler.idleExplain = (routines, days) => void explainIdlePause({ followUps, push: (chatKey, text) => channels.tryPushToChat(chatKey, text, { kind: "notice", about: "routines paused: nobody is writing" }), log }, routines, days); orchestrator.outboxDrafts.connect({ chatFor: draft => chatTarget(draft, { canSend: key => channels.adapterFor(key)?.sendToChat !== undefined, chatOf: conversation => conversations.chatKeyFor(conversation) }), deliver: (draft, chatKey) => channels.tryPushToChat(chatKey, draft.body, { kind: "draft", id: draft.id }).then(result => ({ delivered: result.delivered, ...(result.why !== undefined ? { detail: result.why } : {}) })), tell: (agentId, conversation, text, work) => { orchestrator.bus.deliverSystem(agentId, text, conversation,work?.id); }, note: (taskId, text) => { orchestrator.tasks?.update(taskId, { note: text }, "outbox"); }, log }); // an answered Outbox draft is carried, noted and told (INV-1739)
   channels.start();
   // What was still on its way when the process last stopped goes again (INV-1460).
   void outboxSender.resume(chatKey => { const door = channels.adapterFor(chatKey); return door?.sendToChat === undefined ? undefined : { sendToChat: (key, text) => door.sendToChat!(key, text) }; })

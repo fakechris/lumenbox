@@ -5189,8 +5189,8 @@ function automationRow(s, rows) {
   var origin = s.authoredBy
     ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">{{ui.app.by}} ' + esc(s.authoredBy) + "</span>"
     : "";
-  var pausedTag = s.paused
-    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px"' + (s.hold ? ' title="' + esc(s.hold.reason) + '">{{ui.app.paused-by}} ' + esc(s.hold.by) : ">{{ui.app.paused-2}}") + "</span>"
+  var holdWhy = s.hold && s.hold.code === "idle_owner" ? "{{ui.app.paused-idle}}" : esc(s.hold ? s.hold.reason : ""), pausedTag = s.paused
+    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px"' + (s.hold ? ' title="' + holdWhy + '">{{ui.app.paused-by}} ' + esc(s.hold.by) : ">{{ui.app.paused-2}}") + "</span>"
     : "";
   var toggle = s.paused
     ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">{{ui.app.turn-on}}</button>'
@@ -5239,7 +5239,7 @@ function automationRow(s, rows) {
       (s.agent ? " {{ui.app.as}} " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
     (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
-    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">{{ui.app.paused}} ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + esc(s.hold.reason) + " {{ui.app.turn-on-resumes-it}}</div>" : "") + lastResult + observed +
+    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">{{ui.app.paused}} ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + holdWhy + " {{ui.app.turn-on-resumes-it}}</div>" : "") + lastResult + observed +
     hookBlock + '<div data-runs-for="' + esc(s.slug) + '" style="display:none"></div>' +
   "</div>";
 }

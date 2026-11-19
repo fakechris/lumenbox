@@ -538,6 +538,16 @@ test("a routine's mode is read from its frontmatter, and a wrong word is refused
   assert.ok("problem" in wrong && /mode must be "off", "observe" or "auto"/.test(wrong.problem));
 });
 
+test("when_idle: run keeps a routine going when nobody is writing; a wrong word is refused (INV-741)", () => {
+  const base = "---\ndescription: the week in one page\nschedule: 0 9 * * 1\n";
+  const kept = skillFrom("weekly", parseSkillFile(`${base}when_idle: run\n---\nbody`));
+  assert.ok("skill" in kept && kept.skill.whenIdle === "run");
+  const none = skillFrom("weekly", parseSkillFile(`${base}---\nbody`));
+  assert.ok("skill" in none && none.skill.whenIdle === undefined, "absent pauses with the rest");
+  const wrong = skillFrom("weekly", parseSkillFile(`${base}when_idle: always\n---\nbody`));
+  assert.ok("problem" in wrong && /when_idle must be "run" or "pause"/.test(wrong.problem), "a misspelt exemption must not read as one");
+});
+
 test("the index carries the sentences that decide, not the paragraph (INV-760)", () => {
   const short = "Use when someone asks for a brief. Not for tables.";
   assert.equal(indexDescription(short), short, "under the limit, as written");

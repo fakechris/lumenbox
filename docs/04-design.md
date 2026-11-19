@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: mechanisms
-     updated: 2026-09-27
+     updated: 2026-11-19
 -->
 # Design
 
@@ -360,6 +360,19 @@ applies.
   happens inside resolve and only for a result that will be delivered: the cue turn still runs,
   its reply is not delivered, and what is still unheld afterwards is a note on the same
   delivery — one message per run, never two.
+- **When nobody is looking any more, routines stop (INV-741).** The failure streak catches a
+  routine that keeps failing; nothing caught one that kept working for no one, written, billed
+  and delivered each window to a chat nobody opens. A routine that comes due when no person has
+  written to its box for 7 days (`AGENTBOX_ROUTINE_IDLE_DAYS`; 0 is never) is not run: it is
+  held with the code `idle_owner`, through the same door as every other host pause, and the
+  chat it reports to is told once, as an act inside the room's proactive budget. Heartbeats are
+  routines and stop with the rest. The host lifts this hold itself at the first tick after a
+  person writes; it never lifts a person's pause or a hold with another code. "A person wrote"
+  is read from the heard record, where the host wrote down each message's speaker when a turn
+  took it — so a routine's own turn, a teammate, a webhook and a host notice do not keep a box
+  awake. A box with no person's message on record is not called idle: absence of evidence is
+  not held against it. Turning a routine on by hand counts as somebody there for that routine.
+  `when_idle: run` in the frontmatter exempts one (`routine-idle.ts`).
 
 ## 15. The policy gate
 

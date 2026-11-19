@@ -128,6 +128,8 @@ export interface Skill {
    * store — the same reason a schedule is a line and not an object.
    */
   paused?: boolean;
+  /** `when_idle: run` — it runs however long nobody has written to the box (INV-741); a weekly report, say. */
+  whenIdle?: "run";
   /** How the routine may act (INV-1458); absent means auto. */
   mode?: "off" | "observe" | "auto";
   /**
@@ -238,6 +240,7 @@ export const SKILL_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   "match",
   "chat",
   "paused",
+  "when_idle",
   "allowed-tools",
   "connectors",
   "secrets",
@@ -444,6 +447,12 @@ export function skillFrom(
     return { problem: `${slug}: mode must be "off", "observe" or "auto", not "${modeText}".` };
   }
 
+  // Whether it runs when nobody has written to the box for days (INV-741, routine-idle.ts). Absent is pause.
+  const whenIdle = parsed.meta.when_idle?.trim();
+  if (whenIdle !== undefined && whenIdle !== "" && whenIdle !== "run" && whenIdle !== "pause") {
+    return { problem: `${slug}: when_idle must be "run" or "pause", not "${whenIdle}".` };
+  }
+
   return {
     skill: {
       slug,
@@ -463,6 +472,7 @@ export function skillFrom(
       ...(parsed.meta.authored_by ? { authoredBy: parsed.meta.authored_by.trim() } : {}),
       ...(parsed.meta.because ? { because: parsed.meta.because.trim() } : {}),
       ...(parsed.meta.paused?.trim() === "true" ? { paused: true } : {}),
+      ...(whenIdle === "run" ? { whenIdle: "run" as const } : {}),
       ...(mode !== undefined ? { mode } : {}),
       ...(allowed !== undefined ? { allowedTools: allowed.tools } : {}),
       ...(skillNeedsFrom(parsed.meta) !== undefined ? { needs: skillNeedsFrom(parsed.meta)! } : {}),

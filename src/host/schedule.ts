@@ -42,6 +42,7 @@ import type { RunResult } from "./run-result.ts";
 import { readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
 import { upcomingFires } from "./schedule-time.ts";
 import { classifyFailure } from "./failure-taxonomy.ts";
+import { IDLE_OWNER, idleDays, idleReason, type IdledRoutine, type IdleOwner } from "./routine-idle.ts";
 
 /**
  * A routine run that failed on a passing cause — a rate limit, the network, a timeout — is tried
@@ -121,6 +122,8 @@ export interface Scheduled {
   because?: string;
   /** Off until a person turns it on. Skipped by the tick, refused by runNow, shown in status. */
   paused?: boolean;
+  /** Runs however long nobody has written to its box (INV-741); absent, it pauses with the rest. */
+  whenIdle?: "run";
   /** Which box the file lives in (docs/30); the run goes to an agent of that box. */
   boxId?: string;
   /** The tools the skill says it needs (INV-691); an unattended run is narrowed to them. */
@@ -255,6 +258,8 @@ export interface SchedulerDeps {
    * overlap rule and the failure streak. Undefined, or no check at all, runs.
    */
   precheck?: (skill: { slug: string; name: string; boxId?: string }, agent: string) => Promise<RoutineReason | undefined>;
+  /** When a person last wrote to a box, so a routine nobody is around for pauses (INV-741, routine-idle.ts). Absent: never. */
+  idle?: IdleOwner;
   /** Every run's end (INV-1741): the exception list counts a failed one and resolves on a success. */
   finished?: (skill: { slug: string; name: string }, agent: string, result: RunResult | undefined, reason: string | undefined) => void;
   /** A routine in observe mode was triggered and did not run (INV-1458); the audit row. */
@@ -308,6 +313,10 @@ export class Scheduler {
   readonly holds = new RoutineHolds();
   /** Automatic retries taken by the run each slug is in (INV-1741); cleared when one does not fail on a passing cause. */
   private readonly retries = new Map<string, number>();
+  /** When each routine was last turned back on: a person doing that by hand is somebody around (INV-741). */
+  private readonly resumedAt = new Map<string, Date>();
+  /** Tells the chats of routines paused for nobody writing, once per pause. Set by whoever owns the doors. */
+  idleExplain: ((routines: readonly IdledRoutine[], days: number) => void) | undefined;
 
   constructor(
     private readonly deps: SchedulerDeps,
@@ -335,6 +344,7 @@ export class Scheduler {
         const at = new Date(record.at);
         this.remember(record);
         this.holds.replay(record);
+        if (record.event === "resumed") this.resumedAt.set(record.slug, at);
         if (record.event === "held" || record.event === "resumed" || record.event === "pause-after") continue;
         const state = states.get(record.slug) ?? { lastRun: undefined, interrupted: false };
         if (record.event === "started") {
@@ -445,8 +455,21 @@ export class Scheduler {
   /** A person turned it back on: the hold and the failure streak are cleared. Whether it was held. */
   resume(slug: string, by: string): boolean {
     const was = this.holds.release(slug);
-    if (was) this.record(slug, "resumed", { by });
+    if (was) { this.resumedAt.set(slug, this.now()); this.record(slug, "resumed", { by }); }
     return was;
+  }
+
+  /**
+   * Why a routine due now is not run for want of anybody around (INV-741), or undefined. Somebody is
+   * around when a person wrote to its box, or turned this routine back on, within the limit.
+   */
+  private nobodyAround(skill: { slug: string; boxId?: string; whenIdle?: "run" }): RoutineReason | undefined {
+    const idle = this.deps.idle;
+    if (idle === undefined || skill.whenIdle === "run") return undefined;
+    const wrote = idle.lastPersonAt(skill.boxId), resumed = this.resumedAt.get(skill.slug);
+    // No message on record is not idleness, whatever was turned on since: undefined stays undefined.
+    const last = wrote !== undefined && resumed !== undefined && resumed > wrote ? resumed : wrote;
+    return idleReason(last, this.now(), (idle.days ?? idleDays)());
   }
 
   /** K: how many failures in a row pause a routine. 0 turns automatic pausing off. */
@@ -587,7 +610,13 @@ export class Scheduler {
       return;
     }
 
+    const idled: IdledRoutine[] = [];
     for (const skill of scheduled) {
+      // Held because nobody was writing, and somebody is again: the host lifts its own hold. A person's pause is not this.
+      if (this.holds.holdOf(skill.slug)?.code === IDLE_OWNER && this.nobodyAround(skill) === undefined) {
+        this.resume(skill.slug, "host");
+        this.log(`${skill.name}: resumed — a person is writing again`);
+      }
       // Paused is not due. Not logged per tick: a routine somebody switched off would fill the
       // log with the fact every thirty seconds.
       if (this.deps.allowed?.(skill) === false || skill.paused === true || skill.mode === "off" || this.holds.holdOf(skill.slug) !== undefined) continue;
@@ -608,6 +637,15 @@ export class Scheduler {
         continue;
       }
       if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} (${describeSchedule(skill.schedule)})${skill.deliver !== undefined ? `, report to ${skill.deliver}` : ""}`); continue; }
+      const away = this.nobodyAround(skill);
+      if (away !== undefined) {
+        // Not run, and held until somebody writes: said once to its chat, below, and never per window.
+        this.lastRun.set(skill.slug, this.now());
+        this.skip(skill, away);
+        this.hold(skill, away);
+        if (skill.deliver !== undefined) idled.push({ slug: skill.slug, name: skill.name, deliver: skill.deliver });
+        continue;
+      }
       if (await this.refusal(skill, agent) !== undefined) {
         this.lastRun.set(skill.slug, this.now());
         continue;
@@ -625,6 +663,9 @@ export class Scheduler {
         skill.allowedTools,
         skill.deliverWhen
       ), skill.deliver !== undefined ? { deliver: skill.deliver } : {});
+    }
+    if (idled.length > 0) {
+      try { this.idleExplain?.(idled, (this.deps.idle?.days ?? idleDays)()); } catch (error) { this.log(`could not say why routines paused (${error instanceof Error ? error.message : String(error)})`); }
     }
   }
 
