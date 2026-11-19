@@ -2,7 +2,7 @@
      title: The operator's guide (what the README used to be)
      family: guide
      status: current
-     updated: 2026-11-06
+     updated: 2026-11-19
 -->
 # 38 — The operator's guide (what the README used to be)
 
@@ -233,6 +233,12 @@ fallback: with the proxy configured and the relay down, the browser gets
 `ERR_INTERNET_DISCONNECTED` rather than quietly browsing from the box's own address — checked
 with a fresh profile, because the first attempt at that check was reading Chromium's disk
 cache.
+
+A third, since INV-816: a box started this way is confined to the relay, not only pointed at
+it. Its network has no route out and a small gate container forwards the relay's port and the
+web port, so a command that drops the proxy variables — with `sudo` or without — gets nowhere
+instead of leaving unrecorded. `box up` prints `outbound: confined — …`, or says why not.
+[06-deployment.md](06-deployment.md) §3.4 has what that changes for an agent and how to opt out.
 
 ### Delegated engines: Claude Code, pi, opencode
 

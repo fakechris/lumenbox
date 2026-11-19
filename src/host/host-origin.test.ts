@@ -22,7 +22,7 @@ import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import type { InboundMessage } from "../agents/bus.ts";
 import { Orchestrator } from "./orchestrator.ts";
-import { buildTurnPrompt } from "./prompt.ts";
+import { buildTurnPrompt, firstRunCue } from "./prompt.ts";
 import { reviewInputFor } from "./turn.ts";
 import { fakeModel, type ModelCapture } from "./testing/fake-model.ts";
 
@@ -116,6 +116,35 @@ test("scenario: an admitted audit is answered in its own host context; the perso
   }
 });
 
+test("a turn the host opened through prompt() is not the person's, whoever set it off; a cue still owes that person an answer (INV-829)", async () => {
+  const root = mkdtempSync(join(tmpdir(), "host-opened-")), previousHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = root;
+  try {
+    const registry = new AgentRegistry(join(root, "agents")), mia = registry.create({ name: "Mia" }), tasks = new TaskStore(null);
+    const capture: ModelCapture = { params: [] }; let extraction = "";
+    const orch = new Orchestrator({ registry, useBox: false, inbox: null, mcp: null, hooks: null, tasks, extensions: null, pendingWork: null,
+      client: fakeModel(() => ({ id: "r", type: "message", role: "assistant", model: "test", content: [{ type: "text", text: "Done." }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 10, output_tokens: 4 } } as never), { capture,
+        create: ({ params }) => { extraction = String(params.messages[0]?.content); return { id: "m", type: "message", role: "assistant", model: "test", content: [{ type: "text", text: "NOTHING" }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } as never; } }) });
+    const opened = (conversation: string) => (registry.readTranscript(mia.id, conversation) as { role: string; kind?: string; fromPerson?: true }[]).filter(entry => entry.role === "user" && entry.kind === undefined);
+    const offered = (index: number) => (capture.params[index]?.tools ?? []).map(tool => (tool as { name: string }).name);
+    // A cue: the person who created the agent is named as the caller, and the words are still the host's.
+    await orch.prompt(mia.id, firstRunCue("chris"), { userId: "chris" }, { conversation: "cue", steerable: false, lane: "background", synthetic: true });
+    assert.equal(opened("cue")[0]!.fromPerson, undefined, "a cue is not what the person said");
+    assert.ok(!offered(0).includes("NothingToSay"), "and the person who set it off is owed an answer: silence is not offered");
+    // A routine: nobody is waiting, and nobody has spoken here.
+    await orch.prompt(mia.id, "[scheduled] Send the weekly report.", { userId: "chris" }, { conversation: "routine", steerable: false, lane: "background", synthetic: true });
+    assert.equal(opened("routine")[0]!.fromPerson, undefined, "a routine's turn is not opened by the person");
+    assert.ok(offered(1).includes("NothingToSay"), "nobody is waiting on it");
+    await orch.prompt(mia.id, "And the summary?", { userId: "chris" }, { conversation: "chat" });
+    assert.equal(opened("chat")[0]!.fromPerson, true, "what a person typed still is");
+    assert.deepEqual(tasks.list().map(task => task.title), ["And the summary?"], "only what the person asked for is a request of theirs");
+    // Three exchanges fill a batch, and the extractor is shown who opened each: only the person's is headed as theirs.
+    for (let waited = 0; extraction === "" && waited < 200; waited++) await new Promise(resolve => setTimeout(resolve, 10)); // the bookkeeping is not awaited by the turn
+    assert.ok(extraction.includes("They said: And the summary?"), `the person's words are theirs: ${extraction.slice(-600)}`);
+    assert.equal(extraction.match(/They said: /g)!.length, 1, "and neither the cue nor the routine's prompt is");
+  } finally { if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome; rmSync(root, { recursive: true, force: true }); }
+});
+
 for (const requiredTool of ["bash", "browser_snapshot", "RunOnHost", "UseMcpTool"]) test("a default agent retains blocked user work: " + requiredTool, async () => {
   const root = mkdtempSync(join(tmpdir(),"attention-default-tools-")), previousHome = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = root;
@@ -189,6 +218,7 @@ test("adding a reviewer after submission still permits that reviewer's explicit 
     assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "applied");
     await orch.settle(); await new Promise(resolve => setImmediate(resolve));
     assert.equal(capture.params.length, 1, "the explicit request reaches the real audit dispatcher once");
+    assert.match(JSON.stringify(capture.params[0]!.messages), /from the host \(host:audit\), not from a person/, "and it opens the reviewer's turn as the host, never as the person (INV-829)");
     assert.equal(tasks.deliveryCommand(task.id, "request_check", reviewer.id)!.outcome, "unchanged");
     await orch.settle(); assert.equal(capture.params.length, 1);
   } finally { if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome; rmSync(root, { recursive: true, force: true }); }

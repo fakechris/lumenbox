@@ -25,7 +25,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRegistry } from "../agents/registry.ts";
 import { envNumber } from "../config.ts";
 import { effortConfig } from "./provider.ts";
-import type { HistoryEntry } from "./compaction.ts";
+import { type HistoryEntry, personAuthoredText } from "./compaction.ts";
 import {
   buildEpisodePrompt,
   buildExtractionPrompt,
@@ -719,18 +719,26 @@ export class Rememberer {
 }
 
 /**
+ * How the extractor is shown what opened a turn (INV-829). Only a person's own words are headed
+ * `They said`: a routine's prompt, an audit, a cue, a job notice and a teammate's wake all open a turn
+ * in the same shape, and headed as the person's they came back as "what they prefer".
+ */
+export const THEY_SAID = "They said";
+export const NOT_THE_PERSON = "The host or a teammate wrote this, not a person";
+
+/**
  * The text an exchange contributes, trimmed.
  *
- * What the person said and what the agent concluded — not the tool traffic in between. Extraction is
+ * What opened the turn and what the agent concluded — not the tool traffic in between. Extraction is
  * looking for durable preferences and decisions, and a page of shell output is where it goes to
- * hallucinate a fact about a filename.
+ * hallucinate a fact about a filename. `by` is who wrote what opened it; the caller knows, the text does not.
  */
-export function summariseExchange(inbound: string, outbound: string, limit = 4_000): string {
+export function summariseExchange(inbound: string, outbound: string, by: "person" | "host" = "person", limit = 4_000): string {
   const trim = (text: string) => {
     const clean = text.trim().replace(/\s+\n/g, "\n");
     return clean.length > limit ? `${clean.slice(0, limit)}…` : clean;
   };
-  return [`They said: ${trim(inbound)}`, `You replied: ${trim(outbound)}`].join("\n\n");
+  return [`${by === "person" ? THEY_SAID : NOT_THE_PERSON}: ${trim(inbound)}`, `You replied: ${trim(outbound)}`].join("\n\n");
 }
 
 function watermarkKey(agentId: string, conversation: string): string {
@@ -739,7 +747,7 @@ function watermarkKey(agentId: string, conversation: string): string {
 
 /**
  * The entries a summary will replace, regrouped as the exchanges the extractor reads
- * (INV-778): a person's message and what the agent said back until the next message.
+ * (INV-778): what opened a turn and what the agent said back until the next one opened.
  * Tool traffic is left out for the reason `summariseExchange` gives; text the agent
  * wrote alongside a tool call is kept, because that is where it says what it decided.
  * Each exchange cites its own place, so a record kept from it can be checked against
@@ -753,7 +761,8 @@ export function exchangesOf(
   // Grouped first and rendered after, only for the exchanges shown (INV-1566): rendering every entry
   // of a 36k-entry record to keep the last 30 made ~200 MB of strings per flush.
   const lineOf = (entry: HistoryEntry): string | undefined => {
-    if (!("kind" in entry)) return `${entry.role === "user" ? "They said" : "You replied"}: ${entry.text.trim()}`;
+    // Whose words a user entry holds is `personAuthoredText`'s call, not the role's: the role is only what opens a turn.
+    if (!("kind" in entry)) return `${entry.role !== "user" ? "You replied" : personAuthoredText(entry) !== undefined ? THEY_SAID : NOT_THE_PERSON}: ${entry.text.trim()}`;
     if (entry.kind !== "blocks") return undefined;
     const said = entry.blocks
       .filter((block): block is { type: "text"; text: string } => (block as { type?: string }).type === "text")
