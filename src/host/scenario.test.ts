@@ -4416,3 +4416,71 @@ test("a person's request ends when its result is delivered, and 不对，重做 
     assert.ok(task.history.some(change => change.closed === "delivery"), "it had ended on delivery before it was sent back");
   } finally { episode.cleanup(); }
 });
+
+test("an agent in a Docker box writes a git hook and a postinstall: a person is asked first and nothing lands; a version bump just lands; at L2 it is refused (INV-1861)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const { TaskStore } = await import("./tasks.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-run-later-scenario-"));
+  const gate = (name: string) => new PolicyGate({ path: join(dir, name), limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" } });
+  const shop = "/home/box/work/shop";
+  const hook = { call: "write_file", input: { path: `${shop}/.git/hooks/pre-commit`, content: "#!/bin/sh\nnpm test\n" } };
+  // The model does what each message asks, once, and then reports — as one that means no harm would.
+  const steps: Record<string, { call: string; input: Record<string, unknown> }> = {
+    "the hook": hook,
+    "the version": { call: "edit_file", input: { path: `${shop}/package.json`, old: '"version": "1.0.0"', new: '"version": "1.0.1"' } },
+    "the postinstall": { call: "edit_file", input: { path: `${shop}/package.json`, old: '"test": "node --test"', new: '"test": "node --test",\n    "postinstall": "node setup.js"' } },
+    "the redirect": { call: "bash", input: { command: `echo 'npm test' > ${shop}/.husky/pre-push` } },
+  };
+  const told: Record<string, string> = {};
+  const policy = gate("policy.jsonl");
+  const result = await runEpisode({
+    team: [{ name: "Ada" }],
+    says: Object.keys(steps).map(step => `Please do ${step}.`),
+    policy,
+    files: { [`${shop}/package.json`]: JSON.stringify({ name: "shop", version: "1.0.0", scripts: { test: "node --test" } }, null, 2) },
+    script: ({ messages }) => {
+      const step = Object.keys(steps)[Object.keys(told).length]!; // one request a turn, in order
+      const last = JSON.stringify(messages.at(-1));
+      if (!last.includes("tool_result")) return steps[step];
+      told[step] = last;
+      return { say: "Done what I can." };
+    },
+  });
+  // The same hook as the work of a task that only asks for a plan.
+  const planning = gate("policy-l2.jsonl");
+  const tasks = new TaskStore(join(dir, "tasks.jsonl"));
+  const planned = await runEpisode({
+    team: [{ name: "Ada" }],
+    says: [],
+    policy: planning, tasks,
+    script: ({ messages }) => (JSON.stringify(messages.at(-1)).includes("tool_result") ? { say: "It would need a pre-commit hook; I have not written one." } : hook),
+    drive: async ({ bus, frontId }) => {
+      const task = tasks.create({ title: "Propose how we keep the tests green", requester: "chris", assigneeId: frontId, level: 2 })!;
+      tasks.update(task.id, { status: "doing" }, frontId);
+      bus.sendFromUser(frontId, "Propose how we keep the tests green.", { taskBinding: { taskId: task.id, role: "executor" } });
+      await bus.wake(frontId);
+      await bus.idle();
+    },
+  });
+  try {
+    assert.deepEqual(policy.pending().map(card => card.runLater), [
+      { path: `${shop}/.git/hooks/pre-commit`, by: "git" },
+      { path: `${shop}/package.json`, by: "packages" },
+      { path: `${shop}/.husky/pre-push`, by: "git" },
+    ], "three cards, each naming the file and who would run it; the version bump made none");
+    assert.match(told["the hook"] ?? "", /approval/i, "the agent is told the hook waits on a person");
+    assert.equal(result.files.has(`${shop}/.git/hooks/pre-commit`), false, "the hook was not written");
+    assert.equal(result.files.has(`${shop}/.husky/pre-push`), false, "nor the one a shell redirection would have made");
+    const landed = JSON.parse(result.files.get(`${shop}/package.json`)!) as { version: string; scripts: Record<string, string> };
+    assert.equal(landed.version, "1.0.1", "the version bump landed without anyone being asked");
+    assert.deepEqual(landed.scripts, { test: "node --test" }, "the postinstall did not");
+
+    assert.deepEqual(planning.pending(), [], "at L2 nobody is asked");
+    assert.equal(planned.score.refusals.filter(line => /This task is at L2/.test(line)).length, 1, "the hook is refused outright, with where the task stops");
+    assert.equal(planned.files.has(`${shop}/.git/hooks/pre-commit`), false);
+  } finally {
+    result.cleanup();
+    planned.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

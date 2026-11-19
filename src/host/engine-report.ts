@@ -25,6 +25,7 @@ import { quoteForShell } from "./presets.ts";
 import { DOCKER_BOX_PATHS } from "./box-paths.ts";
 import { type DelegateReport, judgeWithReport, reportPath, summariseReport, validateDelegateReport } from "./delegate-report.ts";
 import { describeWorktree, worktreeDirty, worktreeState, type WorktreeState } from "./worktree-state.ts";
+import { runLaterPath } from "./run-later-paths.ts";
 
 export { MACHINE_OUTPUT } from "./presets.ts";
 
@@ -363,12 +364,13 @@ export function delegateEndedNote(jobId: string, brief: string, settled: Pick<Se
   const delivered = settled.delivery !== undefined ? ` Its report: ${summariseReport(settled.delivery)}.` : "";
   // The repository's state rides with the outcome and never replaces it: "done" with changes
   // still loose in the tree is said as exactly that (INV-1258).
-  const tree =
+  const repo =
     settled.worktree === undefined
       ? ""
       : settled.outcome === "done" && worktreeDirty(settled.worktree)
         ? ` Its repository is not clean: ${describeWorktree(settled.worktree)} — the engine reported success, but those changes are not committed; commit, review or discard them before counting this as landed.`
         : ` Repository: ${describeWorktree(settled.worktree)}.`;
+  const tree = repo + runLaterNote(settled);
   switch (settled.outcome) {
     case "done":
       return `[A job you delegated finished: ${what}. ${capitalize(settled.why)}.${delivered}${tree} Read its output with Jobs and fold the result into your work, or say why it does not matter.]`;
@@ -379,6 +381,25 @@ export function delegateEndedNote(jobId: string, brief: string, settled: Pick<Se
     default:
       return `[A job you delegated ended, and whether it did the work is unknown: ${what}. ${capitalize(settled.why)}.${delivered}${tree} Read its log before you use anything from it, and say what you found.]`;
   }
+}
+
+/**
+ * What a delegation wrote that is run later (INV-1861); nothing when it wrote none. The engine edits
+ * with its own tools, which the policy gate never sees, so the agent that delegated is told to put
+ * these to the person. From the repository's loose changes, and from the paths the report names as
+ * done — a hook the engine committed is in the second and not the first. A package.json named
+ * only by the report cannot be compared with what it held, and is left out.
+ */
+function runLaterNote(settled: Pick<Settled, "worktree" | "delivery">): string {
+  const loose = settled.worktree?.kind === "repo" ? settled.worktree.runLater ?? [] : [];
+  const named = (settled.delivery?.done ?? []).flatMap(item => (item.evidence.kind === "path" ? [item.evidence.path] : []));
+  const reported = named.filter(path => { const entry = runLaterPath(path); return entry !== undefined && entry.byContent !== true; });
+  const files = [...new Set([...loose, ...reported])];
+  if (files.length === 0) return "";
+  return (
+    ` It wrote files that are run later, under somebody else's authority, and nobody was asked: ${files.join(", ")}.` +
+    ` Read each one, and tell the person which they are and what they would run before any of it is committed, pushed or used.`
+  );
 }
 
 function capitalize(text: string): string {

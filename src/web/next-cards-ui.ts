@@ -26,7 +26,9 @@ function cardBox(tone, heading) {
 
 function approvalCard(approval, agent) {
   var box = cardBox("need", t("ui.next.card.consent", { name: agent.name })), acts = el("div", "acts");
-  if (approval.action) box.appendChild(el("b", "", approval.action));
+  // A file that is run later says so in the reader's language, and who runs it (INV-1861); any other action is the host's phrase.
+  if (approval.runLater) box.appendChild(el("b", "", t("ui.consent.runLater", { path: approval.runLater.path, who: t("ui.consent.runLaterBy." + approval.runLater.by) })));
+  else if (approval.action) box.appendChild(el("b", "", approval.action));
   if (approval.why) box.appendChild(el("div", "why", t("ui.next.card.says", { name: agent.name, why: approval.why })));
   box.appendChild(el("code", "card-code", approval.description));
   var scopes = approval.onceOnly ? ["once"] : ["once", "session", "always"];

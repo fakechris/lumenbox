@@ -40,6 +40,10 @@
  * of its own (`privateTmp`, INV-1724), so a socket the person opens in /tmp — before the command
  * started or after — is not in the command's /tmp. Only the egress bridges are bound in, read-only.
  *
+ * The hook and startup-file denials here are the hard half of the run-later table (INV-1861):
+ * what that table marks `hostDenied` cannot be written from this sandbox at all, and everything
+ * else in it is a question the policy gate asks a person.
+ *
  * Known gaps, stated: a hard link made outside the rules is not covered; on Linux the hidden
  * places outside /tmp are the paths that exist when the command starts (a docker socket made
  * later at a new path is reachable); Seatbelt matches the real path,
@@ -50,6 +54,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { RUN_LATER_UNDER_HOME, RUN_LATER_UNDER_REPO } from "./run-later-paths.ts";
 
 export type SandboxMechanism = "sandbox-exec" | "bwrap";
 
@@ -92,10 +97,10 @@ export interface WrappedCommand {
   rules: string[];
 }
 
-/** Under the home directory: where credentials and shell startup live. Never writable. */
-export const DENY_WRITE_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube", ".docker/config.json", ".netrc", ".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile", ".zshenv", ".gitconfig"] as const;
-/** Under the working directory: what turns a later command into this one's. Never writable. */
-export const DENY_WRITE_UNDER_CWD = [".git/hooks", ".git/config"] as const;
+/** Under the home directory, never writable: where credentials live, and the startup files the run-later table marks as refused here (run-later-paths.ts). */
+export const DENY_WRITE_UNDER_HOME: readonly string[] = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube", ".docker/config.json", ".netrc", ...RUN_LATER_UNDER_HOME.filter(entry => entry.hostDenied === true).map(entry => entry.path)];
+/** Under the working directory, never writable: what turns a later command into this one's — the same table's entries for a project. */
+export const DENY_WRITE_UNDER_CWD: readonly string[] = RUN_LATER_UNDER_REPO.filter(entry => entry.hostDenied === true).map(entry => entry.path);
 /** Under the home directory: what a confined process may not even read. Shell rc files stay readable, a login shell needs them. */
 export const CREDENTIAL_READS_UNDER_HOME = [".ssh", ".gnupg", ".aws", ".config/gh", ".kube", ".docker/config.json", ".netrc", "Library/Keychains", ".local/share/keyrings"] as const;
 /**

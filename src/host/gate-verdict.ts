@@ -47,6 +47,8 @@ export function askReasons(facts: {
   levelAsks?: number;
   /** Why a call on the person's own machine asks (INV-1700). */
   hostBoxWrite?: string;
+  /** The file a call writes that is run later (INV-1861). */
+  runLater?: string;
 }): string[] {
   const out: string[] = [];
   if (facts.rule?.effect === "ask") out.push(ruleWords(facts.rule));
@@ -59,6 +61,7 @@ export function askReasons(facts: {
     if (facts.tierEnforced !== undefined) out.push(`the side-effect gate asks for ${facts.tierEnforced} calls`);
     if (facts.levelAsks !== undefined) out.push(`the task is at L${facts.levelAsks}: outward steps are confirmed`);
     if (facts.hostBoxWrite !== undefined) out.push(`on the person's own machine every write asks: ${facts.hostBoxWrite}`);
+    if (facts.runLater !== undefined) out.push(`it writes a file that is run later (${facts.runLater})`);
   }
   return out;
 }
