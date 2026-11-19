@@ -8,7 +8,10 @@
  *     Also a hard gate.
  *   - **model**: `npm run scenario` against the real provider, opt-in, costs money. Not
  *     run means SKIPPED, never PASS; run and worse than the baseline means REVIEW, never
- *     an automatic pass — a named person accepts a regression or the build waits.
+ *     an automatic pass — a named person accepts a regression or the build waits. Or, in
+ *     its place, an evaluation record (`npm run eval`, docs/100): the four numbers, where
+ *     REVIEW is a drop larger than noise and a sample too small to tell is INCOMPLETE and
+ *     says so (INV-1772, INV-821).
  *
  * A baseline is comparable only when it was produced by the same provider, model and
  * fixture version; otherwise the comparison is refused and said, because a scorecard
@@ -26,6 +29,25 @@ export interface ScenarioRun {
   failure?: string;
 }
 
+/** The four numbers of an evaluation record, as the card carries them. Computed in src/evals/summary.ts; plain data here. */
+export interface EvalNumbers {
+  /** The record these were read from. */
+  record: string;
+  split: string;
+  tasks: number;
+  k: number;
+  passRate: { estimate: number; low: number; high: number };
+  /** A task passes every time in k; at least once in k. */
+  passHatK: number;
+  passAtK: number;
+  /** The smallest change in pass rate two runs of this size would catch. */
+  detectableDifference: number;
+  comparison: { verdict: "REVIEW" | "IMPROVED" | "NO_CHANGE_DETECTED" | "INCOMPLETE" | "NO_BASELINE" | "NOT_COMPARABLE"; why: string; paired?: number; worse?: number; better?: number };
+  /** Whether any judge has been checked against a person's labels, and each question's kappa where it has. */
+  judges: { calibrated: boolean; note: string; kappa?: Record<string, number>; mayGate?: string[] };
+  cost?: { tokensPerPass?: number; usdPerPass?: number };
+}
+
 export interface ModelSection {
   status: "ran" | "skipped";
   reason?: string;
@@ -35,6 +57,8 @@ export interface ModelSection {
   fixtureVersion?: string;
   runs?: number;
   results?: ScenarioRun[];
+  /** Present when the section was filled from an evaluation record instead of scenario runs. */
+  eval?: EvalNumbers;
 }
 
 export interface ScorecardInput {
@@ -133,7 +157,17 @@ export function buildScorecard(input: ScorecardInput): Scorecard {
   if (input.model.status === "skipped") soften("INCOMPLETE", `model scenarios SKIPPED: ${input.model.reason ?? "not run"}`);
 
   let comparison: Scorecard["comparison"];
-  if (input.baseline !== undefined) {
+  const numbers = input.model.status === "ran" ? input.model.eval : undefined;
+  if (numbers !== undefined) {
+    // The record carries its own comparison, task by task; a drop is REVIEW only beyond noise.
+    const verdict = numbers.comparison.verdict;
+    const acceptedBy = (input.acceptedRegressions ?? []).find(entry => entry.key === EVAL_KEY)?.by;
+    if (verdict === "REVIEW" && acceptedBy === undefined) {
+      soften("REVIEW", `the evaluation is worse than its baseline: ${numbers.comparison.why}; a named reviewer must accept (--accept "${EVAL_KEY}=<name>") or the build waits`);
+    } else if (verdict === "REVIEW") reasons.push(`regression on the evaluation accepted by ${acceptedBy}`);
+    else if (verdict === "INCOMPLETE" || verdict === "NO_BASELINE" || verdict === "NOT_COMPARABLE") soften("INCOMPLETE", `the evaluation settles nothing yet: ${numbers.comparison.why}`);
+    if (!numbers.judges.calibrated) reasons.push(`judge not calibrated — may not gate (${numbers.judges.note})`);
+  } else if (input.baseline !== undefined) {
     comparison = compareModelSections(input.model, input.baseline.model, input.acceptedRegressions ?? []);
     if (!comparison.comparable) {
       soften("INCOMPLETE", `no comparison: ${comparison.why}`);
@@ -154,6 +188,9 @@ export function buildScorecard(input: ScorecardInput): Scorecard {
   return { format: "lumenbox-scorecard/1", ...input, verdict: { status, reasons }, ...(comparison !== undefined ? { comparison } : {}) };
 }
 
+/** The key a reviewer accepts an evaluation regression under: `--accept "eval=<name>"`. */
+export const EVAL_KEY = "eval";
+
 const pct = (rate: number): string => `${Math.round(rate * 100)}%`;
 
 export function exitCodeFor(status: Verdict): 0 | 1 | 2 | 3 {
@@ -161,13 +198,25 @@ export function exitCodeFor(status: Verdict): 0 | 1 | 2 | 3 {
 }
 
 export function describeScorecard(card: Scorecard): string[] {
+  const numbers = card.model.status === "ran" ? card.model.eval : undefined;
   const lines = [
     `Scorecard ${card.commit}${card.dirty ? " (dirty)" : ""} — ${card.verdict.status}`,
     `  node ${card.node}; ${card.startedAt} → ${card.endedAt}${card.builtAt !== undefined ? `; built ${card.builtAt}` : ""}`,
     `  deterministic: ${card.deterministic.status}${card.deterministic.pass !== undefined ? ` (${card.deterministic.pass} pass, ${card.deterministic.fail ?? 0} fail, floor ${card.deterministic.floor ?? "?"})` : ""}`,
     `  artifact: ${card.artifact.status}${(card.artifact.failures ?? []).length > 0 ? ` (${card.artifact.failures!.join(", ")})` : ""}`,
-    `  model: ${card.model.status === "ran" ? `ran ${card.model.runs ?? "?"}×${new Set((card.model.results ?? []).map(r => r.scenario)).size} on ${card.model.provider ?? "?"} ${card.model.model ?? ""} (fixtures ${card.model.fixtureVersion ?? "?"})` : `SKIPPED — ${card.model.reason ?? "not run"}`}`,
+    card.model.status === "ran"
+      ? `  model: ran ${card.model.runs ?? "?"}×${numbers?.tasks ?? new Set((card.model.results ?? []).map(r => r.scenario)).size} on ${card.model.provider ?? "?"} ${card.model.model ?? ""} (fixtures ${card.model.fixtureVersion ?? "?"})`
+      : `  model: SKIPPED — ${card.model.reason ?? "not run"}`,
   ];
+  if (numbers !== undefined) {
+    const one = (rate: number) => `${(rate * 100).toFixed(1)}%`;
+    lines.push(
+      `    eval ${numbers.split}, ${numbers.tasks} tasks × ${numbers.k} (${numbers.record}):`,
+      `    pass rate ${one(numbers.passRate.estimate)} [${one(numbers.passRate.low)} – ${one(numbers.passRate.high)}]; pass^${numbers.k} ${one(numbers.passHatK)}, pass@${numbers.k} ${one(numbers.passAtK)}`,
+      `    against the baseline: ${numbers.comparison.verdict.replaceAll("_", " ")} — ${numbers.comparison.why}`,
+      `    smallest detectable difference ${one(numbers.detectableDifference)}; judges: ${numbers.judges.calibrated ? `calibrated, ${numbers.judges.note}` : `not calibrated — may not gate (${numbers.judges.note})`}`
+    );
+  }
   if (card.comparison !== undefined) {
     if (!card.comparison.comparable) lines.push(`  baseline: ${card.comparison.why}`);
     else {

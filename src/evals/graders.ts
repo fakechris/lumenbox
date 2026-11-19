@@ -58,6 +58,10 @@ function formatProblem(format: NonNullable<EvalTask["gold"]["format"]>, output: 
   }
 }
 
+/** A teach task as the fixture teach-evals.ts scores and cues from: the one place a task becomes one. */
+export const teachFixtureOf = (task: EvalTask): TeachFixture =>
+  ({ id: String(task.input.fixture ?? task.id), trace: task.input.trace ?? [], expect: task.gold.scorer?.expect ?? {}, reference: task.gold.answer ?? "" }) as unknown as TeachFixture;
+
 /** Every grader the task's gold names, run over one observation. Pure; no model. */
 export function gradeObservation(task: EvalTask, observation: Observation): GraderResult[] {
   const gold = task.gold;
@@ -85,8 +89,7 @@ export function gradeObservation(task: EvalTask, observation: Observation): Grad
     results.push({ name: `state:${key}`, pass: problem === undefined, ...(problem !== undefined ? { detail: `${key} ${problem}` } : {}) });
   }
   if (gold.scorer?.name === "teach") {
-    const fixture = { id: String(task.input.fixture ?? task.id), trace: task.input.trace, expect: gold.scorer.expect, reference: gold.answer ?? "" } as unknown as TeachFixture;
-    for (const check of scoreTeaching(fixture, observation.output)) {
+    for (const check of scoreTeaching(teachFixtureOf(task), observation.output)) {
       results.push({ name: `teach:${check.name}`, pass: check.ok, ...(check.detail !== undefined && !check.ok ? { detail: check.detail.slice(0, 200) } : {}) });
     }
   }

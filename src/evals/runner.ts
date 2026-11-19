@@ -17,6 +17,7 @@ import { redactCredentials } from "../host/teach.ts";
 import { type CacheStore, type CallCounters, cachedModel, type ModelCall } from "./cache.ts";
 import { corpusVersion, digest, type EvalTask, type Split, type SubjectName, taskVersion } from "./corpus.ts";
 import { type GraderResult, gradeObservation } from "./graders.ts";
+import type { JudgeSection } from "./judges.ts";
 import type { Subject } from "./subjects.ts";
 
 export interface TokenUse {
@@ -64,6 +65,8 @@ export interface EvalRun {
   models: Partial<Record<Subject["tier"], { provider: string; model: string }>>;
   calls: CallCounters;
   tasks: TaskResult[];
+  /** The judges' verdicts on this record's outputs, when they were asked (judges.ts). Never part of `pass`. */
+  judges?: JudgeSection;
 }
 
 export interface Tier {
@@ -88,10 +91,10 @@ export interface RunOptions {
 }
 
 const OUTPUT_LIMIT = 4000;
-const emptyUse = (): TokenUse => ({ calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+export const emptyUse = (): TokenUse => ({ calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
 
 /** Adds up what each call reports having used, as the usage ledger would have recorded it. */
-function metered(model: ModelCall, use: TokenUse): ModelCall {
+export function metered(model: ModelCall, use: TokenUse): ModelCall {
   return async (params, wire) => {
     const message = await model(params, wire);
     const usage = (message.usage ?? {}) as Partial<Anthropic.Usage>;
