@@ -10,7 +10,11 @@
  * So a card says where the work came from and what was reported, and its three buttons do three
  * things. It stands in the agent's one conversation, wherever the work was asked (INV-1896).
  */
+import { DELIVERY_BRIEF, DELIVERY_SECTIONS } from "../host/delivery-report.ts";
+
 export const NEXT_RESULT_JS = `
+/** The parts of a delivery in their fixed order, and the few shown before anything is opened (delivery-report.ts, INV-1922). */
+var REPORT_ORDER = ${JSON.stringify(DELIVERY_SECTIONS)}, REPORT_BRIEF = ${JSON.stringify(DELIVERY_BRIEF)};
 /** Markdown as the agent wrote it; raw HTML is off in the renderer, so what is said cannot become markup. */
 function rich(text, name) {
   var node = el("div", name);
@@ -142,6 +146,26 @@ function askedList() {
   return box;
 }
 
+/**
+ * What was reported, drawn part by part when it was written as a delivery, else as it was written.
+ * What was not done or not verified is always drawn, never behind a fold or a scroll: when the member
+ * left it out, the line says so rather than letting silence read as "nothing".
+ */
+function reportBlock(report, keys) {
+  if (!report.parts) return rich(report.note, "report");
+  var box = el("div", "parts");
+  keys.forEach(function (key) {
+    var part = report.parts.filter(function (row) { return row.key === key; })[0];
+    if (!part && key !== "limits") return;
+    var row = el("div", "part");
+    row.dataset.part = key;
+    if (key !== "result") row.appendChild(el("b", "", t("ui.next.report." + key)));
+    row.appendChild(part ? rich(part.text, "said") : el("div", "why", t("ui.next.report.unstated")));
+    box.appendChild(row);
+  });
+  return box;
+}
+
 /** A result waiting for the person: what it is, where it came from, what was reported, and the decision. */
 function resultCard(row) {
   var card = el("div", "card-plain"), acts = el("div", "acts"), files = row.deliverables || [], report = row.report, maker = agentName(row.assigneeId);
@@ -153,7 +177,7 @@ function resultCard(row) {
   card.appendChild(el("div", "why", originOf(row)));
   if (report && report.note) {
     card.appendChild(el("div", "why", t("ui.next.chat.reported", { name: agentName(report.by) || maker, when: agoText(report.at) })));
-    card.appendChild(rich(report.note, "report"));
+    card.appendChild(reportBlock(report, REPORT_BRIEF));
   }
   files.slice(0, 4).forEach(function (file) {
     var link = el("a", "file", file.name);
