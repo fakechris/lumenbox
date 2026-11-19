@@ -26,6 +26,14 @@ import type { ToolContext, ToolOutcome } from "./tools.ts";
 import type { TurnEvent } from "./turn-events.ts";
 
 export const TELL = "Tell";
+
+/** What a turn hands the tool, as part of `ToolContext`. */
+export interface TellContext {
+  /** Says one thing to the person mid-turn. Absent: nobody is reachable, and the tool says so. */
+  tell?: Pick<Teller, "tell">;
+  /** A person started this turn and is waiting on it; false for a wake nobody is watching. Decides whether a Tell spends the daily allowance. */
+  personWaiting?: boolean;
+}
 /** Tells in one turn. Past this the turn is narrating, and the rest belongs in the reply. */
 export const TELLS_PER_TURN = 3;
 /** Minutes between two Tells of one turn, unless the installation sets another. */

@@ -9,7 +9,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { tellTool, withTellTool } from "./tell.ts";
+import { type TellContext, tellTool, withTellTool } from "./tell.ts";
 import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { currentTaskOf, levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts"; import { promoteTool, withPromoteTool } from "./promote-tool.ts";
 /**
  * Tool definitions and dispatch.
@@ -119,7 +119,7 @@ function foregroundWindowMs(): number {
   return Number.isFinite(raw) && raw >= 1_000 ? Math.min(raw, 600_000) : 10_000;
 }
 
-export interface ToolContext {
+export interface ToolContext extends TellContext {
   signal?: AbortSignal;
   audit?: import("./audit-context.ts").AuditContext; resultChecks?: import("./result-check-policy.ts").ResultChecks;
   work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string; /** Nobody asked for this turn (turn-standing.ts). */ unrequested?: boolean;
@@ -208,10 +208,6 @@ export interface ToolContext {
     title?: string;
     close?: boolean; /** The agent's box's work directory: where a FilePreview or Link may point (INV-1736). */ workDir?: string;
   }) => Promise<{ where: string } | { error: string }>;
-  /** Says one thing to the person mid-turn (Tell, INV-1853). Absent: nobody is reachable, and the tool says so. */
-  tell?: Pick<import("./tell.ts").Teller, "tell">;
-  /** A person started this turn and is waiting on it; false for a wake nobody is watching. What Tell reads to know whether it spends the daily allowance. */
-  personWaiting?: boolean;
   askUser?: (input: {
     principalId?: string;
     agentId: string;
@@ -3637,13 +3633,10 @@ export async function dispatchTool(
     case "AskUser": {
       const question = String(input.question ?? "").trim();
       if (question === "") return { text: "Ask something.", isError: true };
-      // String() on an option object is "[object Object]", and it shipped: a model sent
-      // {label, description} choices despite the schema saying strings, and the person got
-      // four identical unreadable bullets in their chat. A schema does not bind a model,
-      // so the reader takes what the object calls itself — same rule as describeArg on
-      // the web side, which caught the same failure in SetTodos.
-      // Nested arrays shipped too — [["a", ["b"]]] — and String() of those is "a,b". One
-      // reader for every shape, shared with the page's replay: web/transcript.ts optionLabel.
+      // String() on an option object is "[object Object]", and it shipped: a model sent {label, description} choices despite the schema saying strings, and the person
+      // got four identical unreadable bullets in their chat. A schema does not bind a model, so the reader takes what the object calls itself — same rule as describeArg
+      // on the web side, which caught the same failure in SetTodos. Nested arrays shipped too — [["a", ["b"]]] — and String() of those is "a,b". One reader for every
+      // shape, shared with the page's replay: web/transcript.ts optionLabel.
       const options = Array.isArray(input.options)
         ? input.options.map(optionLabel).filter((option): option is string => option !== undefined)
         : undefined;
