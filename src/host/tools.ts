@@ -9,6 +9,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
+import { tellTool, withTellTool } from "./tell.ts";
 import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { currentTaskOf, levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts"; import { promoteTool, withPromoteTool } from "./promote-tool.ts";
 /**
  * Tool definitions and dispatch.
@@ -207,6 +208,10 @@ export interface ToolContext {
     title?: string;
     close?: boolean; /** The agent's box's work directory: where a FilePreview or Link may point (INV-1736). */ workDir?: string;
   }) => Promise<{ where: string } | { error: string }>;
+  /** Says one thing to the person mid-turn (Tell, INV-1853). Absent: nobody is reachable, and the tool says so. */
+  tell?: Pick<import("./tell.ts").Teller, "tell">;
+  /** A person started this turn and is waiting on it; false for a wake nobody is watching. What Tell reads to know whether it spends the daily allowance. */
+  personWaiting?: boolean;
   askUser?: (input: {
     principalId?: string;
     agentId: string;
@@ -451,7 +456,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
-  "ShowUI",
+  "ShowUI", "Tell",
   "OtherThreads",
   // A fork's one channel is its final message with its handoff line; silence would read as `unstated`.
   SILENCE_TOOL,
@@ -461,7 +466,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
 /** The tools that reach the person. Withheld on a turn teammates opened (docs/42 §2). */
 export const DESKTOP_TOOLS = new Set(["computer", "browser_open", "browser_snapshot", "browser_read", "browser_act", "browser_scroll", "browser_wait_for", "browser_pages", "browser_upload", "browser_fill_secret", "RunOperation", "HandOverDesktop"]);
 export const HOST_EXECUTION_UNAVAILABLE = "Host execution is not available on this box.";
-export const PERSON_FACING_TOOLS: ReadonlySet<string> = new Set(["AskUser", "AskSecret", "HandOverDesktop", "ShowUI"]);
+export const PERSON_FACING_TOOLS: ReadonlySet<string> = new Set(["AskUser", "AskSecret", "HandOverDesktop", "ShowUI", "Tell"]);
 
 export function isForkConversation(conversation: string | undefined): boolean {
   return (conversation ?? "").startsWith(FORK_PREFIX);
@@ -1791,7 +1796,7 @@ evidence: {
         required: ["action"],
       },
     }
-  ); withDeliverFileTool(tools); withPromoteTool(tools); withOrgCorrectionTool(tools); withOutboxTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729); correcting it (INV-1730); a draft for the person to approve (INV-1739)
+  ); withTellTool(tools); withDeliverFileTool(tools); withPromoteTool(tools); withOrgCorrectionTool(tools); withOutboxTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729); correcting it (INV-1730); a draft for the person to approve (INV-1739)
 
   // The door out of the box, only when an operator has built one. Not added-and-
   // withheld — absent, so a box without host execution never puts the idea in an
@@ -4003,6 +4008,7 @@ export async function dispatchTool(
       }
     }
 
+    case "Tell": return tellTool(context, input);
     case "DeliverFile": return deliverFileTool(context, input); case "Promote": return promoteTool(context, input); case "RunOperation": return runOperationTool(context, input); case ORG_CORRECTION_TOOL: return runOrgCorrectionTool(context, input); case OUTBOX_TOOL: return runOutboxTool(context, input); // INV-1663; INV-1378; INV-1730; INV-1739
     case "browser_verify_write":
       return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };

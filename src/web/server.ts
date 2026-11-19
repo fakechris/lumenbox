@@ -238,7 +238,7 @@ import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
-import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
+import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { Teller } from "../host/tell.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
@@ -429,7 +429,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * restart — see src/web/activity.ts. How much to keep is a preference someone sets
    * once, so it lives in the config file rather than in an environment variable.
    */
-  const activityLimit = loadConfig(line => log(line)).activityLimit;
+  const { activityLimit, tellGapMinutes } = loadConfig(line => log(line));
   const activity = new ActivityLog({
     path: join(agentboxHome(), "activity.jsonl"),
     limit: activityLimit,
@@ -443,7 +443,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     "turn_interrupted",
     "tool_start",
     "message_sent",
-    "error",
+    "error", "told", // one thing a member told the person mid-turn (INV-1853)
   ]);
 
   const remember = (event: OutboundEvent) => {
@@ -542,6 +542,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // the process does is not a budget.
   const followUps = new FollowUpBudget(join(agentboxHome(), "follow-ups.jsonl"));
   const pushBudget = new PushBudget(join(agentboxHome(), "push-budget.jsonl")); // what an agent may push unprompted per day (INV-1576)
+  // One thing a member says mid-turn (Tell, INV-1853): to the page, and to the chat the turn came from as an ordinary message whose files leave through that chat's outbox.
+  const teller = new Teller({ budget: pushBudget, ...(tellGapMinutes !== undefined ? { gapMinutes: tellGapMinutes } : {}), redact: text => outboundRedactor(vault.heldValues())(text), toPage: told => broadcast(told),
+    chatOf: conversation => conversations.chatKeyFor(conversation), toChat: async (chatKey, text, about) => chats?.tryPushToChat(chatKey, text, { kind: "notice", about }) ?? { delivered: false, why: "no channels are configured" } });
 
   /**
    * One JSON-RPC call to Involute's MCP endpoint, as one agent (INV-553).
@@ -696,17 +699,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }).question;
       const where = chats?.askQuestion({ ...input, questionId: watched.id, expiresAt: watched.expiresAt });
       if (where !== undefined) questions.setAsker(watched.id, where);
-      // The page is always a place an answer can come from, so a question is never
-      // undeliverable while somebody could be looking at it.
+      // The page is always a place an answer can come from, so a question is never undeliverable while somebody could be looking at it.
       return where ?? "in the app";
     },
-    // A scheduled skill that named a chat reports into it. Without this a morning brief
-    // ran every morning into the main conversation, which no chat reads — the automation
-    // worked and nobody ever saw it.
-    // Names for rules written about a person (INV-156): the roster is the one place that
-    // knows a principal's name, and an operator should not have to paste a uuid.
+    tell: teller,
+    // Names for rules written about a person (INV-156): the roster is the one place that knows a principal's name, and an operator should not have to paste a uuid.
     principalName: principalId => principals.list().find(person => person.id === principalId)?.name,
     principalIdentities: principalId => principals.list().find(person => person.id === principalId)?.identities,
+    // A scheduled skill that named a chat reports into it. Without this a morning brief ran every morning into the main conversation, which no chat reads — the automation worked and nobody ever saw it.
     deliverToChat: async (chatKey, text, fromAgentId, exempt) => {
       // A routine reports into its own box's rooms (INV-541). A chat nobody has driven is
       // nobody's — a skill file may name a room the bot has never been messaged in, and

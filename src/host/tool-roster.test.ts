@@ -9,15 +9,21 @@ import { buildTools, dispatchTool } from "./tools.ts";
 const everything = buildTools(true, true, undefined, true, true, true, true, false, ["feishu", "dingtalk"]);
 
 test("with every flag on, the list a model sees is at most 30 definitions, and every built-in is either resident or deferred — none dropped", () => {
-  const { resident, deferred } = splitRoster(everything);
-  const sent = [...resident, ...lookupPair(0, deferred)];
-  assert.ok(sent.length <= 30, `${sent.length} tools sent`);
-  assert.equal(resident.length + deferred.length, everything.length);
-  assert.deepEqual(new Set([...resident, ...deferred].map(tool => tool.name)), new Set(everything.map(tool => tool.name)));
+  // The two lists a turn can be given (turn.ts): one a person is waiting on is never offered silence; one nobody is waiting on
+  // is, and there Tell — the other tool that decides what reaches a person — waits behind the pair (INV-1853).
+  const waited = everything.filter(tool => tool.name !== "NothingToSay");
+  for (const [turn, list, unwaited] of [["a person is waiting on", waited, false], ["nobody is waiting on", everything, true]] as const) {
+    const { resident, deferred } = splitRoster(list, unwaited);
+    const sent = [...resident, ...lookupPair(0, deferred)];
+    assert.ok(sent.length <= 30, `${sent.length} tools sent on a turn ${turn}`);
+    assert.equal(resident.some(tool => tool.name === "Tell"), !unwaited, `Tell is ${unwaited ? "behind the pair" : "in the list"} on a turn ${turn}`);
+    assert.equal(resident.length + deferred.length, list.length);
+    assert.deepEqual(new Set([...resident, ...deferred].map(tool => tool.name)), new Set(list.map(tool => tool.name)));
+    for (const tool of deferred) assert.ok(declaredTools().includes(tool.name), `${tool.name} keeps its tier`);
+    assert.ok(deferred.length > 0 && deferred.every(tool => !RESIDENT_TOOLS.has(tool.name) || (unwaited && tool.name === "Tell")));
+  }
   const offered = new Set(everything.map(tool => tool.name));
   for (const name of RESIDENT_TOOLS) assert.ok(offered.has(name) || declaredTools().includes(name), `${name} is a real tool`);
-  for (const tool of deferred) assert.ok(declaredTools().includes(tool.name), `${tool.name} keeps its tier`);
-  assert.ok(deferred.length > 0 && deferred.every(tool => !RESIDENT_TOOLS.has(tool.name)));
 });
 
 test("a list already within budget is sent whole: a narrowed verifier keeps its four tools and gets no pair", () => {

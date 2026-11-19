@@ -105,6 +105,12 @@ function bubble(entry, bare) {
   if (entry.provenance === "unknown") node.insertBefore(el("div", "why", t("ui.next.chat.unknown")), node.firstChild);
   // Where a request came from when it was not typed here: the chat it arrived through, or a routine.
   if (entry.source) node.insertBefore(doorMark(entry.source) || el("div", "why", t("ui.next.chat.source." + entry.source)), node.firstChild);
+  // What a Tell carried (INV-1853): each file a card that downloads it, from the box or from the task's kept copy.
+  (entry.files || []).forEach(function (file) {
+    var card = el("a", "file", file.name);
+    card.href = file.deliverable ? "/api/tasks/deliverable?task=" + encodeURIComponent(file.deliverable.task) + "&id=" + encodeURIComponent(file.deliverable.id) : "/api/file?download=1&path=" + encodeURIComponent(file.path || "");
+    node.appendChild(card);
+  });
   if (!bare) node.appendChild(messageTools(entry));
   return node;
 }
@@ -306,6 +312,8 @@ function chatEvent(event) {
   else if (event.type === "interim" && typeof event.text === "string" && ownTurn()) {
     chat.entries = chat.entries.concat([{ kind: "text", role: "assistant", text: event.text, opening: true }]); if (chat.live) chat.live.text = ""; render();
   }
+  // One thing told mid-turn stays said too, with its files, and the turn goes on below it (INV-1853).
+  else if (event.type === "told" && typeof event.text === "string") { chat.entries = chat.entries.concat([{ kind: "text", role: "assistant", text: event.text, told: true, files: event.files || [] }]); render(); }
   else if (event.type === "tool_start") { chat.live = chat.live || { text: "", doing: "" }; chat.live.text = ""; chat.live.doing = event.phrase || event.tool || ""; render(); }
   else if (event.type === "retrying" && chat.live) {
     if (event.discardPartial) chat.live.text = "";

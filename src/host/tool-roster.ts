@@ -41,6 +41,8 @@ export const RESIDENT_TOOLS: ReadonlySet<string> = new Set([
   // Faces the person or ends the turn: never worth a lookup round trip.
   "AskUser",
   "NothingToSay",
+  // One thing said to the person mid-turn (INV-1853), where a person is waiting on the turn; see `splitRoster`.
+  "Tell",
   // Hands work to an engine; the one spawn path that is reached for.
   "Delegate",
   // The goal loop's own verb (checklist, claim_complete): the prompt tells the agent to call it, so
@@ -70,11 +72,18 @@ export const BUILT_IN_SECTION = "built-in";
 /** Up to this many built-ins ride as they are: a list already narrowed by a profile or a routine is not made to pay a round trip. */
 export const ROSTER_BUDGET = 30;
 
-export function splitRoster(tools: readonly Anthropic.Tool[]): { resident: Anthropic.Tool[]; deferred: Anthropic.Tool[] } {
+/**
+ * `unwaited` is a turn nobody is waiting on. The list was at its thirty when `Tell` arrived (INV-1853), and the two tools that
+ * decide what reaches a person are needed on opposite kinds of turn: `Tell` where somebody is waiting through a long turn, and
+ * `NothingToSay` — offered only on an unwaited one — where nobody is. So an unwaited turn keeps `Tell` behind the pair, and
+ * no turn's list grows.
+ */
+export function splitRoster(tools: readonly Anthropic.Tool[], unwaited = false): { resident: Anthropic.Tool[]; deferred: Anthropic.Tool[] } {
   if (tools.length <= ROSTER_BUDGET) return { resident: [...tools], deferred: [] };
   const resident: Anthropic.Tool[] = [];
   const deferred: Anthropic.Tool[] = [];
-  for (const tool of tools) (RESIDENT_TOOLS.has(tool.name) || GATEWAY_TOOLS.has(tool.name) ? resident : deferred).push(tool);
+  const rides = (name: string) => (RESIDENT_TOOLS.has(name) && !(unwaited && name === "Tell")) || GATEWAY_TOOLS.has(name);
+  for (const tool of tools) (rides(tool.name) ? resident : deferred).push(tool);
   return { resident, deferred };
 }
 
