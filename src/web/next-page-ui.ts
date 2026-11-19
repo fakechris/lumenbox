@@ -230,6 +230,10 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .card-head { font-weight: 600; }
 .report { font-size: 13.5px; max-height: 15em; overflow: auto; overflow-wrap: anywhere; border-left: 2px solid var(--border); padding-left: 10px; }
 .report p { margin: 0 0 8px; } .report p:last-child { margin-bottom: 0; } .report pre { overflow: auto; font-size: 12.5px; } .report ul, .report ol { margin: 0 0 8px; padding-left: 20px; }
+.parts { font-size: 13.5px; overflow-wrap: anywhere; border-left: 2px solid var(--border); padding-left: 10px; display: flex; flex-direction: column; gap: 8px; }
+.part b { display: block; font-size: 12px; font-weight: 600; color: var(--soft); } .part .said p { margin: 0 0 6px; } .part .said p:last-child { margin-bottom: 0; }
+.part .said ul, .part .said ol { margin: 0 0 6px; padding-left: 20px; } .part .said pre { overflow: auto; font-size: 12.5px; }
+.part[data-part="limits"] b { color: var(--warn); } .panel .parts { margin-bottom: 12px; }
 .card-plain .why, .panel .why { white-space: normal; }
 .panel .report { margin-bottom: 12px; }
 .card-plain textarea { width: 100%; min-height: 64px; }

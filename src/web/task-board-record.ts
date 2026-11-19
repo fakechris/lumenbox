@@ -2,14 +2,20 @@ import {workRootSummary} from "../host/work-root-store.ts";
 import { summarizeTaskProgress, type ProgressSourceAccess } from "../host/task-progress.ts";
 /** Board previews contain no full history, fork ledger or configuration history. Open the task for those. */
 import type { Task } from "../host/tasks.ts";
+import { type DeliveryPart, parseDelivery } from "../host/delivery-report.ts";
 const preview = (text: string | undefined, limit: number) => text === undefined ? undefined : text.length > limit ? text.slice(0, limit) + "…" : text;
 /** Who writes a note to keep the books rather than to say what was done. */
 const BOOKKEEPERS: ReadonlySet<string> = new Set(["aging", "audit-guard", "review-guard", "restart", "host", "channel"]);
-/** The newest thing somebody said about the work itself: what a person deciding on it needs to read. */
-export function lastReport(task: Pick<Task, "history" | "createdAt">): { at: string; by: string; note: string } | undefined {
+/**
+ * The newest thing somebody said about the work itself: what a person deciding on it needs to read.
+ * Written as a delivery (delivery-report.ts), it comes with its parts, read from the whole note before
+ * anything is cut: the part that says what was not done stands last but one, and a cut note loses it first.
+ */
+export function lastReport(task: Pick<Task, "history" | "createdAt">, limit = 700): { at: string; by: string; note: string; parts?: DeliveryPart[] } | undefined {
   // The entry written at creation is the board's own line about the card, under the requester's name.
   const said = task.history.findLast((change, index) => !BOOKKEEPERS.has(change.by) && !(index === 0 && change.at === task.createdAt) && (change.note ?? "").trim() !== "");
-  return said ? { at: said.at, by: said.by, note: preview(said.note, 700)! } : undefined;
+  const parts = parseDelivery(said?.note)?.parts.map(part => ({ key: part.key, text: preview(part.text, Math.ceil(limit / 2))! }));
+  return said ? { at: said.at, by: said.by, note: preview(said.note, limit)!, ...(parts ? { parts } : {}) } : undefined;
 }
 export function taskBoardRecord(task: Task, access?: ProgressSourceAccess) {
   const last = task.history.at(-1), report = lastReport(task);
