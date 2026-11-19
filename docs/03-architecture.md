@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: architecture
-     updated: 2026-09-22
+     updated: 2026-11-19
 -->
 # Architecture
 
@@ -122,6 +122,35 @@ Four boundaries, from strongest to weakest, and it matters that they are named i
    prevents the accident, not a determined agent.
 4. **Shell environment.** Credentials the agent has no use for are removed from the environment
    its commands inherit. Same class as (3).
+
+### Outbound traffic: what is enforced and what is only observed (INV-816)
+
+A boundary is enforced when the agent, with the `sudo` it has, cannot step around it; it is
+observed when the traffic that cooperates is decided and recorded and the rest is not. The
+difference was not written down, and "egress goes through the relay" was read as the first
+while being the second: `env -u HTTP_PROXY curl …` left the box directly.
+
+| How the box is run | A connection through the box's proxy | A connection that skips the proxy | Class |
+| --- | --- | --- | --- |
+| Docker, relay named, orchestrator outside the box (the default once `AGENTBOX_EGRESS_RELAY` is set) | relay: hard denials, allow list, per-call record | **refused by the network**: the box is on an internal network with no route out; a gate container forwards the daemon's port in and only the relay's port and the web port out (`src/box/box-network.ts`) | **enforced** |
+| Docker, relay named, `AGENTBOX_EGRESS_ENFORCE=off` | as above | leaves directly, unrecorded | observed |
+| Docker, relay named, orchestrator inside the box (`--with-host`) | as above | leaves directly: the orchestrator calls its model from the box | observed |
+| Docker, no relay named (a personal installation as shipped) | there is no proxy | leaves directly, unrecorded | neither |
+| Kubernetes | no egress relay is wired into a pod | leaves directly; the NetworkPolicy restricts ingress only | neither |
+| An attached box, a native (host) box | whatever that machine's network does | not this installation's to decide | neither |
+
+The row a box is in is printed when it starts (`outbound: confined — …` / `outbound: NOT
+confined — …`), read from the engine rather than from the configuration, so a box created
+before a relay was named is not reported as confined because the variable is set now.
+
+What "enforced" rests on, each measured in a box on OrbStack (`scripts/egress-confinement-check.mjs`):
+an internal network gives a container no default route and no published port; root in the box
+has no `NET_ADMIN` and cannot add a route; frames addressed to the gate's MAC for another
+destination are not forwarded, and the gate runs with forwarding off and no capabilities; a
+restart of the box or the engine brings back the same network, so it fails closed — a gate
+that is down cuts the box off rather than opening it. What it does not cover: a relay with an
+empty allow list still opens anywhere (now recorded, and with the two hard denials); and
+anything the relay itself is allowed to reach.
 
 ## 6. Failure model
 
