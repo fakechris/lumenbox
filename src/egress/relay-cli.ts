@@ -13,6 +13,14 @@ export interface RelayCliOptions {
   eventsPath?: string;
 }
 
+/**
+ * The host ports that are channels when nobody lists any: the web port. One definition, because
+ * the relay's hard denial and a confined box's gate (box/box-network.ts) must open the same door.
+ */
+export function defaultChannelPorts(env: NodeJS.ProcessEnv): number[] {
+  return [Number(env.AGENTBOX_PORT ?? 7777)];
+}
+
 export function relayOptionsFromFlags(flags: Map<string, unknown>, env: NodeJS.ProcessEnv): RelayCliOptions {
   const text = (name: string) => (typeof flags.get(name) === "string" ? (flags.get(name) as string) : undefined);
   const list = (value: string | undefined) => value?.split(",").map(entry => entry.trim()).filter(Boolean);
@@ -23,7 +31,7 @@ export function relayOptionsFromFlags(flags: Map<string, unknown>, env: NodeJS.P
     ...(list(text("--allow")) !== undefined ? { allow: list(text("--allow"))! } : {}),
     // The web port is where the MCP face and the model relay live; everything else on the
     // host, and every cloud metadata address, is refused before the allow list (hard-deny.ts).
-    channelPorts: hostPorts !== undefined && hostPorts.length > 0 ? hostPorts : [Number(env.AGENTBOX_PORT ?? 7777)],
+    channelPorts: hostPorts !== undefined && hostPorts.length > 0 ? hostPorts : defaultChannelPorts(env),
     ...(text("--events") !== undefined ? { eventsPath: text("--events")! } : {}),
   };
 }

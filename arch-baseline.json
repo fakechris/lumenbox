@@ -3,7 +3,7 @@
     "limit": 1000,
     "files": {
       "src/agents/registry.ts": 1510,
-      "src/box/docker.ts": 1109,
+      "src/box/docker.ts": 1046,
       "src/boxd/browser-service.ts": 2046,
       "src/boxd/displays.ts": 1301,
       "src/boxd/main.ts": 1315,
