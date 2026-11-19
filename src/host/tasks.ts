@@ -228,8 +228,8 @@ const HARNESS_ACTORS: ReadonlySet<string> = new Set([
   "audit-guard", "review-guard", PLAN_ACTOR, SETTLE_ACTOR, // the K-reviewer record moving a task it settled (INV-1614); an Orchestrate plan closing its item cards (INV-1740)
 ]);
 
-/** Kept on each task so a snapshot stays one line, not a graph. */
-const HISTORY_LIMIT = 30;
+/** Kept on each task so a snapshot stays one line, not a graph; a note holds a delivery and a request to the person in full (INV-1923). */
+const HISTORY_LIMIT = 30, NOTE_LIMIT = 1500;
 const COMPACT_AT = envNumber("AGENTBOX_TASKS_COMPACT_AT", 5_000);
 /** Done and dropped tasks older than this are let go on compaction. */
 const RETAIN_CLOSED_MS = envNumber("AGENTBOX_TASKS_RETAIN_DAYS", 30) * 24 * 3_600_000;
@@ -609,7 +609,7 @@ export class TaskStore {
         ? { assigneeId: changes.assigneeId }
         : {}),
       ...(changes.note !== undefined && changes.note.trim() !== ""
-        ? { note: changes.note.trim().slice(0, 500) }
+        ? { note: changes.note.trim().slice(0, NOTE_LIMIT) }
         : {}),
       ...(coerced !== undefined ? { note: coerced, coerced: true as const } : {}),
       // Options ride only on a blocked move with a note to answer: anywhere else they

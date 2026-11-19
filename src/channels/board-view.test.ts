@@ -135,6 +135,12 @@ test("a blocked landing chosen by the agent speaks, with its note", () => {
     history: [{ at: "2026-08-27T08:00:00.000Z", by: "agent-bob", status: "blocked" }],
   });
   assert.equal(blockedAnnouncement(wordless), "t6「抓取竞品价格」卡住了,要人来搭把手。");
+  // INV-1923: where the agent wrote what it needs of the person, the chat hears it as written — the lines the page card shows.
+  const asked = task("t8", "blocked", "十月对账", {
+    assigneeId: "agent-bob",
+    history: [{ at: "2026-08-27T08:00:00.000Z", by: "agent-bob", status: "blocked", note: "对到第 3 步。\n请你做：登录供应商后台，下载十月发票\n为什么是你：验证码只发到你的手机。\n我同时在做：九月的对账。" }],
+  });
+  assert.equal(blockedAnnouncement(asked), "t8「十月对账」\n请你做：登录供应商后台，下载十月发票\n为什么是你：验证码只发到你的手机。\n我同时在做：九月的对账。");
 });
 
 test("the channel's own failure landing stays silent — the chat was already told", () => {

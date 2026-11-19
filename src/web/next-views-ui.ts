@@ -29,6 +29,8 @@ function owedText(item) {
 
 /** The sentence under a row's title: what the person is asked, else what holds the work, else where it stands. */
 function reasonOf(row) {
+  // What the agent itself asks of the person comes before any sentence from the table (INV-1923).
+  if (row.ask && !putOff(row)) return row.ask.title;
   var owed = next.mine.filter(function (item) { return item.ref === row.id; })[0];
   if (owed && owedText(owed)) return owedText(owed);
   // What a job is waiting on outside the agent — credentials it lacks, most often — is the reason, in the board's words.

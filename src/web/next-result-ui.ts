@@ -9,6 +9,10 @@
  *
  * So a card says where the work came from and what was reported, and its three buttons do three
  * things. It stands in the agent's one conversation, wherever the work was asked (INV-1896).
+ *
+ * Where the agent wrote what it needs of the person (person-ask.ts, INV-1923), that is the card's
+ * title and its first sentences; the fixed line and the reasons from the table are what is shown
+ * where it did not. The files open where the card stands, and the look can be put off (next-need-ui.ts).
  */
 import { DELIVERY_BRIEF, DELIVERY_SECTIONS } from "../host/delivery-report.ts";
 
@@ -168,24 +172,19 @@ function reportBlock(report, keys) {
 
 /** A result waiting for the person: what it is, where it came from, what was reported, and the decision. */
 function resultCard(row) {
-  var card = el("div", "card-plain"), acts = el("div", "acts"), files = row.deliverables || [], report = row.report, maker = agentName(row.assigneeId);
+  var card = el("div", "card-plain"), acts = el("div", "acts"), files = row.deliverables || [], report = row.report, maker = agentName(row.assigneeId), ask = row.ask;
   var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes")), open = el("button", "act", t("ui.next.act.details"));
   card.dataset.result = row.id;
-  card.appendChild(el("div", "card-head", t("ui.next.chat.review")));
+  card.appendChild(el("div", "card-head", ask ? ask.title : t("ui.next.chat.review")));
   signOffLines(row).forEach(function (line) { card.appendChild(line); });
   card.appendChild(el("div", "", row.title));
   card.appendChild(el("div", "why", originOf(row)));
+  if (ask && (ask.said || []).length) card.appendChild(askBlock(ask));
   if (report && report.note) {
     card.appendChild(el("div", "why", t("ui.next.chat.reported", { name: agentName(report.by) || maker, when: agoText(report.at) })));
     card.appendChild(reportBlock(report, REPORT_BRIEF));
   }
-  files.slice(0, 4).forEach(function (file) {
-    var link = el("a", "file", file.name);
-    link.href = "/api/tasks/deliverable?task=" + encodeURIComponent(row.id) + "&id=" + encodeURIComponent(file.id);
-    card.appendChild(link);
-  });
-  ((row.reading && row.reading.evidence) || []).slice(0, 2).forEach(function (line) { card.appendChild(el("div", "why", line)); });
-  if (files.length > 4) card.appendChild(el("div", "why", t("ui.next.chat.moreFiles", { n: files.length - 4 })));
+  embedInto(card, row);
   if (files.length === 0 && !(report && report.note)) card.appendChild(el("div", "why", t("ui.next.chat.noReport")));
   accept.addEventListener("click", function () {
     postJson("/api/tasks/update", { id: row.id, status: "done" }).then(function () { toast(t("ui.next.done.accepted")); refreshSoon(); }, failed);
@@ -204,7 +203,7 @@ function resultCard(row) {
     return card;
   }
   changes.addEventListener("click", function () { chat.changing = row.id; render(); var field = document.querySelector("[data-result='" + row.id + "'] textarea"); if (field) field.focus(); });
-  acts.appendChild(accept); acts.appendChild(changes); acts.appendChild(open); card.appendChild(acts);
+  acts.appendChild(accept); acts.appendChild(changes); acts.appendChild(open); acts.appendChild(laterButton(row.id, refreshSoon)); card.appendChild(acts);
   card.appendChild(el("div", "why", t("ui.next.chat.reviewHint", { name: maker })));
   return card;
 }

@@ -15,7 +15,7 @@ import type { BoxClass } from "../box/access.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
 import { type DurableState, renderDurableBlocks } from "./durable.ts";
 import { conversationOfTask, renderPursuit } from "./goal-mode.ts";
-import { renderHistoryBlock } from "./history.ts"; import { DELIVERY_ORDER } from "./delivery-report.ts";
+import { renderHistoryBlock } from "./history.ts"; import { DELIVERY_ORDER } from "./delivery-report.ts"; import { PERSON_ASK_RULE } from "./person-ask.ts";
 import {
   type MemoryRecall,
   type MemoryRecord,
@@ -816,10 +816,10 @@ here from memory about models released two weeks earlier; the person had to ask 
 
 # Asking for decisions
 
-By default you decide and proceed. On the rare occasion you genuinely need a choice from
-the person, ask it as a natural question with the options as replies they would actually
-send ("Which account should I use — work or personal?"), never as a menu instruction
-("Pick one of the following"). One question, short options.
+By default you decide and proceed. On the rare occasion you genuinely need a choice from the person, ask it as a natural question with the options as
+replies they would actually send ("Which account should I use — work or personal?"), never as a menu instruction ("Pick one of the following"). One question, short options.
+
+${PERSON_ASK_RULE}
 
 # Showing, not describing
 

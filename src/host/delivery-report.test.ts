@@ -1,7 +1,7 @@
 /** A delivery read back into its parts (INV-1922): what a person is shown depends on this reading being forgiving. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DELIVERY_ORDER, DELIVERY_SECTIONS, deliveryLabel, limitsOwedToChat, parseDelivery, saysNone } from "./delivery-report.ts";
+import { DELIVERY_ORDER, DELIVERY_SECTIONS, deliveryLabel, owedToChat, parseDelivery, saysNone } from "./delivery-report.ts";
 import { TaskStore } from "./tasks.ts";
 
 test("a note written in the order reads as its parts, in either language and however the names are dressed", () => {
@@ -44,8 +44,8 @@ test("every part can be read back under the name it is asked for, and the prompt
   assert.ok(saysNone("None.") && saysNone("无") && !saysNone("none of the live checks ran"));
 });
 
-test("a chat is told what was not verified when the reply left it out, once, and never for \"none\"", () => {
-  const board = new TaskStore(null), fresh = () => limitsOwedToChat(id => board.get(id)), owed = fresh();
+test("a chat is told what was not verified, and what it is asked, when the reply left it out, once, and never for \"none\"", () => {
+  const board = new TaskStore(null), fresh = () => owedToChat(id => board.get(id)), owed = fresh();
   const deliver = (note: string) => {
     const task = board.create({ title: "Fix the export", requester: "feishu:ou_1", assigneeId: "mia" })!;
     board.update(task.id, { status: "done", note }, "mia");
@@ -58,4 +58,8 @@ test("a chat is told what was not verified when the reply left it out, once, and
   assert.equal(fresh()(deliver("Fixed.\nMain change: src/export.ts\nNot done or limits: none"), "Fixed."), undefined);
   assert.equal(fresh()(deliver("Fixed the export, not verified live."), "Fixed."), undefined, "a note not written in the order adds nothing");
   assert.equal(fresh()("t999", "Fixed."), undefined);
+  // INV-1923: a delivery that also asks the person for something. The chat hears the request the card shows, unless the reply said it.
+  const asking = deliver("请你确认：核对第 12 行的差额\n对完了。\n主要改动：report.xlsx\n我同时在做：十一月的对账\n未做与局限：无");
+  assert.equal(fresh()(asking, "对完了，见 report.xlsx。"), "请你确认：核对第 12 行的差额\n我同时在做：十一月的对账");
+  assert.equal(fresh()(asking, "对完了，请核对第 12 行的差额。"), undefined, "the reply already asks it");
 });

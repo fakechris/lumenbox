@@ -27,6 +27,7 @@ import { currentFlag } from "./task-flag.ts";
 import { claimedButNotDelivered } from "./task-deliverables.ts";
 import { DOCKER_WORK } from "./box-paths.ts"; import { openBlockers } from "./task-deps.ts";
 import type { Draft } from "./outbox-drafts.ts";
+import { askLines, askOf, type PersonAsk } from "./person-ask.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
@@ -47,6 +48,8 @@ export interface AttentionItem {
   /** For a question: whom an answer goes to and the choices offered, so it can be answered where it is listed (INV-1825). */
   answer?: { agentId: string; conversation: string; options?: string[] };
   /** An Outbox draft (INV-1739), whole: the page shows the words, the target, the background and the case. */
+  /** The member's own request, read from its note (INV-1923): what is in the way, the action, the sentences. */
+  ask?: PersonAsk;
   draft?: Pick<Draft, "id" | "kind" | "target" | "body" | "why" | "background" | "taskId" | "level" | "agentName" | "createdAt">;
 }
 
@@ -251,11 +254,13 @@ export function attentionFor(input: AttentionInput): Attention {
       });
       continue;
     }
-    if (task.status === "review" && (isMe(task.reviewerId) || input.checkPending !== undefined && isMe(task.requester)) && stages[task.id] === "person/review") { // an agent reviewer settles it by the record (INV-1614/1647)
+    // What the member wrote for the person (INV-1923, person-ask.ts) is what the item says, in its words; one the person put off is not asked again until then.
+    const later = task.snoozeUntil !== undefined && Date.parse(task.snoozeUntil) > now, ask = askOf(task);
+    if (task.status === "review" && !later && (isMe(task.reviewerId) || input.checkPending !== undefined && isMe(task.requester)) && stages[task.id] === "person/review") { // an agent reviewer settles it by the record (INV-1614/1647)
       mine.push({
         kind: "review",
         ref: task.id, stage: stages[task.id],
-        title: task.title,
+        title: ask?.title ?? task.title, ...(ask !== undefined ? { ask } : {}),
         detail: `${input.nameOf(task.assigneeId ?? "somebody")} says it is done and is waiting for your word.${undelivered(task, input.workOf?.(task.assigneeId ?? "") ?? DOCKER_WORK)}`,
         ...(task.due !== undefined ? { deadline: task.due } : {}),
         with: input.nameOf(task.assigneeId ?? ""),
@@ -274,6 +279,13 @@ export function attentionFor(input: AttentionInput): Attention {
         ...(task.due !== undefined ? { deadline: task.due } : {}),
         ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId) } : {}),
       });
+      continue;
+    }
+    // A blocked task whose member wrote a request is that request, also when it offered no answers; the card draws its buttons from what is in the way.
+    if (ask !== undefined && later) continue;
+    if (ask !== undefined && task.status === "blocked" && stages[task.id]?.startsWith("person/") === true && task.mandate?.stale === undefined && isMe(task.requester)) {
+      const to = task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId), answer: { agentId: task.assigneeId, conversation: task.conversation ?? "main" } } : {};
+      mine.push({ kind: "question", ref: task.id, stage: stages[task.id], title: ask.title, detail: askLines(ask).slice(1).join(" · "), ask, ...to });
       continue;
     }
     if (stages[task.id] === "person/answer" && task.mandate?.stale === undefined && isMe(task.requester)) {
@@ -308,7 +320,6 @@ export function attentionFor(input: AttentionInput): Attention {
     if (b.deadline === undefined) return -1;
     return Date.parse(a.deadline) - Date.parse(b.deadline);
   };
-  void now;
   return { stages, mine: mine.sort(byDeadline), theirs: theirs.sort(byDeadline) };
 }
 

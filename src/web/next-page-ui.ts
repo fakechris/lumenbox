@@ -44,6 +44,7 @@ import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { NEXT_CARDS_JS } from "./next-cards-ui.ts";
+import { NEXT_NEED_JS } from "./next-need-ui.ts";
 import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
 
 const STYLE = `
@@ -233,7 +234,13 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .parts { font-size: 13.5px; overflow-wrap: anywhere; border-left: 2px solid var(--border); padding-left: 10px; display: flex; flex-direction: column; gap: 8px; }
 .part b { display: block; font-size: 12px; font-weight: 600; color: var(--soft); } .part .said p { margin: 0 0 6px; } .part .said p:last-child { margin-bottom: 0; }
 .part .said ul, .part .said ol { margin: 0 0 6px; padding-left: 20px; } .part .said pre { overflow: auto; font-size: 12.5px; }
-.part[data-part="limits"] b { color: var(--warn); } .panel .parts { margin-bottom: 12px; }
+.part[data-part="limits"] b, .part[data-part="unverified"] b { color: var(--warn); } .panel .parts { margin-bottom: 12px; }
+.card-need .why { white-space: normal; } .card-plain .acts { flex-wrap: wrap; } .card-need input { min-width: 280px; }
+.card-need .parts { border-left-color: var(--border-strong); } .card-need .elsewhere, .needbox .elsewhere { align-self: flex-start; }
+button.file { width: 100%; text-align: left; background: none; cursor: pointer; font: inherit; color: inherit; } button.file[aria-expanded="true"] { border-color: var(--border-strong); }
+.preview { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; background: var(--surface); }
+.preview img, .preview video { max-width: 100%; max-height: 420px; border-radius: 6px; align-self: flex-start; } .preview pre { margin: 0; overflow: auto; max-height: 320px; font-size: 12.5px; }
+.preview .report { max-height: 320px; overflow: auto; } .needbox .parts { margin: 8px 0; } .needbox input { width: 100%; margin-top: 10px; }
 .card-plain .why, .panel .why { white-space: normal; }
 .panel .report { margin-bottom: 12px; }
 .card-plain textarea { width: 100%; min-height: 64px; }
@@ -483,6 +490,7 @@ ${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}
 ${NEXT_BOXES_JS}
 ${NEXT_CARDS_JS}
+${NEXT_NEED_JS}
 ${NEXT_SYSTEM_JS}
 nextStart();
 </script>
