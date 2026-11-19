@@ -45,7 +45,7 @@ try {
     assert.ok(composer.y + composer.height <= 900 + 1, `${where}: the composer is below the fold`);
     // Its buttons: side by side or wrapped, never on top of each other.
     const buttons = await page.locator("[data-result] .acts button").evaluateAll(nodes => nodes.map(node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, cut: node.scrollWidth > node.clientWidth + 1 }; }));
-    assert.equal(buttons.length, 3, `${where}: the card offers accept, changes and open`);
+    assert.equal(buttons.length, 4, `${where}: the card offers accept, changes, open and later`);
     for (const [index, a] of buttons.entries()) {
       assert.equal(a.cut, false, `${where}: a card button's words are cut off`);
       for (const b of buttons.slice(index + 1)) assert.ok(a.x + a.w <= b.x + 1 || b.x + b.w <= a.x + 1 || a.y + a.h <= b.y + 1 || b.y + b.h <= a.y + 1, `${where}: two card buttons overlap`);
