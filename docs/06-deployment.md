@@ -2,7 +2,7 @@
      title: Deployment
      family: guide
      status: current
-     updated: 2026-11-04
+     updated: 2026-11-19
 -->
 # Deployment
 
@@ -27,6 +27,7 @@ The image is Debian 12, about 1.6GB, and builds on `amd64` and `arm64`.
 | 6080+N | container loopback | no | noVNC per desktop, proxied through 1337 |
 | 8791 | container loopback | no | The egress proxy |
 | 8790 | the operator's machine | n/a | The egress relay |
+| 1337, 8790, 7777 | the gate container of a confined box | 1337 to `127.0.0.1`, ephemeral | Forwarding only: the daemon inwards, the relay and the web port outwards (§3.4) |
 | 7766 | the operator's tailnet IPv4 | n/a | The tailmsg door (docs/82), only when a `tailmsg` channel record exists |
 
 Only 1337 and, in the self-contained shape, 7777 leave the container. Everything per-desktop is
@@ -72,6 +73,38 @@ No Docker needed on this machine.
 ```bash
 node dist/cli.js egress --allow example.com,*.internal.example.com
 AGENTBOX_EGRESS_RELAY=host.docker.internal:8790 node dist/cli.js box up --recreate
+```
+
+**A box started with a relay named is confined to it (INV-816).** Its network is created
+`--internal` — no route out, nothing published — and a second container, `<box>-gate`, on that
+network and on an ordinary one (`<box>-gate-net`), forwards three ports and nothing else: 1337
+inwards (published on loopback, where the box's own port used to be), and outwards the relay's
+port and the web port (`AGENTBOX_PORT`, 7777). Inside the box `host.docker.internal` is the
+gate. `box up` and the server's start both print which it is:
+
+```
+outbound: confined — the box is on an internal network with no route out; only agentbox-box-gate crosses it, forwarding to host.docker.internal:8790, host.docker.internal:7777
+```
+
+What changes for the agent: anything that does not speak through an HTTP proxy has no network —
+`git` over ssh, a raw socket, `ping`, DNS itself (names are resolved by the relay). `sudo`
+drops the proxy variables, so `sudo apt-get install` needs them handed over:
+`sudo -E apt-get …` or `sudo env http_proxy="$http_proxy" apt-get …`. That is the point, and it
+is also why this is tied to naming a relay rather than switched on for everyone.
+
+- An existing box is not changed by setting the variable: it says `NOT confined … Recreate the
+  box` until it is recreated (`box up --recreate`; the work and config volumes are kept).
+- `AGENTBOX_EGRESS_ENFORCE=off` keeps a relay-named box on an ordinary network, steered and not
+  confined, and every start says so.
+- A box with the orchestrator inside (`--with-host`) is not confined: it calls its model from
+  the box. A box with no relay named is as before.
+- On a Linux engine the gate reaches this machine at the bridge's gateway address, so the relay
+  and the web server have to listen there, exactly as the box needed before (below). **Not
+  measured on a Linux engine or Docker Desktop**: the check has only been run on OrbStack.
+- To check a machine: `npm run test:egress -- --name lumenbox-egress-check-1` starts a box of
+  its own, tries to get out without the proxy (plain, by address, with `sudo`, by adding a
+  route), and checks that a proxied command, a package download and the browser still work and
+  are still recorded against their call.
 
 The MCP face (docs/33) reaches the web server by the same name: `host.docker.internal:7777`
 resolves to the host's loopback on Docker Desktop, which is what the web server binds. On a
@@ -79,7 +112,9 @@ Linux engine that name is the host's gateway address, and a loopback listener is
 bind the web server to the bridge address (`--host 172.17.0.1`, or whatever `docker network
 inspect bridge` says) and set `AGENTBOX_MCP_FACE_URL=http://172.17.0.1:7777`. A self-contained
 box (the orchestrator inside the container) needs nothing: the face uses loopback there.
-```
+A confined box is the exception to the variable: it reaches the web port only through its gate,
+so leave `AGENTBOX_MCP_FACE_URL` unset (the default, `host.docker.internal:7777`, is the gate)
+and bind the web server where the gate can reach it.
 
 ## 4. Configuration
 
@@ -211,7 +246,10 @@ State it plainly, because a deployment decision depends on it.
 - **The UI is one shared secret and no identities.** Whoever holds it drives every agent.
 - **In the self-contained topology the model credential is in the container**, and therefore
   reachable by an agent that goes looking. The uid split prevents the accident, not the act.
-- **Egress is off unless configured**, and the relay refuses to run without a token.
+- **Egress is off unless configured**, and the relay refuses to run without a token. With no
+  relay named, the box connects to the internet directly and nothing decides or records it;
+  with one named, a Docker box is confined to it at the network (§3.4, INV-816). Which of the
+  two a box is, is printed at every start; docs/03 §5 has the whole table.
 - **Through the egress relay, two targets are refused before any allow list** (INV-1224,
   `src/egress/hard-deny.ts`): every cloud metadata address (169.254.0.0/16, `fd00:ec2::254`,
   `metadata.google.internal`), and the host itself — loopback, `host.docker.internal` and its
@@ -263,6 +301,12 @@ built in `src/host/host-sandbox.ts`:
   a replacement for the approval.
 
 ### What the box reaches *without* the relay (measured 2026-10-20)
+
+**This section describes an unconfined box**: no relay named, `AGENTBOX_EGRESS_ENFORCE=off`, or
+the orchestrator inside. A confined box (§3.4) reaches none of the targets in the table
+directly — measured 2026-11-19 on OrbStack: `curl` without the proxy variables exits 6 or 7
+for an internet name, an internet address, 169.254.169.254 and a loopback-bound port on this
+machine, with and without `sudo`.
 
 The relay decides only for traffic sent through it (the box's browser, and whatever an agent
 points at the proxy). A command in the box that connects directly is decided by the container

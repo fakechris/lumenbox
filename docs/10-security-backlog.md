@@ -2,7 +2,7 @@
      title: Security backlog
      family: decision
      status: current
-     updated: 2026-11-02
+     updated: 2026-11-19
 -->
 # Security backlog
 
@@ -245,6 +245,46 @@ allowed (outside this box's allow list)` — so a `pip install` that hung reads 
 run for a call now go through the relay, which before this only the browser did (box-chrome's
 `--proxy-server`). That is the point of R4 — egress is a scope's policy, and a policy the shell
 could step around was not one.
+
+## S-11 — Egress was steered to the relay, not confined to it
+
+**Closed for a Docker box with a relay named, 2026-11-19 (INV-816). Open elsewhere, named below.**
+S-8 and S-10 made the relay decide per box and record per call, and both rested on traffic
+choosing to go there: boxd sets `HTTP_PROXY` for a command and the browser is started with
+`--proxy-server`. The agent has passwordless `sudo`. Measured before the fix, in a box started
+with a relay and an allow list of three hosts: `env -u HTTP_PROXY -u HTTPS_PROXY curl
+https://example.com` returned 200, so did the same under `sudo` and a request by address, and a
+service bound to this machine's loopback answered at `host.docker.internal` — none of it seen
+by the relay. The allow list and the per-call record described the traffic that cooperated.
+
+**What changed.** A box started with a relay named, with the orchestrator outside it, is put on
+an internal Docker network and reaches only a gate container that forwards the relay's port and
+the web port (`src/box/box-network.ts`; docs/03 §5 has the enforced/observed table, docs/06
+§3.4 how to run it). The same probes now fail with `curl` exit 6 or 7, with and without
+`sudo`; adding a route is refused (no `NET_ADMIN`); a proxied command, a package download and
+the browser still work and are still attributed to their call
+(`scripts/egress-confinement-check.mjs`, 11 checks, 5 failing before and none after).
+
+| | Before | Now |
+|---|---|---|
+| Docker box, relay named | observed: the proxy path decided and recorded, the direct path open | **enforced**: the direct path has no route |
+| Docker box, relay named, `AGENTBOX_EGRESS_ENFORCE=off` or `--with-host` | observed | observed, and said at every start |
+| Docker box, no relay | neither, silently | neither, and said at every start |
+| Kubernetes pod | neither | **neither — open** |
+
+**Still open.**
+- **Kubernetes.** A pod has no egress relay wired in, and its NetworkPolicy restricts ingress
+  only. An egress policy that denies by default needs somewhere for the box's browsing to go
+  first — a relay the pod can reach — or it simply cuts the box off.
+- **An empty allow list still means anywhere.** Confinement makes the relay the only way out;
+  what the relay opens is still everything unless the operator lists hosts. A deployment that
+  wants "deny unless listed" as its default has no switch for it yet.
+- **Credentials still enter the box.** A command that needs an API key is handed the key. With
+  the relay as the only way out, substituting a placeholder for the real value at the relay
+  becomes possible; it is not built, and for HTTPS it means terminating TLS at the relay,
+  which today is a tunnel that reads nothing.
+- **A box whose orchestrator is inside it** is not confined, because the orchestrator's model
+  call leaves from the box.
 
 ## Triage, 2026-09-16 (INV-138)
 
