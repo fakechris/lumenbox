@@ -16,6 +16,7 @@ function activityLine(event, locale, nameOf, words) {
   if (event.type === "turn_interrupted") return { who: who, text: words.interrupted + (event.reason ? " (" + event.reason + ")" : ""), tone: "warn" };
   if (event.type === "error") return { who: "", text: String(event.message || ""), tone: "bad" };
   if (event.type === "question") return { who: who, text: words.asked + " " + String(event.question || "").slice(0, 90), tone: "warn" };
+  if (event.type === "told") return { who: who, text: words.told + " " + String(event.text || "").slice(0, 90), tone: "" };
   if (event.type === "surface") return { who: who, text: words.card + " " + String(event.title || event.surfaceId || "").slice(0, 90), tone: "" };
   if (event.type === "template_import") return { who: who, text: "← " + String(event.summary || ""), tone: "" };
   return null;
@@ -65,7 +66,7 @@ function activityBlock() {
     }
     if (activity.error) { body.appendChild(el("p", "why", activity.error)); return; }
     var words = { you: t("ui.next.thread.you"), started: t("ui.next.activity.started"), failed: t("ui.next.activity.failed") };
-    words.interrupted = t("ui.next.activity.interrupted"); words.asked = t("ui.next.activity.asked"); words.card = t("ui.next.activity.card");
+    words.interrupted = t("ui.next.activity.interrupted"); words.asked = t("ui.next.activity.asked"); words.card = t("ui.next.activity.card"); words.told = t("ui.next.activity.told");
     var lines = activity.events.slice(-80).reverse().map(function (event) {
       return { at: event.at, line: activityLine(event, "{{@locale}}", agentName, words) };
     }).filter(function (row) { return row.line; });

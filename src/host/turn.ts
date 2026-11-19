@@ -145,7 +145,7 @@ import {
   type ToolOutcome,
   describeCall,
 } from "./tools.ts";
-import type { HostRunner } from "./host-runner.ts";
+import type { HostRunner } from "./host-runner.ts"; import { TELL } from "./tell.ts";
 import type { Vault } from "./vault.ts";
 import type { OAuthGate } from "./oauth.ts";
 import type { TaskStore } from "./tasks.ts";
@@ -546,7 +546,7 @@ export interface TurnDeps {
   webFetch?: ToolContext["webFetch"]; poppyManager?: ToolContext["poppyManager"];
   /** Puts a question to whoever drove this agent. Absent means there is nobody to ask. */
   askUser?: ToolContext["askUser"];
-  showUI?: ToolContext["showUI"];
+  showUI?: ToolContext["showUI"]; tell?: ToolContext["tell"];
   askSecret?: ToolContext["askSecret"];
   handOver?: ToolContext["handOver"];
   /**
@@ -2017,7 +2017,7 @@ ${outcome.text}`;
   // An explicit list written before ShowUI existed froze without it (INV-1276): eight agents on one
   // box said "that is Ada's tool". A list that lets the agent ask the person lets it show them a
   // card — the same class of tool — so the upgrade happens here, at resolution, not on disk.
-  const narrowed = listed !== undefined && listed.includes("AskUser") && !listed.includes("ShowUI") ? [...listed, "ShowUI"] : listed;
+  const narrowed = listed !== undefined && listed.includes("AskUser") ? [...new Set([...listed, "ShowUI", TELL])] : listed; // and lets it tell them one thing (INV-1853)
   // A template setup turn holds files and memory and a way to ask, nothing that reaches out
   // (docs/29 §5.3): the recipe it is installing is third-party text, and installing yourself
   // is not a reason to message anyone. The same narrowing applies when offering and executing tools.
@@ -2090,7 +2090,7 @@ ${outcome.text}`;
   // The split (INV-1341): the resident built-ins ride in the list; the deferred ones wait in the
   // catalog behind the lookup pair, which a fork never gets (MCP tools are outward channels too,
   // docs/32 §2). A routine that named a deferred tool or an external one keeps the pair.
-  const roster = splitRoster(toolsInBox(offered, { kind: deps.boxKind, workDir: deps.boxWorkDir })); // as this box reads them (INV-1737)
+  const roster = splitRoster(toolsInBox(offered, { kind: deps.boxKind, workDir: deps.boxWorkDir }), silenceOffered); // as this box reads them (INV-1737)
   const deferred = isForkConversation(conversation) ? [] : roster.deferred;
   const tools: Anthropic.Tool[] = isForkConversation(conversation)
     ? roster.resident
@@ -3352,7 +3352,7 @@ ${outcome.text}`;
             mcp: isForkConversation(conversation) ? undefined : deps.mcp,
             askUser: deps.askUser,
             chainHops,
-            showUI: deps.showUI,
+            showUI: deps.showUI, tell: deps.tell, personWaiting: personOpened && !silenceOffered,
             askSecret: deps.askSecret,
             handOver: deps.handOver,
             docReader: deps.docReader,

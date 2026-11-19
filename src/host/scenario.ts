@@ -174,6 +174,11 @@ function memoryBox(files: Map<string, string>, overrides: Partial<BoxClient> = {
       if (content === undefined) throw new Error(`${path} does not exist`);
       return { path, size: Buffer.byteLength(content), media_type: "application/octet-stream", base64: Buffer.from(content).toString("base64") };
     },
+    // What puts a file in a chat's outbox (DeliverFile, Tell): the bytes land as the text they are.
+    uploadFile: async (path: string, base64: string) => {
+      files.set(path, Buffer.from(base64, "base64").toString());
+      return { path, size: Buffer.from(base64, "base64").length };
+    },
     listDir: async (path: string) => ({
       path,
       entries: [...files.keys()]
@@ -348,6 +353,8 @@ export interface EpisodeOptions {
   tasks?: TaskStore; resultChecks?: import("./result-check-policy.ts").ResultChecks;
   /** Where an Outbox draft waits for the person (INV-1739). */
   outbox?: OutboxDrafts;
+  /** Where a Tell goes (INV-1853): the real teller over a page and a chat door's double. Absent: nobody is reachable. */
+  tell?: Pick<import("./tell.ts").Teller, "tell">;
   /**
    * The continuation loop of goal mode (INV-770), built once the bus exists so it can wake
    * through it. The episode feeds it what the orchestrator would: a turn starting, a turn
@@ -516,7 +523,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.usage !== undefined ? { usage: options.usage } : {}),
       ...(options.mcp !== undefined ? { mcp: options.mcp } : {}),
       ...(options.tasks !== undefined ? { tasks: options.tasks } : {}), ...(options.resultChecks ? { resultChecks: options.resultChecks } : {}),
-      ...(options.outbox !== undefined ? { outbox: options.outbox } : {}),
+      ...(options.outbox !== undefined ? { outbox: options.outbox } : {}), ...(options.tell !== undefined ? { tell: options.tell } : {}),
       ...(options.pendingWork !== undefined ? { pendingWork: options.pendingWork } : {}),
       ...(acpDelegates !== undefined ? { acpDelegates } : {}),
       ...(options.spendLimits !== undefined ? { spendLimits: options.spendLimits } : {}),

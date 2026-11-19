@@ -9,6 +9,11 @@
  *                                              artifact check itself; exit 0 PASS, 1 FAIL,
  *                                              2 INCOMPLETE, 3 REVIEW.
  *     --scenario out.json                      results from `npm run scenario -- --json out.json`
+ *     --eval <result.json>                     or an evaluation record from `npm run eval -- run`:
+ *                                              pass rate with interval, pass^k, the comparison and
+ *                                              the detectable difference fill the model section
+ *     --eval-baseline <result.json>            the earlier record it is compared with
+ *                                              (accept a regression with --accept "eval=<name>")
  *     --baseline <scorecard.json>              compare model results with a previous card
  *     --accept "<scenario/check>=<name>"       a named reviewer accepts that regression (repeatable)
  *     --skip-tests / --skip-artifact           leave a section SKIPPED (the card says so)
@@ -92,6 +97,22 @@ if (scenarioFile !== undefined) {
     runs,
     results,
   };
+}
+
+// Or from an evaluation record (`npm run eval -- run`, docs/100): the four numbers, read off the
+// record and compared task by task with an earlier one. A stand-in's record fills nothing.
+const evalFile = value("--eval");
+if (evalFile !== undefined) {
+  if (scenarioFile !== undefined) {
+    console.error("--eval and --scenario both fill the model section; give one.");
+    process.exit(1);
+  }
+  const { summarise, scorecardModelSection } = await import("../src/evals/summary.ts");
+  const { loadLabels } = await import("../src/evals/calibration.ts");
+  const record = JSON.parse(readFileSync(evalFile, "utf8"));
+  const before = value("--eval-baseline");
+  const summary = summarise(record, { ...(before !== undefined ? { baseline: JSON.parse(readFileSync(before, "utf8")) } : {}), labels: loadLabels(join(root, "evals/labels")) });
+  model = scorecardModelSection(record, summary, evalFile);
 }
 
 let baseline;

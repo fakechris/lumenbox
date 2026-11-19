@@ -56,7 +56,7 @@ export const TOOL_IDEMPOTENCY: Readonly<Record<string, Idempotency>> = {
   edit_file: { kind: "unsafe" },
   RunOnHost: { kind: "unsafe" },
   SendToAgent: { kind: "unsafe" },
-  AskUser: { kind: "unsafe" },
+  AskUser: { kind: "unsafe" }, Tell: { kind: "unsafe" }, // said again is a second message to the person (INV-1853)
   connector_request: { kind: "unsafe" },
   browser_act: { kind: "unsafe" },
   browser_fill_secret: { kind: "unsafe" },

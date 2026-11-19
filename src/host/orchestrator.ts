@@ -233,7 +233,7 @@ export interface OrchestratorOptions {
    * than pretending a question was delivered.
    */
   askUser?: TurnDeps["askUser"];
-  showUI?: TurnDeps["showUI"];
+  showUI?: TurnDeps["showUI"]; tell?: TurnDeps["tell"];
   askSecret?: TurnDeps["askSecret"];
   handOver?: TurnDeps["handOver"];
   /** Reads Feishu documents with the bot's workspace identity, where one is configured. */
@@ -1915,7 +1915,7 @@ export class Orchestrator {
       operatorRules: () => this.rules.forReview(),
       mcp: isolated ? undefined : this.mcp,
       askUser: this.options.askUser,
-      showUI: this.options.showUI,
+      showUI: this.options.showUI, tell: this.options.tell,
       askSecret: this.options.askSecret,
       handOver: this.options.handOver,
       // The reader for the door this conversation's messages come through (INV-871).
@@ -2697,7 +2697,7 @@ export const ALL_TOOLS: readonly string[] = [
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
-  "ShowUI",
+  "ShowUI", "Tell",
   "CreateAgent",
   "UpdateAgent",
   "PackTemplate",

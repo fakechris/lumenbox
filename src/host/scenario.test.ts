@@ -4604,6 +4604,122 @@ test("a delivery names what was not verified, and the page and the chat both sho
   } finally { result.cleanup(); }
 });
 
+// ── 2026-11-19, INV-1853: between its opening line and its reply, a long turn could say nothing ──
+//
+// What happened: in a chat a twenty-step turn showed the person one opening line, a progress card and, minutes later,
+// the reply. A finding made at step eight, or a file finished then, had nowhere to go but the end. `Tell` is the one
+// door for that: one thing, delivered where the person is, and the turn carries on to an ordinary reply.
+
+test("a member tells the person one thing mid-turn on the page, with its file as a card, and goes on to an ordinary reply (INV-1853)", async () => {
+  const { Teller } = await import("./tell.ts"), { toDisplayEntries } = await import("../web/transcript.ts");
+  const page: import("./turn-events.ts").TurnEvent[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["Reconcile March against the ledger."],
+    files: { "/home/box/work/march.csv": "day,total\n1,10\n" },
+    tell: new Teller({ chatOf: () => undefined, toPage: event => { page.push(event); } }),
+    script: ({ round }) => {
+      if (round === 0) return { call: "bash", input: { command: "cat /home/box/work/march.csv" }, saying: "On it — reading March first." };
+      if (round === 1) return { call: "Tell", input: { text: "March is short by 3% at the source, before any of my sums.", files: ["/home/box/work/march.csv"] } };
+      if (round === 2) return { call: "bash", input: { command: "echo reconciled" } };
+      return { say: "Reconciled: the ledger matches once the source gap is set aside." };
+    },
+  });
+  try {
+    assert.deepEqual(result.score.refusals, []);
+    assert.deepEqual(result.score.trail, ["Nova:bash", "Nova:Tell", "Nova:bash"], "the turn kept working after it told them");
+    assert.deepEqual(page.flatMap(event => event.type === "told" ? [[event.text, event.files]] : []),
+      [["March is short by 3% at the source, before any of my sums.", [{ name: "march.csv", path: "/home/box/work/march.csv" }]]], "the page is told at once, the file riding as a card");
+    const front = result.registry.list()[0]!, transcript = result.registry.readTranscript(front.id);
+    assert.match(JSON.stringify(transcript), /\\"delivered\\":true,\\"where\\":\\"in the app\\"/, "the member is told it was delivered, and where");
+    const thread = toDisplayEntries(transcript, []).flatMap(entry => entry.kind === "text" && entry.role === "assistant" && entry.aside !== true ? [[entry.text.slice(0, 14), entry.told === true ? "told" : entry.opening === true ? "opening" : "reply", entry.files?.length ?? 0]] : []);
+    assert.deepEqual(thread, [["On it — readin", "opening", 0], ["March is short", "told", 1], ["Reconciled: th", "reply", 0]], "a reload draws the same three messages, in the order they were said");
+    assert.equal(result.score.said.at(-1)?.text, "Reconciled: the ledger matches once the source gap is set aside.", "and the reply is still the reply");
+  } finally { result.cleanup(); }
+});
+
+test("a twenty-step chat turn tells the room one finding with its file at step eight: the chat gets three messages and one attachment (INV-1853)", async () => {
+  const { Teller } = await import("./tell.ts");
+  const key = "feishu:oc_finance", conversation = conversationIdFor(key), outbox = `${chatFilesRoot(conversation, undefined)}/outbox`;
+  const chat: string[] = [], page: string[] = [];
+  let manager!: ChannelManager, interim: ((text: string) => void) | undefined;
+  const teller = new Teller({
+    chatOf: id => (id === conversation ? key : undefined),
+    toChat: (chatKey, text, about) => manager.tryPushToChat(chatKey, text, { kind: "notice", about }),
+    toPage: event => { if (event.type === "told") page.push(event.text); },
+  });
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], tell: teller,
+    files: { "/home/box/work/march-gap.md": "# March gap\n\nThe export stops on the 28th.\n" },
+    onEvent: event => { if (event.type === "interim") interim?.(event.text); },
+    script: ({ round }) => {
+      if (round === 7) return { call: "Tell", input: { text: "三月的导出只到 28 号，差的 3% 在源头。明细见附件，我继续对后面的月份。", files: ["/home/box/work/march-gap.md"] } };
+      if (round < 19) return { call: "bash", input: { command: `echo step ${round}` }, ...(round === 0 ? { saying: "收到，先核对三月。" } : {}) };
+      return { say: "对完了：一到六月除三月外全部一致，三月的缺口已单独说明。" };
+    },
+    drive: async ({ registry, bus, frontId, files }) => {
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const adapter: ChannelAdapter = {
+        name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined,
+        sendToChat: async (_chatKey, text) => { chat.push(text); },
+        sendFile: async (_chatKey, name, base64) => { chat.push(`[file ${name}: ${Buffer.from(base64, "base64").toString("utf8").split("\n")[0]}]`); },
+      };
+      manager = new ChannelManager({
+        mayDrive: () => true, log: () => {},
+        ask: async (_name, text, _identity, _chat, _progress, _thread, _task, onInterim, _stream, origin) => {
+          interim = onInterim;
+          bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(frontId, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+        },
+        collectOutbox: async () => [...files.entries()].filter(([path]) => path.startsWith(`${outbox}/`)).map(([path, body]) => ({ name: path.slice(outbox.length + 1), base64: Buffer.from(body).toString("base64") })),
+        outboxDelivered: async (_chatKey, names) => { for (const name of names) files.delete(`${outbox}/${name}`); },
+      });
+      manager.register(adapter, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      try {
+        await receive({ identity: "feishu:ou_chris", chatKey: key, senderLabel: "Chris", text: "把一到六月的账和导出对一遍", messageId: "om_1" });
+        await manager.idle();
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.deepEqual(result.score.refusals, []);
+    assert.equal(result.score.trail.length, 19, "eighteen steps of work and one Tell before the reply");
+    assert.equal(result.score.trail[7], "Nova:Tell");
+    assert.deepEqual(chat, [
+      "收到，先核对三月。",
+      "三月的导出只到 28 号，差的 3% 在源头。明细见附件，我继续对后面的月份。",
+      "[file march-gap.md: # March gap]",
+      "对完了：一到六月除三月外全部一致，三月的缺口已单独说明。",
+    ], "the opening line, the finding with its file as a real attachment, and the reply — which does not carry the file a second time");
+    assert.deepEqual(page, ["三月的导出只到 28 号，差的 3% 在源头。明细见附件，我继续对后面的月份。"], "the page carries the same words the chat got");
+    assert.equal(result.files.has("/home/box/work/march-gap.md"), true, "the file the member named is still where it was");
+  } finally { result.cleanup(); }
+});
+
+test("the fourth Tell of a turn, and a Tell after a question nobody has answered, are refused in words the member can act on (INV-1853)", async () => {
+  const { Teller } = await import("./tell.ts");
+  const told: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: ["Go through the four regions.", "Now pick the region to fix first."],
+    tell: new Teller({ chatOf: () => undefined, gapMinutes: 0, toPage: event => { if (event.type === "told") told.push(event.text); } }),
+    script: ({ round }) => {
+      if (round < 4) return { call: "Tell", input: { text: `Region ${round + 1} is done.` } };
+      if (round === 4) return { say: "All four regions are done; the fourth is in this reply because I had told you three things already." };
+      if (round === 5) return { call: "AskUser", input: { question: "North or South first?", options: ["North", "South"] } };
+      if (round === 6) return { call: "Tell", input: { text: "While you decide: South looks worse." } };
+      return { say: "Waiting on which region you want first." };
+    },
+  });
+  try {
+    assert.deepEqual(told, ["Region 1 is done.", "Region 2 is done.", "Region 3 is done."], "three reached the person");
+    assert.equal(result.score.refusals.length, 2);
+    assert.match(result.score.refusals[0]!, /not told: this turn has already told the person 3 things/);
+    assert.match(result.score.refusals[1]!, /not told: you asked the person a question this turn and they have not answered/);
+    assert.equal(result.score.questions, 1, "the question itself went out");
+  } finally { result.cleanup(); }
+});
+
 // INV-1923: the card that says "needs you" was assembled from a table, and a person could not tell what exactly they
 // were to do or whether the member had stopped because of it. The episode: asked to fix two things and to show the
 // first before it counts, the member delivers the first with a request it wrote itself — the action, why it is the

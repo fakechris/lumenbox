@@ -10,6 +10,7 @@
  * one in `docs/evals/`: a number that measures nothing must not be found where results are kept.
  */
 
+import { KAPPA_TO_GATE, MIN_LABELS, twoPlaces } from "./calibration.ts";
 import type { EvalRun } from "./runner.ts";
 import type { GroupRow, Summary } from "./summary.ts";
 
@@ -21,6 +22,54 @@ function groupTable(title: string, rows: readonly GroupRow[]): string[] {
     `| ${title} | tasks | attempts passed | every attempt passed |`,
     "|---|---|---|---|",
     ...rows.map(row => `| ${row.key} | ${row.tasks} | ${row.passed}/${row.attempts} | ${row.reliable}/${row.tasks} |`),
+  ];
+}
+
+const NOT_CALIBRATED = "**Judge not calibrated — may not gate.**";
+
+/**
+ * What the judges said and whether any of it may be relied on. Until enough of a person's labels
+ * match this judge's verdicts the section opens with the same sentence every time, whatever the
+ * verdicts were: an unchecked judge's numbers are shown so they can be checked, not so they can be used.
+ */
+function judgeLines(summary: Summary): string[] {
+  const judges = summary.judges;
+  if (judges === undefined) {
+    return [
+      `${NOT_CALIBRATED} Every result on this page comes from code graders. No judge question was asked, and no judge has been ` +
+        "checked against a person's labels, so nothing here rests on a model's opinion and no judge verdict may gate a change.",
+    ];
+  }
+  const calibration = judges.calibration;
+  const who = `Judge: ${judges.model.provider} ${judges.model.model}, questions version ${judges.promptVersion}`;
+  const asked = judges.rows.reduce((sum, row) => sum + row.asked, 0);
+  const tail = `One yes-or-no question per failure type, each verdict resting on a quote that code found in the output. ${asked} asked` +
+    `${judges.skipped > 0 ? `, ${judges.skipped} not asked (nothing to read)` : ""}, costing ${count(judges.use.inputTokens)} input and ${count(judges.use.outputTokens)} output tokens beside the cost below. ` +
+    "A verdict never changes the pass rate above.";
+  if (calibration === undefined || !calibration.calibrated) {
+    const why = calibration === undefined
+      ? "The judge here is the stand-in; its verdicts mean nothing."
+      : `${calibration.matched} of the ${MIN_LABELS} labels a person must give have been matched to these verdicts` +
+        `${calibration.unmatched > 0 ? ` (${calibration.unmatched} more are for outputs not on this record)` : ""}, so no verdict below may gate a change.`;
+    return [
+      `${NOT_CALIBRATED} ${why}`, "", `${who}. ${tail}`, "",
+      "| failure type | asked | judge says present | no valid quote |", "|---|---|---|---|",
+      ...judges.rows.map(row => `| ${row.question} | ${row.asked} | ${row.present} | ${row.invalid} |`),
+    ];
+  }
+  const byQuestion = new Map(calibration.questions.map(one => [one.question, one]));
+  const num = (value: number | undefined) => (value === undefined ? "—" : twoPlaces(value));
+  return [
+    `Checked against ${calibration.matched} outputs labelled by ${calibration.labellers.join(", ")}` +
+      `${calibration.conflicting > 0 ? `; ${calibration.conflicting} left out because two labels disagree` : ""}. ` +
+      `A question may gate only at kappa ${KAPPA_TO_GATE} or more; a verdict with no valid quote counts against the judge.`,
+    "", `${who}. ${tail}`, "",
+    "| failure type | asked | judge says present | no valid quote | labels | kappa | catch rate | |", "|---|---|---|---|---|---|---|---|",
+    ...judges.rows.map(row => {
+      const one = byQuestion.get(row.question);
+      return `| ${row.question} | ${row.asked} | ${row.present} | ${row.invalid} | ${one?.labels ?? 0} | ${num(one?.kappa)} | ${one?.catchRate === undefined ? "—" : pct(one.catchRate)} | ` +
+        `${one?.mayGate === true ? "may gate" : "**may not gate**"} — ${one?.why ?? "no labels"} |`;
+    }),
   ];
 }
 
@@ -70,8 +119,7 @@ export function renderReport(run: EvalRun, summary: Summary, options: { name: st
     "",
     "## Judges",
     "",
-    "**Judge not calibrated — may not gate.** Every result on this page comes from code graders. No judge question was asked, and no judge has been " +
-      "checked against a person's labels, so nothing here rests on a model's opinion and no judge verdict may gate a change.",
+    ...judgeLines(summary),
     "",
     "## Where the failures are",
     "",

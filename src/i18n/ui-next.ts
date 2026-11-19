@@ -347,6 +347,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.activity.interrupted": ["被中断", "was interrupted"],
   "ui.next.activity.asked": ["问：", "asked:"],
   "ui.next.activity.card": ["给出一张卡片：", "showed a card:"],
+  "ui.next.activity.told": ["告诉你：", "told you:"],
   "ui.next.audit.title": ["审计：这台电脑上运行过的命令和窗口", "Audit: commands and windows on this computer"],
   "ui.next.audit.none": ["还没有记录。", "Nothing recorded yet."],
   "ui.next.audit.risk": ["审计记录可能不完整：记录进程没有按时报到。", "The audit record may be incomplete: its recorder has not reported in on time."],

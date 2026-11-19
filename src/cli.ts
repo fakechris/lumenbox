@@ -1408,7 +1408,7 @@ The box runs wherever your Docker engine points: set DOCKER_HOST or use
 
 Quality:
   golden [provider...]     End-to-end golden tasks through a real orchestrator
-                           (--only=id,id; --box; --memory-from=<agent> seeds a live memory)
+                           (--only=id,id; --box; --memory-from=<agent>; --trend prints past runs)
                            in a throwaway state directory, graded against the
                            harness's own records. --box includes the box tasks.
                            Nightly per model is the intended cadence.
@@ -1619,6 +1619,9 @@ async function main(): Promise<number> {
       const names = rest.filter(argument => !argument.startsWith("--"));
       const targets = names.length > 0 ? names : [undefined];
       let anyFail = false;
+      const trend = await import("./evals/golden-trend.ts");
+      const goldenDir = join(agentboxHome(), "scorecards"); // the installation's, read before a scratch home takes its place below
+      if (rest.includes("--trend")) { for (const line of trend.renderGoldenTrend(trend.readGoldenRecords(goldenDir))) out(line); return 0; } // what past runs recorded; runs nothing
       for (const name of targets) {
         // The env from config, applied before anything reads it. Without this the suite
         // ran with no search key while the installation it is meant to represent had
@@ -1665,14 +1668,8 @@ async function main(): Promise<number> {
           ...(boxProvisioner !== undefined ? { boxProvisioner } : {}),
         });
         if (withBox) out(dim((await orchestrator.connectBox()).detail));
-        const gold = registry.create({
-          name: "Gold",
-          description: "You are the golden-task agent. Do exactly what each message asks.",
-        });
-        const silver = registry.create({
-          name: "Silver",
-          description: "You acknowledge messages briefly.",
-        });
+        const gold = registry.create({ name: "Gold", description: "You are the golden-task agent. Do exactly what each message asks." });
+        const silver = registry.create({ name: "Silver", description: "You acknowledge messages briefly." });
         if (seededMemory !== undefined) {
           writeFileSync(registry.memoryPathFor(gold.id), seededMemory);
           const count = seededMemory.split("\n").filter(line => line.trim() !== "").length;
@@ -1720,6 +1717,7 @@ async function main(): Promise<number> {
         // counts the denominator, so this costs one division.
         let passed = 0;
         let attempted = 0;
+        const rows: import("./evals/golden-trend.ts").GoldenRow[] = [];
         const spendBefore = orchestrator.usage.totalsSince(0);
         for (const task of GOLDEN_TASKS) {
           // `--only=id,id` narrows the run: the ordinary need after editing one task is
@@ -1728,6 +1726,7 @@ async function main(): Promise<number> {
           if (only !== undefined && !only.split(",").includes(task.id)) continue;
           if (task.needsBox === true && !boxReady) {
             out(`  · ${task.id.padEnd(12)} ${dim("needs a box (--box)")}`);
+            rows.push({ id: task.id, status: "skipped", detail: "needs a box", ms: 0 });
             continue;
           }
           const started = Date.now();
@@ -1761,10 +1760,8 @@ async function main(): Promise<number> {
             // that means "the box was busy" and a red row that means "the model
             // regressed" are different news.
             const mark = verdict.pass ? "✓" : verdict.infrastructure === true ? "!" : "✗";
-            out(
-              `  ${mark} ${task.id.padEnd(12)} ` +
-                dim(`${verdict.detail} (${seconds}s)`)
-            );
+            out(`  ${mark} ${task.id.padEnd(12)} ` + dim(`${verdict.detail} (${seconds}s)`));
+            rows.push({ id: task.id, status: verdict.pass ? "pass" : verdict.infrastructure === true ? "error" : "fail", detail: verdict.detail, ms: Date.now() - started });
             attempted += 1;
             if (verdict.pass) passed += 1;
             else anyFail = true;
@@ -1773,6 +1770,7 @@ async function main(): Promise<number> {
             anyFail = true;
             const detail = error instanceof Error ? error.message : String(error);
             out(`  ✗ ${task.id.padEnd(12)} ${dim(detail)}`);
+            rows.push({ id: task.id, status: "error", detail, ms: Date.now() - started });
           }
         }
         // The headline number: passes per 100k tokens. Quality alone rewards a model
@@ -1784,10 +1782,10 @@ async function main(): Promise<number> {
           (after.cacheReadTokens - spendBefore.cacheReadTokens) +
           (after.cacheWriteTokens - spendBefore.cacheWriteTokens);
         const perHundredK = tokens > 0 ? (passed / tokens) * 100_000 : 0;
-        out(
-          `  ${bold(`${passed}/${attempted}`)} passed, ${Math.round(tokens / 1000)}k tokens` +
-            (tokens > 0 ? dim(` — ${perHundredK.toFixed(1)} passes per 100k`) : "")
-        );
+        out(`  ${bold(`${passed}/${attempted}`)} passed, ${Math.round(tokens / 1000)}k tokens` + (tokens > 0 ? dim(` — ${perHundredK.toFixed(1)} passes per 100k`) : ""));
+        // Kept, so tonight's run has last night's to be compared with (INV-821): `agentbox golden --trend`.
+        const record = { at: new Date().toISOString(), provider: profile.label, model: profile.model, build: packageVersion(), fixtureVersion: trend.goldenFixtureVersion(GOLDEN_TASKS), tokens, results: rows };
+        out(dim(`  recorded: ${trend.writeGoldenRecord(goldenDir, record) ?? "nothing attempted, nothing kept"}`));
       }
       return anyFail ? 1 : 0;
     }
