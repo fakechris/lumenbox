@@ -118,6 +118,8 @@ export type DisplayEntry = (
       aside?: true;
       /** Said to the person while the tools ran: the turn's opening line, a message in its own right. */
       opening?: true;
+      /** Told to the person in the middle of the turn (Tell, INV-1853): a message in its own right, with the files it carried. */
+      told?: true; files?: NonNullable<SaidRow["files"]>;
       /** When it was said, from the transcript; absent on entries written before it was kept. */
       at?: string;
       turnId?: string; executionId?: string; textThrough?: number; causedBy?: string[];
@@ -212,7 +214,9 @@ export function toDisplayEntries(
   const display: DisplayEntry[] = [];
   const knownNames = roster.map(entry => entry.name);
   /** The ids of the calls in the entry just pushed, so results can be matched to it. */
-  let awaiting: { entry: { tools: DisplayTool[] }; ids: string[] } | undefined;
+  let awaiting: { entry: { tools: DisplayTool[] }; ids: string[]; inputs: unknown[] } | undefined;
+  /** How many Tells of each turn have been drawn, so the nth is read from the nth line the host recorded. */
+  const toldSoFar = new Map<string, number>();
   /** A person opened the turn being read and has not been shown anything of it yet. */
   let owedOpening = false;
   /**
@@ -272,7 +276,7 @@ export function toDisplayEntries(
         push(entryWithTools);
         awaiting = {
           entry: display.at(-1) as typeof entryWithTools,
-          ids: calls.map(block => String(block.id ?? "")),
+          ids: calls.map(block => String(block.id ?? "")), inputs: calls.map(block => block.input),
         };
       }
       continue;
@@ -288,6 +292,16 @@ export function toDisplayEntries(
         if (!background) for (const job of resultText(block).match(JOB_ID) ?? []) started.add(job);
         tool.result = resultText(block);
         tool.isError = block.is_error === true;
+        // What a Tell delivered is a message the person received then, drawn where it happened (INV-1853): the words and files as
+        // the host recorded them, or — for a turn the record does not hold — as the call gave them.
+        if (tool.name !== "Tell" || tool.isError) continue;
+        const turn = typeof entry.turnId === "string" ? entry.turnId : "", nth = toldSoFar.get(turn) ?? 0;
+        const input = (awaiting!.inputs[at] ?? {}) as { text?: unknown; files?: unknown }, paths = Array.isArray(input.files) ? input.files : [];
+        const row = saidOf(turn).filter(said => said.kind === "told")[nth];
+        const named = paths.filter((path): path is string => typeof path === "string" && path.startsWith("/")).map(path => ({ name: path.split("/").pop()!, path }));
+        const files = row !== undefined ? row.files ?? [] : named;
+        toldSoFar.set(turn, nth + 1);
+        push({ kind: "text", role: "assistant", text: row?.text ?? String(input.text ?? ""), told: true, ...(files.length > 0 ? { files } : {}), ...stamp(raw) });
       }
       awaiting = undefined;
       continue;

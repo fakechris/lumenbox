@@ -28,14 +28,16 @@ export type Speaker =
   /** A part of the host writing on its own account: an audit, a job notice, a reminder. */
   | { by: "host"; origin: string };
 
-/** What an agent said to the person in a turn, as the host filed it: the line it opened with, or its reply (INV-1845). */
+/** What an agent said to the person in a turn, as the host filed it: the line it opened with, something it told them while working (INV-1853), or its reply (INV-1845). */
 export interface SaidRow {
   turnId: string;
   at: string;
   conversation: string;
-  kind: "opening" | "reply";
+  kind: "opening" | "told" | "reply";
   text: string;
   root?: string;
+  /** What a `told` line carried: a path in the box, or a task's kept deliverable. */
+  files?: { name: string; path?: string; deliverable?: { task: string; id: string } }[];
 }
 
 export interface HeardRow {
@@ -64,11 +66,11 @@ export class HeardRecord {
    * from — so the conversation and the chat take the agent's words from one record rather than each from its own
    * reading of the transcript.
    */
-  said(agentId: string, conversation: string, turnId: string, text: string, kind: SaidRow["kind"], root?: string): void {
+  said(agentId: string, conversation: string, turnId: string, text: string, kind: SaidRow["kind"], root?: string, files?: SaidRow["files"]): void {
     if (text.trim() === "") return;
     try {
       mkdirSync(this.dir, { recursive: true });
-      const row: SaidRow = { turnId, at: new Date().toISOString(), conversation, kind, text, ...(root !== undefined ? { root } : {}) };
+      const row: SaidRow = { turnId, at: new Date().toISOString(), conversation, kind, text, ...(root !== undefined ? { root } : {}), ...(files !== undefined && files.length > 0 ? { files } : {}) };
       appendLine(this.pathFor(agentId), JSON.stringify({ said: true, ...row }));
       const turns = this.saidRows(agentId);
       turns.set(turnId, [...(turns.get(turnId) ?? []), row]);

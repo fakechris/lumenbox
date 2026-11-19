@@ -508,6 +508,7 @@ re-exporting a variable in every shell to hold a preference is the wrong shape f
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `activityLimit` | 400 | How many recent events the web UI keeps, so a page opened later still shows what the agents did. Not a record of the run — the transcripts on disk are that — so it is bounded, and older events are dropped first. |
+| `tellGapMinutes` | 2 | The least time between two things a member tells you in the middle of one turn (it may tell you at most three). `0` lifts the wait and keeps the limit of three. |
 
 The events themselves are in `~/.agentbox/activity.jsonl`, one per line with the time
 they happened, so the feed survives a restart of the server and not just a reload of

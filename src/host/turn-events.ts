@@ -11,6 +11,8 @@ export type TurnEventBody =
    * from plain entries only. Once per turn.
    */
   | { type: "interim"; agentId: string; agentName: string; text: string }
+  /** One thing the member told the person mid-turn (Tell, INV-1853): a message of its own, never the reply. */
+  | { type: "told"; agentId: string; agentName: string; text: string; files?: import("./tell.ts").TellFile[] }
   /** A delegated engine called one of the host's MCP tools through its route (docs/33). */
   | { type: "delegate_call"; agentId: string; agentName: string; tool: string; ok: boolean; ms: number }
   | { type: "tool_start"; agentId: string; agentName: string; tool: string; input: unknown; toolUseId?: string }

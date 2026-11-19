@@ -46,12 +46,16 @@ export interface CurrentWork extends WorkStamp {
   peers: string[];
   awaiting: string[];
   executions?: { agentId: string; conversation: string }[];
+  /** What the owner told the person while working on it (Tell, INV-1853), newest last. Never a status: telling is not answering. */
+  told?: { at: string; text: string }[];
 }
 export const messageWorkId = (message: InboundMessage): string | undefined =>
   message.work?.id ?? message.goal?.workId ?? message.resumeOf?.workId ?? message.taskBinding?.parent?.workId;
 export const personMessage = (message: InboundMessage): boolean =>
   message.fromId === "user" && !message.synthetic && !message.origin && !message.resumeOf && !message.goal;
 const keyOf = (agent: string, conversation: string) => JSON.stringify([agent, conversation]);
+/** Told lines kept on one piece of work: the newest, enough to say what the person already knows. */
+const TOLD_KEPT = 5;
 
 export interface RootPersistence {
   load(legacy?: { records: CurrentWork[]; cancellations: CancelledWork[] }): { records: CurrentWork[]; cancellations: CancelledWork[] };
@@ -543,6 +547,13 @@ export class WorkAttention {
       work.unavailable = kept.length ? kept : undefined;
       this.save();
     }
+  }
+  /** The owner told the person one thing mid-turn (INV-1853). The work stays as it was: running, and not answered. */
+  told(stamp: WorkStamp, participant: string, text: string, at = new Date().toISOString()): void {
+    const work = this.live(stamp);
+    if (!work || !this.valid(stamp, participant)) return;
+    work.told = [...(work.told ?? []), { at, text: text.slice(0, 200) }].slice(-TOLD_KEPT);
+    this.save();
   }
   settle(stamp: WorkStamp, status: CurrentWork["status"], reason?: string, wait?: WorkWait): void {
     const value = this.live(stamp);

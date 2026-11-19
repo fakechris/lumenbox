@@ -47,6 +47,8 @@ export interface AgentboxConfig {
   longWork?: { continuations?: number; activeHours?: number };
   /** How much goes into one request before the host stops carrying it: one rough choice (long-request.ts). */
   effort?: "lean" | "standard" | "open";
+  /** Minutes between two things a member tells the person in one turn (Tell, INV-1853). Absent means 2; 0 lifts the wait, not the three-a-turn limit. */
+  tellGapMinutes?: number;
   /**
    * The local hour (0–23) at which an unattended upgrade may run.
    *
@@ -350,13 +352,8 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
   const boxes = readBoxes(raw.boxes, onWarn);
   const connectorVersions = readConnectorVersions(raw.connectorVersions, onWarn);
   return {
-    activityLimit: readInteger(
-      raw.activityLimit,
-      DEFAULT_CONFIG.activityLimit,
-      { min: 1, max: MAX_ACTIVITY_LIMIT },
-      "activityLimit",
-      onWarn
-    ),
+    activityLimit: readInteger(raw.activityLimit, DEFAULT_CONFIG.activityLimit, { min: 1, max: MAX_ACTIVITY_LIMIT }, "activityLimit", onWarn),
+    ...(raw.tellGapMinutes !== undefined ? { tellGapMinutes: readInteger(raw.tellGapMinutes, 2, { min: 0, max: 720 }, "tellGapMinutes", onWarn) } : {}),
     ...(readTurnBudget(raw.turnBudget, onWarn) !== undefined ? { turnBudget: readTurnBudget(raw.turnBudget, onWarn) } : {}),
     ...(typeof raw.longWork === "object" && raw.longWork !== null && !Array.isArray(raw.longWork) ? { longWork: raw.longWork as NonNullable<AgentboxConfig["longWork"]> } : {}),
     ...(raw.effort === "lean" || raw.effort === "standard" || raw.effort === "open" ? { effort: raw.effort } : {}),
