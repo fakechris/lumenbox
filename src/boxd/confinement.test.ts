@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { HostSandbox } from "../host/host-sandbox.ts";
+import { SCREEN_SERVICES, SCREEN_USER_CLIENTS } from "../cua/macos-executor.ts";
 import { ConfinementRefused, confinementFor } from "./confinement.ts";
 import { Roots } from "./headless.ts";
 import { AcpService } from "./acp-service.ts";
@@ -74,9 +75,16 @@ test("the rules a headless box's commands run under: rw roots and temp writable,
     assert.equal(confine.wrap("/bin/true", [], { what: "exec", actor: "agent:../../x" }).env.XDG_STATE_HOME, join(m.dirs.work, ".state", "_.._x", "state"), "an actor cannot name its way out of the state directory");
     // Where a node opened the machine's own screen (INV-1707), the shell cannot capture or drive it past the computer tool's gates.
     assert.ok(!profile.includes("/usr/sbin/screencapture"), "a box whose screen is closed keeps its programs");
+    for (const name of [...SCREEN_SERVICES, ...SCREEN_USER_CLIENTS]) assert.ok(!profile.includes(name), `and ${name}: nothing is refused for a screen that is not open`);
     const screened = confinementFor({ headless: true, screenOpen: true, roots: () => m.roots, workDir: m.dirs.work, egressPort: () => 3128, log: () => {}, systemTmp: m.dirs.tmp, sandbox: new HostSandbox({ platform: "darwin", home: m.dirs.home, tmp: m.dirs.tmp, probe: () => true }) })!.wrap("/bin/true", [], { what: "exec" });
     assert.match(screened.args[1]!, /\(deny process-exec \(literal "\/usr\/sbin\/screencapture"\) \(literal "\/usr\/bin\/osascript"\)/);
     assert.match(screened.wrapped.rules.join("\n"), /these do not run: \/usr\/sbin\/screencapture, \/usr\/bin\/osascript/);
+    // Refusing to start a program stops nothing the agent compiles itself (INV-1756): what such a program reaches the screen through is refused too.
+    const refusal = (operation: string) => screened.args[1]!.split(")(").find(rule => rule.startsWith(`deny ${operation} `) && !rule.includes("com.apple.SecurityServer")) ?? "";
+    for (const name of SCREEN_SERVICES) assert.ok(refusal("mach-lookup").includes(`(global-name "${name}") (local-name "${name}")`), `${name} cannot be looked up where the screen is open, in the session or in another program`);
+    for (const name of SCREEN_USER_CLIENTS) assert.ok(refusal("iokit-open").includes(`(iokit-user-client-class "${name}")`), `${name} cannot be opened where the screen is open`);
+    assert.ok(screened.args[1]!.indexOf("(deny mach-lookup (global-name \"com.apple.windowserver.active\")") > screened.args[1]!.indexOf("(allow default)"), "after the allow, because the later rule wins");
+    assert.match(screened.wrapped.rules.join("\n"), /these system services are refused, whatever program asks: com\.apple\.windowserver\.active/, "and the agent is told, where a refusal has no error of its own");
 
     const block = confine.violations(wrapped, { exit_code: 1, stderr: `bash: ${m.dirs.outside}/x: Operation not permitted` }, { what: "exec", actor: "agent:a1" });
     assert.match(block ?? "", /<sandbox_violations>[\s\S]*\.state\/a1[\s\S]*granting a directory rw/, "the agent is told which rule, where its state goes, and how it is widened");
