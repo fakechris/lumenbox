@@ -4,6 +4,8 @@
  * (`progress.ts` continuationPrompt, `turn.ts` last round and Stop hook, and the rest below), so a person who
  * happens to type these words is not mistaken for the host.
  */
+import type { HistoryEntry } from "./compaction.ts";
+
 export const LEGACY_HOST_PROMPTS: readonly RegExp[] = [
   /^You have used \d+ tool rounds, which is the limit for one turn/,
   /^\[last round\] You have one response left in this turn/,
@@ -15,3 +17,10 @@ export const LEGACY_HOST_PROMPTS: readonly RegExp[] = [
   /^\[\d+ commands you started earlier ended within a few seconds of each other; all of them follow\.\]/,
   /^\[newer message\] /,
 ];
+
+/** Written by the host to the model, as opposed to said by a person or a teammate. */
+export function isHostAuthored(entry: HistoryEntry): boolean {
+  if ("kind" in entry) return false;
+  if (entry.host === true) return true;
+  return entry.role === "user" && LEGACY_HOST_PROMPTS.some(pattern => pattern.test(entry.text));
+}

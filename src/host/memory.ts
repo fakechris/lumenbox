@@ -615,7 +615,7 @@ export function buildExtractionPrompt(
     "correction they gave you, a fact that was expensive to establish.",
     "",
     "Do not keep: what a tool can tell you again on demand, anything specific to this task, your own",
-    "plans, or a restatement of something already listed below.",
+    "plans, or a restatement of something already listed below.\nOnly a line headed `They said` is a person's own word; under any other heading, nothing is their preference, decision or correction.",
     ...(options.stateChangesFirst === true
       ? [
           "",
