@@ -81,7 +81,9 @@ function resultBlock(task) {
   var said = (task.history || []).filter(function (change, index) { return change.note && !HOST_NOTES[change.by] && !(index === 0 && change.at === task.createdAt); }).slice(-3).reverse();
   said.forEach(function (change) {
     box.appendChild(el("div", "why", (agentName(change.by) === change.by ? originOf({ requester: change.by }) : agentName(change.by)) + " · " + agoText(change.at)));
-    box.appendChild(rich(change.note, "report"));
+    // The newest report comes read into its parts when it was written as a delivery; here every part is shown.
+    var report = task.report && task.report.at === change.at && task.report.by === change.by ? task.report : { note: change.note };
+    box.appendChild(reportBlock(report, REPORT_ORDER));
   });
   if (files.length === 0 && evidence.length === 0 && said.length === 0) box.appendChild(el("p", "why", t("ui.next.panel.noResult")));
   return box;

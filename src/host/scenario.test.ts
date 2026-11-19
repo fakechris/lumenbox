@@ -4546,3 +4546,60 @@ test("an agent in a Docker box writes a git hook and a postinstall: a person is 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// INV-1922: a member's delivery read "done" and the person could not tell where to look or what had not been
+// checked. The episode: asked in a chat to fix an export and show it first, the member delivers with a note in
+// the fixed order that names what it did not verify, and then replies "修好了" without it. What must hold: the
+// member was told the order; the part that says what was not verified is on the page before anything is opened;
+// and the chat is told it too, under the reply that left it out.
+test("a delivery names what was not verified, and the page and the chat both show it", async () => {
+  const { limitsOwedToChat, parseDelivery, DELIVERY_BRIEF } = await import("./delivery-report.ts");
+  const { taskBoardRecord } = await import("../web/task-board-record.ts");
+  const tasks = new TaskStore(null), pushed: string[] = [];
+  const note = "导出现在保留账号的时区。\n主要改动：src/export.ts 第 41 行按账号时区格式化，最值得看的是夏令时分支。\n已验证：12 个单元测试，在提交 3f2a9c1 上。\n未做与局限：线上账号没有验证\n下一步：你用真实账号导出一次确认。";
+  let told = "";
+  const result = await runEpisode({
+    team: [{ name: "Mia" }], says: [], tasks,
+    script: ({ system, round }) => {
+      told = system;
+      if (round === 0) return { call: "Tasks", input: { action: "update", id: "t1", sign_off: true } };
+      if (round === 1) return { call: "Tasks", input: { action: "submit", id: "t1", note, evidence: ["npm test — 12 passed on 3f2a9c1"] } };
+      return { say: "修好了，改在 src/export.ts。" };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const manager = new ChannelManager({
+        mayDrive: () => true, log() {},
+        ask: async (_agent, text, _identity, _chat, _progress, _thread, taskId) => {
+          bus.sendFromUser(frontId, text, { steerable: false, ...(taskId !== undefined ? { taskBinding: { taskId, role: "executor" as const } } : {}) });
+          await bus.runExclusive(frontId, { userDriven: true });
+          const entries = registry.readTranscript(frontId) as { role?: string; text?: string }[];
+          return entries.filter(entry => entry.role === "assistant" && entry.text).at(-1)?.text ?? "";
+        },
+        board: {
+          open: input => tasks.create({ title: input.title, requester: "feishu:chris", assigneeId: frontId })?.id,
+          started: id => { tasks.update(id, { status: "doing" }, "channel"); },
+          closed: id => { tasks.turnFinished(id); return tasks.get(id)?.status === "review" ? "review" : "done"; },
+        },
+        limitsOwed: limitsOwedToChat(id => tasks.get(id)),
+      });
+      manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async (_to, text) => { pushed.push(text); return undefined; }, sendToChat: async (_chat, text) => { pushed.push(text); } }, true, "test");
+      manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      try {
+        await receive({ identity: "feishu:chris", chatKey: "feishu:room", senderLabel: "Chris", text: "修一下导出的时区问题，给我看了再算完成", messageId: "m1" });
+        await manager.idle();
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.match(told, /follow the delivery order.*Not done or limits \(未做与局限\).*"none" if none/, "the member is told the order, and that the fifth part is written even when empty");
+    const task = tasks.get("t1")!;
+    assert.equal(task.status, "review", "delivered and waiting for the person; nothing about when it ends changed");
+    assert.equal(parseDelivery(task.history.findLast(change => change.status === "review")?.note)?.parts.find(part => part.key === "limits")?.text, "线上账号没有验证");
+    const shown = taskBoardRecord(task).report?.parts?.filter(part => DELIVERY_BRIEF.includes(part.key)).map(part => part.key);
+    assert.deepEqual(shown, ["result", "main", "limits", "next"], "the page's first layer carries the short form, what was not verified included");
+    const chat = pushed.filter(text => text.includes("修好了"));
+    assert.deepEqual(chat, ["修好了，改在 src/export.ts。\n\n未做与局限：线上账号没有验证"], "the chat hears the reply and, under it, the part the reply left out");
+  } finally { result.cleanup(); }
+});
