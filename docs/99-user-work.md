@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: user-work
-     updated: 2026-11-17
+     updated: 2026-11-19
 -->
 # 99. A person's work: requests, work, and what happens inside it
 
@@ -141,7 +141,7 @@ whole — they close only by the gate or the person's word.
 
 An agent serves one person's unfinished work in a conversation before anything else addressed to
 that conversation. That is custody, and it is the rule INV-1797 established. Three limits keep it
-from becoming a lock:
+from becoming a lock, and a fourth rule says what an agent does while it waits:
 
 1. **A colleague is answered beside a waiting person, never instead of one.** A message from
    another agent that is not part of the person's work runs on a side lane — one errand at a time
@@ -160,6 +160,13 @@ from becoming a lock:
 3. **Custody ends with the work**, by the lifecycle — not by the model tidying its todo list. A
    plan left unfinished keeps the work open and visible; it does not silence the agent's
    colleagues.
+
+4. **Waiting on a person is not stopping** (INV-1923). An agent whose work waits on a person —
+   their answer, something only they can do, a look at a result — keeps doing whatever else it
+   has that does not need them, and says so in the request: the person reads what the agent is
+   doing meanwhile on the card that asks them, so a request never reads as "everything stopped
+   until you answer". The first three limits already allowed this; this one makes it the rule and
+   makes it said.
 
 Stopping work is revocation first: the stop is recorded durably, then executors are interrupted,
 and anything that arrives late under the old identity is refused. What had already happened in the
@@ -180,6 +187,41 @@ Consequences: the only place that asks for a person's attention is the inbox, an
 things a person can decide. A list of work holds work (§2) and nothing else. Records with no
 verified source — the residue of earlier versions — are reached from the system page, described as
 what they are, and archived in bulk; they are not a view beside the person's work.
+
+### 6.1 What asks for a person is written by the agent that asks (INV-1923)
+
+The card that said "needs you" was assembled from a table: one sentence per category of reason
+(§4.1) and the same buttons whatever was in the way. A person could not tell what exactly they
+were to do, why it had to be them, or whether the agent had stopped because of it. The agent
+knows all three, so it writes the card (`src/host/person-ask.ts`, the one home of the names and
+their reading):
+
+| Part | What it says |
+|---|---|
+| Title | The action, as an imperative with its object. Its name says what is in the way: *Please do*, *Please approve*, *Please check* |
+| What happened | Where the work got to |
+| Why you | Why it has to be this person |
+| How | The exact step, with a link or a location |
+| Meanwhile | What the agent keeps doing (§5, limit 4) |
+| Still yours to check | What was not verified; on a delivery this is the part the delivery order already requires ([delivery-report.ts](../src/host/delivery-report.ts)) |
+
+It is written like a delivery: as labelled lines of the note on the task, read back on demand.
+Nothing is validated and nothing is refused. A note with no title line is not a request, and
+the fixed sentences of §4.1 and the plain note are shown, as before.
+
+**The buttons follow what is in the way, not the category.** Something only the person can do
+elsewhere: *I've done it / skip for now*. A go-ahead: the two outcomes in the agent's words
+where it named them ("Send it" / "Don't send"), else *approve / refuse*; a refusal may carry a
+sentence of why and does not have to. A result to look at: *confirm and close / send back*, as
+§4 has it. Each can be put off to one of a few ready times, and is not asked about again until
+then. A press on the first two is the person's word to the agent, said in the conversation the
+work belongs to. It grants nothing: what the policy gate holds is asked for by the gate, on its
+own card, and no table of standing approvals is touched.
+
+The card carries what was handed over — files, the conclusion of a check of the result, the
+evidence named — and a picture, a recording or a text opens where the card stands. A chat is
+sent the same title and sentences under the same names: when the work is blocked, as the line
+that announces it; when it is delivered, under the reply that left them out.
 
 ## 7. Getting there
 

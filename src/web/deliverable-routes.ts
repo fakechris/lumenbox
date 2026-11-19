@@ -14,6 +14,14 @@ import { apiError } from "./api-error.ts";
 
 export const DELIVERABLE_ROUTE = "GET /api/tasks/deliverable";
 
+/**
+ * What may be shown where the card stands instead of downloaded (`&inline=1`, INV-1923): pictures,
+ * recordings and text, each under a type the browser will not run. Never HTML or SVG: a file an agent
+ * wrote is not a page of ours. Anything else stays a download.
+ */
+const TEXT = "text/plain; charset=utf-8";
+const INLINE: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", mp4: "video/mp4", webm: "video/webm", md: TEXT, txt: TEXT, csv: TEXT, json: TEXT, log: TEXT };
+
 /** Handles the route and answers true; false for any other route. */
 export function deliverableRoute(
   route: string,
@@ -35,10 +43,12 @@ export function deliverableRoute(
     return true;
   }
   const ascii = item.name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "");
+  const inline = url.searchParams.get("inline") === "1" ? INLINE[item.name.split(".").pop()?.toLowerCase() ?? ""] : undefined;
   res.writeHead(200, {
-    "content-type": "application/octet-stream",
+    "content-type": inline ?? "application/octet-stream",
     "content-length": bytes.length,
-    "content-disposition": `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(item.name)}`,
+    "content-disposition": `${inline !== undefined ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(item.name)}`,
+    "x-content-type-options": "nosniff",
     "x-content-sha256": item.sha256,
     "cache-control": "no-store",
   });

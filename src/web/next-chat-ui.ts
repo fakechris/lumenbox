@@ -205,8 +205,10 @@ function renderThread(view) {
     renderThreadTools(found.length); view.appendChild(thread);
     return;
   }
-  var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review"; });
-  mine.filter(function (row) { var group = nextGroupOf(nextStateOf(row).key); return group !== "done" && group !== "review"; }).forEach(function (row) {
+  // What waits on the person is a card: a result to look at, or a request the agent wrote. One the person put off is a pin again until then.
+  var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review" && !putOff(row); });
+  var asking = mine.filter(function (row) { return row.status === "blocked" && nextNeedOf(row) && !putOff(row) && (row.conversation || "main") === chat.conversation; });
+  mine.filter(function (row) { return nextGroupOf(nextStateOf(row).key) !== "done" && delivered.indexOf(row) < 0 && asking.indexOf(row) < 0; }).forEach(function (row) {
     var pin = el("button", "pin"), body = el("span", "body");
     body.appendChild(el("div", "title", row.title)); body.appendChild(el("div", "why", reasonOf(row)));
     pin.appendChild(chip(nextStateOf(row))); pin.appendChild(body);
@@ -227,6 +229,7 @@ function renderThread(view) {
   if (lastAsk && chat.expired[lastAsk.question.question]) thread.appendChild(el("div", "aside", t("ui.next.chat.expired", { name: agent ? agent.name : "" })));
   else if (lastAsk && !chat.live) thread.appendChild(askCard(lastAsk, agent));
   if (agent) pendingCards(agent).forEach(function (card) { thread.appendChild(card); });
+  asking.forEach(function (row) { thread.appendChild(needCard(row)); });
   delivered.filter(function (row) { return (row.conversation || "main") === chat.conversation; }).forEach(function (row) { thread.appendChild(resultCard(row)); });
   if (chat.live) {
     // Its words and its steps are shown as they come only for what the person asked; other work is one line saying it is busy.

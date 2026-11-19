@@ -38,7 +38,7 @@ function setup(conversation = "main") {
 }
 
 /** The download route, served for real, so the test reads what a browser would get. */
-async function download(tasks: TaskStore, taskId: string, id: string): Promise<{ status: number; bytes: Buffer; disposition: string | null }> {
+async function download(tasks: TaskStore, taskId: string, id: string, more = ""): Promise<{ status: number; bytes: Buffer; disposition: string | null; type: string | null }> {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (!deliverableRoute(`${req.method} ${url.pathname}`, url, res, { tasks, mayReadTask: () => true, send: (r, status, body) => { r.writeHead(status); r.end(JSON.stringify(body)); } })) { res.writeHead(404); res.end(); }
@@ -46,8 +46,8 @@ async function download(tasks: TaskStore, taskId: string, id: string): Promise<{
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   try {
     const { port } = server.address() as AddressInfo;
-    const response = await fetch(`http://127.0.0.1:${port}/api/tasks/deliverable?task=${taskId}&id=${id}`);
-    return { status: response.status, bytes: Buffer.from(await response.arrayBuffer()), disposition: response.headers.get("content-disposition") };
+    const response = await fetch(`http://127.0.0.1:${port}/api/tasks/deliverable?task=${taskId}&id=${id}${more}`);
+    return { status: response.status, bytes: Buffer.from(await response.arrayBuffer()), disposition: response.headers.get("content-disposition"), type: response.headers.get("content-type") };
   } finally { server.close(); }
 }
 
@@ -74,13 +74,20 @@ test("DeliverFile keeps a snapshot and a record; the box changing afterwards doe
   assert.equal(got.status, 200);
   assert.deepEqual(got.bytes, original, "the download is the bytes delivered, not the box's current file");
   assert.match(got.disposition!, /attachment; filename="report\.md"/);
+  // Opened where the card stands (INV-1923): a text is shown as text and nothing else, so what an agent wrote is never run as a page.
+  const shown = await download(tasks, task.id, "d1", "&inline=1");
+  assert.deepEqual([shown.type, shown.disposition!.split(";")[0], shown.bytes.equals(original)], ["text/plain; charset=utf-8", "inline", true]);
+  files.set("/home/box/work/page.html", Buffer.from("<script>1</script>"));
+  await deliverFileTool(context, { path: "/home/box/work/page.html", note: "A page" });
+  const page = await download(tasks, task.id, "d2", "&inline=1");
+  assert.deepEqual([page.type, page.disposition!.split(";")[0]], ["application/octet-stream", "attachment"], "a page is downloaded, whatever was asked");
 
   // A retried call is the same delivery; a revision is a second one.
-  assert.match((await deliverFileTool(context, { path: "/home/box/work/report.md", note: "again" })).text, /d2 on t1/);
+  assert.match((await deliverFileTool(context, { path: "/home/box/work/report.md", note: "again" })).text, /d3 on t1/);
   files.set("/home/box/work/report.md", original);
   assert.match((await deliverFileTool(context, { path: "/home/box/work/report.md", note: "again" })).text, /Already delivered: report\.md is d1/);
-  assert.equal(tasks.get(task.id)!.deliverables!.length, 2);
-  assert.equal(readdirSync(join(deliverablesDir(tasks.path!), task.id)).length, 2);
+  assert.equal(tasks.get(task.id)!.deliverables!.length, 3);
+  assert.equal(readdirSync(join(deliverablesDir(tasks.path!), task.id)).length, 3);
   assert.equal((await download(tasks, task.id, "d9")).status, 404);
 });
 

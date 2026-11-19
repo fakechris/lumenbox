@@ -8,6 +8,7 @@ import vm from "node:vm";
 import { NEXT_PAGE } from "./page-locale.ts";
 import { nextLogic } from "./next-logic-ui.ts";
 import { DELIVERY_BRIEF, DELIVERY_SECTIONS, deliveryLabel } from "../host/delivery-report.ts";
+import { ASK_SENTENCES, askLabel, splitAsk } from "../host/person-ask.ts";
 
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
@@ -82,6 +83,20 @@ test("with no choice the page is the rebuilt one; the page somebody switched to 
   assert.equal(ask("/?import=abc").page, NEXT_PAGE, "a template link is the rebuilt page's to open");
 });
 
+/** A stand-in for a page element: what was put in it, what it was told, and what a press on it runs. */
+interface Fake {
+  cls: string; text: string; kids: Fake[]; childNodes: Fake[]; dataset: Record<string, string>; attrs: Record<string, string>; value: string; placeholder?: string; href?: string; press?: () => void; swapped?: Fake;
+  appendChild(kid: Fake): void; addEventListener(name: string, run: () => void): void; setAttribute(name: string, value: string): void; replaceWith(other: Fake): void;
+}
+const fakeEl = (_tag: string, cls = "", text = ""): Fake => {
+  const kids: Fake[] = [];
+  const node: Fake = {
+    cls, text, kids, childNodes: kids, dataset: {}, attrs: {}, value: "",
+    appendChild(kid) { kids.push(kid); }, addEventListener(_name, run) { node.press = run; }, setAttribute(name, value) { node.attrs[name] = value; }, replaceWith(other) { node.swapped = other; },
+  };
+  return node;
+};
+
 /** One function out of the page's own script, run with the globals it reads. */
 function pageFunction(name: string, globals: Record<string, unknown>): (...args: unknown[]) => unknown {
   const script = pageScripts(NEXT_PAGE("en")).sort((a, b) => b.length - a.length)[0]!;
@@ -116,11 +131,7 @@ test("a press on an agent's card is the line the server parses it from", async (
 test("a result waiting for the person says where it came from and what was reported, and its three buttons do three things", async () => {
   // 2026-11-12: four cards read "Bob delivered a result" over a title and three buttons. The work was asked for in
   // Feishu, the report was in the record, and Request changes and Open both opened the same panel.
-  interface Fake { cls: string; text: string; kids: Fake[]; dataset: Record<string, string>; value: string; href?: string; press?: () => void; appendChild(kid: Fake): void; addEventListener(name: string, run: () => void): void }
-  const el = (_tag: string, cls = "", text = ""): Fake => {
-    const node: Fake = { cls, text, kids: [], dataset: {}, value: "", appendChild(kid) { node.kids.push(kid); }, addEventListener(_name, run) { node.press = run; } };
-    return node;
-  };
+  const el = fakeEl;
   const posted: unknown[] = [], opened: string[] = [], chat = { changing: "" };
   const files = [1, 2, 3, 4, 5, 6].map(n => ({ id: `f${n}`, name: `part-${n}.md` }));
   const t = (key: string, values?: { n?: number; name?: string }) => key + (values?.n ?? "") + (values?.name ? `(${values.name})` : "");
@@ -131,7 +142,13 @@ test("a result waiting for the person says where it came from and what was repor
   const signOffLines = pageFunction("signOffLines", { el, t });
   const rich = (text: string, cls: string) => el("div", cls, text);
   const reportBlock = pageFunction("reportBlock", { el, t, rich }) as (report: unknown, keys: readonly string[]) => Fake;
+  const need = { answered: {}, refusing: "", previews: {} };
+  const fileRow = pageFunction("fileRow", { el, t, need, encodeURIComponent, PREVIEW_KIND: { md: "text" }, failed: () => {} });
+  const embedInto = pageFunction("embedInto", { el, t, need, fileRow });
+  const laterButton = pageFunction("laterButton", { el, t, nextLaterTimes: nextLogic.nextLaterTimes, postJson: () => Promise.resolve({}), toast: () => {}, failed: () => {} });
+  const askBlock = pageFunction("askBlock", { el, t, rich, ASK_ORDER: ASK_SENTENCES });
   const resultCard = pageFunction("resultCard", {
+    embedInto, laterButton, askBlock,
     reportBlock, REPORT_BRIEF: DELIVERY_BRIEF, el, t, agentName, originOf, chat, signOffLines, agoText: () => "3d", rich, toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
     render: () => {}, document: { querySelector: () => null },
     openPanel: (id: string) => opened.push(id), postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
@@ -156,6 +173,13 @@ test("a result waiting for the person says where it came from and what was repor
   assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/tasks/update", { id: "t1", status: "done" }], ["/api/tasks/update", { id: "t1", status: "doing", note: "Drop the 536-tool claim." }]]);
   const bare = resultCard({ id: "t2", title: "Nothing left behind", assigneeId: "mia", requester: "web" }) as Fake;
   assert.ok(bare.kids.some(kid => kid.text === "ui.next.chat.noReport"), "an empty result says it is empty");
+  // INV-1923: where the agent wrote what it needs, that is the card's title and its first sentences; where it did not,
+  // the fixed line stands, as above. The buttons of a result to look at are the same either way, with "later" beside them.
+  assert.equal(card.kids[0]!.text, "ui.next.chat.review", "nothing written: the fixed line");
+  const asked = resultCard({ ...row, ask: { kind: "check", title: "Check the DST branch before it ships", said: [{ key: "meanwhile", text: "Fixing the same bug on import." }] } }) as Fake;
+  assert.equal(asked.kids[0]!.text, "Check the DST branch before it ships", "the agent's own title");
+  assert.deepEqual(asked.kids.find(kid => kid.cls === "parts")!.kids.map(kid => [kid.dataset.part, kid.kids.map(inner => inner.text).join(" | ")]), [["meanwhile", "ui.next.ask.meanwhile | Fixing the same bug on import."]]);
+  assert.deepEqual(asked.kids.at(-2)!.kids.map(kid => kid.text), ["ui.next.act.accept", "ui.next.act.changes", "ui.next.act.details", "ui.next.act.snooze"]);
   // INV-1922: a result written as a delivery is drawn by its parts. The card shows the short form; what was not
   // verified is on it without a click, and a delivery that never said is told apart from one that said "none".
   const { lastReport } = await import("./task-board-record.ts");
@@ -413,4 +437,99 @@ test("the box update's backup is unticked unless the server says otherwise, and 
   assert.equal(redrawn.find(node => node.type === "checkbox")!.checked, true, "the person's tick outlives the redraw");
   boxSet = {};
   assert.equal(draw({ state: {}, backupByDefault: true }).find(node => node.type === "checkbox")!.checked, true, "the server's default, whatever it is");
+});
+
+test("a request the agent wrote is the card: its title, its sentences, and the buttons that fit what is in the way", async () => {
+  // INV-1923: "needs you" was one sentence per category and the same buttons whatever was in the way. The agent now writes
+  // the card; what is in the way decides the buttons; and where it wrote nothing the note and the fixed sentence stand.
+  const el = fakeEl, posted: [string, Record<string, unknown>][] = [], need: { answered: Record<string, unknown>; refusing: string; previews: Record<string, unknown> } = { answered: {}, refusing: "", previews: {} };
+  const t = (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : "");
+  const rich = (text: string, cls: string) => el("div", cls, text), agentName = () => "Mia", panel = { taskId: "" };
+  const postJson = (path: string, body: Record<string, unknown>) => { posted.push([path, body]); return Promise.resolve({}); };
+  const press = async (node: Fake) => { node.press!(); await new Promise(resolve => setImmediate(resolve)); }; // and what follows the post has run
+  const shared = { el, t, rich, need, agentName, panel, postJson, toast: () => {}, failed: () => {}, render: () => {}, refreshSoon: () => {}, loadPanel: () => {}, renderPanel: () => {}, encodeURIComponent };
+  const askBlock = pageFunction("askBlock", { ...shared, ASK_ORDER: ASK_SENTENCES });
+  const fileRow = pageFunction("fileRow", { ...shared, PREVIEW_KIND: { png: "image" } });
+  const embedInto = pageFunction("embedInto", { ...shared, fileRow });
+  const laterButton = pageFunction("laterButton", { ...shared, nextLaterTimes: nextLogic.nextLaterTimes });
+  const sayNeed = pageFunction("sayNeed", shared);
+  const needInto = pageFunction("needInto", { ...shared, nextNeedOf: nextLogic.nextNeedOf, askBlock, embedInto, laterButton, sayNeed });
+  const needCard = pageFunction("needCard", { ...shared, needInto, openPanel: () => {} }) as (row: unknown) => Fake;
+  const sent = (): [string, Record<string, unknown>] => JSON.parse(JSON.stringify(posted.pop())); // the page's own objects, as plain ones
+  const buttons = (card: Fake) => card.kids.find(kid => kid.cls === "acts")!.kids;
+  const base = { assigneeId: "mia", conversation: "feishu-1", status: "blocked", updatedAt: "2026-11-19T10:00:00.000Z", reading: { phase: "needs" } };
+  const note = "Please do: Sign in to the vendor portal and download the October invoice\nWhat happened: Reconciliation stopped at step 3.\nWhy you: The code goes to your phone.\nHow: Open https://vendor.example/login and drop the PDF in inbox/.\nMeanwhile: Reconciling September.\nStill yours to check: The invoice header.";
+
+  // Something only the person can do elsewhere.
+  const act = { ...base, id: "t1", title: "Reconcile October", ask: splitAsk(note).ask, deliverables: [{ id: "d1", name: "step-3.png" }, { id: "d2", name: "ledger.xlsx" }], reading: { phase: "needs", checks: { result: "failed" }, evidence: ["vendor portal: 403 after login"] } };
+  assert.equal(nextLogic.nextNeedOf(act), "act");
+  const acting = needCard(act);
+  assert.equal(acting.kids[0]!.text, "Sign in to the vendor portal and download the October invoice", "the title is the action, in the agent's words");
+  assert.equal(acting.kids[1]!.text, "Reconcile October", "and which work it is about is one press away");
+  assert.deepEqual(acting.kids.find(kid => kid.cls === "parts")!.kids.map(kid => kid.dataset.part), [...ASK_SENTENCES], "what happened, why you, how, meanwhile, and what stays yours to check");
+  assert.ok(acting.kids.find(kid => kid.cls === "parts")!.kids[3]!.kids.some(kid => kid.text === "Reconciling September."), "what it keeps doing is on the card");
+  assert.deepEqual(acting.kids.filter(kid => kid.cls === "file").map(kid => [kid.text, kid.attrs["aria-expanded"] ?? "download"]), [["step-3.png", "false"], ["ledger.xlsx", "download"]], "a picture opens where it stands; a sheet is downloaded");
+  assert.ok(acting.kids.some(kid => kid.text === "ui.next.need.check.failed") && acting.kids.some(kid => kid.text === "vendor portal: 403 after login"), "the check's conclusion and the evidence named");
+  assert.deepEqual(buttons(acting).map(kid => kid.text), ["ui.next.need.done", "ui.next.need.skip", "ui.next.act.snooze"]);
+  await press(buttons(acting)[0]!);
+  assert.deepEqual(sent(), ["/api/prompt", { agent: "mia", conversation: "feishu-1", text: "ui.next.need.say.done(Sign in to the vendor portal and download the October invoice)" }], "said to the agent, in the conversation the work belongs to");
+  const settled = needCard(act);
+  assert.ok(!settled.kids.some(kid => kid.cls === "acts") && settled.kids.at(-1)!.text.startsWith("ui.next.need.said("), "answered: what was said stands in place of the buttons");
+  assert.ok(needCard({ ...act, updatedAt: "2026-11-19T11:00:00.000Z" }).kids.some(kid => kid.cls === "acts"), "until the agent moves; a new request is asked afresh");
+  need.answered = {};
+  await press(buttons(needCard(act))[1]!);
+  assert.match(String(sent()[1].text), /^ui\.next\.need\.say\.skip\(/);
+  need.answered = {};
+
+  // A go-ahead: the two outcomes in the agent's words, and a refusal that may say why.
+  const release = { ...base, id: "t2", title: "Renewal notices", ask: splitAsk("Please approve: Send the renewal notice to 214 customers\nWhy you: It goes out under your name.").ask, history: [{ options: ["Send it", "Don't send"] }] };
+  assert.equal(nextLogic.nextNeedOf(release), "release");
+  assert.deepEqual(buttons(needCard(release)).map(kid => kid.text), ["Send it", "Don't send", "ui.next.act.snooze"], "the buttons say what will happen");
+  await press(buttons(needCard(release))[1]!);
+  assert.equal(need.refusing, "t2");
+  const refusing = needCard(release), why = refusing.kids.find(kid => kid.placeholder === "ui.next.need.whyNot")!;
+  await press(buttons(refusing)[0]!);
+  assert.deepEqual(sent()[1].text, "ui.next.need.say.choice(Don't send|Send the renewal notice to 214 customers)", "refused without a reason");
+  need.answered = {}; need.refusing = "t2"; why.value = "the price list is not final";
+  await press(buttons(refusing)[0]!);
+  assert.equal(sent()[1].text, "ui.next.need.say.choice(Don't send|Send the renewal notice to 214 customers) ui.next.need.say.reason(the price list is not final)", "the reason goes with the refusal");
+  need.answered = {};
+  const plain = { ...release, history: [{}] };
+  assert.deepEqual(buttons(needCard(plain)).map(kid => kid.text), ["ui.next.act.approve", "ui.next.act.deny", "ui.next.act.snooze"], "no outcomes named: the plain pair");
+  await press(buttons(needCard(plain))[0]!);
+  assert.equal(sent()[1].text, "ui.next.need.say.choice(ui.next.act.approve|Send the renewal notice to 214 customers)");
+  need.answered = {};
+
+  // Nothing written by the agent: its note, or the fixed sentence, and the answers it offered, as before.
+  const silent = { ...base, id: "t3", title: "Pick a region", history: [{ note: "Which region should the bucket live in?", options: ["eu-west-1", "us-east-1"] }] };
+  assert.equal(nextLogic.nextNeedOf(silent), "answer");
+  const fallback = needCard(silent);
+  assert.equal(fallback.kids[0]!.text, "ui.next.need.head(Mia)");
+  assert.ok(fallback.kids.some(kid => kid.text === "Which region should the bucket live in?"), "the note as it was written");
+  assert.ok(needCard({ ...silent, history: [{ options: ["eu-west-1"] }] }).kids.some(kid => kid.text === "ui.wr.reason.needs"), "and with no note, the fixed sentence");
+  assert.deepEqual(buttons(fallback).map(kid => kid.text), ["eu-west-1", "us-east-1", "ui.next.act.snooze"]);
+  await press(buttons(fallback)[1]!);
+  assert.equal(sent()[1].text, "us-east-1", "an answer is said as it reads");
+
+  // What decides the family, and what is not a request at all.
+  assert.equal(nextLogic.nextNeedOf({ status: "review", reading: { phase: "review" }, ask: { kind: "approve" } }), "delivery", "a result to look at keeps confirm and send back, whatever its title was named");
+  assert.equal(nextLogic.nextNeedOf({ status: "blocked", reading: { phase: "needs" }, history: [{}] }), undefined, "work parked by a failure has nothing to press");
+  assert.equal(nextLogic.nextNeedOf({ status: "doing", reading: { phase: "working" }, ask: { kind: "act" } }), undefined);
+
+  // "Later" is a few ready times, and the one pressed is when the work is asked about again.
+  need.answered = {};
+  const later = buttons(needCard(silent)).at(-1)!;
+  await press(later);
+  const times = later.swapped!.kids;
+  assert.ok(times.length >= 2 && times.every(kid => kid.text.startsWith("ui.next.later.")));
+  await press(times.at(-1)!);
+  const [path, body] = sent();
+  assert.deepEqual([path, body.id, new Date(String(body.snoozeUntil)).getDay(), new Date(String(body.snoozeUntil)).getHours()], ["/api/tasks/update", "t3", 1, 9], "next Monday, nine in the morning");
+  const friday = nextLogic.nextLaterTimes(new Date(2026, 10, 20, 10, 0)), sundayNight = nextLogic.nextLaterTimes(new Date(2026, 10, 22, 21, 0));
+  assert.deepEqual(friday.map(time => [time.key, new Date(time.at).getDate(), new Date(time.at).getHours()]), [["tonight", 20, 18], ["tomorrow", 21, 9], ["monday", 23, 9]]);
+  assert.deepEqual(sundayNight.map(time => [time.key, new Date(time.at).getDate()]), [["tomorrow", 23], ["monday", 30]], "no evening left, and tomorrow is not offered twice");
+
+  // The page names a sentence by the word the agent is asked to write it under.
+  const { MESSAGES } = await import("../i18n/messages.ts");
+  for (const key of ASK_SENTENCES) for (const locale of ["zh", "en"] as const) assert.equal(MESSAGES[locale][`ui.next.ask.${key}`], askLabel(key, locale), key);
 });

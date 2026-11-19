@@ -5,7 +5,7 @@ import { surfaceActionWork } from "../host/surface-action.ts";
 import { workReading, workReference } from "../host/work-reading.ts";
 import { evidenceDigest } from "../host/review-dispatch.ts";
 import { resultCheckRoute } from "./result-check-routes.ts";
-import { taskDeliveryRoute } from "./task-delivery-routes.ts"; import { limitsOwedToChat } from "../host/delivery-report.ts";
+import { taskDeliveryRoute } from "./task-delivery-routes.ts"; import { owedToChat } from "../host/delivery-report.ts"; import { askOf } from "../host/person-ask.ts";
 import { DeliveryRecovery, replyExecutionKey } from "../host/delivery-recovery.ts";
 import { deliveryRecoveryRoute } from "./delivery-recovery-routes.ts";
 import { taskAudience } from "../host/task-audience.ts";
@@ -1172,7 +1172,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       mode: () => orchestrator.answerReviewMode(),
       sampled: messageId => orchestrator.sampledForAnswerReview(messageId), review: input => orchestrator.reviewAnswer(input),
     },
-    limitsOwed: limitsOwedToChat(id => orchestrator.tasks?.get(id)), // what the result note says is not verified follows a reply that left it out (INV-1922)
+    owedUnderReply: owedToChat(id => orchestrator.tasks?.get(id)), // what the result note asks or says is not verified follows a reply that left it out (INV-1922, INV-1923)
     attachToReply: chatKey => orchestrator.routineAttachments.take(chatKey), forkTally: taskId => orchestrator.pendingWork?.forks?.tallyLine(taskId), // "分了 N 个子任务" under the reply (INV-1667)
     ingress,
     messages,
@@ -1882,7 +1882,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         } catch {
           // Not an agent: the name is whatever moved it.
         }
-        const question = `${task.id}「${task.title}」卡住了：${last.note}`;
+        const question = askOf(task) !== undefined ? line : `${task.id}「${task.title}」卡住了：${last.note}`; // the member's own request, as the card shows it (INV-1923)
         void channels.pushQuestionToChat(chatKey, { agentName, question, options: last.options }, { kind: "attention", ref: task.id, question });
         return;
       }
@@ -3882,7 +3882,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         let readingBuilt = false; let readingWorld: Parameters<typeof stageWorldOf<Task>>[1] | undefined; const childReferences = new Map<string, string[]>(), readingCache = new Map<string, ReturnType<typeof workReading>>();
         const readingFor = (task: Task) => { if (!readingBuilt) { readingBuilt = true; for (const row of orchestrator.tasks?.list() ?? []) if (row.origin?.parentId && mayReadTask(row)) { const ids = childReferences.get(row.origin.parentId) ?? []; ids.push(row.id); childReferences.set(row.origin.parentId, ids); } } let reading = readingCache.get(task.id); if (!reading) { const reference = (id: string, relation: "parent" | "dependency" | "collaboration") => workReference(id, relation, id => orchestrator.tasks?.get(id), mayReadTask); readingWorld ??= { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending }; reading = workReading(task, { stage: stageWorldOf(task, readingWorld!), checks: orchestrator.resultChecks.snapshot(task), verdicts: orchestrator.verifications.recordsFor(task.id, evidenceDigest(task)), references: [...(task.origin?.parentId ? [reference(task.origin.parentId, "parent")] : []), ...(task.blockedBy ?? []).map(id => reference(id, "dependency")), ...(childReferences.get(task.id) ?? []).map(id => reference(id, "collaboration"))] }); readingCache.set(task.id, reading); } return reading; };
         if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => ({ ...taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), reading: readingFor(orchestrator.tasks!.get(id)!) }), send })) return;
-        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, report: lastReport(task, 8000), reading: readingFor(task), work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id), orchestrator.resultChecks), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, report: lastReport(task, 8000), ask: askOf(task), reading: readingFor(task), work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id), orchestrator.resultChecks), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
         if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), reading: readingFor(task), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id), orchestrator.resultChecks), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(taskView) ?? [] });

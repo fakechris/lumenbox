@@ -36,7 +36,8 @@ function needBlock(task) {
     dismiss.addEventListener("click", function () { updateTask({ status: "dropped", note: t("ui.next.note.dismissed") }, t("ui.next.done.dismissed")); });
     acts.appendChild(commit); acts.appendChild(dismiss);
   } else if (stage === "person/review") {
-    box.appendChild(el("div", "", t("ui.next.panel.review")));
+    box.appendChild(el("div", "", task.ask ? task.ask.title : t("ui.next.panel.review")));
+    if (task.ask && (task.ask.said || []).length) box.appendChild(askBlock(task.ask));
     signOffLines(task).forEach(function (line) { box.appendChild(line); });
     box.appendChild(el("div", "why", t("ui.next.chat.reviewHint", { name: agentName(task.assigneeId) })));
     var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes"));
@@ -51,16 +52,11 @@ function needBlock(task) {
       acts.replaceChildren(send); box.insertBefore(input, acts); input.focus();
     });
     acts.appendChild(accept); acts.appendChild(changes);
-  } else if (stage === "person/answer" || stage === "person/blocked") {
-    if (last.note) box.appendChild(el("div", "", last.note));
-    (last.options || []).forEach(function (option) {
-      var pick = el("button", "act", option);
-      pick.addEventListener("click", function () {
-        postJson("/api/prompt", { agent: task.assigneeId, conversation: task.conversation || "main", text: option }).then(function () { toast(t("ui.next.done.sent", { name: agentName(task.assigneeId) })); refreshSoon(); }, failed);
-      });
-      acts.appendChild(pick);
-    });
-  }
+  } else if (nextNeedOf(task)) {
+    // The agent's request and its buttons, drawn by the same code as the card in the conversation (next-need-ui.ts).
+    if (task.ask) box.appendChild(el("b", "", task.ask.title));
+    needInto(box, task, true);
+  } else if ((stage === "person/answer" || stage === "person/blocked") && last.note) box.appendChild(el("div", "", last.note));
   if (acts.childNodes.length) box.appendChild(acts);
   return box.childNodes.length ? box : null;
 }
@@ -80,9 +76,10 @@ function resultBlock(task) {
   // What was said about the work, newest first: for work with no file this is the result.
   var said = (task.history || []).filter(function (change, index) { return change.note && !HOST_NOTES[change.by] && !(index === 0 && change.at === task.createdAt); }).slice(-3).reverse();
   said.forEach(function (change) {
-    box.appendChild(el("div", "why", (agentName(change.by) === change.by ? originOf({ requester: change.by }) : agentName(change.by)) + " · " + agoText(change.at)));
     // The newest report comes read into its parts when it was written as a delivery; here every part is shown.
     var report = task.report && task.report.at === change.at && task.report.by === change.by ? task.report : { note: change.note };
+    if (!report.parts && !report.note) return; // all of it was the request to the person, which stands above
+    box.appendChild(el("div", "why", (agentName(change.by) === change.by ? originOf({ requester: change.by }) : agentName(change.by)) + " · " + agoText(change.at)));
     box.appendChild(reportBlock(report, REPORT_ORDER));
   });
   if (files.length === 0 && evidence.length === 0 && said.length === 0) box.appendChild(el("p", "why", t("ui.next.panel.noResult")));
@@ -158,13 +155,9 @@ function stopBlock(task) {
   snooze.addEventListener("click", function () {
     if (later) { updateTask({ snoozeUntil: "" }, t("ui.next.done.unsnoozed")); return; }
     var pick = el("span", "acts");
-    [["tomorrow", 1], ["week", 7]].forEach(function (pair) {
-      var day = el("button", "act", t("ui.next.snooze." + pair[0]));
-      day.addEventListener("click", function () {
-        var until = new Date(Date.now() + pair[1] * 86400000);
-        until.setHours(9, 0, 0, 0);
-        updateTask({ snoozeUntil: until.toISOString() }, t("ui.next.done.snoozed", { when: until.toLocaleDateString() }));
-      });
+    nextLaterTimes(new Date()).forEach(function (time) {
+      var day = el("button", "act", t("ui.next.later." + time.key));
+      day.addEventListener("click", function () { updateTask({ snoozeUntil: time.at }, t("ui.next.done.snoozed", { when: new Date(time.at).toLocaleDateString() })); });
       pick.appendChild(day);
     });
     snooze.replaceWith(pick);

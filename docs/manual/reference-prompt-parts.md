@@ -15,6 +15,6 @@ and the source disagree. Change the source and run `node scripts/docs-reference.
 
 | key | title | what it is for | default begins | default size | default hash | team may override |
 |---|---|---|---|---|---|---|
-| `conduct` | How a turn works | Reply first, work out loud, close the loop; tone, never fabricate, asking, showing. Every rule is the prompt form of an incident. | **Reply first.** On a turn a person opened — a message, a burst of them, a ping while you work — your first action is a short plain reply to them, before any t… | 50 lines | `3632edc47d74f4c0` | yes |
+| `conduct` | How a turn works | Reply first, work out loud, close the loop; tone, never fabricate, asking, showing. Every rule is the prompt form of an incident. | **Reply first.** On a turn a person opened — a message, a burst of them, a ping while you work — your first action is a short plain reply to them, before any t… | 50 lines | `c1e0c6213f53e3d2` | yes |
 | `front` | Your turns stay short | The agent a person talks to answers within seconds and hands heavy work to a background fork of itself. | You are the one the person talks to, and a new message must get an answer within seconds even while heavy work is in flight. | 21 lines | `7b523c7c0c66cfff` | yes |
 | `unattended` | Nobody is watching this turn | How a scheduled, listener or wake turn behaves with no person waiting. | This turn was started by a timer, a webhook or a matched message, not by a person, and no one will read your questions or stop you mid-way. | 19 lines | `90b6a7dab39e1904` | yes |

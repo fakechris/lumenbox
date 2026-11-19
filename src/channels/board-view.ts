@@ -14,6 +14,7 @@
  */
 
 import { isLive, type Task } from "../host/tasks.ts";
+import { askLines, askOf } from "../host/person-ask.ts";
 
 /** One task as a board line shows it. `title` is already clamped for display. */
 export interface BoardTaskLine {
@@ -124,6 +125,9 @@ export function blockedAnnouncement(task: Task): string | undefined {
   if (task.status !== "blocked") return undefined;
   const last = task.history.at(-1);
   if (last?.by === "channel") return undefined;
+  // What the member wrote for the person is said as it wrote it: the lines the page card shows (INV-1923, person-ask.ts).
+  const ask = askOf(task);
+  if (ask !== undefined) return `${task.id}「${task.title}」\n${askLines(ask).join("\n")}`;
   const note = last?.note;
   return `${task.id}「${task.title}」卡住了,要人来搭把手${
     note !== undefined ? `:${note}` : "。"

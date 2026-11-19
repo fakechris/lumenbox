@@ -132,6 +132,16 @@ test("every live task has a stage by the table, a blocked task with options is a
   assert.deepEqual(question?.answer, { agentId: "bot", conversation: "feishu-oc_1", options: ["us", "eu"] }, "answerable where it is listed: to whom, where, and the choices (INV-1825)");
   assert.match(question?.detail ?? "", /us or eu\? — us \/ eu/);
   assert.equal(answer.theirs.find(item => item.ref === "t4")?.stage, "working");
+  // INV-1923: a blocked task whose agent wrote what it needs of the person is listed as that request, in its words —
+  // also when it offered no answers to choose from, which before was nobody's to act on. Put off, it is not asked again until then.
+  const wrote = task({ id: "t6", status: "blocked", assigneeId: "bot", history: [{ at: "t", by: "bot", status: "blocked", note: "请你做：登录供应商后台\n为什么是你：验证码只发到你的手机\n我同时在做：九月的对账" }] });
+  const parked = task({ id: "t7", status: "blocked", assigneeId: "bot", history: [{ at: "t", by: "channel", status: "blocked", note: "the turn failed" }] });
+  const asked = attentionFor({ principalId: "p-chris", identities: [], tasks: [wrote, parked], questions: [], nameOf, now: new Date(T0) });
+  const item = asked.mine.find(row => row.ref === "t6");
+  assert.deepEqual([item?.kind, item?.title, item?.detail, item?.ask?.kind, item?.with], ["question", "登录供应商后台", "为什么是你：验证码只发到你的手机 · 我同时在做：九月的对账", "act", "Ada"]);
+  assert.ok(!asked.mine.some(row => row.ref === "t7") && asked.theirs.some(row => row.ref === "t7"), "work parked by a failure is still not a request");
+  const later = attentionFor({ principalId: "p-chris", identities: [], tasks: [{ ...wrote, snoozeUntil: new Date(T0 + 3_600_000).toISOString() }], questions: [], nameOf, now: new Date(T0) });
+  assert.equal(later.mine.length, 0);
 });
 
 test("a pending approval is mine, first on the strip, with the agent, what it asked and when (INV-1627)", async () => {

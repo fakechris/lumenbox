@@ -58,7 +58,27 @@ function nextAgo(iso: string | undefined, now: number): { key: string; n: number
   return { key: "days", n: Math.floor(minutes / (60 * 24)) };
 }
 
-export const nextLogic = { nextStateOf, nextGroupOf, nextInboxGroupOf, nextProgressOf, nextAgo };
+/**
+ * What is in the way of work that waits on the person, which decides the buttons its card carries (INV-1923):
+ * a result to look at, a go-ahead, something only they can do elsewhere, or a question with answers to choose from.
+ * Undefined where there is nothing for them to press: work parked by a failure is not a request.
+ */
+function nextNeedOf(row: { status: string; reading?: { phase: string }; ask?: { kind: string }; history?: { options?: string[] }[] }): string | undefined {
+  if ((row.reading?.phase ?? "") === "review") return "delivery";
+  if (row.status !== "blocked") return undefined;
+  if (row.ask?.kind === "approve") return "release";
+  if (row.ask !== undefined) return "act";
+  return (row.history ?? []).at(-1)?.options?.length ? "answer" : undefined;
+}
+
+/** The ready-made times "later" offers, from now: this evening while there is one, tomorrow morning, and the Monday after. */
+function nextLaterTimes(now: Date): { key: string; at: string }[] {
+  const at = (days: number, hour: number): string => { const day = new Date(now); day.setDate(day.getDate() + days); day.setHours(hour, 0, 0, 0); return day.toISOString(); };
+  const toMonday = (8 - now.getDay()) % 7 || 7;
+  return [...(now.getHours() < 17 ? [{ key: "tonight", at: at(0, 18) }] : []), { key: "tomorrow", at: at(1, 9) }, { key: "monday", at: at(toMonday === 1 ? 8 : toMonday, 9) }];
+}
+
+export const nextLogic = { nextStateOf, nextGroupOf, nextInboxGroupOf, nextProgressOf, nextAgo, nextNeedOf, nextLaterTimes };
 
 /** The same functions, as page source. */
-export const NEXT_LOGIC_JS = [nextStateOf, nextGroupOf, nextInboxGroupOf, nextProgressOf, nextAgo].map(fn => fn.toString()).join("\n");
+export const NEXT_LOGIC_JS = [nextStateOf, nextGroupOf, nextInboxGroupOf, nextProgressOf, nextAgo, nextNeedOf, nextLaterTimes].map(fn => fn.toString()).join("\n");

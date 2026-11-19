@@ -4553,7 +4553,7 @@ test("an agent in a Docker box writes a git hook and a postinstall: a person is 
 // member was told the order; the part that says what was not verified is on the page before anything is opened;
 // and the chat is told it too, under the reply that left it out.
 test("a delivery names what was not verified, and the page and the chat both show it", async () => {
-  const { limitsOwedToChat, parseDelivery, DELIVERY_BRIEF } = await import("./delivery-report.ts");
+  const { owedToChat, parseDelivery, DELIVERY_BRIEF } = await import("./delivery-report.ts");
   const { taskBoardRecord } = await import("../web/task-board-record.ts");
   const tasks = new TaskStore(null), pushed: string[] = [];
   const note = "导出现在保留账号的时区。\n主要改动：src/export.ts 第 41 行按账号时区格式化，最值得看的是夏令时分支。\n已验证：12 个单元测试，在提交 3f2a9c1 上。\n未做与局限：线上账号没有验证\n下一步：你用真实账号导出一次确认。";
@@ -4581,7 +4581,7 @@ test("a delivery names what was not verified, and the page and the chat both sho
           started: id => { tasks.update(id, { status: "doing" }, "channel"); },
           closed: id => { tasks.turnFinished(id); return tasks.get(id)?.status === "review" ? "review" : "done"; },
         },
-        limitsOwed: limitsOwedToChat(id => tasks.get(id)),
+        owedUnderReply: owedToChat(id => tasks.get(id)),
       });
       manager.register({ name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async (_to, text) => { pushed.push(text); return undefined; }, sendToChat: async (_chat, text) => { pushed.push(text); } }, true, "test");
       manager.start();
@@ -4717,5 +4717,107 @@ test("the fourth Tell of a turn, and a Tell after a question nobody has answered
     assert.match(result.score.refusals[0]!, /not told: this turn has already told the person 3 things/);
     assert.match(result.score.refusals[1]!, /not told: you asked the person a question this turn and they have not answered/);
     assert.equal(result.score.questions, 1, "the question itself went out");
+  } finally { result.cleanup(); }
+});
+
+// INV-1923: the card that says "needs you" was assembled from a table, and a person could not tell what exactly they
+// were to do or whether the member had stopped because of it. The episode: asked to fix two things and to show the
+// first before it counts, the member delivers the first with a request it wrote itself — the action, why it is the
+// person's turn, what it does meanwhile — and goes on with the second in the same breath. What must hold: the member
+// was told to write it and to keep working; the card's title and sentences are the member's words; what was not
+// verified is still the delivery's own part; and the second piece of work moved while the person had answered nothing.
+test("a member delivers one piece of work for a look and goes on with another: the card is its own words", async () => {
+  const { taskBoardRecord } = await import("../web/task-board-record.ts");
+  const { nextLogic } = await import("../web/next-logic-ui.ts");
+  const tasks = new TaskStore(null);
+  const note = "请你确认：上线前看一眼夏令时分支\n导出现在保留账号的时区。\n发生了什么：导出修好了，12 个单元测试通过。\n为什么是你：你要求做完先给你过目。\n怎么做：打开 src/export.ts 第 41 行，看夏令时那个分支。\n我同时在做：导入那边的同一个问题（t2）。\n主要改动：src/export.ts 第 41 行按账号时区格式化。\n未做与局限：线上账号没有验证\n下一步：你确认后我发版。";
+  const replies = [
+    { call: "Tasks", input: { action: "update", id: "t1", sign_off: true } },
+    { call: "Tasks", input: { action: "submit", id: "t1", note, evidence: ["npm test — 12 passed on 3f2a9c1"] } },
+    { call: "Tasks", input: { action: "update", id: "t2", status: "doing", note: "导入：已复现，问题在 parseDate 没带时区。" } },
+    { say: "导出修好了，等你看一眼夏令时分支；导入我接着修。" },
+  ];
+  let told = "";
+  const result = await runEpisode({
+    team: [{ name: "Mia" }], says: [], tasks,
+    script: ({ system }) => { told = system; return replies.shift() as never; },
+    drive: async ({ frontId, say }) => {
+      for (const title of ["修导出的时区问题", "修导入的时区问题"]) tasks.create({ title, requester: "web", assigneeId: frontId });
+      tasks.update("t1", { status: "doing" }, frontId);
+      await say("导出和导入的时区问题都修一下；导出给我看了再算完成。");
+    },
+  });
+  try {
+    assert.match(told, /in a note that opens with the action.*Please check \(请你确认\).*Meanwhile \(我同时在做\).*keep doing whatever else does not need them/s, "the member is told to write the request, and that waiting is not stopping");
+    const first = tasks.get("t1")!, second = tasks.get("t2")!, row = taskBoardRecord(first);
+    assert.equal(first.status, "review", "delivered, and the person has answered nothing");
+    assert.equal(nextLogic.nextNeedOf({ ...row, reading: { phase: "review" } }), "delivery", "a result to look at: confirm, or send back");
+    assert.equal(row.ask?.title, "上线前看一眼夏令时分支", "the card's title is the member's action");
+    assert.deepEqual(row.ask?.said.map(part => part.key), ["happened", "why", "how", "meanwhile"], "what happened, why you, how, and what it does meanwhile");
+    assert.equal(row.ask?.said.find(part => part.key === "meanwhile")?.text, "导入那边的同一个问题（t2）。");
+    assert.deepEqual(row.report?.parts?.map(part => part.key), ["result", "main", "limits", "next"], "the delivery is read beside it, and what was not verified is its own part");
+    assert.ok(!row.report?.note.includes("请你确认") && !row.report?.parts?.some(part => part.text.includes("我同时在做")), "nothing is said twice");
+    const delivered = first.history.findLast(change => change.status === "review")!.at, moved = second.history.findLast(change => change.note?.startsWith("导入："));
+    assert.ok(moved !== undefined && moved.at >= delivered && second.status === "doing", "the second piece of work moved after the first was handed over, with nobody's answer");
+  } finally { result.cleanup(); }
+});
+
+// INV-1923, the other families and the fallback. One member, three pieces of work, each in the way for a different
+// reason: an invoice only the person can fetch, a notice that needs their go-ahead, and a question it wrote the old
+// way. What must hold: what is in the way decides the buttons; the chat is sent the lines the card shows; "I've done
+// it" and a refusal with its reason both reach the member as the person's word and the work moves on; and where the
+// member wrote no request, the note and its answers are shown as they always were.
+test("what is in the way decides the buttons, a refusal carries its reason to the member, and nothing written falls back", async () => {
+  const { taskBoardRecord } = await import("../web/task-board-record.ts");
+  const { nextLogic } = await import("../web/next-logic-ui.ts");
+  const { blockedAnnouncement } = await import("../channels/board-view.ts");
+  const { attentionFor } = await import("./attention.ts");
+  const { askLines } = await import("./person-ask.ts");
+  const { MESSAGES } = await import("../i18n/messages.ts");
+  const tasks = new TaskStore(null), heard: string[] = [];
+  const invoice = "请你做：登录供应商后台，下载十月发票\n发生了什么：对账到第 3 步，后台要短信验证码。\n为什么是你：验证码只发到你的手机。\n怎么做：打开 https://vendor.example/login ，把 PDF 放进 inbox/。\n我同时在做：九月的对账，不受影响。";
+  const notice = "请你批准：给 214 位客户发续费通知\n为什么是你：以你的名义发出。\n我同时在做：整理退订名单。";
+  const replies = [
+    { call: "Tasks", input: { action: "update", id: "t1", status: "blocked", note: invoice } },
+    { call: "Tasks", input: { action: "update", id: "t2", status: "blocked", note: notice, options: ["发出", "不发"] } },
+    { call: "Tasks", input: { action: "update", id: "t3", status: "blocked", note: "桶放哪个区域？", options: ["eu-west-1", "us-east-1"] } },
+    { say: "三件事都要你：发票、续费通知、区域。九月的账我接着对。" },
+    // "I've done it" arrives: the invoice work moves on.
+    { call: "Tasks", input: { action: "update", id: "t1", status: "doing", note: "发票到了，继续对十月。" } },
+    { say: "收到发票，接着对。" },
+    // The refusal arrives with its reason: the notice is not sent.
+    { call: "Tasks", input: { action: "update", id: "t2", status: "doing", note: "不发；等价目表定稿后再问。" } },
+    { say: "好，先不发。" },
+  ];
+  const word = (key: string, values: Record<string, string>) => Object.entries(values).reduce((text, [name, value]) => text.replace(`{${name}}`, value), MESSAGES.zh[key]!);
+  const rows = () => Object.fromEntries(["t1", "t2", "t3"].map(id => [id, taskBoardRecord(tasks.get(id)!)]));
+  const family = (row: ReturnType<typeof taskBoardRecord>) => nextLogic.nextNeedOf({ ...row, reading: { phase: "needs" } });
+  let asked!: ReturnType<typeof rows>, mine: { ref: string; title: string }[] = [], said: (string | undefined)[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Mia" }], says: [], tasks,
+    script: ({ messages }) => { heard.push(JSON.stringify(messages)); return replies.shift() as never; },
+    drive: async ({ frontId, say }) => {
+      for (const title of ["十月对账", "续费通知", "建存储桶"]) { const made = tasks.create({ title, requester: "web", assigneeId: frontId })!; tasks.update(made.id, { status: "doing" }, frontId); }
+      await say("十月对账、发续费通知、建存储桶，都推进一下。");
+      asked = rows(); said = ["t1", "t2", "t3"].map(id => blockedAnnouncement(tasks.get(id)!));
+      mine = attentionFor({ principalId: "web", identities: [], tasks: tasks.list(), questions: [], nameOf: id => (id === frontId ? "Mia" : id) }).mine;
+      await say(word("ui.next.need.say.done", { title: asked.t1!.ask!.title }));
+      await say(`${word("ui.next.need.say.choice", { choice: "不发", title: asked.t2!.ask!.title })} ${word("ui.next.need.say.reason", { reason: "价目表还没定稿" })}`);
+    },
+  });
+  try {
+    assert.deepEqual([family(asked.t1!), family(asked.t2!), family(asked.t3!)], ["act", "release", "answer"], "I've done it / skip; the two outcomes it named; the answers it offered");
+    assert.deepEqual(asked.t2!.history[0]?.options, ["发出", "不发"], "the go-ahead's buttons say what will happen");
+    assert.equal(asked.t1!.ask!.said.find(part => part.key === "meanwhile")?.text, "九月的对账，不受影响。", "waiting on the person, it says what it keeps doing");
+    assert.equal(said[0], `t1「十月对账」\n${askLines(asked.t1!.ask!).join("\n")}`, "the chat is sent the lines the card shows");
+    assert.equal(said[0], `t1「十月对账」\n${invoice}`, "which are the member's own");
+    assert.deepEqual(mine.map(item => [item.ref, item.title]).sort(), [["t1", "登录供应商后台，下载十月发票"], ["t2", "给 214 位客户发续费通知"], ["t3", "建存储桶"]], "listed across members by what is asked");
+    assert.equal(asked.t3!.ask, undefined, "nothing written as a request");
+    assert.equal(said[2], "t3「建存储桶」卡住了,要人来搭把手:桶放哪个区域？", "so the chat hears the fixed sentence and the note, as before");
+    assert.ok(heard.at(-4)!.includes("我做完了：登录供应商后台，下载十月发票"), "the member reads \"I've done it\" as the person's word");
+    assert.ok(heard.at(-2)!.includes("不发：给 214 位客户发续费通知 理由：价目表还没定稿"), "and the refusal with its reason");
+    assert.deepEqual(["t1", "t2", "t3"].map(id => tasks.get(id)!.status), ["doing", "doing", "blocked"], "the two answered move on; the third still waits");
+    assert.equal(taskBoardRecord(tasks.get("t1")!).ask, undefined, "an answered request is no longer asked");
+    assert.equal(replies.length, 0, "every scripted step ran");
   } finally { result.cleanup(); }
 });
