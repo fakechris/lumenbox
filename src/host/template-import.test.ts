@@ -181,6 +181,11 @@ test("an imported bot installs its own recipe on its first turn, and the host re
     assert.doesNotMatch(cue, /one at a time/);
     // The setup turn held files and memory and a way to ask, and nothing that reaches out.
     assert.ok(offered.includes("write_file") && offered.includes("RememberFact") && offered.includes("AskUser"), offered.join(","));
+    // The cue is the host's text: the person who imported the template is there to be asked and owed the
+    // hello, and the record does not say they typed it (INV-829).
+    assert.ok(!offered.includes("NothingToSay"), "a setup turn is not one nobody is waiting on");
+    const setup = (registry.readTranscript(imported.agent.id) as { role: string; text?: string; fromPerson?: true }[]).find(entry => entry.role === "user" && entry.text?.startsWith(TEMPLATE_CUE));
+    assert.ok(setup !== undefined && setup.fromPerson === undefined, "the setup cue is not recorded as what the person said");
     for (const tool of ["bash", "SendToAgent", "Delegate", "browser_open", "WebFetch", "computer", "CreateAgent"]) {
       assert.ok(!offered.includes(tool), `${tool} was offered in a setup turn`);
     }

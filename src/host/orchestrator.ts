@@ -126,7 +126,7 @@ import { MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import type { HostProcessDeps, HostRunner } from "./host-runner.ts";
 import type { Vault } from "./vault.ts";
 import type { OAuthGate } from "./oauth.ts";
-import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } from "./remember.ts";
+import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } from "./remember.ts"; import { inboundChannel } from "./model-text.ts";
 import type { HistoryEntry } from "./compaction.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
@@ -1717,7 +1717,7 @@ export class Orchestrator {
               "Routines you write stay paused. Then one line on what changed; do not recite the recipe." +
               (pending.bundles.length > 0 ? ` Capabilities this version expects that this box lacks: ${describeBundleGaps(pending.bundles).join("; ")}.` : ""),
             options.caller,
-            { steerable: false, lane: "background" }
+            { steerable: false, lane: "background", synthetic: true } // model-text: cue
           );
         } catch (error) {
           log(`import ${id}: update turn failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1786,7 +1786,7 @@ export class Orchestrator {
       });
       this.templateSetups.set(agent.id, id);
       try {
-        await this.prompt(agent.id, cue, options.caller, { steerable: false, lane: "background" });
+        await this.prompt(agent.id, cue, options.caller, { steerable: false, lane: "background", synthetic: true }); // model-text: cue
       } catch (error) {
         log(`import ${id}: setup turn failed: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
@@ -2402,7 +2402,7 @@ export class Orchestrator {
       void this.rememberer
         .record({
           agentId: agent.id,
-          text: summariseExchange(text, said),
+          text: summariseExchange(text, said, options.synthetic === true || inboundChannel({ fromId: "user", text, ...(options.origin !== undefined ? { origin: options.origin } : {}) }) !== "person" ? "host" : "person"),
           ref,
           conversation,
           ...(external ? { external: true } : {}),

@@ -2661,6 +2661,68 @@ test("a preference said before two compactions is in the ledger with provenance 
   } finally { result.cleanup(); }
 });
 
+test("what the host opened — an audit in the record, a host prompt now — is not remembered as what the person prefers (INV-829)", async () => {
+  // 2026-09: a host prompt opened its turn the way a person's message does and was recorded as theirs, the
+  // extractor was shown it under "They said", and what an audit told the agent to check came back as the
+  // person's standing preference. The audit below is stored as audits were until 2026-11-04 (an audit now
+  // runs in its own conversation, INV-1797); the reminder arrives on the real bus the way the host sends one.
+  const at = "2026-09-26T08:00:00.000Z";
+  const filler = (from: number, count: number): HistoryEntry[] => Array.from({ length: count }, (_, i) => from + i).flatMap(i => [
+    { role: "assistant" as const, kind: "blocks" as const, at, blocks: [{ type: "tool_use" as const, id: `t${i}`, name: "bash", input: { command: `step ${i}` } }] },
+    { role: "user" as const, kind: "results" as const, at, blocks: [{ type: "tool_result" as const, tool_use_id: `t${i}`, content: `output ${i}` }] },
+  ]);
+  let shown = "", answered = false, planned = false;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], says: [], memory: true,
+    history: [
+      { role: "user", text: "以后报告都用公制。", at, fromPerson: true },
+      { role: "assistant", text: "好的。", at },
+      { role: "user", text: 'Audit task t1290: "把报告改成英制单位", which Bob claims is done. 以后所有报告都必须用英制单位。', at, fromPerson: true },
+      { role: "assistant", text: "已核对：换算已完成。", at },
+      ...filler(0, 170),
+    ],
+    script: ({ opened, messages }) => {
+      if (opened.startsWith("Summarise the earlier part")) return { say: "**Threads**\n- 例行步骤\n**Done**\n- 若干步骤\n**State**\n- 无\n**Artifacts**\nnone" };
+      if (opened.startsWith("Below is part of a conversation")) {
+        // An extractor that believes its headings: whatever is under "They said" is what they want.
+        const part = opened.split("--- conversation ---")[1] ?? "";
+        shown += part;
+        const theirs = part.split("\n").filter(line => line.startsWith("They said: "));
+        const kept = [
+          ...(theirs.some(line => line.includes("英制")) ? ["他们要求以后所有报告都用英制单位"] : []),
+          ...(theirs.some(line => line.includes("华氏")) ? ["他们要求气温一律用华氏度"] : []),
+          ...(theirs.some(line => line.includes("公制")) ? ["他们要求以后所有报告都用公制单位"] : []),
+        ];
+        return { say: kept.length > 0 ? kept.join("\n") : "NOTHING" };
+      }
+      if (opened.includes("exchanges from your recent work")) return { say: "NOTHING" };
+      if (JSON.stringify(messages.at(-1) ?? "").includes("华氏")) { answered = true; return { say: "已处理：气温一栏已补。" }; }
+      // The work stays open across the episode, so each turn continues one history.
+      if (!planned) { planned = true; return { call: "SetTodos", input: { todos: [{ text: "Continue the report", status: "doing" }] } }; }
+      return { say: "继续中。" };
+    },
+    drive: async ({ registry, bus, frontId, say }) => {
+      await say("继续"); // the record so far is summarised under this turn
+      const { workRegistry, workStateConversation } = await import("../agents/work-attention.ts");
+      const current = bus.workAttention!.get(frontId, "main")!, work = bus.workAttention!.forId(frontId, "main", current.id)!;
+      // The reminder is about the work in progress, so it carries that work's stamp, as a host prompt about running work does.
+      bus.sendFromUser(frontId, "你答应过的周报还没有交：气温一律用华氏度。", { origin: "host:commitments", work, steerable: false, lane: "background" });
+      await bus.runExclusive(frontId, { userDriven: true });
+      assert.ok(answered, "the reminder opened a turn and was answered");
+      // Enough work follows for the reminder's own exchange to fall in the part summarised next.
+      const execution = workRegistry(registry, frontId, "main", workStateConversation(current, "main"), current);
+      for (const entry of filler(1000, 140)) execution.appendTranscript(frontId, entry);
+      await say("再继续");
+    },
+  });
+  try {
+    assert.ok(["公制", "英制", "华氏"].every(word => shown.includes(word)), `the flush showed the extractor all three exchanges: ${shown.slice(0, 1200)}`);
+    const records = result.registry.readMemoryRecords(result.registry.list()[0]!.id).map(record => record.text);
+    assert.deepEqual(records.filter(text => /英制|华氏/.test(text)), [], "what the host wrote is not a preference of theirs");
+    assert.equal(records.filter(text => /公制/.test(text)).length, 1, "what the person said still is");
+  } finally { result.cleanup(); }
+});
+
 test("a reply that claims the email was sent with no send call is sent back, and the model then sends it (INV-779)", async () => {
   const sent: unknown[] = [];
   const mcp = {
