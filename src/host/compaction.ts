@@ -603,6 +603,12 @@ export const USER_ANCHOR_PREFIX = "the person said: ";
  */
 const WAKE_BOUNDARY = `\n\n---\n\n${AGENT_WAKE_CUE}`;
 
+/** A turn's text up to that separator: the part that is not scaffolding or colleagues, whoever wrote it. */
+export function beforeWake(text: string): string {
+  const boundary = text.indexOf(WAKE_BOUNDARY);
+  return boundary === -1 ? text : text.slice(0, boundary);
+}
+
 /**
  * The words in a user-role entry that a person actually typed, or undefined when none are
  * theirs (INV-799).
@@ -620,8 +626,7 @@ const WAKE_BOUNDARY = `\n\n---\n\n${AGENT_WAKE_CUE}`;
  */
 export function personAuthoredText(entry: HistoryEntry): string | undefined {
   if ("kind" in entry || entry.role !== "user" || entry.fromPerson !== true || entryChannel(entry) !== "person") return undefined;
-  const boundary = entry.text.indexOf(WAKE_BOUNDARY);
-  return boundary === -1 ? entry.text : entry.text.slice(0, boundary);
+  return beforeWake(entry.text);
 }
 
 /** One thing the person said in a summarised range, verbatim, and where it lives. */
