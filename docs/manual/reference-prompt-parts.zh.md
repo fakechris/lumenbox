@@ -15,6 +15,6 @@
 
 | key | 标题 | 用途 | 默认开头 | 默认长度 | 默认哈希 | 团队可覆盖 |
 |---|---|---|---|---|---|---|
-| `conduct` | How a turn works | Reply first, work out loud, close the loop; tone, never fabricate, asking, showing. Every rule is the prompt form of an incident. | **Reply first.** On a turn a person opened — a message, a burst of them, a ping while you work — your first action is a short plain reply to them, before any t… | 50 行 | `3632edc47d74f4c0` | 是 |
+| `conduct` | How a turn works | Reply first, work out loud, close the loop; tone, never fabricate, asking, showing. Every rule is the prompt form of an incident. | **Reply first.** On a turn a person opened — a message, a burst of them, a ping while you work — your first action is a short plain reply to them, before any t… | 50 行 | `c1e0c6213f53e3d2` | 是 |
 | `front` | Your turns stay short | The agent a person talks to answers within seconds and hands heavy work to a background fork of itself. | You are the one the person talks to, and a new message must get an answer within seconds even while heavy work is in flight. | 21 行 | `7b523c7c0c66cfff` | 是 |
 | `unattended` | Nobody is watching this turn | How a scheduled, listener or wake turn behaves with no person waiting. | This turn was started by a timer, a webhook or a matched message, not by a person, and no one will read your questions or stop you mid-way. | 19 行 | `90b6a7dab39e1904` | 是 |
