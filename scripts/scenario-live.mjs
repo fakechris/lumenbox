@@ -23,8 +23,17 @@
  *   … --material <dir>                   also write learning material (INV-1377): tasks/<id>.json +
  *                                        index.jsonl, for `agentbox skills improve`
  *
- * A scratch AGENTBOX_HOME and a scratch box are used, so nothing here touches the live
- * installation's agents, ledgers or spend.
+ *   … --box keep | --box use <name>      the scenarios' box (scripts/lib/eval-box.mjs): kept at the
+ *                                        end, or an existing one that is not the installation's
+ *
+ * Nothing here touches the live installation's agents, ledgers, spend or box (INV-1828):
+ *   - every run gets a scratch AGENTBOX_HOME, removed after it;
+ *   - the scenarios run in their own `lumenbox-eval-scenario-<id>` container, created for the
+ *     invocation and removed at the end with its volumes — also on failure and on Ctrl-C. The
+ *     installation's own box is refused, whoever names it. The one file written in the real home
+ *     is that container's token, removed with it;
+ *   - `--skills` runs over an in-memory box and `--teach` has no box at all: no Docker for either.
+ * What is read from the real home is the provider configuration, and nothing else.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -108,26 +117,35 @@ async function main() {
   void runEpisode; // the live path builds its own stack below; imported to fail fast if it moved.
   const results = [];
 
-  for (const scenario of chosen) {
-    for (let run = 1; run <= runs; run += 1) {
-      const home = mkdtempSync(join(tmpdir(), `lumenbox-scenario-${scenario.name}-`));
-      process.env.AGENTBOX_HOME = home;
-      const started = Date.now();
-      let score;
-      let failure;
-      try {
-        score = await liveEpisode(scenario, provider);
-      } catch (error) {
-        failure = error instanceof Error ? error.message : String(error);
+  // The scenarios' own box, opened while the real home is still in place (the image it runs is
+  // the one this machine is configured for) and removed in the `finally`. It leaves
+  // AGENTBOX_CONTAINER and AGENTBOX_TOKEN naming it, which is what `liveEpisode` connects to.
+  const { openEvalBox } = await import("./lib/eval-box.mjs");
+  const box = await openEvalBox({ runId: `scenario-${Date.now().toString(36)}`, isolated: true });
+  try {
+    for (const scenario of chosen) {
+      for (let run = 1; run <= runs; run += 1) {
+        const home = mkdtempSync(join(tmpdir(), `lumenbox-scenario-${scenario.name}-`));
+        process.env.AGENTBOX_HOME = home;
+        const started = Date.now();
+        let score;
+        let failure;
+        try {
+          score = await liveEpisode(scenario, provider);
+        } catch (error) {
+          failure = error instanceof Error ? error.message : String(error);
+        }
+        results.push({
+          scenario: scenario.name,
+          run,
+          seconds: Math.round((Date.now() - started) / 1000),
+          ...(score !== undefined ? { score, checks: judge(scenario, score) } : { failure }),
+        });
+        rmSync(home, { recursive: true, force: true });
       }
-      results.push({
-        scenario: scenario.name,
-        run,
-        seconds: Math.round((Date.now() - started) / 1000),
-        ...(score !== undefined ? { score, checks: judge(scenario, score) } : { failure }),
-      });
-      rmSync(home, { recursive: true, force: true });
     }
+  } finally {
+    await box.close();
   }
 
   report(chosen, results, runs);
@@ -156,7 +174,8 @@ async function main() {
  * Each starter's own cases against the real model (INV-693, src/host/skill-evals.ts).
  *
  * The real turn, prompt and skills index, with every starter present at its box path and an
- * in-memory box — no Docker, nothing live touched. A case is judged on one fact: did the agent
+ * in-memory box (`runEpisode` builds it and hands it to the orchestrator, which then never
+ * resolves a container) — no Docker, nothing live touched. A case is judged on one fact: did the agent
  * open that skill's SKILL.md. The model is capped at a few calls per case, because the choice to
  * open a skill comes first and the rest of the work is not what is being measured.
  */
@@ -297,11 +316,23 @@ function judge(scenario, score) {
 }
 
 /**
- * One live run: a real orchestrator against the real provider, in a scratch home, with the
- * installation's own box. Everything the model does is real; only the person is scripted.
+ * One live run: a real orchestrator against the real provider, in a scratch home, in the
+ * scenarios' own box. Everything the model does is real; only the person is scripted.
+ *
+ * The box is named here rather than left to the orchestrator's default, which is the
+ * installation's own container (or whatever AGENTBOX_BOXD_URL points at): the shell commands and
+ * files of a scenario, and the CPU ceiling a connect applies, would land on the box a person is
+ * working in (INV-1828). A run with no eval box open fails here instead. `deps` is for the test.
  */
-async function liveEpisode(scenario, provider) {
-  const { Orchestrator } = await import("../src/host/orchestrator.ts");
+export async function liveEpisode(scenario, provider, deps = {}) {
+  const { defaultBoxConfig, DEFAULT_CONTAINER } = await import("../src/box/docker.ts");
+  const { DockerBoxProvisioner } = await import("../src/box/provisioner.ts");
+  const { assertNotLiveBox } = await import("./lib/eval-box.mjs");
+  const containerName = process.env.AGENTBOX_CONTAINER;
+  assertNotLiveBox(containerName, DEFAULT_CONTAINER);
+  const boxProvisioner = new DockerBoxProvisioner(defaultBoxConfig({ containerName }));
+
+  const { Orchestrator } = deps.Orchestrator !== undefined ? deps : await import("../src/host/orchestrator.ts");
   const { AgentRegistry } = await import("../src/agents/registry.ts");
 
   const registry = new AgentRegistry(join(process.env.AGENTBOX_HOME, "agents"));
@@ -314,6 +345,7 @@ async function liveEpisode(scenario, provider) {
     registry,
     provider,
     useBox: true,
+    boxProvisioner,
     askUser: async input => {
       questions.push(input.question);
       // The person is not here: every question takes its own stated default, which is what a
@@ -362,8 +394,6 @@ function report(scenarios, results, runs) {
   console.log("  x is a conduct judgement, not a broken build. Read the runs, not the total.\n");
 }
 
-await main();
-
 /** Teach evals (INV-1369): the real teaching cue, the real model (or --fake), scored by teach-evals.ts. */
 async function teachEvals(provider, runs, only) {
   const { runTeachEvals, renderTeachScorecard } = await import("../src/host/teach-evals.ts");
@@ -405,3 +435,6 @@ async function writeLearningMaterial(tasks) {
   writeMaterial(dir, tasks);
   console.log(`\n  learning material: ${tasks.length} task(s) in ${dir}`);
 }
+
+// Run only as the script: the test imports `liveEpisode` and must not start a real run.
+if (import.meta.url === `file://${process.argv[1]}`) await main();
