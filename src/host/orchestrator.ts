@@ -2711,7 +2711,7 @@ export const ALL_TOOLS: readonly string[] = [
   "Recall",
   "OtherThreads",
   "Tasks", "TaskProgress",
-  "DeliverFile",
+  "DeliverFile", "Verify", // a verification report with its recording (INV-1925)
   "HandBack",
   "Goal",
   "RunOnHost",

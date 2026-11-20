@@ -96,6 +96,7 @@ const TEMPLATES: Record<string, Template> = {
   TaskProgress: { en: "recording task progress", zh: "记录任务进度" },
   Tasks: { en: "checking the task board", zh: "查看任务板" },
   DeliverFile: { en: "handing over a finished file", zh: "交付文件" },
+  Verify: { en: "verifying with a recording", zh: "录像验证" },
   HandBack: { en: "handing a follow-up back", zh: "退回跟进消息" },
   Goal: { en: "working on the goal's checklist", zh: "整理目标清单" },
   PackTemplate: { en: "packing a template", zh: "打包模板" },
