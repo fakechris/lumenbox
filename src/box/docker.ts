@@ -317,6 +317,8 @@ export class DockerError extends Error {
   }
 }
 
+export class RecreateRefusedError extends DockerError {}
+
 export async function docker(
   args: readonly string[],
   timeoutMs = 120_000
@@ -777,7 +779,7 @@ export class BoxManager {
 
     if (options.recreate && state !== "missing") {
       const problem = await this.imageExists() ? await inspectImagePlatformProblem(docker, this.config.image) : undefined;
-      if (problem) throw new DockerError(problem);
+      if (problem) throw new RecreateRefusedError(problem);
       onOutput?.(`removing existing container ${this.config.containerName}`);
       await this.down({ remove: true });
       state = "missing";

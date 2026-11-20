@@ -15,7 +15,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BACKUP_EXCLUDES, BOX_IMAGE_REPO, BoxManager, boxImageRef, boxTokenPath, boxUiToken, defaultBoxConfig, DockerError, ensureLocalImage, loadBoxToken, networkNameFor, packageVersion, readBoxToken, uiToken } from "./docker.ts";
+import { BACKUP_EXCLUDES, BOX_IMAGE_REPO, BoxManager, boxImageRef, boxTokenPath, boxUiToken, defaultBoxConfig, DockerError, ensureLocalImage, loadBoxToken, networkNameFor, packageVersion, readBoxToken, uiToken, RecreateRefusedError } from "./docker.ts";
 import { SPILL_AT_BYTES, SPOOL_DIR } from "../boxd/shell-service.ts";
 import { DEFAULT_RECORDINGS_DIR } from "../boxd/record-service.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
@@ -80,7 +80,11 @@ else if (args[0] === 'run') { console.error('reached run'); process.exit(1); }
     manager.state = async () => "exited";
     let removed = false;
     manager.down = async () => { removed = true; };
-    await assert.rejects(manager.up({ recreate: true }), /platform is linux\/arm64/);
+    await assert.rejects(manager.up({ recreate: true }), (error: unknown) => {
+      assert.ok(error instanceof RecreateRefusedError);
+      assert.match(error.message, /platform is linux\/arm64/);
+      return true;
+    });
     assert.equal(removed, false);
     const recreateCalls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
     assert.ok(!recreateCalls.some(args => args[0] === "run" || args[0] === "create"));
