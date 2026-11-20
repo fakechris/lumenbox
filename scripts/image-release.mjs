@@ -40,3 +40,20 @@ export function requireReleasePlatforms(tag, image) {
   const missing = RELEASE_PLATFORMS.filter(platform => !published.has(platform));
   if (missing.length) throw new Error(`${image} lacks ${missing.join(", ")}; run npm run push:image to publish a multi-platform release before shipping the app.`);
 }
+
+export function publishedEngineContract(run, image, { skipImage = false, requireEngines = false } = {}, say = console.log) {
+  if (skipImage) {
+    say("RELEASE_CHECK_SKIP_IMAGE=1 — published engine contract gate skipped");
+    return undefined;
+  }
+  try { run(["pull", image]); }
+  catch (error) { throw new Error(`could not pull published image ${image} for engine verification: ${error.message}`); }
+  let raw;
+  try { raw = run(["run", "--rm", "--entrypoint", "cat", image, "/etc/lumenbox/contract.json"]); }
+  catch (error) {
+    if (requireEngines) throw new Error(`could not read the engine contract from ${image}: ${error.message}`);
+    say(`${image}: engine contract not checked (set RELEASE_CHECK_REQUIRE_ENGINES=1 to insist)`);
+    return undefined;
+  }
+  return JSON.parse(raw);
+}

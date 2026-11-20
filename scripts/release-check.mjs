@@ -34,7 +34,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assess, macArtifacts } from "./notarization.mjs";
-import { requireReleasePlatforms } from "./image-release.mjs";
+import { publishedEngineContract, requireReleasePlatforms } from "./image-release.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const failures = [];
@@ -224,19 +224,10 @@ check("the image at this version carries every delegated engine (the 0.3.7 engin
   // Dockerfile writes from its pins, so an empty field is an engine the box does not have.
   const repo = process.env.AGENTBOX_IMAGE_REPO ?? "fakechris/lumenbox";
   const image = `${repo}:${version}`;
-  let raw;
-  try {
-    raw = execFileSync("docker", ["run", "--rm", "--entrypoint", "cat", image, "/etc/lumenbox/contract.json"], {
-      encoding: "utf8", timeout: 120_000, stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (error) {
-    if (process.env.RELEASE_CHECK_REQUIRE_ENGINES === "1") {
-      throw new Error(`could not read the engine contract from ${image}: ${error.message}`);
-    }
-    note(`${image} is not available locally; engine contract not checked (set RELEASE_CHECK_REQUIRE_ENGINES=1 to insist)`);
-    return;
-  }
-  const contract = JSON.parse(raw);
+  const contract = publishedEngineContract(args => execFileSync("docker", args, {
+    encoding: "utf8", timeout: 10 * 60_000, stdio: ["ignore", "pipe", "pipe"],
+  }), image, { skipImage: process.env.RELEASE_CHECK_SKIP_IMAGE === "1", requireEngines: process.env.RELEASE_CHECK_REQUIRE_ENGINES === "1" }, note);
+  if (contract === undefined) return;
   const engines = contract.engines ?? {};
   const missing = ["opencode", "claude", "pi", "mcode"].filter(engine => !engines[engine]);
   if (missing.length > 0) {

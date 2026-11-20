@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { engineBuildArgs, publicationTarget, publishImage, requireReleasePlatforms } from "./image-release.mjs";
+import { engineBuildArgs, publicationTarget, publishedEngineContract, publishImage, requireReleasePlatforms } from "./image-release.mjs";
 
 test("a release tag must carry both runnable Linux platforms, not just attestations", () => {
   const amd64 = { os: "linux", architecture: "amd64" };
@@ -9,6 +9,22 @@ test("a release tag must carry both runnable Linux platforms, not just attestati
   assert.throws(() => requireReleasePlatforms({ images: [arm64] }, "image:1"), /image:1 lacks linux\/amd64/);
   assert.throws(() => requireReleasePlatforms({ images: [amd64] }, "image:1"), /linux\/arm64/);
   assert.throws(() => requireReleasePlatforms({}, "image:1"), /linux\/amd64, linux\/arm64/);
+  const calls = [];
+  const contract = publishedEngineContract(args => {
+    calls.push(args[0]);
+    return args[0] === "pull" ? "pulled" : JSON.stringify({ engines: { pi: "published" } });
+  }, "image:1");
+  assert.deepEqual(calls, ["pull", "run"], "replace any stale local tag before reading its contract");
+  assert.equal(contract.engines.pi, "published");
+  assert.throws(() => publishedEngineContract(args => {
+    assert.equal(args[0], "pull", "a failed pull must never inspect a stale image");
+    throw new Error("registry unavailable");
+  }, "image:1"), /could not pull published image image:1.*registry unavailable/);
+  assert.equal(publishedEngineContract(() => assert.fail("skip must not pull or run"), "image:1", { skipImage: true }, () => {}), undefined);
+  const unreadable = args => { if (args[0] === "run") throw new Error("missing contract"); return ""; };
+  assert.equal(publishedEngineContract(unreadable, "image:1", {}, () => {}), undefined);
+  assert.throws(() => publishedEngineContract(unreadable, "image:1", { requireEngines: true }), /could not read the engine contract.*missing contract/);
+  assert.throws(() => publishedEngineContract(() => "not JSON", "image:1"), SyntaxError);
 });
 
 test("local and published builds share pins and refuse incomplete release builds", () => {
