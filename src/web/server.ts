@@ -82,6 +82,7 @@ import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
+import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
@@ -209,7 +210,7 @@ import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { Unk
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
 import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { outboxRoute } from "./outbox-routes.ts"; import { OUTBOX_JS } from "./outbox-ui.ts"; import { chatTarget } from "../host/outbox-drafts.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { orgKnowledgeRoute } from "./org-knowledge-routes.ts"; import { orgCorrectionRoute } from "./org-correction-routes.ts"; import { ORG_CORRECTION_JS } from "./org-correction-ui.ts"; import { ORG_KNOWLEDGE_JS } from "./org-knowledge-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { longWorkRoute } from "./long-work-routes.ts"; import { taskArchiveRoute } from "./task-archive-routes.ts"; import { runLaterWords } from "../host/run-later-words.ts"; import type { RunLaterFinding } from "../host/run-later-paths.ts";
-import { agentPauseRoute } from "./agent-pause-routes.ts"; import { exceptionRetryDeps, exceptionRoute, noteDelivery } from "./exception-routes.ts"; import { EXCEPTIONS_JS } from "./exceptions-ui.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestAnswerReview } from "../host/answer-review.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts"; import { boxRegisterRoute } from "./box-register-routes.ts"; import { nodeMembersRefusal, nodeOfBox, nodeRoute } from "./node-routes.ts"; import { NODES_JS } from "./nodes-ui.ts"; import { blockerProblem, dependencyView, notReady, parseBlockers } from "../host/task-deps.ts"; import { TASK_DEPS_JS } from "./task-deps-ui.ts";
+import { agentPauseRoute } from "./agent-pause-routes.ts"; import { reminderRoute } from "./reminder-routes.ts"; import { exceptionRetryDeps, exceptionRoute, noteDelivery } from "./exception-routes.ts"; import { EXCEPTIONS_JS } from "./exceptions-ui.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestAnswerReview } from "../host/answer-review.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts"; import { boxRegisterRoute } from "./box-register-routes.ts"; import { nodeMembersRefusal, nodeOfBox, nodeRoute } from "./node-routes.ts"; import { NODES_JS } from "./nodes-ui.ts"; import { blockerProblem, dependencyView, notReady, parseBlockers } from "../host/task-deps.ts"; import { TASK_DEPS_JS } from "./task-deps-ui.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts"; import { boxRegistrationModeAt, openRoster, PERSONAL_ONLY_KEY, PersonalInstallationOnly, roleLabel } from "../host/installation.ts"; import { redeemInvite } from "../host/invite-redeem.ts"; import { installationRoute, mergeRoute, routeErrorReply } from "./installation-routes.ts"; import { adoptOperatorNotes, applyPendingMerge, mergePaths } from "../host/self-merge.ts"; import { operatorKey } from "../host/person.ts"; import { INSTALLATION_JS } from "./installation-ui.ts";
 import { Principals, principalsPath, roleAtLeast, soleAdmin, type Principal, type Role } from "../host/principals.ts";
 import type { MandateWorld } from "../host/mandate.ts";
@@ -320,6 +321,7 @@ type OutboundEvent =
   | { type: "reaction"; agentId: string; conversation: string; index: number; emoji: string | null; by: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
+  | { type: "box_status"; boxId: string }
   /** An approval was just created; the desktop shell turns this into a notification. */
   | { type: "approval_pending"; id: string; agentId: string; agentName: string; description: string }
   /** An approval was answered, here or in a chat; the card in the thread settles. */
@@ -2454,9 +2456,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         broadcast({ type: "error", boxId: registry.boxByName(change.name)?.id ?? "", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
       }
     }).catch(() => {});
-    void keeper.tick().then(state => { box = state; }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
-    // Configurable only so a test can watch a recovery without waiting half a minute
-    // for each tick; nothing in production has a reason to change it.
+    void keeper.tick().then(state => {
+      const changed = state.connected !== box.connected; box = state;
+      if (changed) broadcast({ type: "box_status", boxId: registry.box.id });
+    }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
   }, envNumber("AGENTBOX_BOX_WATCH_MS", 30_000));
   boxWatch.unref?.();
 
@@ -3913,7 +3916,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // Every result a routine's runs produced, newest first — delivered or not (INV-776).
         // Read like the list above: what a routine found is no more secret than that it ran.
-        const runsRoute = await routineRunsRoute(route, url, orchestrator.scheduler, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), agentOf: nameOrId => { const agent = registry.tryGet(nameOrId) ?? registry.list().find(entry => entry.profile.name === nameOrId); return agent === undefined ? undefined : { id: agent.id, name: agent.profile.name }; }, mayReadAgent, conversationOf: conversationIdFor }); if (runsRoute !== undefined) { if (runsRoute.status !== 0) send(res, runsRoute.status, runsRoute.body); return; } /* INV-1665 */ if (route === "GET /api/schedules/results") {
+        const runsRoute = await routineRunsRoute(route, url, orchestrator.scheduler, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), agentOf: nameOrId => { const agent = registry.tryGet(nameOrId) ?? registry.list().find(entry => entry.profile.name === nameOrId); return agent === undefined ? undefined : { id: agent.id, name: agent.profile.name }; }, mayReadAgent, conversationOf: conversationIdFor }) ?? await reminderRoute(route, orchestrator.pendingWork, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), agentName: id => registry.tryGet(id)?.profile.name, mayReadAgent }); if (runsRoute !== undefined) { if (runsRoute.status !== 0) send(res, runsRoute.status, runsRoute.body); return; } /* INV-1665 */ if (route === "GET /api/schedules/results") {
           const slug = url.searchParams.get("slug") ?? undefined;
           const limit = Math.max(1, Math.min(200, Number(url.searchParams.get("limit") ?? 50) || 50));
           send(res, 200, { results: orchestrator.routineResults.list({ ...(slug !== undefined ? { slug } : {}), limit }).filter(entry => mayReadAgent(entry.agentId)) });
@@ -6655,18 +6658,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, { id: agentId, name: updated.profile.name });
           return;
         }
-
+        if (await modelReadinessRoute(route, url, registry, orchestrator.provider, refused, body => send(res, 200, body))) return;
         if (route === "POST /api/prompt") {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           if (refused(agentId)) return;
           const text = String(body.text ?? "").trim();
-
           if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) {
             send(res, 409, apiError("console-context-command"));
             return;
           }
-
           if (!registry.has(agentId)) {
             send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
@@ -6679,7 +6680,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             typeof body.conversation === "string" && body.conversation !== ""
               ? body.conversation
               : MAIN_CONVERSATION; if (isForkChild(conversation)) { send(res, 409, apiError("fork-read-only")); return; } // INV-1667
-
+          if (!await modelReady(registry, orchestrator.provider, agentId)) {
+            send(res, 409, apiError("model-not-configured")); return;
+          }
           const surfaceWork = body.surfaceAction ? surfaceActionWork({ action: body.surfaceAction, text, agentId, conversation, surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }) : undefined;
           if (surfaceWork && "error" in surfaceWork) { send(res, 409, apiError("surface-work-unavailable", { reason: surfaceWork.error })); return; }
           // Without this, an operator's interjection and the agent's answer were visible
@@ -6702,9 +6705,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (chatKey !== undefined) {
             void channels.pushToChat(chatKey, `〔控制台〕${text}`, { kind: "notice", about: "console" });
           }
-
           const promptMessageId = typeof body.messageId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(body.messageId) ? body.messageId : randomUUID();
-
           const before = registry.readTranscript(agentId, conversation).length;
           void orchestrator
             .prompt(agentId, text, caller, { conversation, messageId: promptMessageId, ...(surfaceWork && "taskBinding" in surfaceWork ? { ...(surfaceWork.work ? { work: surfaceWork.work, workRelation: "continue" as const } : {}), taskBinding: surfaceWork.taskBinding, steerable: false } : body.workRelation === "new" || body.workRelation === "continue" ? {workRelation:body.workRelation} : {}), onAdmitted:()=>{          broadcast({

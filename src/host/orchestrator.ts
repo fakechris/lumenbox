@@ -45,7 +45,7 @@ import { McpFace } from "./mcp-face.ts";
 import { ModelRelay } from "./model-relay.ts";
 import { DelegateSessions } from "./delegate-sessions.ts";
 import { EXTENSIONS_SERVER, Extensions, extensionsDir } from "./extensions.ts";
-import { Effects } from "./effects.ts";
+import { Effects } from "./effects.ts"; import { reminderPrompt } from "./reminders.ts";
 import { Orchestrations } from "./orchestrate.ts"; import { planCards } from "./plan-cards.ts"; import { watchDependencies } from "./task-deps.ts";
 import { FileVersions } from "./files.ts";
 import {
@@ -700,8 +700,8 @@ export class Orchestrator {
     },
     observed: (slug, would) => this.policy.notifyObserved(slug, would), finished: (skill, agent, result, reason) => noteRoutineEnd(this.exceptions, skill.slug, agent, result, reason), // The observe-mode audit row (INV-1458); every run's end on the exception list (INV-1741).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
-    run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity) => {
-      const scope = toolScope !== undefined ? { toolScope } : {};
+    run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity, origin) => {
+      const scope = { ...(toolScope !== undefined ? { toolScope } : {}), ...(origin !== undefined ? { origin } : {}) }; // origin: a member's reminder, the host's words and not a person's (INV-1878)
       const startedMs = Date.now();
       const resultOf = (agentId: string) => routineResult(this.turns?.endedSince(agentId, startedMs) ?? []);
       const why = (agentId: string) => { const reason = routineReason(this.turns?.endedSince(agentId, startedMs) ?? []); return reason === undefined ? {} : { reason }; }; // the run history's line (INV-1665)
@@ -1014,7 +1014,7 @@ export class Orchestrator {
             mcp: () => this.mcp,
             deliver: (agentId, text, conversation, workId) =>
               this.bus.deliverSystem(agentId, text, conversation, workId) !== undefined || this.bus.inboxless,
-            log: line => console.error(`[effects] ${line}`),
+            log: line => console.error(`[effects] ${line}`), report: due => this.scheduler.once({ agent: due.agentId, prompt: reminderPrompt(due), deliver: due.chat, identity: `reminder:${due.id}`, origin: "host:reminder" }),
           });
     if (this.extensions !== undefined) {
       this.extensions.onJobDone = (jobId, text, ok) => this.effects?.jobDone(EXTENSIONS_SERVER, jobId, text, ok) ?? false;
@@ -1162,7 +1162,7 @@ export class Orchestrator {
       return { connected: false, detail: "box disabled by --no-box" };
     }
 
-    const own = this.registry.box.id;
+    const own = this.registry.box.id, previous = this.box;
     let result: { connected: boolean; detail: string };
     try {
       if (this.options.boxClient !== undefined) {
@@ -1178,8 +1178,6 @@ export class Orchestrator {
         this.boxClients.set(own, client);
         this.resolution = health.resolution;
         this.resolutions.set(own, health.resolution);
-        // Read here, not at construction: connecting again may be a *different* box, and the class belongs to the box. The roster's
-        // box record name is the fallback for attached provisioners, whose boxName is a URL — see classifyBox for why a URL never keys the lookup.
         this.boxAccess = classifyBox(provisioner.boxName, loadConfig(), this.registry.box.name);
         this.boxAccesses.set(own, this.boxAccess);
         // Connecting again may be a different box — updated, recreated, restarted; nothing it had is guaranteed, and a remembered desktop is the one that never appears.
@@ -1190,15 +1188,17 @@ export class Orchestrator {
         result = { connected: true, detail: `box ready (${size}) via ${provisioner.label}` };
       }
     } catch (error) {
+      if (previous !== undefined && this.box === previous) {
+        this.box = undefined;
+        this.boxClients.delete(own);
+        this.forgetDesktopsOf(own);
+      }
       result = { connected: false, detail: error instanceof Error ? error.message : String(error) };
     }
-    // The attached boxes, each on its own: one that is down costs its own agents their
-    // computer, not everyone theirs.
     for (const entry of this.registry.listBoxes()) {
       if (entry.id === own) continue;
       await this.connectAttached(entry);
     }
-    // A box that just appeared has none of the mirror files; a reconnect may be a different box.
     void this.memoryMirror.syncAll();
     return result;
   }
@@ -2697,7 +2697,7 @@ export const ALL_TOOLS: readonly string[] = [
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
-  "ShowUI", "Tell",
+  "ShowUI", "Tell", "Reminder",
   "CreateAgent",
   "UpdateAgent",
   "PackTemplate",

@@ -14,6 +14,7 @@
  */
 
 export const SERVER_ERRORS = {
+  "err.model-not-configured": ["模型尚未配置。请前往设置 → 模型添加凭据后再发送。", "The model is not configured. Open Settings → Model to add credentials before sending."],
   "err.work-management-refused": ["未执行所选处置，请刷新范围后重试：{reason}", "Selected disposition was not executed; refresh its scope and retry: {reason}"],
   "err.surface-work-unavailable": ["卡片操作未执行，也未新建任务：{reason}", "Card action not executed; no new task was created: {reason}"],
   "err.task-check-unknown": ["工作不存在或你无权查看。", "Work unavailable."],
@@ -161,6 +162,7 @@ export const SERVER_ERRORS = {
   "err.task-blocker-unknown": ["没有任务 {task} 可以等待。", "No task {task} to wait on."],
   "err.task-blocker-self": ["{task} 不能等待它自己。", "{task} cannot wait on itself."],
   "err.task-blocker-cycle": ["这样会形成循环（{path}）：每个任务都要等另一个完成才能开始。没有修改。", "That would be a cycle ({path}): each task would be ready only after the other. Not changed."],
+  "err.reminder-not-waiting": ["没有等待中的提醒 \"{id}\"：它已经触发，或已被取消。", "No reminder is waiting as \"{id}\": it has fired or was already dismissed."],
   "err.routine-needs-name": ["名称不能为空。", "Name is required."],
   "err.routine-needs-body": ["指令内容不能为空。", "Instruction body is required."],
   "err.routine-needs-schedule": ["定时触发需要填写时间表。", "Schedule is required for schedule trigger."],

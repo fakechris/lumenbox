@@ -251,7 +251,7 @@ export interface SchedulerDeps {
    * a listener passes no slug, because a listener run is not reconciled, but its results
    * are its own — not one `ad-hoc` history every listener shares.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string) => Promise<void | { result: RunResult; reason?: string }>;
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string, origin?: string) => Promise<void | { result: RunResult; reason?: string }>;
   /**
    * Asked before every run (INV-1666): a reason means "not now" — the window is skipped with it and
    * the routine is held until a person resumes it, through the same `skip` / `hold` doors as the
@@ -918,6 +918,16 @@ export class Scheduler {
       skill.deliverWhen
     ), { ...(skill.deliver !== undefined ? { deliver: skill.deliver } : {}), ...(retry !== undefined ? { retry } : { manual: true }) });
     return { ok: true };
+  }
+
+  /**
+   * One run no skill file describes — a reminder a member set for itself (reminders.ts, INV-1878) —
+   * through the same `run` as a routine's, so what it says takes the same resolve step and the same
+   * chat door. It is not a routine: nothing here holds, retries or pauses it, the caller fires it once,
+   * and `origin` marks its prompt as the host's, since the words are the member's own and not a person's.
+   */
+  async once(input: { agent: string; prompt: string; deliver: string; identity: string; origin: string }): Promise<void> {
+    await this.deps.run(input.agent, input.prompt, input.deliver, undefined, undefined, undefined, input.identity, input.origin);
   }
 
   start(): void {

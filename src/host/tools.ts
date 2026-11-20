@@ -9,7 +9,7 @@ import { inputValueHash, parseSensitiveInput, SENSITIVE_INPUT_TTL_MS } from "../
 import { approvalOf, computerWithVision, desktopGuard, visionActionSchema, visionExpectSchema } from "./computer-vision.ts";
 import { deliveryLine } from "../cua/delivery.ts";
 import { formatExec } from "./exec-format.ts";
-import { type TellContext, tellTool, withTellTool } from "./tell.ts";
+import { type TellContext, tellTool, withTellTool } from "./tell.ts"; import { reminderTool, withReminderTool } from "./reminders.ts";
 import { isWaitOnly, onEndSchema, parseOnEnd } from "./job-end.ts"; import { VERIFY_TOOL, verifyTool, withVerifyTool } from "./verification-report.ts"; import { currentTaskOf, levelOfCurrentTask, parseLevel } from "./autonomy-level.ts"; import { splitWhy, WHY_FIELD } from "./consent-case.ts"; import { describeDiscovery, DISCOVERY_FIELDS, parseDiscovery } from "./discovery.ts"; import type { JobWatch } from "./job-watch.ts"; import { deliverFileTool, withDeliverFileTool } from "./deliver-file-tool.ts"; import { promoteTool, withPromoteTool } from "./promote-tool.ts";
 /**
  * Tool definitions and dispatch.
@@ -453,7 +453,7 @@ export const FORK_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   "AskSecret",
   "HandOverDesktop",
   "ShowUI", "Tell",
-  "OtherThreads",
+  "OtherThreads", "Reminder", // a fork ends with its handoff: nothing of it is there to be woken later
   // A fork's one channel is its final message with its handoff line; silence would read as `unstated`.
   SILENCE_TOOL,
 ]);
@@ -1792,7 +1792,7 @@ evidence: {
         required: ["action"],
       },
     }
-  ); withTellTool(tools); withDeliverFileTool(tools); withVerifyTool(tools); withPromoteTool(tools); withOrgCorrectionTool(tools); withOutboxTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729); correcting it (INV-1730); a draft for the person to approve (INV-1739)
+  ); withTellTool(tools); withReminderTool(tools); withDeliverFileTool(tools); withVerifyTool(tools); withPromoteTool(tools); withOrgCorrectionTool(tools); withOutboxTool(tools); // a task's deliverables (INV-1663); proposing an organisation item (INV-1729); correcting it (INV-1730); a draft for the person to approve (INV-1739)
 
   // The door out of the box, only when an operator has built one. Not added-and-
   // withheld — absent, so a box without host execution never puts the idea in an
@@ -4001,7 +4001,7 @@ export async function dispatchTool(
       }
     }
 
-    case "Tell": return tellTool(context, input);
+    case "Tell": return tellTool(context, input); case "Reminder": return reminderTool(context, input); // a note to itself for later (INV-1878)
     case "DeliverFile": return deliverFileTool(context, input); case VERIFY_TOOL: return verifyTool(context, input); case "Promote": return promoteTool(context, input); case "RunOperation": return runOperationTool(context, input); case ORG_CORRECTION_TOOL: return runOrgCorrectionTool(context, input); case OUTBOX_TOOL: return runOutboxTool(context, input); // INV-1663; INV-1378; INV-1730; INV-1739
     case "browser_verify_write":
       return { text: writePaths.verify(writePathKey(context.agent.id, context.conversation), String(input.mark ?? ""), (["done", "not_done", "unknown"] as const).find(v => v === input.verdict) ?? "unknown", String(input.evidence ?? "").slice(0, 300)) };
