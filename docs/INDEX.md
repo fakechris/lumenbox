@@ -61,7 +61,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [manual/teams/media-desk](manual/teams/media-desk.md) | Media desk: one source, three forms | current | 2026-11-06 |
 | [manual/teams/ship](manual/teams/ship.md) | Ship: a product, an engineer and a reviewer | current | 2026-11-06 |
 | [manual/teams/starter](manual/teams/starter.md) | The starter team: a coordinator on call, with a researcher, an operator and a reviewer | current | 2026-11-06 |
-| [manual/templates](manual/templates.md) | Templates | current | 2026-11-06 |
+| [manual/templates](manual/templates.md) | Templates | current | 2026-11-20 |
 
 ## guide
 
@@ -74,7 +74,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
 | [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-11-07 |
-| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-11-19 |
+| [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-11-20 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
 | [70-cua-linux-validation](70-cua-linux-validation.md) | Linux CUA 回归矩阵与状态验收 | current | 2026-09-22 |
