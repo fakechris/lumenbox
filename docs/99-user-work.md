@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: user-work
-     updated: 2026-11-19
+     updated: 2026-11-20
 -->
 # 99. A person's work: requests, work, and what happens inside it
 
@@ -209,19 +209,44 @@ It is written like a delivery: as labelled lines of the note on the task, read b
 Nothing is validated and nothing is refused. A note with no title line is not a request, and
 the fixed sentences of §4.1 and the plain note are shown, as before.
 
+**The names are how the agent writes, not what the person reads first.** At the default level
+(§6) the card is the action as its title, the agent's sentences as one running paragraph, what
+stays the person's to check set apart from it, and the buttons. The breakdown under the names is
+one click away, in the work's panel. A delivery that also asks is one card: the request's action
+is its title and the delivery's short form says the rest, because the request's sentences and the
+delivery's parts tell the same facts; what was not done or not verified is on the card in every
+case. Files are one row of names. A chat is sent the same three things: the action, the running
+text, what stays theirs.
+
 **The buttons follow what is in the way, not the category.** Something only the person can do
 elsewhere: *I've done it / skip for now*. A go-ahead: the two outcomes in the agent's words
 where it named them ("Send it" / "Don't send"), else *approve / refuse*; a refusal may carry a
 sentence of why and does not have to. A result to look at: *confirm and close / send back*, as
 §4 has it. Each can be put off to one of a few ready times, and is not asked about again until
-then. A press on the first two is the person's word to the agent, said in the conversation the
-work belongs to. It grants nothing: what the policy gate holds is asked for by the gate, on its
-own card, and no table of standing approvals is touched.
+then. It grants nothing: what the policy gate holds is asked for by the gate, on its own card,
+and no table of standing approvals is touched.
 
-The card carries what was handed over — files, the conclusion of a check of the result, the
-evidence named — and a picture, a recording or a text opens where the card stands. A chat is
-sent the same title and sentences under the same names: when the work is blocked, as the line
-that announces it; when it is delivered, under the reply that left them out.
+**A person's word is written on the work it answers, and the agent hears it**
+(`src/host/person-word.ts`). A press, a reply typed while the card is on show (the box says
+"replying to: …", and one press detaches it), and a result sent back are each one write to the
+task. The host delivers it to the assignee in the conversation the work belongs to and starts
+its turn: the word of a person on waiting work, a reason for sending a result back included, is
+never left on the board for the agent to find. An acceptance, a drop, and what the host ends on
+its own start nothing.
+
+**What waits is one entry; what was settled is one line.** Everything an agent waits on the
+person for in a conversation — results, requests, a consent it holds — is one entry that stays
+above the conversation while the conversation scrolls under it: one card on show, "2 of 4", and
+the way to the next. It is redrawn in place as the work moves. Once answered, a card is one line
+among what was said — what was decided, by whom, when — read from the task's history wherever
+the answer was given, and the work's panel behind it holds everything the card said. Work the
+host ended with nobody's word has its line too. The line is about the newest wait: an agent that
+asks again has a card again. The inbox across agents stays the second way in.
+
+The card carries what was handed over — the files by name, the conclusion of a check of the
+result — and a picture, a recording or a text opens where the card stands. When the work is
+blocked the chat is sent the request as the line that announces it; when it is delivered, under
+the reply that left it out.
 
 ## 7. Getting there
 
