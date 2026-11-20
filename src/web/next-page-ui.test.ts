@@ -164,6 +164,7 @@ test("automations send and save a timezone only for schedules (INV-1967)", async
   const { BOXD_PROTOCOL } = await import("../protocol/index.ts");
   const { startWebServer } = await import("./server.ts");
   const { parseSkillFile } = await import("../host/skills.ts");
+  const { AgentRegistry } = await import("../agents/registry.ts");
   const home = mkdtempSync(join(tmpdir(), "automation-timezone-")), previous = process.env.AGENTBOX_HOME;
   const previousTtl = process.env.AGENTBOX_SKILL_TTL_MS;
   process.env.AGENTBOX_HOME = home;
@@ -189,6 +190,7 @@ test("automations send and save a timezone only for schedules (INV-1967)", async
     await new Promise<void>(resolve => daemon.listen(0, "127.0.0.1", resolve));
     const address = daemon.address();
     assert.ok(address && typeof address !== "string");
+    new AgentRegistry().create({ name: "Ada" });
     let base = "";
     stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "automation-fixture", onLog: () => {},
       boxProvisioner: new AttachedBoxProvisioner({ baseUrl: `http://127.0.0.1:${address.port}`, token: "daemon-fixture" }), onReady: url => { base = url; } });
@@ -199,7 +201,7 @@ test("automations send and save a timezone only for schedules (INV-1967)", async
       let submitted: Record<string, unknown> = {};
       const form = pageFunction("autoForm", {
         el: fakeEl, field: () => { const field = { input: fakeEl("input"), label: fakeEl("label") }; fields.push(field); return field; },
-        t: (key: string) => key, agentsHere: () => [], auto: { trigger }, AUTO_TIMES: [["daily", "0 9 * * *"]],
+        t: (key: string) => key, settings: { runnerAgents: [] }, auto: { trigger }, AUTO_TIMES: [["daily", "0 9 * * *"]],
         Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "Asia/Shanghai" }) }) },
         postJson: (_path: string, body: Record<string, unknown>) => { submitted = body; return Promise.resolve({}); },
         toast: () => {}, reloadAuto: () => {}, failed: () => {},
