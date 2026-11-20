@@ -29,6 +29,7 @@ import {
   type SkillSource,
 } from "./skills.ts";
 import { starterSkillsWithEvals } from "./starter-skills.ts";
+import { Scheduler } from "./schedule.ts";
 
 function skill(name: string, scope: Skill["scope"] = "global", owner?: string): Skill {
   return {
@@ -262,6 +263,21 @@ test("the cache re-reads on a timer and shares concurrent reads", async () => {
 
   // And `current()` is synchronous, because prompt assembly is.
   assert.equal(cache.current().skills.length, 1);
+
+  const files: Record<string, string> = {};
+  const routines = new SkillCache(() => fakeBox(files), () => [], 5_000, () => clock);
+  const scheduler = new Scheduler({
+    due: async () => (await routines.refresh()).skills.flatMap(skill => skill.schedule ? [{ ...skill, schedule: skill.schedule }] : []),
+    run: async () => {}, defaultAgent: () => undefined, path: null,
+  });
+  assert.deepEqual(await scheduler.status(), []);
+  for (const slug of ["first", "second"]) {
+    files[`${slug}/SKILL.md`] = `---\nname: ${slug}\ndescription: x\nschedule: "0 9 * * *"\npaused: true\n---\nbody`;
+    await routines.refresh(true);
+    const listed = await scheduler.status();
+    assert.equal(listed.length, Object.keys(files).length);
+    assert.equal(listed.find(routine => routine.slug === slug)?.paused, true);
+  }
 });
 
 test("a concurrent first refresh waits for the read rather than answering empty", async () => {
@@ -274,11 +290,13 @@ test("a concurrent first refresh waits for the read rather than answering empty"
     release = resolve;
   });
   const clock = 1_000;
+  const names = ["weekly"];
   const source: SkillSource = {
     async listDir(path: string) {
       if (path === SKILLS_DIR) {
+        const entries = names.map(name => ({ name, type: "directory" }));
         await gate;
-        return { entries: [{ name: "weekly", type: "directory" }] };
+        return { entries };
       }
       return { entries: [] };
     },
@@ -290,10 +308,13 @@ test("a concurrent first refresh waits for the read rather than answering empty"
 
   const first = cache.refresh();
   const second = cache.refresh();
+  names.push("new-routine");
+  const forced = cache.refresh(true);
   release?.();
   const [a, b] = await Promise.all([first, second]);
   assert.equal(a.skills.length, 1);
   assert.equal(b.skills.length, 1, "the second caller waited for the same read");
+  assert.equal((await forced).skills.length, 2, "a write during discovery needs a new read, not the pre-write listing");
 });
 
 test("a failed read still arms the freshness gate, so a down box is not re-listed every turn", async () => {

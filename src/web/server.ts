@@ -4046,7 +4046,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             }
             await box.exec(`mkdir -p '${dirPath}'`, { timeoutMs: 5000 });
             await box.writeFile(`${dirPath}/${SKILL_FILENAME}`, fileContent);
-            await orchestrator.skills.refresh();
+            await orchestrator.skills.refresh(true);
             log(`automation created: ${slug} (${triggerType})${caller.userId === undefined ? "" : ` by ${caller.userId}`}`);
             send(res, 200, { ok: true, slug });
           } catch (e) {

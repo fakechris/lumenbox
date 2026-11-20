@@ -6,7 +6,7 @@
  * to do, who does it, and what starts it. The routes are the classic page's.
  */
 export const NEXT_AUTO_JS = `
-var auto = { creating: false, open: "", runs: null, trigger: "schedule" };
+var auto = { creating: false, open: "", runs: null, trigger: "schedule", read: 0 };
 // minute hour day month weekday, as the scheduler reads it
 var AUTO_TIMES = [["hourly", "0 * * * *"], ["daily", "0 9 * * *"], ["weekdays", "0 9 * * 1-5"], ["monday", "0 9 * * 1"]];
 
@@ -66,7 +66,12 @@ function autoRuns(routine) {
 
 function renderAuto(view) {
   if (!settings.routines) {
-    getJson("/api/schedules").then(function (got) { settings.routines = got.schedules || []; if (next.view === "auto") render(); }, failed);
+    var read = ++auto.read;
+    view.appendChild(el("p", "why", t("ui.next.auto.reading")));
+    getJson("/api/schedules").then(function (got) {
+      if (read !== auto.read) return;
+      settings.routines = got.schedules || []; if (next.view === "auto") render();
+    }, function (error) { if (read === auto.read) failed(error); });
     return;
   }
   if (auto.creating) view.appendChild(autoForm());
