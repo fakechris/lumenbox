@@ -48,6 +48,15 @@ test("Mine offers first-admin setup only to an uninitialized operator, and expla
   assert.equal(render('myIdentity = null; mcpSetup = undefined; renderMcpSetup();'), "", "missing setup data does not invent a bootstrap path");
 });
 
+test("classic Automations shows where a message routine replies (INV-1969)", () => {
+  const source = APP_HTML.slice(APP_HTML.indexOf("function automationRow("), APP_HTML.indexOf("// The URLs and secrets, by slug."));
+  const row = runInNewContext(`${source}; automationRow`, { esc: String }) as (entry: object, hooks: object) => string;
+  const message = row({ kind: "message", slug: "report", name: "Report", described: "report", schedule: "message" }, {});
+  assert.match(message, /replies in the chat that triggered it/);
+  assert.doesNotMatch(message, /no chat hears it/);
+  assert.match(row({ kind: "schedule", slug: "daily", name: "Daily", described: "daily", schedule: "0 9 * * *" }, {}), /no chat hears it/);
+});
+
 /** Every `id="…"` the document defines. */
 const definedIds = new Set([...APP_HTML.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map(match => match[1]!));
 

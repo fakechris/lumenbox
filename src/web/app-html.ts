@@ -5135,8 +5135,7 @@ function automationRow(s, rows) {
   // Next, by the tick's own rules.
   if (s.nextRun && !s.running) last += " {{ui.app.next}} " + esc(new Date(s.nextRun).toLocaleString());
   else if (s.kind === "once" && s.lastRun) last += " {{ui.app.done}}";
-  // Where it reports: a skill with no deliver says nothing in any chat.
-  var where = s.deliver
+  var where = s.kind === "message" ? '<span class="dim">{{ui.app.replies-in-triggering-chat}}</span>' : s.deliver
     ? "{{ui.app.reports-to}} " + esc(s.deliver)
     : '<span class="dim">{{ui.app.writes-files-only-no-chat}}</span>';
   if (s.deliver && s.deliverWhen === "always") where += ' <span class="dim">{{ui.app.every-run}}</span>';
