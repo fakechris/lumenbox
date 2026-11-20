@@ -3906,6 +3906,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // The places (INV-430): the view groups routines by the box they live in.
             boxes: registry.listBoxes().filter(box => mayReadBox(box.id)).map(box => ({ id: box.id, name: box.name })),
             defaultBox: registry.box.id,
+            runnerAgents: registry.list().filter(agent => mayReadAgent(agent.id) && orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs: agent.id }).agent !== undefined).map(agent => agent.profile.name),
           });
           return;
         }
@@ -3990,7 +3991,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           
-          const slug = slugify(name);
+          const slug = slugify(name), runAs = typeof body.agent === "string" && body.agent.trim() !== "" ? body.agent.trim() : undefined;
+          const decision = orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs }, id => registry.tryGet(id)?.profile.name ?? id);
+          if (decision.reason) { send(res, 400, { error: decision.reason }); return; }
           const box = orchestrator.boxClient();
           if (box === undefined) {
             send(res, 503, apiError("no-box"));
@@ -4029,7 +4032,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (typeof body.deliver === "string" && body.deliver.trim() !== "") {
             frontmatter += `deliver: "${body.deliver.trim().replace(/"/g, '\\"')}"\n`;
           }
-          if (typeof body.timezone === "string" && body.timezone.trim() !== "") {
+          if (triggerType === "schedule" && typeof body.timezone === "string" && body.timezone.trim() !== "") {
             frontmatter += `timezone: "${body.timezone.trim().replace(/"/g, '\\"')}"\n`;
           }
           frontmatter += `paused: true\nauthored_by: web\n---\n`;
