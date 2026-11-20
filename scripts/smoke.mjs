@@ -56,8 +56,8 @@ function assert(condition, message) {
 const target = smokeTarget(process.argv, process.env, DEFAULT_CONTAINER);
 if (target.mode !== "attached") delete process.env.AGENTBOX_BOXD_URL;
 const realHome = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
-const owners = target.live ? liveOwners(process.env.AGENTBOX_AGENTS_DIR ?? join(realHome, "agents")) : new Map();
-if (target.live) {
+const owners = target.localLive ? liveOwners(process.env.AGENTBOX_AGENTS_DIR ?? join(realHome, "agents")) : new Map();
+if (target.localLive) {
   process.env.AGENTBOX_TOKEN ??= readFileSync(join(realHome, "token"), "utf8").trim();
 }
 const scratch = smokeHome(process.env);

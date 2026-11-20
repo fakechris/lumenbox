@@ -32,6 +32,10 @@ test("smoke permits explicit test targets and requires opt-in for the live conta
   const live = smokeTarget(["--live-box"], {}, DEFAULT_CONTAINER);
   assert.equal(live.name, DEFAULT_CONTAINER);
   assert.equal(live.live, true);
+  assert.equal(live.localLive, true);
+  assert.equal(smokeTarget(["--live-box"], attachedEnv, DEFAULT_CONTAINER).localLive, false);
+  assert.equal(smokeTarget(["--live-box", "--box", "use", "test-box"], {}, DEFAULT_CONTAINER).localLive, false);
+  assert.equal(smokeTarget(["--live-box", "--box", "create"], {}, DEFAULT_CONTAINER).localLive, false);
 });
 
 test("smoke replaces an inherited home and removes its registry and token on close", () => {

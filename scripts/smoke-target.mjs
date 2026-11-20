@@ -13,7 +13,8 @@ export function smokeTarget(argv, env, liveName) {
   if (argv.includes("--box") && argv[argv.indexOf("--box") + 1] === undefined) {
     throw new Error("--box needs create, keep or use <name>.");
   }
-  return { live, ...(url ? { mode: "attached", url } : chosen) };
+  const target = { live, ...(url ? { mode: "attached", url } : chosen) };
+  return { ...target, localLive: live && target.mode === "use" && target.name === liveName };
 }
 
 export function smokeHome(env) {
