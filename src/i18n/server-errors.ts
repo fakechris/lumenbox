@@ -161,6 +161,7 @@ export const SERVER_ERRORS = {
   "err.task-blocker-unknown": ["没有任务 {task} 可以等待。", "No task {task} to wait on."],
   "err.task-blocker-self": ["{task} 不能等待它自己。", "{task} cannot wait on itself."],
   "err.task-blocker-cycle": ["这样会形成循环（{path}）：每个任务都要等另一个完成才能开始。没有修改。", "That would be a cycle ({path}): each task would be ready only after the other. Not changed."],
+  "err.reminder-not-waiting": ["没有等待中的提醒 \"{id}\"：它已经触发，或已被取消。", "No reminder is waiting as \"{id}\": it has fired or was already dismissed."],
   "err.routine-needs-name": ["名称不能为空。", "Name is required."],
   "err.routine-needs-body": ["指令内容不能为空。", "Instruction body is required."],
   "err.routine-needs-schedule": ["定时触发需要填写时间表。", "Schedule is required for schedule trigger."],

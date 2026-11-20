@@ -2697,7 +2697,7 @@ export const ALL_TOOLS: readonly string[] = [
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
-  "ShowUI", "Tell",
+  "ShowUI", "Tell", "Reminder",
   "CreateAgent",
   "UpdateAgent",
   "PackTemplate",

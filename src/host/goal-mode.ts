@@ -520,7 +520,7 @@ export interface GoalMarker {
  */
 export const GOAL_BOOKKEEPING_TOOLS: ReadonlySet<string> = new Set([
   "Tasks", "TaskProgress", "RememberFact", "SetTodos", "SetPlan", "ClaimWork", "Goal", "Checkpoint", "Recall",
-  "ReadHistory", "ReadKept", "OtherThreads", "Teammates", "NothingToSay", "Tell", // saying where it has got to is not getting anywhere (INV-1853)
+  "ReadHistory", "ReadKept", "OtherThreads", "Teammates", "NothingToSay", "Tell", "Reminder", // saying where it has got to, or noting to look again, is not getting anywhere (INV-1853, INV-1878)
 ]);
 
 /** The pursuit guidelines, after Grok Bot's (research §2), in the host's voice. */

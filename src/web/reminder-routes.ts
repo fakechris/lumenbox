@@ -8,6 +8,7 @@
  */
 
 import type { PendingWork } from "../host/pending-work.ts";
+import { apiError } from "./api-error.ts";
 import { cancelReminder, pendingReminders } from "../host/reminders.ts";
 
 export async function reminderRoute(
@@ -28,7 +29,7 @@ export async function reminderRoute(
   if (deps.refused()) return { status: 0, body: null };
   const id = String((await deps.readJson()).id ?? "");
   const waiting = ledger === undefined ? undefined : pendingReminders(ledger).find(reminder => reminder.id === id && deps.mayReadAgent(reminder.agentId));
-  if (ledger === undefined || waiting === undefined) return { status: 404, body: { error: `No reminder is waiting as "${id}": it has fired or was already dismissed.` } };
+  if (ledger === undefined || waiting === undefined) return { status: 404, body: apiError("reminder-not-waiting", { id }) };
   cancelReminder(ledger, id);
   return { status: 200, body: { ok: true, id } };
 }

@@ -4,6 +4,9 @@
  * A reminder starts a turn by itself, so it belongs with what starts by itself. One row each — who
  * set it, the note, when it is due and where the result goes — and one thing a person can do, which
  * is drop it. Nothing is drawn while none waits. The list is `GET /api/reminders`.
+ *
+ * Drawn under the routines by wrapping `renderAuto` (next-auto-ui.ts), so that page's own script
+ * stays about routines and is tested alone.
  */
 export const NEXT_REMINDER_JS = `
 var remind = { list: null, at: 0, reading: false };
@@ -41,4 +44,7 @@ function renderReminders(view) {
   });
   view.appendChild(list);
 }
+
+var renderAutoRoutines = renderAuto;
+renderAuto = function (view) { renderAutoRoutines(view); if (settings.routines) renderReminders(view); };
 `;
