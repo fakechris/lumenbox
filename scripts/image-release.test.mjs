@@ -25,8 +25,9 @@ test("publishing creates a multi-platform builder when absent, or reuses a suita
     publishImage(args => {
       calls.push(args);
       if (args[1] === "inspect") {
+        assert.deepEqual(args, ["buildx", "inspect", "lumenbox-release"]);
         if (!exists) throw new Error("no builder");
-        return "docker-container\n";
+        return "Name:          lumenbox-release\nDriver:        docker-container\nNodes:\n";
       }
       return "";
     }, { image: "repo:1", latest: "repo:latest", context: "context", buildArgs: ["--build-arg", "PI_VERSION=3"] });
@@ -37,6 +38,8 @@ test("publishing creates a multi-platform builder when absent, or reuses a suita
     for (const tag of ["repo:1", "repo:latest"]) assert.ok(build.some((arg, i) => arg === "-t" && build[i + 1] === tag));
     assert.ok(build.includes("PI_VERSION=3"));
   }
-  assert.throws(() => publishImage(() => "docker", {}), /docker-container driver/);
+  for (const inspection of ["Name: lumenbox-release\nDriver: docker\n", ""]) {
+    assert.throws(() => publishImage(() => inspection, {}), /docker-container driver/);
+  }
   assert.throws(() => publishImage(() => { throw new Error("engine offline"); }, {}), /engine offline/);
 });

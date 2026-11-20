@@ -18,10 +18,12 @@ export function engineBuildArgs(env, say = console.log) {
 
 export function publishImage(run, { image, latest, context, buildArgs }) {
   const builder = "lumenbox-release";
-  let driver;
-  try { driver = run(["buildx", "inspect", builder, "--format", "{{.Driver}}"]); } catch { /* created below */ }
-  if (!driver) run(["buildx", "create", "--name", builder, "--driver", "docker-container"]);
-  else if (driver.trim() !== "docker-container") throw new Error(`Builder ${builder} must use the docker-container driver; select a different name or remove the conflicting builder.`);
+  let inspection;
+  try { inspection = run(["buildx", "inspect", builder]); }
+  catch { run(["buildx", "create", "--name", builder, "--driver", "docker-container"]); }
+  if (inspection !== undefined && !/^Driver:\s+docker-container\s*$/m.test(inspection)) {
+    throw new Error(`Builder ${builder} must use the docker-container driver; select a different name or remove the conflicting builder.`);
+  }
   run(["buildx", "build", "--builder", builder, "--platform", RELEASE_PLATFORMS.join(","), "--push", ...buildArgs, "-t", image, "-t", latest, context]);
 }
 
