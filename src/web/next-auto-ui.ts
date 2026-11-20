@@ -31,10 +31,12 @@ function autoForm() {
   var save = el("button", "act-primary", t("ui.next.member.create")), cancel = el("button", "act", t("ui.next.auto.cancel")), acts = el("div", "acts");
   save.addEventListener("click", function () {
     var body = { name: name.input.value.trim(), body: what.input.value.trim(), triggerType: kind.value };
-    if (kind.value === "schedule") body.schedule = when.value || custom.input.value.trim();
+    if (kind.value === "schedule") {
+      body.schedule = when.value || custom.input.value.trim();
+      try { body.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (error) {}
+    }
     if (kind.value === "message") body.match = match.input.value.trim();
     if (who.value) body.agent = who.value;
-    try { if (kind.value === "schedule") body.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (error) {}
     save.disabled = true;
     postJson("/api/automations", body).then(function (result) {
       auto.creating = false; auto.createdSlug = result.slug; reloadAuto();

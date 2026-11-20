@@ -58,7 +58,7 @@ test("new routines stay paused until explicitly turned on, then reach preflight 
     await routines(); // Warm the cache before writing; the next read must already reflect the write.
     for (const [triggerType, options] of [["schedule", { schedule: "0 9 * * *" }], ["webhook", {}], ["message", { match: "report" }]] as const) {
       const name = `${triggerType} report`;
-      const response = await post("/api/automations", { name, body: "Summarize the report.", triggerType, ...options });
+      const response = await post("/api/automations", { name, body: "Summarize the report.", triggerType, timezone: "America/New_York", ...options });
       assert.equal(response.status, 200);
       const { slug } = await response.json();
       const entry = (await routines()).find(row => row.slug === slug);
@@ -66,6 +66,8 @@ test("new routines stay paused until explicitly turned on, then reach preflight 
       assert.equal(entry?.paused, true);
       const path = [...files.keys()].find(file => file.endsWith(`/${slug}/SKILL.md`))!;
       assert.match(files.get(path)!, /^paused: true$/m);
+      if (triggerType === "schedule") assert.match(files.get(path)!, /^timezone: "America\/New_York"$/m);
+      else assert.doesNotMatch(files.get(path)!, /^timezone:/m);
 
       const hook = triggerType === "webhook"
         ? (await (await fetch(base + "/api/hooks", { headers })).json()).hooks.find((row: { slug: string }) => row.slug === slug)

@@ -5428,6 +5428,8 @@ $("autosave").addEventListener("click", function () {
     var cron = autoCron || $("autocron").value.trim();
     if (!cron) { $("autoerror").textContent = "{{ui.app.pick-a-schedule-or-enter}}"; $("autoerror").style.display = ""; return; }
     payload.schedule = cron;
+    var tz = $("autotimezone").value.trim();
+    if (tz) payload.timezone = tz;
   }
   if (autoTrigger === "message") {
     var match = $("automatch").value.trim();
@@ -5439,8 +5441,6 @@ $("autosave").addEventListener("click", function () {
   if (agent) payload.agent = agent;
   var deliver = $("autodeliver").value.trim();
   if (deliver) payload.deliver = deliver;
-  var tz = $("autotimezone").value.trim();
-  if (autoTrigger === "schedule" && tz) payload.timezone = tz;
   
   $("autosave").disabled = true;
   $("autoerror").style.display = "none";
