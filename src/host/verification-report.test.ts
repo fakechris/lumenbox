@@ -13,10 +13,13 @@ const AGENT = "a-ada";
 function setup() {
   const tasks = new TaskStore(join(mkdtempSync(join(tmpdir(), "agentbox-verify-")), "tasks.jsonl"));
   const task = tasks.create({ title: "Ship the export", requester: "p-chris", assigneeId: AGENT, conversation: "main" })!;
-  const recorder: { started: number[]; stopped: (number | undefined)[] } = { started: [], stopped: [] };
+  const recorder: { started: number[]; stopped: (string | undefined)[]; failNext: boolean } = { started: [], stopped: [], failNext: false };
   const box = {
     startRecording: async ({ display }: { display: number }) => { recorder.started.push(display); return { id: "r1", display, file: "verify-1.mp4", path: "/home/box/work/recordings/verify-1.mp4", started_at: "" }; },
-    stopRecording: async (display?: number) => { recorder.stopped.push(display); return { id: "r1", display: display ?? 0, file: "verify-1.mp4", path: "", started_at: "" }; },
+    stopRecording: async (display?: number, id?: string) => {
+      if (recorder.failNext) { recorder.failNext = false; throw new Error("box unreachable"); }
+      recorder.stopped.push(`${display}/${id}`); return { id: "r1", display: display ?? 0, file: "verify-1.mp4", path: "", started_at: "" };
+    },
   } as unknown as BoxClient;
   const shown: { surface: string; components?: unknown }[] = [];
   const context = {
@@ -46,9 +49,13 @@ test("a report goes plan, start, check, finish; the host stamps each check's pla
   await verifyTool(context, { action: "check", assertion: "s1.a2", result: "fail", observed: "the first row is data, there is no header" }, now);
   assert.match((await verifyTool(context, { action: "check", assertion: "s9.a1", result: "pass", observed: "x" }, now)).text, /no assertion s9\.a1/);
   advance(2_000);
+  // A stop that does not reach the box leaves the report recording, so finishing can be tried again.
+  recorder.failNext = true;
+  assert.match((await verifyTool(context, { action: "finish", conclusion: "x" }, now)).text, /did not stop \(box unreachable\); vr-[a-f0-9]{8} is still recording/);
+  assert.equal(store.list("a-ada")[0]!.state, "recording");
   const done = await verifyTool(context, { action: "finish", conclusion: "The export downloads; the header row is missing." }, now);
   assert.match(done.text, /1 passed, 1 failed, 1 not checked/);
-  assert.deepEqual(recorder.stopped, [3]);
+  assert.deepEqual(recorder.stopped, ["3/r1"], "its own recording by identity, never one that replaced it");
 
   const [report] = store.list("a-ada");
   assert.equal(report!.state, "finished");

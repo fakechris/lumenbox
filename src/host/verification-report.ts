@@ -53,7 +53,7 @@ export interface VerificationReport {
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
-  recording?: { file: string; display: number };
+  recording?: { file: string; display: number; /** The box's identity for it: a stop ends this one, never a later one. */ id?: string };
   scenarios: VerificationScenario[];
   conclusion?: string;
 }
@@ -209,6 +209,18 @@ export function reportCard(report: VerificationReport): Record<string, unknown>[
   ];
 }
 
+/** Stops the report's own recording; on failure the report stays recording, so the member can try again. */
+async function stopFailure(context: ToolContext, report: VerificationReport): Promise<ToolOutcome | undefined> {
+  if (context.box === undefined) return { text: outcomeLine("failed", "there is no box to stop the recording on; try again when it is back"), isError: true };
+  try {
+    await context.box.stopRecording(report.recording?.display, report.recording?.id);
+    return undefined;
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return { text: outcomeLine("failed", `the recording did not stop (${why}); ${report.id} is still recording, so try again`), isError: true };
+  }
+}
+
 function storeOf(context: ToolContext): VerificationReports | undefined {
   const path = context.tasks?.path;
   return path ? new VerificationReports(reportsDir(path)) : undefined;
@@ -260,7 +272,8 @@ export async function verifyTool(context: ToolContext, input: Record<string, unk
   if (open === undefined) return refused("there is no report being written here; Verify plan first");
 
   if (action === "abandon") {
-    if (open.state === "recording" && context.box !== undefined) await context.box.stopRecording(open.recording?.display).catch(() => undefined);
+    const unstopped = open.state === "recording" ? await stopFailure(context, open) : undefined;
+    if (unstopped !== undefined) return unstopped;
     store.save({ ...open, state: "abandoned", finishedAt: now().toISOString() });
     return { text: `Abandoned ${open.id}.` };
   }
@@ -272,7 +285,8 @@ export async function verifyTool(context: ToolContext, input: Record<string, unk
     try {
       await context.ensureDesktop?.();
       const recording = await context.box.startRecording({ display, name: `verify-${open.id}` });
-      store.save({ ...open, state: "recording", startedAt: now().toISOString(), recording: { file: recording.file, display: recording.display } });
+      const started = { file: recording.file, display: recording.display, ...(recording.id ? { id: recording.id } : {}) };
+      store.save({ ...open, state: "recording", startedAt: now().toISOString(), recording: started });
     } catch (error) {
       return { text: outcomeLine("failed", `the recording did not start (${error instanceof Error ? error.message : String(error)})`), isError: true };
     }
@@ -303,7 +317,8 @@ export async function verifyTool(context: ToolContext, input: Record<string, unk
   if (action === "finish") {
     const conclusion = line(input.conclusion);
     if (conclusion === "") return refused("conclusion says what passed, then what failed and what was seen");
-    if (context.box !== undefined) await context.box.stopRecording(open.recording?.display).catch(() => undefined);
+    const unstopped = await stopFailure(context, open);
+    if (unstopped !== undefined) return unstopped;
     const report: VerificationReport = { ...open, state: "finished", finishedAt: now().toISOString(), conclusion };
     store.save(report);
     const counts = reportCounts(report);

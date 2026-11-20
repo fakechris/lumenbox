@@ -450,8 +450,8 @@ export class BoxClient {
   }
 
   /** Stops it and returns the finished file. Waits for ffmpeg to write its trailer. */
-  stopRecording(display?: number): Promise<RecordingInfo> {
-    return this.post<RecordingInfo>("/record/stop", { display }, 30_000);
+  stopRecording(display?: number, id?: string): Promise<RecordingInfo> { // id: only that recording, not one that replaced it
+    return this.post<RecordingInfo>("/record/stop", { display, ...(id ? { id } : {}) }, 30_000);
   }
 
   listRecordings(): Promise<RecordListResult> {

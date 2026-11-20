@@ -834,7 +834,7 @@ const routes: Record<string, Handler> = {
   "POST /record/stop": async (body: RecordStopRequest): Promise<RecordingInfo> => {
     const index = body.display ?? defaultDisplayIndex;
     displays.assertControl(index, body);
-    const stopped = await recorder.stop(index);
+    const stopped = body.id ? await recorder.stopIfCurrent(index, body.id) : await recorder.stop(index);
     if (stopped !== undefined) return stopped;
     return { id: "", display: index, file: "", path: "", started_at: new Date().toISOString() };
   },
