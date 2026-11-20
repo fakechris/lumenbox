@@ -2456,8 +2456,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
     }).catch(() => {});
     void keeper.tick().then(state => {
-      const changed = state.connected !== box.connected;
-      box = state;
+      const changed = state.connected !== box.connected; box = state;
       if (changed) broadcast({ type: "box_status", boxId: registry.box.id });
     }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
   }, envNumber("AGENTBOX_BOX_WATCH_MS", 30_000));
