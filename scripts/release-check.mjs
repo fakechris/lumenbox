@@ -25,7 +25,7 @@
  *     when it has no Apple credentials (every release through 0.3.8; skippable per environment)
  *
  * Not here: anything needing a real box or an X server. `npm run smoke` covers those
- * against a running container and takes minutes — it belongs to a release, and this
+ * in its disposable eval container and home and takes minutes — it belongs to a release, and this
  * belongs to every build that claims to be one.
  */
 
@@ -317,4 +317,4 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log("[release-check] the built artifacts load and are pinned. OK.");
-console.log("[release-check] Still yours to run before shipping: npm run smoke, against a live box.");
+console.log("[release-check] Still yours to run before shipping: npm run smoke, in its disposable eval box and home.");

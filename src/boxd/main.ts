@@ -90,7 +90,7 @@ import { detectDisplay, getDisplay, parseDisplayNum } from "../cua/display.ts";
 import { readClipboard, writeClipboard } from "./clipboard-service.ts";
 import { DEFAULT_PORT as EGRESS_PROXY_PORT, startEgressProxy } from "../egress/proxy.ts";
 import { CALL_ENV, CallRegistry, callEnvironment } from "../egress/call.ts";
-import { RecordService, RECORDINGS_DIR } from "./record-service.ts";
+import { RecordService, RECORDINGS_DIR, recordingRetentionFrom } from "./record-service.ts";
 import { AGENT_NICE, reapSpool, runShell, withoutBoxToken } from "./shell-service.ts";
 import { AcpOpenError, AcpService } from "./acp-service.ts";
 import { JobService } from "./job-service.ts"; import { JobLimitError, jobLimitsFrom } from "./job-limits.ts"; import { logLimitsFrom } from "./log-retention.ts"; import { diskSpace, outputLimitsFrom } from "./job-output-guard.ts";
@@ -113,7 +113,7 @@ const HEADLESS = process.env.BOXD_HEADLESS === "1"; /* an organisation node may 
 
 const displays = new DisplayManager(line => log(line), undefined, nativeScreen?.runtime); // the machine's own screen is desktop 1 where a node opened it
 const desktopOperations = new DesktopOperations();
-const recorder = new RecordService(line => log(line));
+const recorder = new RecordService(line => log(line), undefined, undefined, recordingRetentionFrom(process.env)); setInterval(() => recorder.prune(), 3_600_000).unref(); // recordings expire by age and size (INV-1949)
 const xwatchdog = new XWatchdogService();
 
 /** The desktop `box shot` and the smoke test look at when none is named. */
