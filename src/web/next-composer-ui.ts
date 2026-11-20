@@ -5,6 +5,33 @@
  */
 export const NEXT_COMPOSER_JS = `
 var composer = { skills: null, rows: [], at: 0, kind: "" };
+var modelReadiness = { agent: "", configured: null, request: 0 };
+
+function refreshModelReadiness() {
+  var id = chat.agentId, request = ++modelReadiness.request;
+  modelReadiness.agent = id; modelReadiness.configured = null;
+  if (!id) return Promise.resolve(true);
+  return getJson("/api/model-readiness?agent=" + encodeURIComponent(id)).then(function (got) {
+    if (request === modelReadiness.request) { modelReadiness.configured = got.configured; renderModelNotice(); }
+    return got.configured !== false;
+  }, function () { return true; });
+}
+
+function renderModelNotice() {
+  var notice = $("composer-model");
+  if (modelReadiness.agent !== chat.agentId) refreshModelReadiness();
+  notice.replaceChildren(); notice.hidden = modelReadiness.configured !== false;
+  if (notice.hidden) return;
+  notice.appendChild(el("span", "why", t("ui.next.composer.modelMissing")));
+  var button = el("button", "act", t("ui.next.composer.modelSettings"));
+  button.type = "button";
+  button.addEventListener("click", function () { openSettingsPane("model"); });
+  notice.appendChild(button);
+}
+
+function composerCanSend() {
+  return refreshModelReadiness();
+}
 
 /** What is being asked for at the caret: a skill, a colleague, or nothing. */
 function composerQuery(value, caret) {
