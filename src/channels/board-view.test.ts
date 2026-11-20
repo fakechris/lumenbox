@@ -140,7 +140,7 @@ test("a blocked landing chosen by the agent speaks, with its note", () => {
     assigneeId: "agent-bob",
     history: [{ at: "2026-08-27T08:00:00.000Z", by: "agent-bob", status: "blocked", note: "对到第 3 步。\n请你做：登录供应商后台，下载十月发票\n为什么是你：验证码只发到你的手机。\n我同时在做：九月的对账。" }],
   });
-  assert.equal(blockedAnnouncement(asked), "t8「十月对账」\n请你做：登录供应商后台，下载十月发票\n为什么是你：验证码只发到你的手机。\n我同时在做：九月的对账。");
+  assert.equal(blockedAnnouncement(asked), "t8「十月对账」\n请你做：登录供应商后台，下载十月发票\n验证码只发到你的手机。我同时在做：九月的对账。");
 });
 
 test("the channel's own failure landing stays silent — the chat was already told", () => {

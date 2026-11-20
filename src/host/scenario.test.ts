@@ -4765,8 +4765,9 @@ test("a member delivers one piece of work for a look and goes on with another: t
 // INV-1923, the other families and the fallback. One member, three pieces of work, each in the way for a different
 // reason: an invoice only the person can fetch, a notice that needs their go-ahead, and a question it wrote the old
 // way. What must hold: what is in the way decides the buttons; the chat is sent the lines the card shows; "I've done
-// it" and a refusal with its reason both reach the member as the person's word and the work moves on; and where the
-// member wrote no request, the note and its answers are shown as they always were.
+// it" and a refusal with its reason, pressed on the card, both reach the member as the person's word, start its turn
+// and leave one line where the card was; and where the member wrote no request, the note and its answers are shown as
+// they always were.
 test("what is in the way decides the buttons, a refusal carries its reason to the member, and nothing written falls back", async () => {
   const { taskBoardRecord } = await import("../web/task-board-record.ts");
   const { nextLogic } = await import("../web/next-logic-ui.ts");
@@ -4796,13 +4797,14 @@ test("what is in the way decides the buttons, a refusal carries its reason to th
   const result = await runEpisode({
     team: [{ name: "Mia" }], says: [], tasks,
     script: ({ messages }) => { heard.push(JSON.stringify(messages)); return replies.shift() as never; },
-    drive: async ({ frontId, say }) => {
+    drive: async ({ frontId, say, bus }) => {
       for (const title of ["十月对账", "续费通知", "建存储桶"]) { const made = tasks.create({ title, requester: "web", assigneeId: frontId })!; tasks.update(made.id, { status: "doing" }, frontId); }
       await say("十月对账、发续费通知、建存储桶，都推进一下。");
       asked = rows(); said = ["t1", "t2", "t3"].map(id => blockedAnnouncement(tasks.get(id)!));
       mine = attentionFor({ principalId: "web", identities: [], tasks: tasks.list(), questions: [], nameOf: id => (id === frontId ? "Mia" : id) }).mine;
-      await say(word("ui.next.need.say.done", { title: asked.t1!.ask!.title }));
-      await say(`${word("ui.next.need.say.choice", { choice: "不发", title: asked.t2!.ask!.title })} ${word("ui.next.need.say.reason", { reason: "价目表还没定稿" })}`);
+      // The two presses, as the card makes them: written on the work they answer, and nothing said in the conversation.
+      tasks.update("t1", { note: word("ui.next.need.say.done", {}) }, "web"); await bus.idle();
+      tasks.update("t2", { note: `不发${word("ui.next.need.say.reason", { reason: "价目表还没定稿" })}` }, "web"); await bus.idle();
     },
   });
   try {
@@ -4810,14 +4812,57 @@ test("what is in the way decides the buttons, a refusal carries its reason to th
     assert.deepEqual(asked.t2!.history[0]?.options, ["发出", "不发"], "the go-ahead's buttons say what will happen");
     assert.equal(asked.t1!.ask!.said.find(part => part.key === "meanwhile")?.text, "九月的对账，不受影响。", "waiting on the person, it says what it keeps doing");
     assert.equal(said[0], `t1「十月对账」\n${askLines(asked.t1!.ask!).join("\n")}`, "the chat is sent the lines the card shows");
-    assert.equal(said[0], `t1「十月对账」\n${invoice}`, "which are the member's own");
+    assert.equal(said[0], "t1「十月对账」\n请你做：登录供应商后台，下载十月发票\n对账到第 3 步，后台要短信验证码。验证码只发到你的手机。打开 https://vendor.example/login ，把 PDF 放进 inbox/。我同时在做：九月的对账，不受影响。", "the member's own sentences, as one paragraph");
     assert.deepEqual(mine.map(item => [item.ref, item.title]).sort(), [["t1", "登录供应商后台，下载十月发票"], ["t2", "给 214 位客户发续费通知"], ["t3", "建存储桶"]], "listed across members by what is asked");
     assert.equal(asked.t3!.ask, undefined, "nothing written as a request");
     assert.equal(said[2], "t3「建存储桶」卡住了,要人来搭把手:桶放哪个区域？", "so the chat hears the fixed sentence and the note, as before");
-    assert.ok(heard.at(-4)!.includes("我做完了：登录供应商后台，下载十月发票"), "the member reads \"I've done it\" as the person's word");
-    assert.ok(heard.at(-2)!.includes("不发：给 214 位客户发续费通知 理由：价目表还没定稿"), "and the refusal with its reason");
+    assert.ok(/The person answered on t1 .*我做完了。/s.test(JSON.parse(heard.at(-4)!).at(-1).content), "a press on the card starts the member's turn, with the person's word on the work it answers");
+    assert.ok(heard.at(-2)!.includes("不发。理由：价目表还没定稿"), "and the refusal with its reason");
+    const receipt = taskBoardRecord(tasks.get("t2")!, undefined, id => id === result.registry.list()[0]!.id).receipt;
+    assert.deepEqual([receipt?.what, receipt?.title, receipt?.by, receipt?.text], ["answered", "给 214 位客户发续费通知", "web", "不发。理由：价目表还没定稿"], "the card is one line from then on: what was decided, by whom");
     assert.deepEqual(["t1", "t2", "t3"].map(id => tasks.get(id)!.status), ["doing", "doing", "blocked"], "the two answered move on; the third still waits");
     assert.equal(taskBoardRecord(tasks.get("t1")!).ask, undefined, "an answered request is no longer asked");
     assert.equal(replies.length, 0, "every scripted step ran");
+  } finally { result.cleanup(); }
+});
+
+// INV-1923, the result sent back. On 2026-11-19 "send back" on a result wrote the reason to the task, moved it to
+// doing, and woke nobody: zero model calls followed, and the work sat as the member's with the member never told. The
+// episode: a member delivers for a look; the person sends it back with a sentence of why, from the board, saying
+// nothing in the conversation. What must hold: that alone starts the member's turn; the reason is in what it reads;
+// it does what was said and delivers again; and the card that was sent back is one line until there is a new one.
+test("a result sent back with a reason wakes the member, which reads the reason and delivers again", async () => {
+  const { receiptOf } = await import("./person-word.ts");
+  const tasks = new TaskStore(null), read: string[] = [];
+  const replies = [
+    { call: "Tasks", input: { action: "update", id: "t1", sign_off: true } },
+    { call: "Tasks", input: { action: "submit", id: "t1", note: "结论：导出保留账号时区。\n未做与局限：无", evidence: ["npm test — 12 passed"] } },
+    { say: "导出修好了，等你过目。" },
+    // Woken by the send-back alone.
+    { call: "Tasks", input: { action: "submit", id: "t1", note: "结论：夏令时切换日 02:30 也对了。\n已验证：新增 2 个用例，14 个通过。\n未做与局限：无", evidence: ["npm test — 14 passed"] } },
+    { say: "切换日 02:30 的问题修了，请再看。" },
+  ];
+  let between: ReturnType<typeof receiptOf>, calls = 0, before = 0;
+  const result = await runEpisode({
+    team: [{ name: "Mia" }], says: [], tasks,
+    script: ({ messages }) => { calls++; read.push(JSON.stringify(messages.at(-1)?.content)); return replies.shift() as never; },
+    drive: async ({ frontId, say, bus, registry }) => {
+      tasks.create({ title: "修导出的时区问题", requester: "web", assigneeId: frontId }); tasks.update("t1", { status: "doing" }, frontId);
+      await say("修一下导出的时区问题，给我看了再算完成。");
+      before = calls;
+      // What "send back" on the card posts: the status and the reason, to the board. Nothing is said to the member.
+      tasks.update("t1", { status: "doing", note: "夏令时切换当天 02:30 还是错的。" }, "web");
+      between = receiptOf(tasks.get("t1")!, id => registry.has(id));
+      await bus.idle();
+    },
+  });
+  try {
+    assert.equal(before, 3, "delivered, and waiting for a look");
+    assert.equal(calls - before, 2, "the send-back started a turn: it used to start none");
+    assert.match(read[3]!, /sent it back to you, saying:.*夏令时切换当天 02:30 还是错的。/s, "the reason is what the member reads");
+    assert.deepEqual([between?.what, between?.text], ["returned", "夏令时切换当天 02:30 还是错的。"], "the card that was sent back is one line saying so");
+    assert.equal(tasks.get("t1")!.status, "review", "it did what was said and delivered again");
+    assert.equal(receiptOf(tasks.get("t1")!), undefined, "a new delivery is a card again");
+    assert.deepEqual(result.score.said.map(row => row.text), ["导出修好了，等你过目。", "切换日 02:30 的问题修了，请再看。"]);
   } finally { result.cleanup(); }
 });

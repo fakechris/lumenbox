@@ -138,7 +138,7 @@ test("every live task has a stage by the table, a blocked task with options is a
   const parked = task({ id: "t7", status: "blocked", assigneeId: "bot", history: [{ at: "t", by: "channel", status: "blocked", note: "the turn failed" }] });
   const asked = attentionFor({ principalId: "p-chris", identities: [], tasks: [wrote, parked], questions: [], nameOf, now: new Date(T0) });
   const item = asked.mine.find(row => row.ref === "t6");
-  assert.deepEqual([item?.kind, item?.title, item?.detail, item?.ask?.kind, item?.with], ["question", "登录供应商后台", "为什么是你：验证码只发到你的手机 · 我同时在做：九月的对账", "act", "Ada"]);
+  assert.deepEqual([item?.kind, item?.title, item?.detail, item?.ask?.kind, item?.with], ["question", "登录供应商后台", "验证码只发到你的手机。我同时在做：九月的对账。", "act", "Ada"]);
   assert.ok(!asked.mine.some(row => row.ref === "t7") && asked.theirs.some(row => row.ref === "t7"), "work parked by a failure is still not a request");
   const later = attentionFor({ principalId: "p-chris", identities: [], tasks: [{ ...wrote, snoozeUntil: new Date(T0 + 3_600_000).toISOString() }], questions: [], nameOf, now: new Date(T0) });
   assert.equal(later.mine.length, 0);

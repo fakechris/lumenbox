@@ -3,7 +3,7 @@ import { GovernanceLedger, resourceKey, routineResource } from "./work-governanc
 import { ResultChecks } from "./result-check-policy.ts";
 import { runResultCheck } from "./result-check-runner.ts"; import { settleDelivered, settleReviews, type SettleWorld } from "./review-settle.ts";
 import { requestsResultCheck } from "./task-delivery.ts";
-import { taskAttentionChanged, taskWorkId } from "./task-attention.ts"; import { taskHasStanding } from "./turn-standing.ts"; import { HeardRecord } from "../agents/heard-record.ts";
+import { taskAttentionChanged, taskWorkId } from "./task-attention.ts"; import { taskHasStanding } from "./turn-standing.ts"; import { HeardRecord } from "../agents/heard-record.ts"; import { watchPersonWord } from "./person-word.ts";
 import { continueAcrossBudget, longRequestLimits } from "./long-request.ts";
 import { summarizeTaskProgress } from "./task-progress.ts";
 import { progressLines } from "./task-progress-view.ts";
@@ -1128,7 +1128,7 @@ export class Orchestrator {
       judgeExperiment: (prompt, agentId) => this.askCheaply(this.registry.get(agentId), prompt), // the ledger's one question per continuation (INV-1475)
       log: line => console.error(`[goal] ${line}`),
     });
-    if (this.tasks !== undefined) this.tasks.onChange(task => { this.goalLoop?.onTaskChanged(task); taskAttentionChanged(this.bus, task); }); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION, taskWorkId(task,this.bus), taskHasStanding(task)); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
+    if (this.tasks !== undefined) watchPersonWord(this.tasks, id => this.registry.has(id), (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION, undefined, true); }); if (this.tasks !== undefined) this.tasks.onChange(task => { this.goalLoop?.onTaskChanged(task); taskAttentionChanged(this.bus, task); }); if (this.tasks !== undefined) watchDependencies(this.tasks, (task, text) => { this.bus.deliverSystem(task.assigneeId!, text, task.conversation ?? MAIN_CONVERSATION, taskWorkId(task,this.bus), taskHasStanding(task)); }); // a task whose last blocker closed wakes its assignee, as a late fork result does (INV-1740)
     this.goalGate = this.tasks === undefined ? undefined : new GoalGate({ modelRecoveryRoot: this.registry.root,
       tasks: this.tasks,
       registry: this.registry,
