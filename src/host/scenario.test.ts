@@ -4918,3 +4918,199 @@ test("a week after the last message from a person a due routine pauses and says 
     rmSync(heardDir, { recursive: true, force: true });
   }
 });
+
+// ── 2026-11-20, INV-1928: what nobody asked for landed in the middle of what somebody was asking ──
+//
+// A routine's result, a reminder, a host notice were limited by how many go out in a day and by
+// nothing about the moment: one could arrive between a person's question and its answer. On the real
+// stack — turns through the bus, the heard record written as turns take their messages, the open-turn
+// ledger, a chat door's double behind the real channel manager and the real outbox — with the clock
+// moved by hand. The room below is that stack; `restart` is a new process over the same files.
+
+async function quietRoom(dir: string, context: { bus: AgentBus; registry: AgentRegistry; frontId: string }, turns: import("./resume.ts").TurnLedger, chat: string[]) {
+  const { HeardRecord } = await import("../agents/heard-record.ts");
+  const { OutboxSender } = await import("../channels/outbox-sender.ts");
+  const { Outbox } = await import("./outbox.ts");
+  const { answeringPerson, quietChatDoor, QuietQueue } = await import("./quiet-delivery.ts");
+  const { lastPersonMessage } = await import("./routine-idle.ts");
+  const { bus, registry, frontId } = context, key = "feishu:oc_ops", conversation = conversationIdFor(key);
+  bus.heard = new HeardRecord(join(dir, "heard"));
+  const everyone = registry.list().map(agent => agent.id);
+  let receive!: (message: ChannelMessage) => Promise<string | undefined>, manager!: ChannelManager, queue!: InstanceType<typeof QuietQueue>, said = 0;
+  const adapter: ChannelAdapter = { name: "feishu", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined, sendToChat: async (_chatKey, text) => { chat.push(text); } };
+  const restart = async () => {
+    manager?.stop();
+    queue = new QuietQueue({
+      path: join(dir, "quiet-queue.jsonl"),
+      lastPersonAt: where => lastPersonMessage(bus.heard, everyone, where)?.getTime(),
+      answering: where => answeringPerson(turns.interrupted(), bus.heard, where),
+    });
+    const door: ChannelManager = new ChannelManager({
+      mayDrive: () => true, log: () => {},
+      outbox: quietChatDoor(new OutboxSender(new Outbox(join(dir, "outbox.jsonl")), () => {}), queue, { conversationOf: conversationIdFor, push: (chatKey, text, purpose) => door.tryPushToChat(chatKey, text, purpose) }),
+      ask: async (_name, text, _identity, _chat, _progress, _thread, _task, _interim, _stream, origin) => {
+        bus.sendFromUser(frontId, text, { conversation, steerable: false, messageId: origin!.messageId });
+        await bus.runExclusive(frontId, { userDriven: true, conversation });
+        return replyForMessage(registry.readTranscript(frontId, conversation), origin!.messageId);
+      },
+    });
+    manager = door;
+    manager.register(adapter, true, "test"); manager.start();
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  await restart();
+  return {
+    key, conversation, restart,
+    queue: () => queue, manager: () => manager,
+    /** A person writes in the chat and is answered. */
+    person: async (text: string) => { await receive({ identity: "feishu:ou_chris", chatKey: key, senderLabel: "Chris", text, messageId: `om_${++said}` }); await manager.idle(); },
+    /** A routine runs as a turn of its own and reports its result into the chat, the way the host's report door does. */
+    routine: async (prompt: string, more: { urgent?: boolean } = {}) => {
+      const messageId = `routine_${++said}`;
+      bus.sendFromUser(frontId, prompt, { steerable: false, lane: "background", synthetic: true, messageId });
+      await bus.runExclusive(frontId, { userDriven: true });
+      return manager.tryPushToChat(key, replyForMessage(registry.readTranscript(frontId), messageId)!, { kind: "notice", about: `report from ${frontId}`, from: frontId, ...more });
+    },
+  };
+}
+
+test("a routine's result that arrives while a person is being answered waits for the conversation to be quiet and arrives in order; an urgent one goes at once, the cap delivers anyway, and a restart delivers once (INV-1928)", async () => {
+  const { mock } = await import("node:test");
+  const { TurnLedger } = await import("./resume.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-quiet-room-")), start = Date.now();
+  mock.timers.enable({ apis: ["Date"], now: start });
+  const minute = (n: number) => mock.timers.setTime(start + n * 60_000);
+  const turns = new TurnLedger(join(dir, "turns.jsonl")), chat: string[] = [], lines: string[] = [];
+  let result: Awaited<ReturnType<typeof runEpisode>> | undefined;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: [], turns,
+      script: () => ({ say: lines.shift() ?? "Still here." }),
+      drive: async context => {
+        const room = await quietRoom(dir, context, turns, chat);
+        const person = async (text: string, reply: string) => { lines.push(reply); await room.person(text); };
+        const routine = async (reply: string, more: { urgent?: boolean } = {}) => { lines.push(reply); return room.routine("Run the brief.", more); };
+        const sweep = () => room.queue().sweep();
+
+        await person("What did March close at?", "March closed at 41,200.");
+        minute(1);
+        const first = await routine("Brief: two invoices are overdue.");
+        assert.equal(first.delivered, true, "the report door is told it was taken, so the routine does not try again");
+        minute(2);
+        await person("And April?", "April closed at 39,850.");
+        minute(2.5);
+        await routine("Brief: the export finished.");
+        minute(3);
+        await routine("The bank key was rejected: the 15:00 payment run will not go.", { urgent: true });
+        assert.deepEqual(chat, ["March closed at 41,200.", "April closed at 39,850.", "The bank key was rejected: the 15:00 payment run will not go."], "the answers, and the one that cannot wait — nothing else lands in the exchange");
+        minute(4.9);
+        assert.equal(await sweep(), 0);
+        minute(5);
+        assert.equal(await sweep(), 2, "three minutes after the person last wrote; the member's replies and its urgent message since then did not restart the wait");
+        assert.deepEqual(chat.slice(3), ["Brief: two invoices are overdue.", "Brief: the export finished."], "in the order they were queued, word for word");
+
+        // A conversation that does not go quiet: the person writes every two minutes for half an hour.
+        minute(10);
+        await person("Now walk me through May.", "May, week one: 9,400.");
+        minute(11);
+        await routine("Brief: the supplier replied.");
+        for (let at = 12; at <= 40; at += 2) { minute(at); await person("Go on.", `May, minute ${at}.`); assert.equal(await sweep(), 0, `minute ${at}: still talking`); }
+        assert.equal(chat.includes("Brief: the supplier replied."), false);
+        minute(41);
+        assert.equal(await sweep(), 1, "thirty minutes after it was queued it goes, though the person wrote a minute ago");
+        assert.equal(chat.at(-1), "Brief: the supplier replied.");
+
+        // The process stops with one waiting.
+        minute(42);
+        await person("And June?", "June is not closed yet.");
+        minute(43);
+        await routine("Brief: the audit closed.");
+        await room.restart();
+        assert.deepEqual(room.queue().waiting().map(message => message.text), ["Brief: the audit closed."], "the new process finds it waiting");
+        assert.equal(await sweep(), 0, "and still waits: the person wrote a minute ago, and that is on record too");
+        minute(45);
+        assert.equal(await sweep(), 1);
+        await room.restart();
+        assert.equal(await sweep(), 0);
+        assert.equal(chat.filter(text => text === "Brief: the audit closed.").length, 1, "delivered once, across two restarts");
+        room.manager().stop();
+      },
+    });
+    assert.deepEqual(result.score.refusals, []);
+    assert.equal(lines.length, 0, "every scripted reply was a real turn");
+  } finally {
+    mock.timers.reset();
+    result?.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a Tell on a turn the person is waiting on is not delayed; from a wake nobody is watching it waits, and the member takes it back when its reply says it first (INV-1928)", async () => {
+  const { mock } = await import("node:test");
+  const { TurnLedger } = await import("./resume.ts");
+  const { fileTold, Teller } = await import("./tell.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-quiet-tell-")), start = Date.now();
+  mock.timers.enable({ apis: ["Date"], now: start });
+  const minute = (n: number) => mock.timers.setTime(start + n * 60_000);
+  const turns = new TurnLedger(join(dir, "turns.jsonl")), chat: string[] = [], page: string[] = [], seen: string[] = [];
+  const lastResult = () => seen.at(-1)!.replaceAll("\\", "");
+  const steps: ({ say: string } | { call: string; input: Record<string, unknown> })[] = [];
+  let room!: Awaited<ReturnType<typeof quietRoom>>, host!: AgentBus, connect!: () => void;
+  // The teller is built before the episode has a room, so it reaches the room's queue through these, and its door is connected once the room is up.
+  const teller = new Teller({
+    gapMinutes: 0, quiet: { holds: where => room.queue().holds(where), hold: message => room.queue().hold(message), amend: (id, agentId, text) => room.queue().amend(id, agentId, text),
+      waiting: where => room.queue().waiting(where), door: (via, release) => { connect = () => room.queue().door(via, release); }, capMinutes: 30 },
+    chatOf: id => (id === room.conversation ? room.key : undefined),
+    toChat: (chatKey, text, about) => room.manager().tryPushToChat(chatKey, text, { kind: "notice", about, urgent: true }),
+    toPage: event => { if (event.type === "told") page.push(event.text); },
+    filed: told => fileTold(host, told),
+  });
+  let result: Awaited<ReturnType<typeof runEpisode>> | undefined;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: [], turns, tell: teller,
+      script: ({ messages }) => { seen.push(JSON.stringify(messages.at(-1))); return steps.shift() ?? { say: "Noted." }; },
+      drive: async context => {
+        host = context.bus;
+        room = await quietRoom(dir, context, turns, chat);
+        connect();
+        const wake = async (text: string) => {
+          context.bus.sendFromUser(context.frontId, text, { conversation: room.conversation, steerable: false, lane: "background", synthetic: true, origin: "host:jobs" });
+          await context.bus.runExclusive(context.frontId, { conversation: room.conversation });
+        };
+
+        steps.push({ call: "Tell", input: { text: "The March export stops on the 28th; I am reconciling what is there." } }, { say: "March reconciles once the gap is set aside." });
+        await room.person("Reconcile March against the export.");
+        assert.deepEqual(chat, ["The March export stops on the 28th; I am reconciling what is there.", "March reconciles once the gap is set aside."], "the person asked and is waiting: told at once, in the middle of their own turn");
+
+        minute(1);
+        steps.push({ call: "Tell", input: { text: "The April export is ready." } }, { say: "Noted the export." });
+        await wake("A background job ended: the April export finished.");
+        assert.equal(chat.includes("The April export is ready."), false, "a minute after the person wrote, what nobody asked for does not land in the chat");
+        assert.equal(page.includes("The April export is ready."), false, "nor on the page");
+        assert.match(lastResult(), /"queued":"q1".*withdraw: "q1"/, "the member is told it waits, under which name, and how to take it back");
+
+        minute(2);
+        steps.push({ call: "Tell", input: { withdraw: "q1" } }, { say: "Yes — April's export is ready; it finished a minute ago." });
+        await room.person("Is April's export done?");
+        assert.equal(chat.at(-1), "Yes — April's export is ready; it finished a minute ago.");
+        assert.match(lastResult(), /"withdrawn":"q1"/);
+        minute(40);
+        assert.equal(await room.queue().sweep(), 0, "what the reply already said is not sent a second time");
+        assert.equal(chat.includes("The April export is ready."), false);
+
+        steps.push({ call: "Tell", input: { text: "The May export is ready." } }, { say: "Noted the export." });
+        await wake("A background job ended: the May export finished.");
+        assert.equal(chat.at(-1), "The May export is ready.", "nobody has written for half an hour: the same Tell goes at once");
+        assert.deepEqual(page, ["The March export stops on the 28th; I am reconciling what is there.", "The May export is ready."], "the page carries what the chat got");
+        room.manager().stop();
+      },
+    });
+    assert.deepEqual(result.score.refusals, []);
+    assert.equal(steps.length, 0, "every scripted step ran");
+  } finally {
+    mock.timers.reset();
+    result?.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

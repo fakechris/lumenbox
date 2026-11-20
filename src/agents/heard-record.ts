@@ -60,7 +60,7 @@ export function speakerOf(message: InboundMessage, isAgent: (id: string) => bool
 export class HeardRecord {
   private readonly cache = new Map<string, Map<string, HeardRow>>();
   private readonly saidCache = new Map<string, Map<string, SaidRow[]>>();
-  /** When a person last spoke to each agent, by the rows read and written here. */
+  /** When a person last spoke to each agent — and to each agent in each conversation — by the rows read and written here. */
   private readonly lastPersonAt = new Map<string, string>();
 
   /**
@@ -123,17 +123,20 @@ export class HeardRecord {
   /**
    * When a person last spoke to this agent, or undefined when this record has no message of theirs
    * (INV-741). The speaker is the one the host wrote down when the turn took the message, so a
-   * routine's prompt, a teammate, a webhook and a host notice are none of them this.
+   * routine's prompt, a teammate, a webhook and a host notice are none of them this. With a
+   * conversation, only what they wrote there (INV-1928).
    */
-  lastPerson(agentId: string): string | undefined {
+  lastPerson(agentId: string, conversation?: string): string | undefined {
     this.rows(agentId);
-    return this.lastPersonAt.get(agentId);
+    return this.lastPersonAt.get(conversation === undefined ? agentId : `${agentId}\n${conversation}`);
   }
 
   private spoke(agentId: string, row: HeardRow): void {
     if (row.speaker?.by !== "person" || typeof row.at !== "string") return;
-    const last = this.lastPersonAt.get(agentId);
-    if (last === undefined || row.at > last) this.lastPersonAt.set(agentId, row.at);
+    for (const key of [agentId, `${agentId}\n${row.conversation}`]) {
+      const last = this.lastPersonAt.get(key);
+      if (last === undefined || row.at > last) this.lastPersonAt.set(key, row.at);
+    }
   }
 
   private rows(agentId: string): Map<string, HeardRow> {

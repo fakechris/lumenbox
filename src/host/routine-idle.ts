@@ -52,11 +52,13 @@ export interface IdledRoutine {
   deliver: string;
 }
 
-/** The newest message from a person among these agents, by the heard record. */
-export function lastPersonMessage(heard: { lastPerson(agentId: string): string | undefined } | undefined, agentIds: readonly string[]): Date | undefined {
+/** The newest message from a person among these agents, by the heard record; with a conversation, the newest one there. */
+export function lastPersonMessage(
+  heard: { lastPerson(agentId: string, conversation?: string): string | undefined } | undefined, agentIds: readonly string[], conversation?: string
+): Date | undefined {
   let last: string | undefined;
   for (const id of agentIds) {
-    const at = heard?.lastPerson(id);
+    const at = heard?.lastPerson(id, conversation);
     if (at !== undefined && (last === undefined || at > last)) last = at;
   }
   return last === undefined ? undefined : new Date(last);
