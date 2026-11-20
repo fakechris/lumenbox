@@ -73,6 +73,12 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     writeFileSync(join(home, "principals.json"), "broken");
     assert.equal((await fetch(base + "/bootstrap")).status, 503);
     assert.equal((await begin(code)).status, 503);
+    const mcp = await fetch(base + "/api/mcp", { headers: { authorization: "Bearer fixture" } });
+    assert.equal(mcp.status, 200, "unreadable bootstrap must not hide MCP settings");
+    const settings = await mcp.json();
+    assert.equal(settings.setup.bootstrap, false, "a corrupt roster never offers enrollment");
+    assert.equal(settings.tokens.length, 1, "existing tokens remain visible");
+    assert.ok(Array.isArray(settings.servers), "MCP server data remains available");
   } finally {
     stop?.();
     if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome;

@@ -4568,8 +4568,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/mcp") {
+          let bootstrapPending = false;
+          try { bootstrapPending = bootstrap.pending(); } catch { /* Unreadable bootstrap cannot offer enrollment. */ }
           send(res, 200, {
-            setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrap.pending() },
+            setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrapPending },
             servers: orchestrator.mcp.statuses(),
             budget: TOOL_BUDGET_WARNING,
             extensions: orchestrator.extensions?.current() ?? null,
