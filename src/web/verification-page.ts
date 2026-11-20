@@ -30,6 +30,12 @@ export function reportTimeline(report: VerificationReport): ReportTimeline {
   const segments: ReportTimeline["segments"] = [];
   const ticks: ReportTimeline["ticks"] = [];
   const steps: ReportTimeline["steps"] = [];
+  // The overlay follows the order checks came in, whatever order the plan listed them: from one check to
+  // the next, it names the assertion checked at the end of that stretch.
+  const checks = report.scenarios
+    .flatMap(scenario => scenario.assertions.flatMap(item => (item.offsetMs === undefined ? [] : [{ offsetMs: item.offsetMs, label: `${scenario.name} — ${item.fact}` }])))
+    .sort((a, b) => a.offsetMs - b.offsetMs);
+  checks.forEach((check, index) => steps.push({ t: Math.round((index === 0 ? 0 : checks[index - 1]!.offsetMs) / 100) / 10, label: check.label }));
   let from = 0;
   for (const scenario of report.scenarios) {
     const offsets = scenario.assertions.flatMap(item => (item.offsetMs === undefined ? [] : [item.offsetMs]));
@@ -37,13 +43,8 @@ export function reportTimeline(report: VerificationReport): ReportTimeline {
     const last = scenario === report.scenarios[report.scenarios.length - 1];
     const until = last ? durationMs : end;
     segments.push({ scenario: scenario.id, name: scenario.name, startPct: pct(from), widthPct: Math.max(0, pct(until) - pct(from)), failed: scenario.assertions.some(item => item.result === "fail") });
-    let at = from;
     for (const item of scenario.assertions) {
-      steps.push({ t: Math.round(at / 100) / 10, label: `${scenario.name} — ${item.fact}` });
-      if (item.offsetMs !== undefined) {
-        ticks.push({ id: item.id, pct: pct(item.offsetMs), failed: item.result === "fail", seek: seekSeconds(item.offsetMs) });
-        at = item.offsetMs;
-      }
+      if (item.offsetMs !== undefined) ticks.push({ id: item.id, pct: pct(item.offsetMs), failed: item.result === "fail", seek: seekSeconds(item.offsetMs) });
     }
     from = end;
   }

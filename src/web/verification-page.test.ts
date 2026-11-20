@@ -30,6 +30,13 @@ test("the timeline splits by scenario, colours the failed one and puts each asse
   assert.deepEqual(timeline.ticks.map(tick => [tick.id, tick.pct, tick.failed, tick.seek]), [["s1.a1", 20, false, 2], ["s1.a2", 50, true, 8], ["s2.a1", 80, false, 14]]);
   assert.equal(timeline.steps.find(step => step.t === 4)?.label, "Export — the file has a header row", "after the first check the overlay names the next");
 
+  // Checked out of plan order: the overlay follows the order the checks came in.
+  const swapped = structuredClone(REPORT);
+  swapped.scenarios[0]!.assertions[0]!.offsetMs = 12_000;
+  assert.deepEqual(reportTimeline(swapped).steps.map(step => [step.t, step.label]), [
+    [0, "Export — the file has a header row"], [10, "Export — the button downloads a file"], [12, "Empty table — only the header"],
+  ]);
+
   const page = verificationPageHtml(REPORT);
   assert.match(page, /<div class="seg fail" data-scenario="s1"/);
   assert.match(page, /<div class="seg" data-scenario="s2"/);
