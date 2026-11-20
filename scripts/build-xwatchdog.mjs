@@ -9,31 +9,17 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { arch } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..");
 const srcDir = join(repo, "src", "xwatchdog");
-const outBinary = join(repo, "docker", "box", "xwatchdog");
-
-const targetArch = process.env.TARGETARCH || (arch() === "arm64" ? "arm64" : "amd64");
-
-console.log(`[xwatchdog] compiling native Go audit daemon for linux/${targetArch} ...`);
-
-try {
-  execFileSync(
-    "go",
-    [
-      "build",
-      "-ldflags=-s -w",
-      "-o",
-      outBinary,
-      ".",
-    ],
-    {
+for (const targetArch of ["amd64", "arm64"]) {
+  const outBinary = join(repo, "docker", "box", `xwatchdog-${targetArch}`);
+  console.log(`[xwatchdog] compiling native Go audit daemon for linux/${targetArch} ...`);
+  try {
+    execFileSync("go", ["build", "-ldflags=-s -w", "-o", outBinary, "."], {
       cwd: srcDir,
       env: {
         ...process.env,
@@ -42,13 +28,10 @@ try {
         GOARCH: targetArch,
       },
       stdio: "inherit",
-    }
-  );
-  console.log(`[xwatchdog] successfully built ${outBinary}`);
-} catch (error) {
-  if (!existsSync(outBinary)) {
-    console.error("[xwatchdog] compilation failed and no existing binary found.");
+    });
+    console.log(`[xwatchdog] successfully built ${outBinary}`);
+  } catch (error) {
+    console.error(`[xwatchdog] compilation failed for linux/${targetArch}: ${error.message}`);
     process.exit(1);
   }
-  console.warn("[xwatchdog] compilation failed, keeping existing binary:", error.message);
 }
