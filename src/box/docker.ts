@@ -17,7 +17,8 @@ import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import { boxNetworkArguments, describeOutbound, gateNameFor, networkNameFor, outboundPlan, prepareBoxNetwork, removeGate, startGate, stopGate, type OutboundPlan } from "./box-network.ts";
 import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts"; import { redactSecretAssignments, secretsOutOfArgs } from "./secret-env.ts"; import { runContainer } from "./run-container.ts";
-import { ensureImagePlatform } from "./image-platform.ts";
+import { inspectImagePlatformProblem } from "./image-platform.ts";
+
 const execFileAsync = promisify(execFile);
 
 /**
@@ -88,6 +89,7 @@ export function boxImageRef(version: string = packageVersion()): string {
 }
 
 export const DEFAULT_IMAGE = boxImageRef();
+
 export { networkNameFor } from "./box-network.ts";
 
 export interface BoxConfig {
@@ -780,6 +782,8 @@ export class BoxManager {
     let state = await this.state();
 
     if (options.recreate && state !== "missing") {
+      const problem = await this.imageExists() ? await inspectImagePlatformProblem(docker, this.config.image) : undefined;
+      if (problem) throw new DockerError(problem);
       onOutput?.(`removing existing container ${this.config.containerName}`);
       await this.down({ remove: true });
       state = "missing";
@@ -795,12 +799,9 @@ export class BoxManager {
 
     if (state !== "missing") await startGate(docker, this.config.containerName); // a confined box is reached through its gate; one that has none is untouched
     if (state === "missing") {
-      await ensureLocalImage(
-        this.config.image,
-        { exists: () => this.imageExists(), pull: () => this.pull(onOutput) },
-        onOutput,
-      );
-      await ensureImagePlatform(docker, this.config.image);
+      await ensureLocalImage(this.config.image, { exists: () => this.imageExists(), pull: () => this.pull(onOutput) }, onOutput);
+      const problem = await inspectImagePlatformProblem(docker, this.config.image);
+      if (problem) throw new DockerError(problem);
       onOutput?.(`starting container ${this.config.containerName}`);
       await prepareBoxNetwork(docker, { containerName: this.config.containerName, image: this.config.image, publish: this.boxdPublication(), plan: this.outbound() });
       await runContainer({ run: () => docker(this.runArguments(), 120_000), state: () => this.state(), start: () => docker(["start", this.config.containerName], 60_000), remove: () => docker(["rm", "--force", this.config.containerName], 60_000), say: line => onOutput?.(line) }); // a run that hangs or fails is settled by what it left (INV-1561)

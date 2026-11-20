@@ -22,7 +22,7 @@ import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureImagePlatform, imagePlatformProblem } from "./image-platform.ts";
+import { inspectImagePlatformProblem, imagePlatformProblem } from "./image-platform.ts";
 
 test("platform diagnostics name both platforms and a native install path", () => {
   const problem = imagePlatformProblem("image:1", "linux/arm64\n", "linux/amd64\n")!;
@@ -81,7 +81,7 @@ else if (args[0] === 'run') { console.error('reached run'); process.exit(1); }
     let removed = false;
     manager.down = async () => { removed = true; };
     await assert.rejects(manager.up({ recreate: true }), /platform is linux\/arm64/);
-    assert.equal(removed, true);
+    assert.equal(removed, false);
     const recreateCalls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
     assert.ok(!recreateCalls.some(args => args[0] === "run" || args[0] === "create"));
   } finally {
@@ -92,7 +92,7 @@ else if (args[0] === 'run') { console.error('reached run'); process.exit(1); }
 });
 
 test("platform probing tolerates inspection errors", async () => {
-  await ensureImagePlatform(async () => { throw new Error("engine unavailable"); }, "image:1");
+  assert.equal(await inspectImagePlatformProblem(async () => { throw new Error("engine unavailable"); }, "image:1"), undefined);
 });
 
 test("the published image is fakechris/lumenbox at this package's version", () => {
