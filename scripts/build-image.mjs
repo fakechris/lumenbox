@@ -20,10 +20,27 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { engineBuildArgs, publishImage } from "./image-release.mjs";
+
+process.chdir(fileURLToPath(new URL("..", import.meta.url)));
 
 const CONTEXT = "docker/box";
 const REPO = process.env.AGENTBOX_IMAGE_REPO ?? "fakechris/lumenbox";
 const VERSION = JSON.parse(readFileSync("package.json", "utf8")).version;
+const buildArgs = engineBuildArgs(process.env);
+const pushing = process.argv.includes("--push");
+if (pushing) {
+  try {
+    publishImage(args => execFileSync("docker", args, { encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }), {
+      image: `${REPO}:${VERSION}`, latest: `${REPO}:latest`, context: CONTEXT, buildArgs,
+    });
+  } catch (error) {
+    console.error(`${error.message}\nA push to Docker Hub needs docker login on an account that can write ${REPO}.`);
+    process.exit(1);
+  }
+  process.exit(0);
+}
 
 /** Everything in the build context, in a stable order, as one hash. */
 function contextHash(dir) {
@@ -31,6 +48,7 @@ function contextHash(dir) {
   const walk = current => {
     // Sorted, or the hash depends on the order the filesystem happens to return.
     for (const entry of readdirSync(current).sort()) {
+      if (current === dir && entry === "xwatchdog") continue;
       const path = join(current, entry);
       if (statSync(path).isDirectory()) {
         walk(path);
@@ -67,33 +85,6 @@ if (outgoing) {
   console.log("no existing :latest, so there is nothing to roll back to yet");
 }
 
-// Preset engines ride as pinned build args (docs/25 E1): OPENCODE_VERSION in the
-// environment turns the Dockerfile's dormant opencode layer on, at exactly that
-// version. Unset builds stay engine-free, which is what they were.
-const buildArgs = [];
-const unpinned = [];
-for (const [variable, engine] of [
-  ["OPENCODE_VERSION", "opencode"],
-  ["CLAUDE_CODE_VERSION", "claude"],
-  ["PI_VERSION", "pi"],
-  ["MCODE_VERSION", "mcode"],
-]) {
-  if (process.env[variable]) {
-    buildArgs.push("--build-arg", `${variable}=${process.env[variable]}`);
-    console.log(`${engine} pinned at ${process.env[variable]}`);
-  } else {
-    unpinned.push(`${engine} (${variable})`);
-  }
-}
-// Said loudly, because the 0.3.7 release shipped an engine-less box this way and nothing
-// between here and the smoke test noticed. A release build names every engine.
-if (unpinned.length > 0) {
-  console.log(`\nNOT in this image: ${unpinned.join(", ")} — a release image pins all of them.`);
-  if (process.env.LUMENBOX_RELEASE_IMAGE === "1") {
-    console.error("LUMENBOX_RELEASE_IMAGE=1 and an engine is unpinned; refusing to build a release image without it.");
-    process.exit(1);
-  }
-}
 const release = `${REPO}:${VERSION}`;
 docker(["build", ...buildArgs, "-t", versioned, "-t", release, "-t", `${REPO}:latest`, CONTEXT]);
 console.log(`\nbuilt ${versioned}`);

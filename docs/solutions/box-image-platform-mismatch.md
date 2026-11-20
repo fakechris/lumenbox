@@ -10,6 +10,6 @@ found: 2026-11-20, INV-1961 (0.4.5)
 
 **Cause.** The published image is linux/arm64 only. Docker can create its container on an amd64 engine, but cannot execute its entrypoint natively.
 
-**Fix.** Before creating a box or its gate, compare the local image platform with the Docker server platform. Refuse known mismatches; unavailable inspections retain the previous behavior. From a checkout, run `npm run build:image` (requires the Go toolchain), then `agentbox box up --recreate`, or select a release image publishing the server's platform. A normal push publishes the locally built platform, not a multi-platform release.
+**Fix.** Before creating a box or its gate, compare the local image platform with the Docker server platform. Refuse known mismatches; unavailable inspections retain the previous behavior. From a checkout, run `npm run build:image` (requires the Go toolchain), then `agentbox box up --recreate`, or select a release image publishing the server's platform. Release publishers use `npm run push:image`: Buildx publishes linux/amd64 and linux/arm64 together, with a watchdog compiled for each. The release gate refuses a tag missing either platform.
 
 **Verify.** Compare `docker image inspect --format '{{.Os}}/{{.Architecture}}' fakechris/lumenbox:0.4.5` with `docker version --format '{{.Server.Os}}/{{.Server.Arch}}'`. On a mismatch, `agentbox box up` must refuse with both platforms and install instructions, leaving no new container in `docker ps -a`.

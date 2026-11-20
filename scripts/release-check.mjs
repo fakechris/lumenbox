@@ -34,6 +34,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assess, macArtifacts } from "./notarization.mjs";
+import { requireReleasePlatforms } from "./image-release.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const failures = [];
@@ -307,6 +308,7 @@ check("the image tag this app pulls exists on Docker Hub before the app ships", 
   if (tag.name !== version) {
     throw new Error(`Docker Hub answered with tag "${tag.name}" where ${version} was asked for`);
   }
+  requireReleasePlatforms(tag, `${repo}:${version}`);
   note(`${repo}:${version} is on Docker Hub`);
 });
 

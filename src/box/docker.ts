@@ -345,9 +345,10 @@ function dockerStream(
   args: readonly string[],
   timeoutMs: number,
   onOutput?: (line: string) => void,
+  executable = "docker",
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", [...args], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(executable, [...args], { stdio: ["ignore", "pipe", "pipe"] });
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
       reject(new DockerError(`docker ${args[0]} timed out after ${timeoutMs / 1000}s`));
@@ -662,16 +663,9 @@ export class BoxManager {
    * that only pushes the version leaves `docker pull fakechris/lumenbox` on an older alias.
    */
   async push(onOutput?: (line: string) => void): Promise<void> {
-    const versionTag = this.config.image;
-    const latest = `${BOX_IMAGE_REPO}:latest`;
-    if (versionTag.startsWith(`${BOX_IMAGE_REPO}:`) && versionTag !== latest) {
-      await docker(["tag", versionTag, latest], 30_000);
-    }
-    const tags = versionTag === latest ? [latest] : [versionTag, latest];
-    for (const tag of tags) {
-      onOutput?.(`pushing ${tag}`);
-      await dockerStream(["push", tag], 30 * 60_000, onOutput);
-    }
+    const script = ["../../scripts/build-image.mjs", "../scripts/build-image.mjs"].map(path => fileURLToPath(new URL(path, import.meta.url))).find(path => existsSync(path));
+    if (!script) throw new DockerError("Publishing needs a checkout. Run `npm run push:image` there (requires Go, Docker Buildx and docker login).");
+    await dockerStream([script, "--push"], 2 * 60 * 60_000, onOutput, process.execPath);
   }
 
   /** Exposed for the test that pins where the daemon is published. */
