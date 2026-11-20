@@ -281,12 +281,17 @@ test("over the per-box ceiling the oldest recordings go first, until the rest fi
   assert.deepEqual(readdirSync(dir).sort(), ["c-newer.mp4", "d-newest.mp4"]);
 });
 
-test("a recording still being written is never pruned, however old or large", () => {
+test("a recording still being written is never pruned, however old or large", async () => {
   const now = Date.UTC(2026, 10, 19);
   const lines: string[] = [];
+  const children: FakeChild[] = [];
   const service = new RecordService(
     line => lines.push(line),
-    () => new FakeChild() as never,
+    () => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as never;
+    },
     () => now,
     { keepMs: DAY, keepBytes: 1, minFreeBytes: 0 },
     () => undefined
@@ -299,6 +304,12 @@ test("a recording still being written is never pruned, however old or large", ()
   service.prune();
 
   assert.ok(existsSync(join(recordingsDir, live.file)), "the file ffmpeg is writing stays");
+  // Nor while ffmpeg is finishing it after a stop was asked for.
+  const stopping = service.stop(7);
+  service.prune();
+  assert.ok(existsSync(join(recordingsDir, live.file)), "the file ffmpeg is closing stays");
+  children[0]?.exit(0);
+  await stopping;
   assert.ok(lines.some(line => /removed \d+ recording\(s\) past retention/.test(line)), JSON.stringify(lines));
 });
 

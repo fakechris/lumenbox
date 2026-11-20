@@ -228,6 +228,7 @@ interface Active {
 
 export class RecordService {
   private readonly active = new Map<number, Active>();
+  private readonly finishing = new Set<string>();
 
   constructor(
     private readonly log: (line: string) => void,
@@ -239,7 +240,7 @@ export class RecordService {
 
   /** Applies the retention to finished files; the ones being written are left alone. */
   prune(): PrunedRecordings {
-    const inUse = new Set([...this.active.values()].map(entry => entry.status.file));
+    const inUse = new Set([...this.active.values()].map(entry => entry.status.file).concat([...this.finishing]));
     const pruned = pruneRecordings(RECORDINGS_DIR, this.retention, this.now(), inUse);
     if (pruned.removed.length > 0) {
       this.log(
@@ -425,6 +426,16 @@ export class RecordService {
 
   private async stopEntry(display: number, entry: Active): Promise<RecordingStatus> {
     this.active.delete(display);
+    // Still being finished by ffmpeg, so still protected from the retention until it exits.
+    this.finishing.add(entry.status.file);
+    try {
+      return await this.finishEntry(display, entry);
+    } finally {
+      this.finishing.delete(entry.status.file);
+    }
+  }
+
+  private async finishEntry(display: number, entry: Active): Promise<RecordingStatus> {
 
     const exited = new Promise<void>(resolve => {
       if (entry.child.exitCode !== null) return resolve();
