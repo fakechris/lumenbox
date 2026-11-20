@@ -98,6 +98,8 @@ const DECLARED: Record<string, SideEffect> = {
   Tasks: { tier: "self" },
   // Copies a file off the box onto the task's record and, in a chat, into the outbox for the person who asked (INV-1663).
   DeliverFile: { tier: "self" },
+  // Records the member's own desktop and keeps the report beside the board (INV-1925).
+  Verify: { tier: "self" },
   HandBack: { tier: "self" },
   // Reading the goal or growing its checklist changes the board, which is the agent's own work.
   Goal: { tier: "self" },

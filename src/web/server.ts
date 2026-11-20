@@ -5,6 +5,8 @@ import { surfaceActionWork } from "../host/surface-action.ts";
 import { workReading, workReference } from "../host/work-reading.ts";
 import { evidenceDigest } from "../host/review-dispatch.ts";
 import { resultCheckRoute } from "./result-check-routes.ts";
+import { verificationRoute } from "./verification-routes.ts";
+import { reportAttention, reportsDir, VerificationReports } from "../host/verification-report.ts";
 import { taskDeliveryRoute } from "./task-delivery-routes.ts"; import { owedToChat } from "../host/delivery-report.ts"; import { askOf } from "../host/person-ask.ts"; import { receiptOf } from "../host/person-word.ts";
 import { DeliveryRecovery, replyExecutionKey } from "../host/delivery-recovery.ts";
 import { deliveryRecoveryRoute } from "./delivery-recovery-routes.ts";
@@ -3529,6 +3531,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
+        const reports = orchestrator.tasks?.path ? new VerificationReports(reportsDir(orchestrator.tasks.path)) : undefined; // a verification report (INV-1925)
+        const proxyVideo = (agentId: string, file: string) => proxyDesktop(req, res, `/recordings/file?name=${encodeURIComponent(file)}`, false, registry.boxOf(agentId).id);
+        if (await verificationRoute(route, res, { reports, mayReadAgent: id => registry.has(id) && mayReadAgent(id), send, proxyVideo })) return;
         if (route === "GET /recording" || route === "GET /api/recordings") { // the named member's box, judged like the desktop routes (INV-1949)
           const agentId = url.searchParams.get("agent") ?? "";
           if (!registry.has(agentId)) { send(res, 404, apiError("agent-unknown", { agent: agentId })); return; }
@@ -5995,6 +6000,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const { agentId, day } of spendLimits.pausedForSpend()) answer.mine.unshift({ kind: "spend-limit", ref: agentId, title: `${registry.tryGet(agentId)?.profile.name ?? agentId} is paused: its daily spend line was reached`, detail: `Reached on ${day}; it resumes tomorrow by itself. Resume it now or raise the line in Settings → Team → Agents.` }); // INV-1615
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const rest of providerRests.list()) answer.mine.unshift({ kind: "provider-resting", ref: rest.account, title: `${rest.label} is out of usage`, detail: `Every agent on it waits until ${new Date(rest.until).toLocaleString()}; top up the plan or Retry now in Settings → Model.` }); // INV-1577
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const probe of probeKeeper?.recent() ?? []) answer.mine.unshift({ kind: "boundary-probe", ref: probe.agentId, title: `${probe.agentName} reached for this machine's credentials`, detail: `${probe.count} attempt${probe.count === 1 ? "" : "s"} in the last hour, refused; the latest ${probe.detail}.${probe.paused ? ` ${probe.agentName} is paused — Settings → Team.` : ""}` }); // INV-1553
+          const verified = board?.path ? new VerificationReports(reportsDir(board.path)) : undefined; // a finished verification on work in review (INV-1925)
+          if (verified && board) answer.mine.push(...reportAttention(verified, board, id => registry.has(id) && mayReadAgent(id)));
           answer.mine.push(...ownerAttention(orchestrator.orgKnowledge.staleItems(), owner => me === undefined || (owner !== undefined && (owner === me.id || me.identities.includes(owner))))); // an organisation item its owner must look at again (INV-1731)
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const item of pendingReviews(registry.readSharedMemory())) answer.mine.unshift({ kind: "team-memory", ref: item.writer, title: `${registry.tryGet(item.writer)?.profile.name ?? "An agent"} wants the team to remember something`, detail: `"${item.record.text.slice(0, 140)}" — approve or reject in Settings → Team → Team memory.` }); // INV-1581
           send(res, 200, { ...answer, mine: [...answer.mine].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind)).map(item => ({ ...item, ...(board?.get(item.ref) && mayReadTask(board.get(item.ref)!) ? { reading: readingFor(board.get(item.ref)!) } : {}), decision: isDecision(item.kind), ...(board?.get(item.ref)?.level !== undefined ? { level: board!.get(item.ref)!.level } : {}) })), who: me?.name ?? "this installation" }); // decisions first and marked (INV-1647)

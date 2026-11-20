@@ -133,6 +133,7 @@ function inboxRow(item) {
   // Opens the work when it is about work, else the conversation with the agent that asked.
   if (isTask(item.ref)) open.addEventListener("click", function () { openPanel(item.ref); });
   else if (item.answer) open.addEventListener("click", function () { openChat(item.answer.agentId); });
+  else if (item.kind === "verification") open.addEventListener("click", function () { window.open("/verification/" + encodeURIComponent(item.ref), "_blank", "noopener"); }); // its report page (INV-1925)
   node.appendChild(open);
   if (item.kind === "approval") {
     var approve = el("button", "act-primary", t("ui.next.act.approve")), deny = el("button", "act", t("ui.next.act.deny"));

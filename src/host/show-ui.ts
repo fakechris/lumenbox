@@ -130,8 +130,8 @@ export function compileSurface(input: ShowUiInput, existing: SurfaceRecord | und
     }
     if (component.component === "Link") {
       const to = String(component.to ?? "");
-      const okTarget = (to.startsWith(`${work}/`) && !to.split("/").includes("..")) || /^t\d+$/.test(to) || /^https?:\/\/\S+$/.test(to);
-      if (!okTarget) return { ok: false, reason: `Link ${component.id}: \`to\` is a file under ${work}, a task id like t12, or an http(s) URL; "${to}" is none of these.` };
+      const okTarget = (to.startsWith(`${work}/`) && !to.split("/").includes("..")) || /^t\d+$/.test(to) || /^vr-[a-f0-9]{8}$/.test(to) || /^https?:\/\/\S+$/.test(to);
+      if (!okTarget) return { ok: false, reason: `Link ${component.id}: \`to\` is a file under ${work}, a task id like t12, a verification report id like vr-1a2b3c4d, or an http(s) URL; "${to}" is none of these.` };
     }
     const local = localFunction(component);
     if (local !== undefined) return { ok: false, reason: `Component ${component.id}: "${local}" is not a function a card may call. Available: ${SHOW_UI_FUNCTIONS.join(", ")}; actions are events (\`{"event": {"name": ...}}\`).` };

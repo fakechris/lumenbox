@@ -802,7 +802,7 @@ export interface RecordStartRequest extends DisplayGuardProjection {
 }
 
 export interface RecordStopRequest extends DisplayGuardProjection {
-  display?: number;
+  display?: number; /** Stop only this recording, never one that has replaced it on the desktop (INV-1925). */ id?: string;
 }
 
 /**

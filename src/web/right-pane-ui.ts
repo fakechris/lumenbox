@@ -56,6 +56,7 @@ function feed(html, cls, at) {
 export const ATTENTION_PANEL_JS = String.raw`// One attention item as a line: in the panel above the board, or (onBoard) as the mark on its task's own row (INV-1654).
 function attentionRow(item, owed, onBoard) {
   var act =
+    item.kind === "verification" ? '<a class="btn sm ghost" href="/verification/' + esc(item.ref) + '" target="_blank" rel="noopener">' + esc(t("ui.attention.open")) + "</a>" :
     item.kind === "box-update" ? '<button class="btn sm ghost" data-att-box-settings>{{ui.tf.boxSettings}}</button>' :
     item.kind === "approval" ? '<button class="btn sm" data-att-approve="' + esc(item.ref) + '">' + esc(t("consent.once")) + '</button><button class="btn sm ghost" data-att-deny="' + esc(item.ref) + '">' + esc(t("consent.deny")) + "</button>" :
     item.kind === "close-proposal" ? '<button class="btn sm ghost" data-att-keep="' + esc(item.ref) + '">' + esc(t("ui.attention.keepOpen")) + "</button>" :
