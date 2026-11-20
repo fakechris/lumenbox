@@ -7,7 +7,7 @@
  * two reads the classic page makes, shown without the rest.
  */
 export const NEXT_VIEWS_JS = `
-var next = { view: "chat", layout: "list", agents: {}, mine: [], rows: [], loading: false };
+var next = { view: "chat", layout: "list", agents: {}, mine: [], rows: [], loading: false, refreshAgain: false };
 
 function agentName(id) { return next.agents[id] ? next.agents[id].name : (id || ""); }
 function initial(name) { return (name || "?").trim().slice(0, 1).toUpperCase(); }
@@ -264,13 +264,14 @@ function renderView(view) {
 }
 
 function refresh() {
-  if (next.loading) return Promise.resolve();
+  if (next.loading) { next.refreshAgain = true; return Promise.resolve(); }
   next.loading = true;
-  // The computers are a fourth read that may be refused or slow; the page does not wait on it to be useful.
+  // A refused optional read must not prevent the rest of the page from drawing.
   var machines = getJson("/api/boxes").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
-  getJson("/api/setup").then(function (got) { settings.setup = got; }, function () {});
-  return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines]).then(function (got) {
+  var setup = getJson("/api/setup").catch(function () { return settings.setup; });
+  return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines, setup]).then(function (got) {
     boxes.list = got[3].boxes || []; boxes.own = got[3].own || ""; boxes.state = got[0].box || null;
+    settings.setup = got[4];
     var first = Object.keys(next.agents).length === 0;
     next.agents = {}; member.allTools = got[0].allTools || [];
     (got[0].agents || []).forEach(function (agent) { next.agents[agent.id] = agent; });
@@ -281,7 +282,10 @@ function refresh() {
     render();
     // Work opened from a link was drawn before anybody's name was known.
     if (first && panel.task) renderPanel();
-  }, failed).then(function () { next.loading = false; });
+  }, failed).finally(function () {
+    next.loading = false;
+    if (next.refreshAgain) { next.refreshAgain = false; refreshSoon(); }
+  });
 }
 
 var refreshTimer = 0;
@@ -336,7 +340,7 @@ function nextStart() {
   events.onmessage = function (message) {
     var event; try { event = JSON.parse(message.data); } catch (error) { return; }
     var kind = event && event.type;
-    if (kind === "task_changed" || kind === "approval_pending" || kind === "approval_settled" || kind === "question" || kind === "turn_finished" || kind === "turn_failed" || kind === "reset") refreshSoon();
+    if (["box_status", "task_changed", "approval_pending", "approval_settled", "question", "turn_finished", "turn_failed", "reset"].includes(kind)) refreshSoon();
     if ((kind === "task_changed" || kind === "task_execution") && event.taskId) panelChanged(event.taskId);
     if (kind === "turn_started" || kind === "turn_finished" || kind === "turn_failed") { var who = next.agents[event.agentId]; if (who) who.running = kind === "turn_started"; }
     chatEvent(event);
