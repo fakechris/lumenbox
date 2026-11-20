@@ -47,6 +47,7 @@ import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { NEXT_CARDS_JS } from "./next-cards-ui.ts";
 import { NEXT_NEED_JS } from "./next-need-ui.ts";
 import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
+import { NEXT_LINE_JS } from "./next-line-ui.ts";
 import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
 
 const STYLE = `
@@ -245,8 +246,8 @@ button.file { width: 100%; text-align: left; background: none; cursor: pointer; 
 .preview .report { max-height: 320px; overflow: auto; } .needbox .parts { margin: 8px 0; } .needbox input { width: 100%; margin-top: 10px; }
 .card-plain .why, .panel .why { white-space: normal; }
 /* What waits on the person: one entry that stays at the top while the conversation scrolls under it (next-dock-ui.ts). */
-.needdock { position: sticky; top: -20px; align-self: stretch; margin-top: -20px; padding: 20px 0 10px; background: var(--bg); border-bottom: 1px solid var(--border); }
-.needdock { display: flex; flex-direction: column; gap: 6px; max-height: 64vh; overflow: auto; }
+.dockbar { flex: none; padding: 14px 24px 10px; border-bottom: 1px solid var(--border); background: var(--bg); } .dockbar[hidden] { display: none; }
+.needdock { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; max-height: 56vh; overflow: auto; }
 .needdock > .card-need, .needdock > .card-plain, .needdock > .card-stuck { max-width: none; align-self: stretch; }
 .pager { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
 .pager span { margin-right: 4px; } .pager button { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); line-height: 1; }
@@ -349,7 +350,7 @@ body.electron-mac .side { padding-top: 40px; }
   .row { flex-wrap: wrap; } .when { display: none; }
   .board { grid-template-columns: 1fr; }
   .panel { inset: 0; width: auto; border-radius: 0; }
-  .needdock { top: -14px; margin-top: -14px; padding-top: 14px; max-height: 70vh; } .receipt { flex-wrap: wrap; } .receipt .what { flex: 1; white-space: normal; } .receipt .why { flex-basis: 100%; padding-left: 20px; }
+  .dockbar { padding: 10px 14px 8px; } .needdock { max-height: 60vh; } .receipt { flex-wrap: wrap; } .receipt .what { flex: 1; white-space: normal; } .receipt .why { flex-basis: 100%; padding-left: 20px; }
   .back { display: inline-flex !important; }
 }
 .back { display: none; padding: 4px 8px; border-radius: 8px; color: var(--muted); }
@@ -416,6 +417,7 @@ export const NEXT_HTML = `<!doctype html>
     <span class="why" id="find-count"></span>
     <button id="find-close" aria-label="{{ui.next.card.dismiss}}">×</button>
   </div>
+  <div class="dockbar" id="dock" hidden></div>
   <section class="view" id="view"></section>
   <div class="composer" id="composer" hidden>
     <div class="picker" id="composer-menu" hidden></div>
@@ -512,6 +514,7 @@ ${NEXT_BOXES_JS}
 ${NEXT_CARDS_JS}
 ${NEXT_NEED_JS}
 ${NEXT_DOCK_JS}
+${NEXT_LINE_JS}
 ${NEXT_SYSTEM_JS}
 nextStart();
 </script>

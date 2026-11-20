@@ -416,6 +416,7 @@ test("queuedCount and isActive answer per conversation, while turns run", async 
     assert.equal(bus.isActive(ada.id, "chat-1"), true);
     assert.equal(bus.queuedCount(ada.id, "chat-1"), 0, "in flight is not queued");
     assert.equal(bus.isActive(ada.id, "chat-2"), false, "another conversation is idle");
+    assert.deepEqual(bus.activeConversationsOf(ada.id), ["chat-1"], "and which ones are running, by name (INV-1926)");
 
     bus.sendFromUser(ada.id, "task two", { conversation: "chat-1" });
     assert.equal(bus.queuedCount(ada.id, "chat-1"), 1, "waiting behind the running turn");

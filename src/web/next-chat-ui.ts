@@ -54,7 +54,7 @@ function renderSide() {
     var row = el("button", "agent"), body = el("span", "body");
     row.setAttribute("aria-current", String(next.view === "chat" && agent.id === chat.agentId));
     body.appendChild(el("div", "title", agent.name));
-    body.appendChild(el("div", "role", agent.running ? t("ui.next.agent.working") : (agent.title || agent.description || "")));
+    body.appendChild(lineNode("role", memberLine(agent))); // what it asks of the person, else what it says it is doing (next-line-ui.ts)
     row.appendChild(el("span", "who", initial(agent.name)));
     row.appendChild(body);
     if (member.paused[agent.id]) row.appendChild(el("span", "chip", t("ui.next.agent.paused")));
@@ -229,10 +229,10 @@ function renderThread(view) {
   var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review" && !putOff(row); });
   var asking = mine.filter(function (row) { return row.status === "blocked" && nextNeedOf(row) && !putOff(row) && (row.conversation || "main") === chat.conversation; });
   // All of it is one entry that stays above the conversation, and what was settled is a line among what was said (next-dock-ui.ts).
-  var dock = agent ? needDock(agent) : null, settled = receiptsAmong(); if (dock) thread.appendChild(dock);
+  var settled = receiptsAmong(); placeDock(agent ? needDock(agent) : null);
   mine.filter(function (row) { return nextGroupOf(nextStateOf(row).key) !== "done" && delivered.indexOf(row) < 0 && asking.indexOf(row) < 0; }).forEach(function (row) {
     var pin = el("button", "pin"), body = el("span", "body");
-    body.appendChild(el("div", "title", row.title)); body.appendChild(el("div", "why", reasonOf(row)));
+    body.appendChild(el("div", "title", row.title)); body.appendChild(lineNode("why", reasonOf(row)));
     pin.appendChild(chip(nextStateOf(row))); pin.appendChild(body);
     pin.addEventListener("click", function () { openPanel(row.id); });
     thread.appendChild(pin);
@@ -264,7 +264,7 @@ function renderThread(view) {
   view.appendChild(thread);
   if (focusTopic(view)) return;
   // Follow the newest words only for somebody who was already reading the end (measured before the redraw).
-  if (next.atEnd || chat.jump) view.scrollTop = view.scrollHeight; else view.scrollTop = next.scrollTop;
+  if (next.atEnd || chat.jump) scrollToEnd(view); else view.scrollTop = next.scrollTop; // next-dock-ui.ts
   chat.jump = false;
 }
 

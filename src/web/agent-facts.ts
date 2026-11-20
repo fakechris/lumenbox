@@ -12,6 +12,7 @@
 
 import { activityOfInbound, type Awaiting, type ConversationFacts, type ConversationState, rowMarker } from "../host/conversation-state.ts";
 import { apiError } from "./api-error.ts";
+import type { MemberNow } from "./member-now.ts";
 
 export interface AgentFactsDeps {
   /** Pending approvals, by agent. */
@@ -22,6 +23,8 @@ export interface AgentFactsDeps {
   pausedForSpend: () => readonly { agentId: string; day: string }[];
   /** Mid-turn right now. */
   working: (agentId: string) => boolean;
+  /** What the agent says it is doing now, while that is still true (member-now.ts, INV-1926). */
+  now?: (agentId: string) => MemberNow | undefined;
 }
 
 export interface AgentRowFacts {
@@ -32,6 +35,8 @@ export interface AgentRowFacts {
   unreadIn?: { conversation: string; count: number }[];
   awaiting?: Awaiting;
   marker?: "blocked" | "unread" | "working";
+  /** The row's line in the agent's own words, when it has said what it is doing and is still doing it. */
+  now?: MemberNow;
 }
 
 export class AgentFacts {
@@ -77,7 +82,9 @@ export class AgentFacts {
     const unreadCount = own.reduce((sum, facts) => sum + facts.unreadCount, 0);
     const awaiting = this.awaitingFor(agentId);
     const marker = rowMarker({ unreadCount, ...(awaiting !== undefined ? { awaiting } : {}) }, this.deps.working(agentId));
+    const now = this.deps.now?.(agentId); // read only where a turn is running, so an idle agent has none
     return {
+      ...(now !== undefined ? { now } : {}),
       ...(latest(f => f.lastActivityAt) !== undefined ? { lastActivityAt: latest(f => f.lastActivityAt) } : {}),
       ...(latest(f => f.lastViewedAt) !== undefined ? { lastViewedAt: latest(f => f.lastViewedAt) } : {}),
       unreadCount,

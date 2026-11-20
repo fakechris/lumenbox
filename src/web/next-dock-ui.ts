@@ -22,8 +22,8 @@ var RECEIPT_KEEP = 86400000;
 
 /** Whether a row still asks something of the person here: a result to look at, or a request nobody has answered. */
 function waitsHere(row) {
-  if (row.assigneeId !== chat.agentId || !nextNeedOf(row) || putOff(row) || (row.conversation || "main") !== chat.conversation) return false;
-  return !(row.receipt && row.status === "blocked"); // answered: the agent's move now
+  if (row.assigneeId !== chat.agentId || (row.conversation || "main") !== chat.conversation) return false;
+  return waitsOnPerson(row); // next-line-ui.ts: answered is the agent's move now
 }
 
 /** What this agent waits on the person for in this conversation, longest-waiting first: its work, then what it holds for a consent or a secret. */
@@ -55,6 +55,22 @@ function needDock(agent) {
   }
   dock.appendChild(entry.node || (nextNeedOf(entry.row) === "delivery" ? resultCard(entry.row) : needCard(entry.row)));
   return dock;
+}
+
+/** The entry stands above the conversation, outside what scrolls: the conversation starts below it, so no message is half under it. */
+function placeDock(dock) { var bar = $("dock"); bar.replaceChildren(); bar.hidden = !dock; if (dock) bar.appendChild(dock); }
+
+/**
+ * The end of the conversation, with no message cut in half at its top edge: what the edge would cut is scrolled out whole, and
+ * the room is made under the newest message instead. A message taller than a third of the view is left as it falls.
+ */
+function scrollToEnd(view) {
+  var thread = view.querySelector(".thread");
+  view.scrollTop = view.scrollHeight;
+  if (!thread) return;
+  var edge = view.getBoundingClientRect().top, cut = Array.prototype.filter.call(thread.children, function (node) { var box = node.getBoundingClientRect(); return box.top < edge && box.bottom > edge; })[0];
+  var over = cut ? cut.getBoundingClientRect().bottom - edge : 0;
+  if (over > 0 && over < view.clientHeight / 3) { thread.style.paddingBottom = Math.ceil(over) + "px"; view.scrollTop = view.scrollHeight; }
 }
 
 /** Who settled something, as a person reads it: the agent by name, the host as itself, a person by the door they spoke through. */
