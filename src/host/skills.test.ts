@@ -291,9 +291,11 @@ test("a concurrent first refresh waits for the read rather than answering empty"
   });
   const clock = 1_000;
   const names = ["weekly"];
+  let reads = 0;
   const source: SkillSource = {
     async listDir(path: string) {
       if (path === SKILLS_DIR) {
+        reads += 1;
         const entries = names.map(name => ({ name, type: "directory" }));
         await gate;
         return { entries };
@@ -310,11 +312,14 @@ test("a concurrent first refresh waits for the read rather than answering empty"
   const second = cache.refresh();
   names.push("new-routine");
   const forced = cache.refresh(true);
+  const alsoForced = cache.refresh(true);
   release?.();
   const [a, b] = await Promise.all([first, second]);
   assert.equal(a.skills.length, 1);
   assert.equal(b.skills.length, 1, "the second caller waited for the same read");
   assert.equal((await forced).skills.length, 2, "a write during discovery needs a new read, not the pre-write listing");
+  assert.equal((await alsoForced).skills.length, 2);
+  assert.equal(reads, 2, "forced callers waiting on one read share one new read; reads never overlap");
 });
 
 test("a failed read still arms the freshness gate, so a down box is not re-listed every turn", async () => {

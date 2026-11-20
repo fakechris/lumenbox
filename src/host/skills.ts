@@ -741,6 +741,7 @@ export class SkillCache {
    */
   private attemptAt: number | undefined;
   private inFlight: Promise<void> | undefined;
+  private started = 0;
 
   constructor(
     private readonly source: () => SkillSource | undefined,
@@ -769,10 +770,16 @@ export class SkillCache {
     // gate at the *start* of a read made a concurrent first caller pass the TTL check
     // and return the empty pre-read cache instead of waiting — two callers, two
     // different answers, from one refresh.
-    if (this.inFlight !== undefined) {
+    // A forced caller (it just wrote a file) needs a read that started after it asked: a read
+    // already running may have listed the directory before the write. Reads never overlap, so an
+    // older one cannot publish over a newer one.
+    const asked = this.started;
+    while (this.inFlight !== undefined) {
+      const runningStartedAfterAsk = this.started > asked;
       await this.inFlight;
-      if (!force) return this.loaded;
+      if (!force || runningStartedAfterAsk) return this.loaded;
     }
+    if (force && this.started > asked) return this.loaded;
     // Gated on the last *attempt*, not the last success: a box that is down (or a fresh
     // box with no skills directory yet) used to fail the read, leave the gate unarmed,
     // and every turn and scheduler tick re-issued the listing — negative results need
@@ -783,6 +790,7 @@ export class SkillCache {
     const source = this.source();
     if (source === undefined) return this.loaded;
 
+    this.started += 1;
     this.inFlight = (async () => {
       try {
         const loaded = await loadSkills(source, this.roots(), this.dir());
