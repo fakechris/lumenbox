@@ -4,12 +4,13 @@
  * sees their own; none of it is the installation's.
  */
 export const NEXT_SET_MINE_JS = `
-var mine = { person: null, tokens: null, policy: null, error: "", issued: "" };
+var mine = { person: null, tokens: null, policy: null, setup: null, needsPerson: false, error: "", issued: "" };
 var PERSON_FIELDS = ["responsibilities", "projects", "goals", "interests", "habits", "preferences"];
 
 function loadMine() {
   Promise.all([getJson("/api/person"), getJson("/api/mcp"), getJson("/api/policy")]).then(function (got) {
     mine.person = got[0]; mine.tokens = (got[1].tokens || []).filter(function (token) { return token.mine; }); mine.policy = got[2]; mine.error = "";
+    mine.setup = got[1].setup || null;
   }, function (error) { mine.error = error.message; mine.person = mine.person || {}; }).then(function () { if (next.view === "settings") render(); });
 }
 
@@ -46,10 +47,24 @@ function aboutMeBlock() {
   return box;
 }
 
+function tokenSetupNotice() {
+  var fresh = settings.me && settings.me.identity === null && mine.setup && mine.setup.admins === 0;
+  if (!fresh && !mine.needsPerson) return null;
+  var notice = el("div", "needbox"); notice.setAttribute("role", "status");
+  if (fresh && mine.setup.bootstrap) {
+    notice.appendChild(el("p", "", t("ui.mcp.owner-needed")));
+    var link = el("a", "", t("ui.mcp.first-admin")); link.href = "/bootstrap";
+    notice.appendChild(link);
+    notice.appendChild(el("p", "", t("ui.mcp.bootstrap-code")));
+  } else notice.appendChild(el("p", "", t("ui.mcp.sign-in")));
+  return notice;
+}
+
 function tokensBlock() {
   var box = el("section", "setting"), label = el("input"), issue = el("button", "act", t("ui.next.mine.issue")), row = el("div", "acts");
   box.appendChild(el("h2", "group", t("ui.next.mine.tokens")));
   box.appendChild(el("p", "why", t("ui.next.mine.tokensNote")));
+  var notice = tokenSetupNotice(); if (notice) box.appendChild(notice);
   if (mine.issued) {
     // Shown this once: it is stored nowhere it could be read back from.
     var once = el("div", "needbox"), copy = el("button", "act", t("ui.next.msg.copy")), secret = mine.issued;
@@ -65,7 +80,12 @@ function tokensBlock() {
   });
   label.placeholder = t("ui.next.mine.tokenLabel");
   issue.addEventListener("click", function () {
-    postJson("/api/mcp/tokens", { label: label.value.trim() }).then(function (got) { mine.issued = got.token || ""; loadMine(); }, failed);
+    postJson("/api/mcp/tokens", { label: label.value.trim() }).then(function (got) {
+      mine.needsPerson = false; mine.issued = got.token || ""; loadMine();
+    }, function (error) {
+      if (!error.data || error.data.code !== "token-needs-person") { failed(error); return; }
+      mine.needsPerson = true; mine.issued = ""; loadMine();
+    });
   });
   row.appendChild(label); row.appendChild(issue); box.appendChild(row);
   return box;
