@@ -27,15 +27,100 @@
  * The frame rate and quality are deliberately modest — 12fps, CRF 30 — because this
  * shares a CPU with the agents' browser. Recording at 60fps all-intra is what video
  * editing wants; that is a different purpose and roughly twenty times the bitrate.
+ *
+ * Recordings are evidence, not work product, and they expire (INV-1949). Nothing used to delete
+ * one, and a box whose members record every verification fills its work volume. A finished file
+ * goes once it is older than the retention period, and the oldest go first while the box holds
+ * more than its ceiling; a recording still being written is never touched. A start is refused,
+ * with the reason, when the volume's free space is below the floor rather than discovering it
+ * as a truncated file. The same directory is left out of every volume backup (src/box/docker.ts).
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { diskSpace, type DiskSpace } from "./job-output-guard.ts";
 
 /** Under the work volume, so recordings outlive the container that made them. */
-export const RECORDINGS_DIR = process.env.BOXD_RECORDINGS_DIR ?? "/home/box/work/recordings";
+export const DEFAULT_RECORDINGS_DIR = "/home/box/work/recordings";
+export const RECORDINGS_DIR = process.env.BOXD_RECORDINGS_DIR ?? DEFAULT_RECORDINGS_DIR;
+
+/** How much recording a box keeps, and how much free space a new recording needs. */
+export interface RecordingRetention {
+  keepMs: number;
+  keepBytes: number;
+  minFreeBytes: number;
+}
+
+/**
+ * BOXD_RECORDINGS_KEEP_DAYS (default 14), BOXD_RECORDINGS_KEEP_MB (default 2048) and
+ * BOXD_RECORDINGS_MIN_FREE_MB (default 512). Zero turns that limit off.
+ */
+export function recordingRetentionFrom(env: Record<string, string | undefined>): RecordingRetention {
+  const number = (raw: string | undefined, fallback: number) =>
+    raw !== undefined && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : fallback;
+  const mb = 1024 * 1024;
+  return {
+    keepMs: number(env.BOXD_RECORDINGS_KEEP_DAYS, 14) * 24 * 60 * 60_000,
+    keepBytes: number(env.BOXD_RECORDINGS_KEEP_MB, 2048) * mb,
+    minFreeBytes: number(env.BOXD_RECORDINGS_MIN_FREE_MB, 512) * mb,
+  };
+}
+
+export interface PrunedRecordings {
+  removed: string[];
+  freedBytes: number;
+}
+
+/**
+ * Deletes the finished recordings the retention no longer keeps: first every one older than
+ * `keepMs`, then the oldest of what is left while the total is over `keepBytes`. Only `.mp4`
+ * files directly in `dir` are considered, and never one named in `inUse`.
+ */
+export function pruneRecordings(
+  dir: string,
+  retention: Pick<RecordingRetention, "keepMs" | "keepBytes">,
+  now: number,
+  inUse: ReadonlySet<string> = new Set()
+): PrunedRecordings {
+  const result: PrunedRecordings = { removed: [], freedBytes: 0 };
+  let files: { name: string; mtimeMs: number; size: number }[] = [];
+  try {
+    files = readdirSync(dir)
+      .filter(name => name.endsWith(".mp4") && !inUse.has(name))
+      .flatMap(name => {
+        try {
+          const info = statSync(join(dir, name));
+          return info.isFile() ? [{ name, mtimeMs: info.mtimeMs, size: info.size }] : [];
+        } catch {
+          return [];
+        }
+      })
+      .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  } catch {
+    return result; // no recordings directory yet
+  }
+  const remove = (file: { name: string; size: number }): boolean => {
+    try {
+      unlinkSync(join(dir, file.name));
+    } catch {
+      return false;
+    }
+    result.removed.push(file.name);
+    result.freedBytes += file.size;
+    return true;
+  };
+  const kept = files.filter(file => !(retention.keepMs > 0 && now - file.mtimeMs > retention.keepMs && remove(file)));
+  if (retention.keepBytes > 0) {
+    let total = kept.reduce((sum, file) => sum + file.size, 0);
+    for (const file of kept) {
+      if (total <= retention.keepBytes) break;
+      if (remove(file)) total -= file.size;
+    }
+  }
+  return result;
+}
 
 export const DEFAULT_FRAMERATE = 12;
 export const DEFAULT_CRF = 30;
@@ -143,12 +228,28 @@ interface Active {
 
 export class RecordService {
   private readonly active = new Map<number, Active>();
+  private readonly finishing = new Set<string>();
 
   constructor(
     private readonly log: (line: string) => void,
     private readonly spawner: Spawner = defaultSpawner,
-    private readonly now: () => number = () => Date.now()
+    private readonly now: () => number = () => Date.now(),
+    private readonly retention: RecordingRetention = recordingRetentionFrom({}),
+    private readonly space: (path: string) => DiskSpace | undefined = diskSpace
   ) {}
+
+  /** Applies the retention to finished files; the ones being written are left alone. */
+  prune(): PrunedRecordings {
+    const inUse = new Set([...this.active.values()].map(entry => entry.status.file).concat([...this.finishing]));
+    const pruned = pruneRecordings(RECORDINGS_DIR, this.retention, this.now(), inUse);
+    if (pruned.removed.length > 0) {
+      this.log(
+        `removed ${pruned.removed.length} recording(s) past retention, ` +
+          `${Math.round(pruned.freedBytes / 1024 / 1024)} MB freed`
+      );
+    }
+    return pruned;
+  }
 
   isRecording(display: number): boolean {
     return this.active.has(display);
@@ -161,6 +262,16 @@ export class RecordService {
     }
 
     mkdirSync(RECORDINGS_DIR, { recursive: true });
+    this.prune();
+    const free = this.space(RECORDINGS_DIR)?.free;
+    if (free !== undefined && this.retention.minFreeBytes > 0 && free < this.retention.minFreeBytes) {
+      const mb = (bytes: number) => `${Math.round(bytes / 1024 / 1024)} MB`;
+      throw new RecordingError(
+        `Not enough disk space to record desktop ${display}: ${mb(free)} free on the work volume, ` +
+          `and a recording needs at least ${mb(this.retention.minFreeBytes)} ` +
+          `(BOXD_RECORDINGS_MIN_FREE_MB). Free space in the box, or lower the recording retention.`
+      );
+    }
 
     const stamp = new Date(this.now()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const base = options.name ? sanitizeName(options.name) : `desktop-${display}`;
@@ -315,6 +426,16 @@ export class RecordService {
 
   private async stopEntry(display: number, entry: Active): Promise<RecordingStatus> {
     this.active.delete(display);
+    // Still being finished by ffmpeg, so still protected from the retention until it exits.
+    this.finishing.add(entry.status.file);
+    try {
+      return await this.finishEntry(display, entry);
+    } finally {
+      this.finishing.delete(entry.status.file);
+    }
+  }
+
+  private async finishEntry(display: number, entry: Active): Promise<RecordingStatus> {
 
     const exited = new Promise<void>(resolve => {
       if (entry.child.exitCode !== null) return resolve();

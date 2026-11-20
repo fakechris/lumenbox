@@ -21,16 +21,14 @@ import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-c
 const execFileAsync = promisify(execFile);
 
 /**
- * Paths a volume archive leaves behind, as `tar --exclude` patterns.
- *
- * A backup exists so nothing that cannot be rebuilt is lost. The spool can be rebuilt —
- * it is a 24-hour buffer of command output that `reapSpool` deletes — and it is the one
- * directory in the volume whose whole purpose is to hold text the transcript decided not
- * to keep. Copying it out of the box on every upgrade converts an expiring buffer into a
- * permanent copy, in a directory whose contents nobody reviews. Exported so a test can
- * assert the list rather than trust the command line it is spliced into.
+ * Paths a volume archive leaves behind, as `tar --exclude` patterns. A backup exists so nothing
+ * that cannot be rebuilt is lost. The spool is a 24-hour buffer of command output `reapSpool`
+ * deletes, the one directory whose purpose is text the transcript decided not to keep; copying it
+ * out on every upgrade made an expiring buffer a permanent copy nobody reviews. Recordings are
+ * disposable evidence that boxd expires by age and size (INV-1949), not work product, and each of
+ * the kept archives carried all of them. Exported so a test asserts the list, not the command line.
  */
-export const BACKUP_EXCLUDES: readonly string[] = ["./.spool"];
+export const BACKUP_EXCLUDES: readonly string[] = ["./.spool", "./recordings"];
 
 /**
  * What a volume archive carries, said at the moment one is written.

@@ -3529,13 +3529,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        if (route === "GET /recording") {
-          const name = url.searchParams.get("name") ?? "";
-          await proxyDesktop(
-            req,
-            res,
-            `/recordings/file?name=${encodeURIComponent(name)}`
-          );
+        if (route === "GET /recording" || route === "GET /api/recordings") { // the named member's box, judged like the desktop routes (INV-1949)
+          const agentId = url.searchParams.get("agent") ?? "";
+          if (!registry.has(agentId)) { send(res, 404, apiError("agent-unknown", { agent: agentId })); return; }
+          if (!mayReadAgent(agentId)) { send(res, 403, apiError("box-not-yours")); return; }
+          if (route === "GET /recording") { await proxyDesktop(req, res, `/recordings/file?name=${encodeURIComponent(url.searchParams.get("name") ?? "")}`, false, registry.boxOf(agentId).id); return; }
+          const client = orchestrator.boxClient(agentId);
+          send(res, 200, client ? await client.listRecordings() : { recordings: [] });
           return;
         }
 
@@ -5693,16 +5693,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           log("restart requested from the UI");
           send(res, 202, { restarting: true });
           setTimeout(() => process.exit(RESTART_EXIT_CODE), 300);
-          return;
-        }
-
-        if (route === "GET /api/recordings") {
-          const client = orchestrator.boxClient();
-          if (!client) {
-            send(res, 200, { recordings: [] });
-            return;
-          }
-          send(res, 200, await client.listRecordings());
           return;
         }
 
