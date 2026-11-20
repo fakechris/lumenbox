@@ -35,7 +35,9 @@ export function reportTimeline(report: VerificationReport): ReportTimeline {
   const checks = report.scenarios
     .flatMap(scenario => scenario.assertions.flatMap(item => (item.offsetMs === undefined ? [] : [{ offsetMs: item.offsetMs, label: `${scenario.name} — ${item.fact}` }])))
     .sort((a, b) => a.offsetMs - b.offsetMs);
-  checks.forEach((check, index) => steps.push({ t: Math.round((index === 0 ? 0 : checks[index - 1]!.offsetMs) / 100) / 10, label: check.label }));
+  checks.forEach((check, index) => {
+    steps.push({ t: Math.round((index === 0 ? 0 : checks[index - 1]!.offsetMs) / 100) / 10, label: check.label });
+  });
   let from = 0;
   for (const scenario of report.scenarios) {
     const offsets = scenario.assertions.flatMap(item => (item.offsetMs === undefined ? [] : [item.offsetMs]));

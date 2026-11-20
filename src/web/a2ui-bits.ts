@@ -110,7 +110,9 @@ export class LumenboxLinkElement extends A2uiLitElement<typeof LinkApi> {
     // A report's card carries a still of its recording (INV-1925): the browser draws the frame, the box makes no thumbnail.
     if (target.kind === "report") {
       const still = "display:block;width:240px;max-width:100%;aspect-ratio:16/10;background:#000;border-radius:6px;margin-bottom:4px";
-      return html`<a class="lb-link lb-link-report" href=${target.href} target="_blank" rel="noopener">
+      // Opened by hand: the page's own navigation took a plain new-tab link into this tab.
+      const open = (event: Event) => { event.preventDefault(); window.open(target.href, "_blank", "noopener"); };
+      return html`<a class="lb-link lb-link-report" href=${target.href} target="_blank" rel="noopener" @click=${open}>
         <video class="lb-report-still" style=${still} muted preload="metadata" src=${`${target.href}/video#t=0.5`}></video><span>${props.text ?? props.to}</span></a>`;
     }
     return html`<a class=${`lb-link lb-link-${target.kind}`} href=${target.href} target=${external ? "_blank" : "_self"} rel=${external ? "noopener" : ""} title=${props.to}>${props.text ?? props.to}${external && target.host ? html` <span class="lb-link-host">${target.host}</span>` : nothing}</a>`;
