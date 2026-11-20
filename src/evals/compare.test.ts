@@ -28,6 +28,15 @@ test("a version whose tool list lost read_file is red on every skill it can no l
   assert.equal((await promptSurface()).digest, surface.digest, "the same configuration reads the same prompt twice, or no two versions could be told apart by it");
   assert.ok(surface.bytes.system > 1000 && surface.tools.some(tool => "name" in tool && tool.name === "read_file"), "what is read is the prompt and tool list a turn really sends");
   assert.notEqual((await promptSurface({ skills: [] })).digest, surface.digest, "an agent offered no skills is sent another prompt");
+  // The two halves the size ratchet holds (INV-1857) are the two the turn sent, and a turn nobody waits on is sent another list.
+  assert.equal(`${surface.parts.stable}\n\n${surface.parts.volatile}`, surface.system);
+  assert.match(surface.parts.stable, /Your name is Nova\./, "the stable half holds who the agent is");
+  assert.match(surface.parts.volatile, /# Before you answer/, "the volatile half ends the prompt");
+  assert.equal(surface.bytes.stable + surface.bytes.volatile + 2, surface.bytes.system);
+  const offered = (one: PromptSurface) => one.tools.map(tool => ("name" in tool ? tool.name : ""));
+  const unattended = await promptSurface({ unattended: true });
+  assert.ok(offered(unattended).includes("NothingToSay") && !offered(surface).includes("NothingToSay"), "silence is offered only where nobody is waiting");
+  assert.match(unattended.parts.volatile, /# Before you answer/);
 
   // The candidate is the same product with one tool gone from what the model is sent.
   const episode = SUBJECT_TABLE.episode;

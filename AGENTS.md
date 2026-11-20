@@ -148,6 +148,16 @@ Every file in `docs/` opens with a header block naming what it is:
   The limit counts lines, so a line may not be the way under it: `arch-baseline.json` also lists
   every file with lines over 240 characters and how many (INV-1826); that count only falls, and a
   file not listed has none. The word tables in `src/i18n/` are exempt.
+- **What an agent is sent only shrinks, unless a pull request says why not.** `prompt-baseline.json`
+  (checked by `npm run arch`, `scripts/prompt-ratchet.mjs`, INV-1857) holds, for four agent
+  configurations — one agent, a team member, one with a desktop, a turn nobody is waiting on — the
+  bytes of the stable half of the prompt, of the volatile half with no memory and no tasks, and of
+  the tool list as JSON, read off a real turn's first request (`src/evals/surface.ts`). A number
+  over its ceiling fails and the message names it: shrink, or raise that number by hand in that
+  file and say in the pull request why every agent should pay it on every turn.
+  `--write-baseline` only lowers. On a conflict, take `main`'s file and run `npm run arch`: it
+  prints the numbers to raise. A pull request touching the prompt or a tool's definition also gets
+  a CI notice pointing at the comparison the pull request template asks for; that is a hint, not a gate.
 - **A flaky fix is believed at 16 runs, 4 at a time.** A test that failed only sometimes was
   green for its author and red under the loaded suite; a fix for one is merged only with the
   output of `npm run flaky -- <file>` (16/16) in the PR. The script runs the file the way
