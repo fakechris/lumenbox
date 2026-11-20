@@ -9,9 +9,45 @@ import { NEXT_PAGE } from "./page-locale.ts";
 import { nextLogic } from "./next-logic-ui.ts";
 import { DELIVERY_BRIEF, DELIVERY_SECTIONS, deliveryLabel } from "../host/delivery-report.ts";
 import { ASK_SENTENCES, askLabel, askProse, splitAsk } from "../host/person-ask.ts";
+import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
+
+test("automation refresh shows discovery, ignores an old response and renders the new paused routine", async () => {
+  const pending: { resolve: (got: unknown) => void; reject: (error: Error) => void }[] = [];
+  const settings = { routines: null as unknown };
+  const errors: Error[] = [];
+  const node = (tag: string, cls = "", text = "") => ({
+    tag, cls, text, kids: [] as unknown[],
+    appendChild(child: unknown) { this.kids.push(child); }, addEventListener() {},
+  });
+  let view = node("main");
+  const context = vm.createContext({
+    settings, next: { view: "auto" }, el: node, t: (key: string) => key, initial: () => "N",
+    getJson: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    failed: (error: Error) => errors.push(error),
+    render: () => { view = node("main"); vm.runInContext("renderAuto(view)", Object.assign(context, { view })); },
+  });
+  vm.runInContext(NEXT_AUTO_JS, context);
+  vm.runInContext("render()", context);
+  assert.match(JSON.stringify(view), /ui.next.auto.reading/);
+  vm.runInContext("reloadAuto()", context);
+  pending[1]!.resolve({ schedules: [{ slug: "new-routine", name: "New routine", paused: true }] });
+  await Promise.resolve();
+  pending[0]!.resolve({ schedules: [] });
+  await Promise.resolve();
+  assert.match(JSON.stringify(view), /New routine/);
+  assert.match(JSON.stringify(view), /ui.next.auto.paused/);
+  vm.runInContext("reloadAuto()", context);
+  pending[2]!.resolve({ schedules: [] });
+  await Promise.resolve();
+  assert.match(JSON.stringify(view), /ui.next.auto.empty/);
+  vm.runInContext("reloadAuto()", context);
+  pending[3]!.reject(new Error("offline"));
+  await Promise.resolve();
+  assert.equal(errors[0]?.message, "offline");
+});
 
 const row = (phase: string, blocker?: string, status = "doing") => ({ status, reading: { phase, ...(blocker ? { blocker: { kind: blocker } } : {}) } });
 
@@ -109,6 +145,42 @@ function pageFunction(name: string, globals: Record<string, unknown>): (...args:
   }
   return vm.runInNewContext(`(${script.slice(start, end)})`, globals) as (...args: unknown[]) => unknown;
 }
+
+test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an owner refusal", async () => {
+  const mine = { setup: null as null | { admins: number; bootstrap: boolean }, needsPerson: false, issued: "", tokens: [] };
+  const settings = { me: { identity: null as string | null } };
+  const { MESSAGES } = await import("../i18n/messages.ts");
+  const t = (key: string) => MESSAGES.en[key] ?? key;
+  const globals = { mine, settings, el: fakeEl, t };
+  const notice = pageFunction("tokenSetupNotice", globals) as () => Fake | null;
+  const all = (node: Fake): Fake[] => [node, ...node.kids.flatMap(all)];
+  const loadMine = pageFunction("loadMine", {
+    mine, next: { view: "settings" }, render: () => {},
+    getJson: (path: string) => Promise.resolve(path === "/api/mcp" ? { setup: { admins: 0, bootstrap: true }, tokens: [] } : {}),
+  });
+  loadMine(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(all(notice()!).find(node => node.href)?.href, "/bootstrap");
+  assert.ok(all(notice()!).some(node => node.text.includes("bootstrap-code")));
+  mine.setup!.bootstrap = false;
+  assert.ok(all(notice()!).some(node => node.text.includes("repair the local roster")));
+  assert.ok(all(notice()!).every(node => !node.href), "closed bootstrap is not linked");
+  mine.setup!.admins = 1; assert.equal(notice(), null);
+  mine.setup = { admins: 0, bootstrap: true }; settings.me.identity = "feishu:driver";
+  assert.equal(notice(), null, "a signed-in driver does not need initialization");
+  settings.me.identity = null; mine.setup = null;
+  assert.equal(notice(), null, "unknown setup state does not invent a bootstrap path");
+  let failure: unknown, loaded = 0;
+  const tokensBlock = pageFunction("tokensBlock", {
+    ...globals, tokenSetupNotice: notice, loadMine: () => { loaded++; }, failed: (error: unknown) => { failure = error; },
+    postJson: () => Promise.reject({ data: { code: "token-needs-person" } }),
+  }) as () => Fake;
+  all(tokensBlock()).find(node => node.text === t("ui.next.mine.issue"))!.press!();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(mine.needsPerson, true); assert.equal(loaded, 1); assert.equal(failure, undefined);
+  assert.ok(all(notice()!).some(node => node.text.includes("Sign in as a driver or administrator")));
+  mine.setup = { admins: 0, bootstrap: true };
+  assert.equal(all(notice()!).find(node => node.href)?.href, "/bootstrap", "a refusal keeps the available first-admin path");
+});
 
 test("\"@Bob …\" typed to Ada is said to Bob; a name mid-sentence, an unknown name and the agent's own are not", () => {
   const agents = { a: { id: "a", name: "Ada" }, b: { id: "b", name: "Bob" } };

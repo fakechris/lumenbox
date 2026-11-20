@@ -3907,6 +3907,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // The places (INV-430): the view groups routines by the box they live in.
             boxes: registry.listBoxes().filter(box => mayReadBox(box.id)).map(box => ({ id: box.id, name: box.name })),
             defaultBox: registry.box.id,
+            runnerAgents: registry.list().filter(agent => mayReadAgent(agent.id) && orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs: agent.id }).agent !== undefined).map(agent => agent.profile.name),
           });
           return;
         }
@@ -3991,7 +3992,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           
-          const slug = slugify(name);
+          const slug = slugify(name), runAs = typeof body.agent === "string" && body.agent.trim() !== "" ? body.agent.trim() : undefined;
+          const decision = orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs }, id => registry.tryGet(id)?.profile.name ?? id);
+          if (decision.reason) { send(res, 400, { error: decision.reason }); return; }
           const box = orchestrator.boxClient();
           if (box === undefined) {
             send(res, 503, apiError("no-box"));
@@ -4030,7 +4033,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (typeof body.deliver === "string" && body.deliver.trim() !== "") {
             frontmatter += `deliver: "${body.deliver.trim().replace(/"/g, '\\"')}"\n`;
           }
-          if (typeof body.timezone === "string" && body.timezone.trim() !== "") {
+          if (triggerType === "schedule" && typeof body.timezone === "string" && body.timezone.trim() !== "") {
             frontmatter += `timezone: "${body.timezone.trim().replace(/"/g, '\\"')}"\n`;
           }
           frontmatter += `paused: true\nauthored_by: web\n---\n`;
@@ -4047,7 +4050,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             }
             await box.exec(`mkdir -p '${dirPath}'`, { timeoutMs: 5000 });
             await box.writeFile(`${dirPath}/${SKILL_FILENAME}`, fileContent);
-            await orchestrator.skills.refresh();
+            await orchestrator.skills.refresh(true);
             log(`automation created: ${slug} (${triggerType})${caller.userId === undefined ? "" : ` by ${caller.userId}`}`);
             send(res, 200, { ok: true, slug });
           } catch (e) {
@@ -4503,21 +4506,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // use them. The roster is the access-control list now, not a flat allow list.
         // The bridges to other people's tools: what is running, and how much of every
         // agent's prompt each one is spending.
-        // Tokens for the side door. Issued to a person, listed without their secrets,
-        // and revocable one at a time — an IDE that no longer needs access should not
-        // require rotating everybody's.
         if (route === "POST /api/mcp/tokens") {
           if (refusedRole("driver")) return;
           const body = await readJson(req);
           const owner = caller.userId ?? (String(body.principalId ?? "") || (soleAdmin(principals.list()) ?? "")); // nobody signed in: the one admin (INV-1681)
-          if (owner === "") {
+          if (owner === "" || (caller.userId === undefined && !principals.list().some(person => person.id === owner))) {
             send(res, 400, apiError("token-needs-person", { admins: principals.list().filter(person => person.role === "admin").length }));
             return;
           }
           const minted = mcpTokens.mint(owner, String(body.label ?? ""));
           log(`mcp token issued to ${owner} (${minted.label})`);
-          // The only time the secret is ever returned: it is not stored anywhere it
-          // could be read back, so a lost one is re-issued rather than recovered.
           send(res, 200, { token: minted.token, label: minted.label, createdAt: minted.createdAt });
           return;
         }
@@ -4574,7 +4572,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/mcp") {
+          let bootstrapPending = false;
+          try { bootstrapPending = bootstrap.pending(); } catch { /* Unreadable bootstrap cannot offer enrollment. */ }
           send(res, 200, {
+            setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrapPending },
             servers: orchestrator.mcp.statuses(),
             budget: TOOL_BUDGET_WARNING,
             extensions: orchestrator.extensions?.current() ?? null,

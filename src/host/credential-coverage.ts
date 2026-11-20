@@ -99,7 +99,7 @@ export function mountedSkills<S extends CoverageSkill & { scope?: string; owner?
 
 /** The connector a tool-list entry names, when it names one: `mcp:notion__search` → `mcp:notion`. */
 function connectorOfTool(entry: string): string | undefined {
-  if (!entry.startsWith("mcp:")) return undefined;
+  if (!entry.startsWith("mcp:") || entry === "mcp:*") return undefined;
   const at = entry.indexOf("__");
   return at < 0 ? entry : entry.slice(0, at);
 }

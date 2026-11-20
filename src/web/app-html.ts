@@ -10,6 +10,7 @@ import { TASK_BOARD_JS, TASK_BOARD_STYLE } from "./task-board-ui.ts";
 import { TASK_FOCUS_JS, TASK_FOCUS_STYLE } from "./task-focus-ui.ts";
 import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
 import { LIVE_TOOLS_JS } from "./live-tools.ts";
+import { MCP_TOKEN_JS } from "./mcp-token-ui.ts";
 
 /**
  * The web UI, as a single inlined document.
@@ -1842,46 +1843,7 @@ document.getElementById("setmemlines").addEventListener("click", function (event
 /** The people list: one row per identity, grouped nowhere — flat and editable. */
 var people = [];
 
-function renderMcpTokens(tokens) {
-  var mine = (tokens || []).filter(function (t) { return t.mine; });
-  $("setmcptokens").innerHTML = mine.length
-    ? mine.map(function (t) {
-        return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
-          '<span style="flex:1">' + esc(t.label) + "</span>" +
-          '<span class="dim" style="font-size:11px">' + esc(new Date(t.createdAt).toLocaleDateString()) + "</span>" +
-          '<a href="#" data-revoke="' + esc(t.createdAt) + '" style="color:var(--danger);font-size:12px">{{ui.app.revoke}}</a></div>';
-      }).join("")
-    : '<div class="fieldnote" style="margin:0">{{ui.app.none-yet}}</div>';
-}
-
-$("setmcpadd").onclick = function () {
-  fetch("/api/mcp/tokens", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ label: $("setmcplabel").value })
-  })
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      // Shown once, because it is not stored anywhere it could be read back.
-      $("setmcpnew").textContent = d.token
-        ? "{{ui.app.copy-it-now-it-is}} " + d.token
-        : (d.error || "{{ui.app.failed}}");
-      $("setmcplabel").value = "";
-      renderMcp();
-    })
-    .catch(function () { $("setmcpnew").textContent = "{{ui.app.failed}}"; });
-};
-
-document.getElementById("setmcptokens").addEventListener("click", function (event) {
-  var at = event.target.getAttribute && event.target.getAttribute("data-revoke");
-  if (!at) return;
-  event.preventDefault();
-  fetch("/api/mcp/tokens/revoke", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ createdAt: at })
-  }).then(renderMcp);
-});
+${MCP_TOKEN_JS}
 
 document.getElementById("setextreload").addEventListener("click", function () {
   var note = $("setextreloaded");
@@ -1919,6 +1881,7 @@ function renderMcp() {
     .then(function (data) {
       var servers = data.servers || [];
       renderMcpTokens(data.tokens);
+      mcpSetup = data.setup; renderMcpSetup();
       // An installation matter, so admins only — and admins with none see the empty state
       // and the reload, because "add one to config.json, then reload" is the way in.
       document.getElementById("setmcpwrap").style.display = myRole === "admin" ? "" : "none";
@@ -5398,8 +5361,7 @@ document.getElementById("autonew").addEventListener("click", function (e) {
   $("autocreate").style.display = autoCreateOpen ? "" : "none";
   if (autoCreateOpen) {
     // populate agent dropdown
-    $("autoagent").innerHTML = '<option value="">{{ui.app.first-agent}}</option>' +
-      agents.map(function (a) { return '<option value="' + esc(a.name) + '">' + esc(a.name) + '</option>'; }).join("");
+    $("autoagent").innerHTML = '<option value="">{{ui.app.first-agent}}</option>';
   }
 });
 
@@ -5478,7 +5440,7 @@ $("autosave").addEventListener("click", function () {
   var deliver = $("autodeliver").value.trim();
   if (deliver) payload.deliver = deliver;
   var tz = $("autotimezone").value.trim();
-  if (tz) payload.timezone = tz;
+  if (autoTrigger === "schedule" && tz) payload.timezone = tz;
   
   $("autosave").disabled = true;
   $("autoerror").style.display = "none";
@@ -7015,6 +6977,7 @@ fetch("/api/me")
   .then(function (r) { return r.json(); })
   .then(function (me) {
     myRole = me.role || "viewer";
+    myIdentity = me.identity; renderMcpSetup();
     $("whoami").textContent = me.name ? me.name + " · " + (me.label || me.role) : ""; // "owner" on a single-machine installation (INV-1685)
     $("whoami").title = me.identity ? "{{ui.app.signed-in-as}} " + me.identity : "";
     applyRole();

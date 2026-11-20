@@ -22,7 +22,7 @@ function skill(frontmatter: string) {
 test("what is needed comes from the tool list, the skills' frontmatter and the box's bundles, each with who said so", () => {
   const agent: CoverageAgent = {
     ...ada,
-    tools: ["read_file", "mcp:notion__search", "mcp:notion__create_page"],
+    tools: ["read_file", "mcp:*", "mcp:notion__search", "mcp:notion__create_page"],
     bundles: [{ name: "release", needs: { connectors: ["github"], secretIds: ["NPM_TOKEN"] } }],
   };
   const reviewer = skill("connectors: [github, mcp:linear]\nsecrets: GH_DEPLOY_KEY");

@@ -9,6 +9,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { attentionFor } from "./attention.ts";
+import { CredentialChecks } from "./credential-waits.ts";
+import { parseSkillFile, skillFrom } from "./skills.ts";
 import { cmdRoutines } from "./routine-runs-cli.ts";
 import { runsOf, type RunRecord } from "./routine-runs.ts";
 import { parseSchedule, passingFailure, ROUTINE_RETRIES, routineRetryDelayMs, Scheduler, type Scheduled, type SchedulerDeps } from "./schedule.ts";
@@ -42,6 +44,32 @@ function fixture(path: string | null, outcomes: (() => Promise<void | { result: 
 }
 
 const fail = (reason: string) => async () => { throw new Error(reason); };
+
+test("MCP wildcard permission lets a reply-only routine run, but a named missing connector still pauses it (INV-1965)", async () => {
+  for (const connectors of ["", "connectors: mcp:github\n"]) {
+    const built = skillFrom("hourly", parseSkillFile(`---\nname: Hourly reply\ndescription: Reply with text.\n${connectors}---\nReply with hello.`));
+    assert.ok("skill" in built);
+    const checks = new CredentialChecks({
+      agent: () => ({ id: "agent-ada", name: "Ada", boxId: "box", tools: ["mcp:*"] }),
+      skillsIn: () => [built.skill],
+      world: () => ({ secrets: [], servers: [], env: {} }),
+    });
+    const f = fixture(null, [], async (skill, agent) => checks.forRoutine(skill, agent));
+    const scheduler = f.make();
+    await scheduler.tick();
+    await settle();
+    if (connectors === "") {
+      assert.equal(f.fired.length, 1, "reply-only work starts without any MCP connectors");
+      assert.equal(scheduler.holds.holdOf("hourly"), undefined);
+      assert.equal(scheduler.runs("hourly")[0]?.outcome, "done");
+    } else {
+      assert.equal(f.fired.length, 0, "the missing named connector prevents the run");
+      assert.equal(scheduler.holds.holdOf("hourly")?.code, "missing_credentials");
+      assert.match(scheduler.holds.holdOf("hourly")?.reason ?? "", /connector mcp:github/);
+      assert.equal(scheduler.runs("hourly")[0]?.outcome, "skipped");
+    }
+  }
+});
 
 test("a run that failed on a passing cause is retried 1, 2 then 4 minutes later, and only the window's last failure counts (INV-1741)", async () => {
   mock.timers.enable({ apis: ["setTimeout"] });
