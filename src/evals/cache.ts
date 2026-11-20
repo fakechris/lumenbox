@@ -74,7 +74,8 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
  * they are the only thing that differs between two runs of the same episode (measured: the
  * requests are otherwise byte-identical), so they are blanked before hashing.
  */
-export const requestFingerprint = (params: Anthropic.MessageCreateParams): string => digest(canonical(params).replace(UUID, "<id>"));
+export const blankIds = (text: string): string => text.replace(UUID, "<id>");
+export const requestFingerprint = (params: Anthropic.MessageCreateParams): string => digest(blankIds(canonical(params)));
 
 export interface CacheScope {
   /** The task's version (corpus.ts): a task edited is a task asked again. */

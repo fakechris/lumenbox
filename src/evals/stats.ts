@@ -177,6 +177,9 @@ export interface PairedComparison {
   paired: number;
   worse: number;
   better: number;
+  /** Which tasks those are, by the key the two runs were paired on. */
+  worseIds: string[];
+  betterIds: string[];
   /** `worse` over the paired tasks: the share of what worked before that a reader would now find broken. */
   worseShare: number;
   betterShare: number;
@@ -194,17 +197,19 @@ export interface PairedComparison {
  */
 export function pairedComparison(now: ReadonlyMap<string, boolean>, baseline: ReadonlyMap<string, boolean>, alpha = 0.05): PairedComparison {
   let paired = 0;
-  let worse = 0;
-  let better = 0;
+  const worseIds: string[] = [];
+  const betterIds: string[] = [];
   let baselinePasses = 0;
   for (const [id, passed] of now) {
     const was = baseline.get(id);
     if (was === undefined) continue;
     paired += 1;
     if (was) baselinePasses += 1;
-    if (was && !passed) worse += 1;
-    if (!was && passed) better += 1;
+    if (was && !passed) worseIds.push(id);
+    if (!was && passed) betterIds.push(id);
   }
+  const worse = worseIds.length;
+  const better = betterIds.length;
   const test = mcnemar(worse, better);
   const share = (count: number) => (paired === 0 ? 0 : count / paired);
   let verdict: ComparisonVerdict;
@@ -224,5 +229,5 @@ export function pairedComparison(now: ReadonlyMap<string, boolean>, baseline: Re
     verdict = "NO_CHANGE_DETECTED";
     why = `${worse} worse, ${better} better of ${paired}: no drop (p = ${test.p.toFixed(3)}); read it beside the detectable difference`;
   }
-  return { paired, worse, better, worseShare: share(worse), betterShare: share(better), p: test.p, statistic: test.statistic, verdict, why };
+  return { paired, worse, better, worseIds, betterIds, worseShare: share(worse), betterShare: share(better), p: test.p, statistic: test.statistic, verdict, why };
 }

@@ -1,7 +1,8 @@
 /** The eval command on the stand-in: a second run costs nothing, and a stand-in's page cannot be filed as a result (INV-1772). */
 
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -63,6 +64,64 @@ test("a stand-in's page is refused in docs/evals/, and plan counts calls without
   assert.equal(Number(judgeCalls), Number(tasks) * 3, "one judge question per steward attempt");
   assert.match((await collect(["plan", "--only", "skill.", "--k", "3"])).text, /and 0 judge calls/, "which skill was opened is decided by code alone");
   await assert.rejects(collect(["plan", "--split", "train"]), /--split needs dev or test/);
+});
+
+test("--compare freezes two commits, finds the one whose prompt points at a file that is not there red, and asks nothing twice (INV-1862)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "inv1862-cli-"));
+  // The frozen trees go under a temporary directory of this test's own, so what is left of them can be counted.
+  const scratch = join(dir, "tmp");
+  mkdirSync(scratch);
+  const realTmp = process.env.TMPDIR;
+  process.env.TMPDIR = scratch;
+  try {
+    // A throwaway repository of this product with one more commit: the candidate's prompt lists every
+    // skill at a path no skill is at. Nothing is written to the repository the suite runs in.
+    const repo = join(dir, "repo");
+    const git = (...args) => execFileSync("git", ["-c", "user.name=eval", "-c", "user.email=eval@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("git", ["clone", "--quiet", "--depth", "1", `file://${root}`, repo], { stdio: ["ignore", "pipe", "pipe"] });
+    const skills = join(repo, "src/host/skills.ts");
+    const source = readFileSync(skills, "utf8");
+    const named = 'export const SKILL_FILENAME = "SKILL.md";';
+    assert.ok(source.includes(named), "the fixture edits the one line that names a skill's file");
+    writeFileSync(skills, source.replace(named, 'export const SKILL_FILENAME = "SKILL.txt";'));
+    git("commit", "--quiet", "-am", "the prompt names a file no skill has");
+
+    const plan = await collect(["plan", "--compare", "HEAD~1", "HEAD", "--only", "skill.", "--k", "2"]);
+    const [, twice, once] = /at most (\d+) model calls, twice the (\d+) of a plain run/.exec(plan.text);
+    assert.equal(Number(twice), Number(once) * 2, "the cost of both versions is said before anything is spent");
+    assert.match(plan.text, /No judge is asked/);
+
+    const common = ["--compare", "HEAD~1", "HEAD", "--repo", repo, "--fake", "--wrong", "0", "--only", "skill.", "--k", "2", "--cache", join(dir, "cache")];
+    const first = await collect([...common, "--out", join(dir, "a.json"), "--report", join(dir, "a.md")]);
+    assert.equal(first.code, 0, first.text);
+    const a = JSON.parse(readFileSync(join(dir, "a.json"), "utf8"));
+    assert.notEqual(a.base.sha, a.candidate.sha);
+    assert.notEqual(a.base.surface.digest, a.candidate.surface.digest, "the two sides were built from two trees: their prompts differ");
+    assert.equal(a.base.run.split, "dev+test");
+    assert.match(first.text, /gate: RED — the pass rate fell by .* \(stand-in; not a measurement\)/);
+    const page = readFileSync(join(dir, "a.md"), "utf8");
+    assert.match(page, /^<!-- eval-report: COMPARE-\d{4}-\d{2}-\d{2}-[0-9a-f]{7}-[0-9a-f]{7}\n {5}measured: no /);
+    const mustOpen = a.base.run.tasks.filter(task => task.failureType === "skill-not-opened");
+    assert.ok(mustOpen.length > 10 && mustOpen.every(task => page.includes(`| ${task.id} **(outright)** |`)), "every skill the candidate can no longer open is listed as broken");
+    assert.match(page, /## Tasks that got better\n\nNone\./);
+
+    // A commit against itself sends the same requests: the second side costs nothing and nothing moves.
+    const same = await collect(["--compare", "HEAD", "HEAD", "--repo", repo, "--fake", "--wrong", "0.3", "--only", "steward.", "--k", "2", "--cache", join(dir, "cache"), "--out", join(dir, "c.json")]);
+    const c = JSON.parse(readFileSync(join(dir, "c.json"), "utf8"));
+    assert.ok(c.base.run.calls.made > 0 && c.candidate.run.calls.made === 0, JSON.stringify([c.base.run.calls, c.candidate.run.calls]));
+    assert.match(same.text, /gate: NOT RED \(stand-in; not a measurement\)/);
+    assert.match(same.text, /The two versions send the same prompt and the same tools/);
+
+    await assert.rejects(collect([...common, "--report", join(root, "docs/evals/COMPARE-2099-01-01-aaaaaaa-bbbbbbb.md")]), /may not be written into docs\/evals/);
+    await assert.rejects(collect(["--compare", "HEAD", "no-such-ref", "--repo", repo, "--fake"]), /no-such-ref names no commit/);
+    await assert.rejects(collect(["--compare", "HEAD", "--fake"]), /--compare needs two refs/);
+    assert.deepEqual(readdirSync(scratch), [], "every frozen tree and scratch home was removed");
+    assert.ok(existsSync(join(root, "node_modules/@anthropic-ai/sdk")), "and removing one left this checkout's packages where they are");
+  } finally {
+    if (realTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = realTmp;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the scenario tasks ask what the live scenarios ask", async () => {
