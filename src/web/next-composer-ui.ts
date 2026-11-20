@@ -38,21 +38,6 @@ function composerCanSend() {
   return refreshModelReadiness();
 }
 
-async function sendMessage() {
-  var input = $("composer-text"), text = input.value.trim(), id = chat.agentId;
-  if (!text || !id) return;
-  var to = addressed(text);
-  if (to && to.text) { input.value = to.text; openChat(to.agent.id); sendMessage(); return; }
-  if (!await composerCanSend() || chat.agentId !== id || input.value.trim() !== text) return;
-  // With a card on show the reply is that card's (next-dock-ui.ts); detached, it is an ordinary message, this once.
-  if (need.detached) need.detached = ""; else if (sendReply(text)) return;
-  input.value = ""; input.style.height = "";
-  chat.entries = chat.entries.concat([{ kind: "text", role: "user", text: text }]);
-  chat.live = { text: "", doing: "" }; chat.jump = true;
-  render();
-  postJson("/api/prompt", { agent: id, conversation: chat.conversation, text: text }).catch(function (error) { chat.live = null; failed(error); loadThread(); });
-}
-
 /** What is being asked for at the caret: a skill, a colleague, or nothing. */
 function composerQuery(value, caret) {
   var slash = /^\\/(\\S*)$/.exec(value);

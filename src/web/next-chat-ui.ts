@@ -313,6 +313,21 @@ function addressed(text) {
   return other ? { agent: other, text: text.slice(match[0].length) } : null;
 }
 
+async function sendMessage() {
+  var input = $("composer-text"), text = input.value.trim(), id = chat.agentId;
+  if (!text || !id) return;
+  var to = addressed(text);
+  if (to && to.text) { input.value = to.text; openChat(to.agent.id); sendMessage(); return; }
+  if (!await composerCanSend() || chat.agentId !== id || input.value.trim() !== text) return;
+  // With a card on show the reply is that card's (next-dock-ui.ts); detached, it is an ordinary message, this once.
+  if (need.detached) need.detached = ""; else if (sendReply(text)) return;
+  input.value = ""; input.style.height = "";
+  chat.entries = chat.entries.concat([{ kind: "text", role: "user", text: text }]);
+  chat.live = { text: "", doing: "" }; chat.jump = true;
+  render();
+  postJson("/api/prompt", { agent: id, conversation: chat.conversation, text: text }).catch(function (error) { chat.live = null; failed(error); loadThread(); });
+}
+
 /** Live events for the open conversation: words as they come, what it is doing, and a re-read when the turn ends. */
 function chatEvent(event) {
   if (!event || event.agentId !== chat.agentId || next.view !== "chat") return;
