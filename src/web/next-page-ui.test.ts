@@ -146,6 +146,42 @@ function pageFunction(name: string, globals: Record<string, unknown>): (...args:
   return vm.runInNewContext(`(${script.slice(start, end)})`, globals) as (...args: unknown[]) => unknown;
 }
 
+test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an owner refusal", async () => {
+  const mine = { setup: null as null | { admins: number; bootstrap: boolean }, needsPerson: false, issued: "", tokens: [] };
+  const settings = { me: { identity: null as string | null } };
+  const { MESSAGES } = await import("../i18n/messages.ts");
+  const t = (key: string) => MESSAGES.en[key] ?? key;
+  const globals = { mine, settings, el: fakeEl, t };
+  const notice = pageFunction("tokenSetupNotice", globals) as () => Fake | null;
+  const all = (node: Fake): Fake[] => [node, ...node.kids.flatMap(all)];
+  const loadMine = pageFunction("loadMine", {
+    mine, next: { view: "settings" }, render: () => {},
+    getJson: (path: string) => Promise.resolve(path === "/api/mcp" ? { setup: { admins: 0, bootstrap: true }, tokens: [] } : {}),
+  });
+  loadMine(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(all(notice()!).find(node => node.href)?.href, "/bootstrap");
+  assert.ok(all(notice()!).some(node => node.text.includes("bootstrap-code")));
+  mine.setup!.bootstrap = false;
+  assert.ok(all(notice()!).some(node => node.text.includes("repair the local roster")));
+  assert.ok(all(notice()!).every(node => !node.href), "closed bootstrap is not linked");
+  mine.setup!.admins = 1; assert.equal(notice(), null);
+  mine.setup = { admins: 0, bootstrap: true }; settings.me.identity = "feishu:driver";
+  assert.equal(notice(), null, "a signed-in driver does not need initialization");
+  settings.me.identity = null; mine.setup = null;
+  assert.equal(notice(), null, "unknown setup state does not invent a bootstrap path");
+  let failure: unknown, loaded = 0;
+  const tokensBlock = pageFunction("tokensBlock", {
+    ...globals, tokenSetupNotice: notice, loadMine: () => { loaded++; }, failed: (error: unknown) => { failure = error; },
+    postJson: () => Promise.reject({ data: { code: "token-needs-person" } }),
+  }) as () => Fake;
+  all(tokensBlock()).find(node => node.text === t("ui.next.mine.issue"))!.press!();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(mine.needsPerson, true); assert.equal(loaded, 1); assert.equal(failure, undefined);
+  assert.ok(all(notice()!).some(node => node.text.includes("Sign in as a driver or administrator")));
+  mine.setup = { admins: 0, bootstrap: true };
+  assert.equal(all(notice()!).find(node => node.href)?.href, "/bootstrap", "a refusal keeps the available first-admin path");
+});
+
 test("\"@Bob …\" typed to Ada is said to Bob; a name mid-sentence, an unknown name and the agent's own are not", () => {
   const agents = { a: { id: "a", name: "Ada" }, b: { id: "b", name: "Bob" } };
   const addressed = pageFunction("addressed", { next: { agents }, chat: { agentId: "a" } });

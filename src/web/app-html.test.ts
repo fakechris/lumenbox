@@ -22,6 +22,32 @@ import { APP_PAGE } from "./page-locale.ts";
 /** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
 const APP_HTML = APP_PAGE("en");
 
+test("Mine offers first-admin setup only to an uninitialized operator, and explains unavailable setup", () => {
+  const source = APP_HTML.slice(APP_HTML.indexOf("var mcpSetup, myIdentity;"), APP_HTML.indexOf("function renderMcpTokens(tokens)"));
+  const notice = {
+    textContent: "", children: [] as { textContent?: string; href?: string }[],
+    appendChild(node: { textContent?: string; href?: string }) { this.children.push(node); },
+  };
+  const context = {
+    $: () => notice,
+    document: { createTextNode: (textContent: string) => ({ textContent }), createElement: () => ({}) },
+  };
+  runInNewContext(source, context);
+  const render = (state: string) => {
+    notice.children = [];
+    runInNewContext(state, context);
+    return notice.textContent + notice.children.map(node => node.textContent).join("");
+  };
+  assert.match(render('myIdentity = null; mcpSetup = {admins:0,bootstrap:true}; renderMcpSetup();'), /bootstrap-code/);
+  assert.equal(notice.children.find(node => node.href)?.href, "/bootstrap");
+  assert.match(render('mcpSetup.bootstrap = false; renderMcpSetup();'), /repair the local roster/);
+  assert.equal(notice.children.length, 0, "unavailable bootstrap is not offered");
+  assert.equal(render('mcpSetup.admins = 1; renderMcpSetup();'), "");
+  assert.equal(render('myIdentity = "driver:alice"; mcpSetup.admins = 0; renderMcpSetup();'), "");
+  assert.match(render('renderMcpSetup(true);'), /Sign in as a driver or administrator/, "an issuance refusal has an actionable next step");
+  assert.equal(render('myIdentity = null; mcpSetup = undefined; renderMcpSetup();'), "", "missing setup data does not invent a bootstrap path");
+});
+
 /** Every `id="…"` the document defines. */
 const definedIds = new Set([...APP_HTML.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map(match => match[1]!));
 
