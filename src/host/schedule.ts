@@ -677,7 +677,7 @@ export class Scheduler {
    */
   async listening(): Promise<readonly Listening[]> { return this.deps.listeners ? this.deps.listeners() : []; }
 
-  async status(): Promise<
+  async status({ includeListeners = false } = {}): Promise<
     readonly {
       slug: string;
       name: string;
@@ -695,7 +695,7 @@ export class Scheduler {
       running: boolean;
       paused: boolean;
       /** Recurring, one-time (`@at`), or on call (INV-430): the view groups on this. */
-      kind: "schedule" | "once" | "webhook";
+      kind: "schedule" | "once" | "webhook" | "message";
       /** The box the routine lives in; absent means the installation's own. */
       boxId: string | undefined;
       /** How it may act (INV-1458); `modeDefaulted` when the file says nothing and auto is assumed. */
@@ -735,28 +735,37 @@ export class Scheduler {
     // question, and a routine that is missing from the automations page is a routine nobody
     // knows is armed.
     const hooked = this.deps.hooked === undefined ? [] : await this.deps.hooked().catch(() => []);
+    const listeners = includeListeners ? await this.listening().catch(() => []) : [];
+    const events: ({ skill: Hooked; kind: "webhook" } | { skill: Listening; kind: "message" })[] = [
+      ...hooked.map(skill => ({ skill, kind: "webhook" as const })),
+      ...listeners.map(skill => ({ skill, kind: "message" as const })),
+    ];
     return [
       ...scheduled,
-      ...hooked.map(skill => ({
-        slug: skill.slug,
-        name: skill.name,
-        described: "when its webhook is called",
-        schedule: "webhook",
-        agent: skill.runAs,
-        timezone: undefined,
-        deliver: skill.deliver,
-        deliverWhen: skill.deliverWhen,
-        authoredBy: skill.authoredBy,
-        because: skill.because,
-        lastRun: this.lastRun.get(skill.slug)?.toISOString(),
-        nextRun: undefined,
-        running: this.running.has(skill.slug),
-        paused: skill.paused === true || this.holds.holdOf(skill.slug) !== undefined,
-        upcoming: [],
-        kind: "webhook" as const,
-        boxId: skill.boxId,
-        mode: skill.mode ?? "auto", modeDefaulted: skill.mode === undefined, observed: this.observedOf(skill.slug), hold: this.holds.holdOf(skill.slug), failures: this.holds.streakOf(skill.slug),
-      })),
+      ...events.map(event => {
+        const { skill, kind } = event;
+        const hook = event.kind === "webhook" ? event.skill : undefined;
+        return {
+          slug: skill.slug,
+          name: skill.name,
+          described: event.kind === "webhook" ? "when its webhook is called" : event.skill.match,
+          schedule: kind,
+          agent: skill.runAs,
+          timezone: undefined,
+          deliver: hook?.deliver,
+          deliverWhen: hook?.deliverWhen,
+          authoredBy: hook?.authoredBy,
+          because: hook?.because,
+          lastRun: this.lastRun.get(skill.slug)?.toISOString(),
+          nextRun: undefined,
+          running: this.running.has(skill.slug),
+          paused: skill.paused === true || this.holds.holdOf(skill.slug) !== undefined,
+          upcoming: [],
+          kind,
+          boxId: skill.boxId,
+          mode: skill.mode ?? "auto", modeDefaulted: skill.mode === undefined, observed: this.observedOf(skill.slug), hold: this.holds.holdOf(skill.slug), failures: this.holds.streakOf(skill.slug),
+        };
+      }),
     ];
   }
 
@@ -833,7 +842,7 @@ export class Scheduler {
     const skill = hooked.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No webhook routine "${slug}".` };
     if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
-    if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
+    if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused. In Automations, select Turn on beside this routine, then resend the webhook.` };
     const held = this.holds.holdOf(slug);
     if (held !== undefined) return { ok: false, reason: `${skill.name} is paused (${held.reason}); resume it first.` };
     if (skill.mode === "off") return { ok: false, reason: `${skill.name} is switched off (mode: off).` };
@@ -885,7 +894,7 @@ export class Scheduler {
     const skill = skills.find(candidate => candidate.slug === slug);
     if (skill === undefined) return { ok: false, reason: `No scheduled skill "${slug}".` };
     if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
-    if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused; turn it on first.` };
+    if (skill.paused === true) return { ok: false, reason: `${skill.name} is paused. In Automations, select Turn on beside this routine, then select Run now again.` };
     const held = this.holds.holdOf(slug);
     if (held !== undefined) return { ok: false, reason: `${skill.name} is paused (${held.reason}); resume it first.` };
     if (this.running.has(slug)) return { ok: false, reason: `${skill.name} is already running.` };

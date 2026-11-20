@@ -3898,7 +3898,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const lastResults = new Map<string, ReturnType<typeof orchestrator.routineResults.list>[number]>();
           for (const entry of orchestrator.routineResults.list().filter(entry => mayReadAgent(entry.agentId))) if (!lastResults.has(entry.slug)) lastResults.set(entry.slug, entry);
           send(res, 200, {
-            schedules: (await orchestrator.scheduler.status()).filter(entry => mayReadBox(entry.boxId ?? registry.box.id)).map(entry => {
+            schedules: (await orchestrator.scheduler.status({ includeListeners: true })).filter(entry => mayReadBox(entry.boxId ?? registry.box.id)).map(entry => {
               const last = lastResults.get(entry.slug);
               return last === undefined ? entry : { ...entry, lastResult: { at: last.at, verdict: last.verdict, reason: last.reason, text: last.text.slice(0, 600), ...(last.result !== undefined ? { result: last.result } : {}) } };
             }),
@@ -6524,6 +6524,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const updated = mode !== undefined ? rewriteFrontmatter(existing.content, { set: { mode } })
               : resumed ? rewriteFrontmatter(existing.content, { drop: ["paused"] }) : rewriteFrontmatter(existing.content, { set: { paused: "true" } });
             await box.writeFile(path, updated);
+            await orchestrator.skills.refresh(true);
             log(`${mode !== undefined ? `mode ${mode} for` : resumed ? "resumed" : "paused"} ${slug}${caller.userId === undefined ? "" : ` for ${caller.userId}`}`);
             send(res, 200, { ok: true, paused: mode === undefined ? !resumed : undefined, ...(mode !== undefined ? { mode } : {}) });
           } catch (error) {

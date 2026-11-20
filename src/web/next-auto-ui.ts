@@ -6,7 +6,7 @@
  * to do, who does it, and what starts it. The routes are the classic page's.
  */
 export const NEXT_AUTO_JS = `
-var auto = { creating: false, open: "", runs: null, trigger: "schedule", read: 0 };
+var auto = { creating: false, createdSlug: "", open: "", runs: null, trigger: "schedule", read: 0 };
 // minute hour day month weekday, as the scheduler reads it
 var AUTO_TIMES = [["hourly", "0 * * * *"], ["daily", "0 9 * * *"], ["weekdays", "0 9 * * 1-5"], ["monday", "0 9 * * 1"]];
 
@@ -36,7 +36,9 @@ function autoForm() {
     if (who.value) body.agent = who.value;
     try { if (kind.value === "schedule") body.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (error) {}
     save.disabled = true;
-    postJson("/api/automations", body).then(function () { auto.creating = false; toast(t("ui.next.member.created")); reloadAuto(); }, function (error) { save.disabled = false; failed(error); });
+    postJson("/api/automations", body).then(function (result) {
+      auto.creating = false; auto.createdSlug = result.slug; reloadAuto();
+    }, function (error) { save.disabled = false; failed(error); });
   });
   cancel.addEventListener("click", function () { auto.creating = false; render(); });
   [name.label, what.label, pick(t("ui.next.auto.who"), who), pick(t("ui.next.auto.starts"), kind), whenLabel, custom.label, match.label].forEach(function (node) { form.appendChild(node); });
@@ -82,23 +84,33 @@ function renderAuto(view) {
   }
   if (settings.routines.length === 0) { view.appendChild(el("p", "empty", t("ui.next.auto.empty"))); return; }
   var list = el("div", "list");
-  settings.routines.forEach(function (routine) {
+  var created = settings.routines.find(function (routine) { return routine.slug === auto.createdSlug; });
+  var routines = created ? [created].concat(settings.routines.filter(function (routine) { return routine !== created; })) : settings.routines;
+  routines.forEach(function (routine) {
     var row = el("div", "row"), open = el("button", "open"), body = el("span", "body"), acts = el("span", "acts");
-    var toggle = el("button", "act", t(routine.paused ? "ui.next.auto.resume" : "ui.next.auto.pause")), run = el("button", "act", t("ui.next.auto.run"));
-    var when = routine.nextRun ? t("ui.next.auto.next", { when: new Date(routine.nextRun).toLocaleString() }) : t("ui.next.auto.event");
+    var toggle = el("button", "act", t(routine.paused ? "ui.app.turn-on" : "ui.next.auto.pause")), run = el("button", "act", t("ui.next.auto.run"));
+    var when = routine.nextRun ? t("ui.next.auto.next", { when: new Date(routine.nextRun).toLocaleString() }) : routine.paused ? "" : t("ui.next.auto.event");
     body.appendChild(el("div", "title", routine.name || routine.slug));
     body.appendChild(el("div", "why", [routine.described || routine.schedule || "", when].filter(Boolean).join(" · ")));
+    if (routine === created && routine.paused && !routine.hold) body.appendChild(el("div", "why", t("ui.next.auto.createdPaused")));
     open.appendChild(el("span", "who", initial(routine.agent || routine.name)));
     open.appendChild(body);
     open.addEventListener("click", function () { auto.open = auto.open === routine.slug ? "" : routine.slug; auto.runs = null; render(); });
     row.appendChild(open);
     row.appendChild(el("span", routine.paused ? "chip" : "chip-run", t(routine.paused ? "ui.next.auto.paused" : "ui.next.auto.on")));
-    toggle.addEventListener("click", function () { postJson(routine.paused ? "/api/schedules/resume" : "/api/schedules/pause", { slug: routine.slug }).then(reloadAuto, failed); });
+    toggle.addEventListener("click", function () {
+      postJson(routine.paused ? "/api/schedules/resume" : "/api/schedules/pause", { slug: routine.slug }).then(function () {
+        if (routine === created) auto.createdSlug = "";
+        reloadAuto();
+      }, failed);
+    });
     run.addEventListener("click", function () {
+      if (routine.paused && !routine.hold) { toast(t("ui.next.auto.runPaused")); return; }
       run.disabled = true;
       postJson("/api/schedules/run", { slug: routine.slug }).then(function () { toast(t("ui.next.auto.started")); auto.runs = null; reloadAuto(); }, function (error) { run.disabled = false; failed(error); });
     });
-    acts.appendChild(run); acts.appendChild(toggle); row.appendChild(acts);
+    if (routine.kind !== "webhook" && routine.kind !== "message") acts.appendChild(run);
+    acts.appendChild(toggle); row.appendChild(acts);
     list.appendChild(row);
     if (auto.open === routine.slug) list.appendChild(autoRuns(routine));
   });

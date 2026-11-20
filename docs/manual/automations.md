@@ -4,7 +4,7 @@
      status: current
      covers: routine
      audience: user
-     updated: 2026-11-19
+     updated: 2026-11-20
 -->
 # Automations
 
@@ -26,6 +26,8 @@ nothing runs. Check the Automations tab: "would have run N times · last …".
 
 - **Make one:** the Automations tab → *+ New*. Give it a name and an instruction, choose *When
   to run* — on a schedule, a webhook, or a message — and the agent it runs as.
+- **Turn it on:** new routines show as *Paused*. Select *Turn on* beside the routine when
+  you are ready for it to run. A paused routine does not respond to its trigger or to *Run now*.
 - **Try it safely:** press *Observe* to watch what it would do, then *Let it run* when you trust
   it. *Run now* runs it once at once.
 - **Pause or resume it:** *Pause* and *Turn on*.
@@ -48,8 +50,9 @@ nothing runs. Check the Automations tab: "would have run N times · last …".
 agentbox routines runs <name> [--limit N]   # a routine's last runs, and whether it was paused
 ```
 
-A webhook routine is started with an HTTP POST to its URL, with
-`Authorization: Bearer <secret>`.
+First select *Turn on* beside the webhook routine in the Automations tab. Then send an HTTP
+POST to its URL with `Authorization: Bearer <secret>`. A paused routine returns HTTP 409 even
+with a valid secret. Turn it on and resend the POST.
 
 ## Where to see the result
 
