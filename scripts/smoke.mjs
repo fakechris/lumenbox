@@ -55,9 +55,10 @@ function assert(condition, message) {
 
 const target = smokeTarget(process.argv, process.env, DEFAULT_CONTAINER);
 if (target.mode !== "attached") delete process.env.AGENTBOX_BOXD_URL;
+if (target.overridesAttached) delete process.env.AGENTBOX_TOKEN;
 const realHome = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
 const owners = target.localLive ? liveOwners(process.env.AGENTBOX_AGENTS_DIR ?? join(realHome, "agents")) : new Map();
-if (target.localLive) {
+if (target.localLive || (target.overridesAttached && target.mode === "use")) {
   process.env.AGENTBOX_TOKEN ??= readBoxToken(target.name);
   if (!process.env.AGENTBOX_TOKEN) throw new Error(`No token for ${target.name}. Set AGENTBOX_TOKEN to the box's token.`);
 }

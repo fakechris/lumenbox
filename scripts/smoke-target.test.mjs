@@ -23,10 +23,13 @@ test("smoke permits explicit test targets and requires opt-in for the live conta
   assert.equal(smokeTarget(["--box", "use", "test-box"], {}, DEFAULT_CONTAINER).name, "test-box");
   assert.equal(smokeTarget([], { AGENTBOX_CONTAINER: "test-box" }, DEFAULT_CONTAINER).name, "test-box");
   assert.equal(smokeTarget([], { AGENTBOX_BOXD_URL: "http://test.invalid" }, DEFAULT_CONTAINER).mode, "attached");
-  const attachedEnv = { AGENTBOX_BOXD_URL: "http://test.invalid" };
+  const attachedEnv = { AGENTBOX_BOXD_URL: "http://test.invalid", AGENTBOX_TOKEN: "remote-token" };
+  assert.equal(smokeTarget([], attachedEnv, DEFAULT_CONTAINER).overridesAttached, false);
+  assert.equal(smokeTarget(["--box", "use", "test-box"], {}, DEFAULT_CONTAINER).overridesAttached, false);
   for (const mode of ["create", "keep", "use"]) {
     const target = smokeTarget(["--box", mode, "test-box"], attachedEnv, DEFAULT_CONTAINER);
     assert.equal(target.mode, mode);
+    assert.equal(target.overridesAttached, true);
     if (mode === "use") assert.equal(target.name, "test-box");
   }
   const live = smokeTarget(["--live-box"], {}, DEFAULT_CONTAINER);

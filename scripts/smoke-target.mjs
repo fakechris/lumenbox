@@ -6,6 +6,7 @@ import { BOX_OWNER_FILENAME, PROFILE_FILENAME } from "../src/agents/registry.ts"
 
 export function smokeTarget(argv, env, liveName) {
   const live = argv.includes("--live-box");
+  const overridesAttached = argv.includes("--box") && Boolean(env.AGENTBOX_BOXD_URL?.trim());
   const url = argv.includes("--box") ? undefined : env.AGENTBOX_BOXD_URL?.trim();
   const chosen = live && !argv.includes("--box") && env.AGENTBOX_CONTAINER === undefined
     ? { mode: "use", name: liveName } : boxMode(argv, env);
@@ -14,7 +15,7 @@ export function smokeTarget(argv, env, liveName) {
     throw new Error("--box needs create, keep or use <name>.");
   }
   const target = { live, ...(url ? { mode: "attached", url } : chosen) };
-  return { ...target, localLive: live && target.mode === "use" && target.name === liveName };
+  return { ...target, overridesAttached, localLive: live && target.mode === "use" && target.name === liveName };
 }
 
 export function smokeHome(env) {
