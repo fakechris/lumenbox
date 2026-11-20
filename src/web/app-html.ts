@@ -6356,7 +6356,7 @@ $("clipout").onclick = function () {
  */
 var recording = null;
 
-function renderRecordings(list) {
+function renderRecordings(list, agent) {
   var box = $("recordings");
   if (!list || !list.length) {
     box.style.display = "none";
@@ -6366,7 +6366,7 @@ function renderRecordings(list) {
   for (var i = 0; i < Math.min(list.length, 6); i++) {
     var item = list[i];
     var size = item.size_bytes ? Math.round(item.size_bytes / 1024) + "KB" : "recording…";
-    html += '<a href="/recording?agent=' + encodeURIComponent(current) + '&amp;name=' + encodeURIComponent(item.file) + '" target="_blank"' +
+    html += '<a href="/recording?agent=' + encodeURIComponent(agent) + '&amp;name=' + encodeURIComponent(item.file) + '" target="_blank"' +
       ' rel="noopener">' + esc(item.file.replace(/\.mp4$/, "")) + " (" + size + ")</a>";
   }
   box.innerHTML = html;
@@ -6374,9 +6374,9 @@ function renderRecordings(list) {
 }
 
 function loadRecordings() {
-  if (!current) { renderRecordings([]); return Promise.resolve(); } return fetch("/api/recordings?agent=" + encodeURIComponent(current)) // the member's own box (INV-1949)
+  var agent = current; renderRecordings([]); if (!agent) return Promise.resolve(); return fetch("/api/recordings?agent=" + encodeURIComponent(agent)) // the member's own box (INV-1949)
     .then(function (r) { return r.json(); })
-    .then(function (data) { renderRecordings(data.recordings); })
+    .then(function (data) { if (agent === current) renderRecordings(data.recordings, agent); }) // a late answer for the last agent is dropped
     .catch(function () { /* the box may be down; the pane just stays hidden */ });
 }
 
