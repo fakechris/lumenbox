@@ -82,6 +82,7 @@ import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
+import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
@@ -6655,18 +6656,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, { id: agentId, name: updated.profile.name });
           return;
         }
-
+        if (await modelReadinessRoute(route, url, registry, orchestrator.provider, refused, body => send(res, 200, body))) return;
         if (route === "POST /api/prompt") {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");
           if (refused(agentId)) return;
           const text = String(body.text ?? "").trim();
-
           if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) {
             send(res, 409, apiError("console-context-command"));
             return;
           }
-
           if (!registry.has(agentId)) {
             send(res, 404, apiError("agent-unknown", { agent: agentId }));
             return;
@@ -6679,7 +6678,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             typeof body.conversation === "string" && body.conversation !== ""
               ? body.conversation
               : MAIN_CONVERSATION; if (isForkChild(conversation)) { send(res, 409, apiError("fork-read-only")); return; } // INV-1667
-
+          if (!await modelReady(registry, orchestrator.provider, agentId)) {
+            send(res, 409, apiError("model-not-configured")); return;
+          }
           const surfaceWork = body.surfaceAction ? surfaceActionWork({ action: body.surfaceAction, text, agentId, conversation, surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }) : undefined;
           if (surfaceWork && "error" in surfaceWork) { send(res, 409, apiError("surface-work-unavailable", { reason: surfaceWork.error })); return; }
           // Without this, an operator's interjection and the agent's answer were visible
@@ -6702,9 +6703,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (chatKey !== undefined) {
             void channels.pushToChat(chatKey, `〔控制台〕${text}`, { kind: "notice", about: "console" });
           }
-
           const promptMessageId = typeof body.messageId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(body.messageId) ? body.messageId : randomUUID();
-
           const before = registry.readTranscript(agentId, conversation).length;
           void orchestrator
             .prompt(agentId, text, caller, { conversation, messageId: promptMessageId, ...(surfaceWork && "taskBinding" in surfaceWork ? { ...(surfaceWork.work ? { work: surfaceWork.work, workRelation: "continue" as const } : {}), taskBinding: surfaceWork.taskBinding, steerable: false } : body.workRelation === "new" || body.workRelation === "continue" ? {workRelation:body.workRelation} : {}), onAdmitted:()=>{          broadcast({

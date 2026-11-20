@@ -8,6 +8,7 @@ export const NEXT_SET_MODEL_JS = `
 var model = { config: null, error: "", fallbacks: null, rests: null, note: "", test: "", parts: null, jev: null };
 
 function loadModel() {
+  refreshModelReadiness();
   getJson("/api/config").then(function (got) { model.config = got; model.error = ""; }, function (error) { model.error = error.message; model.config = model.config || {}; })
     .then(function () { if (next.view === "settings") render(); });
   // An admin's to read: for anybody else these two simply are not shown.
