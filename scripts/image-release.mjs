@@ -47,7 +47,11 @@ export function publishedEngineContract(run, image, { skipImage = false, require
     return undefined;
   }
   try { run(["pull", image]); }
-  catch (error) { throw new Error(`could not pull published image ${image} for engine verification: ${error.message}`); }
+  catch (error) {
+    if (requireEngines) throw new Error(`could not pull published image ${image} for engine verification: ${error.message}`);
+    say(`${image}: engine contract not checked, pull failed (set RELEASE_CHECK_REQUIRE_ENGINES=1 to insist)`);
+    return undefined;
+  }
   let raw;
   try { raw = run(["run", "--rm", "--entrypoint", "cat", image, "/etc/lumenbox/contract.json"]); }
   catch (error) {

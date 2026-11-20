@@ -16,10 +16,13 @@ test("a release tag must carry both runnable Linux platforms, not just attestati
   }, "image:1");
   assert.deepEqual(calls, ["pull", "run"], "replace any stale local tag before reading its contract");
   assert.equal(contract.engines.pi, "published");
-  assert.throws(() => publishedEngineContract(args => {
+  const pullFails = args => {
     assert.equal(args[0], "pull", "a failed pull must never inspect a stale image");
     throw new Error("registry unavailable");
-  }, "image:1"), /could not pull published image image:1.*registry unavailable/);
+  };
+  assert.equal(publishedEngineContract(pullFails, "image:1", {}, () => {}), undefined, "no daemon only blocks a strict engine check");
+  assert.throws(() => publishedEngineContract(pullFails, "image:1", { requireEngines: true }, () => {}),
+    /could not pull published image image:1.*registry unavailable/);
   assert.equal(publishedEngineContract(() => assert.fail("skip must not pull or run"), "image:1", { skipImage: true }, () => {}), undefined);
   const unreadable = args => { if (args[0] === "run") throw new Error("missing contract"); return ""; };
   assert.equal(publishedEngineContract(unreadable, "image:1", {}, () => {}), undefined);
