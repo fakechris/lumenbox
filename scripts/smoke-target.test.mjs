@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_CONTAINER } from "../src/box/docker.ts";
-import { liveOwners, smokeHome, smokeTarget } from "./smoke-target.mjs";
+import { liveOwners, requiredSmokeToken, smokeHome, smokeTarget } from "./smoke-target.mjs";
 import { BOX_OWNER_FILENAME, PROFILE_FILENAME } from "../src/agents/registry.ts";
 
 test("smoke defaults to creating its own box, never the installation's", () => {
@@ -39,6 +39,10 @@ test("smoke permits explicit test targets and requires opt-in for the live conta
   assert.equal(smokeTarget(["--live-box"], attachedEnv, DEFAULT_CONTAINER).localLive, false);
   assert.equal(smokeTarget(["--live-box", "--box", "use", "test-box"], {}, DEFAULT_CONTAINER).localLive, false);
   assert.equal(smokeTarget(["--live-box", "--box", "create"], {}, DEFAULT_CONTAINER).localLive, false);
+  assert.equal(requiredSmokeToken("local-token", live.name), "local-token");
+  for (const missing of [undefined, ""]) {
+    assert.throws(() => requiredSmokeToken(missing, live.name), /No token for agentbox-box/);
+  }
 });
 
 test("smoke replaces an inherited home and removes its registry and token on close", () => {

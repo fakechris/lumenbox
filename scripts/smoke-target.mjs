@@ -25,6 +25,11 @@ export function smokeHome(env) {
   return { home, close: () => rmSync(home, { recursive: true, force: true }) };
 }
 
+export function requiredSmokeToken(token, name) {
+  if (!token) throw new Error(`No token for ${name}. Set AGENTBOX_TOKEN to the box's token.`);
+  return token;
+}
+
 export function liveOwners(root) {
   const owners = new Map();
   let entries;

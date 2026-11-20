@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONTAINER, defaultBoxImage, readBoxToken } from "../src/box/docker.ts";
 import { openEvalBox } from "./lib/eval-box.mjs";
-import { liveOwners, smokeHome, smokeTarget } from "./smoke-target.mjs";
+import { liveOwners, requiredSmokeToken, smokeHome, smokeTarget } from "./smoke-target.mjs";
 import { resolveBoxProvisioner } from "../src/box/provisioner.ts";
 import { startEgressRelay } from "../src/egress/relay.ts";
 import { DisplayLease } from "../src/box/display-lease.ts";
@@ -59,8 +59,7 @@ if (target.overridesAttached) delete process.env.AGENTBOX_TOKEN;
 const realHome = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
 const owners = target.localLive ? liveOwners(process.env.AGENTBOX_AGENTS_DIR ?? join(realHome, "agents")) : new Map();
 if (target.localLive || (target.overridesAttached && target.mode === "use")) {
-  process.env.AGENTBOX_TOKEN ??= readBoxToken(target.name);
-  if (!process.env.AGENTBOX_TOKEN) throw new Error(`No token for ${target.name}. Set AGENTBOX_TOKEN to the box's token.`);
+  process.env.AGENTBOX_TOKEN = requiredSmokeToken(readBoxToken(target.name), target.name);
 }
 if ((target.mode === "create" || target.mode === "keep") &&
     !(process.argv.includes("--image") && process.argv[process.argv.indexOf("--image") + 1] === "build")) {
