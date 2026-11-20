@@ -25,13 +25,15 @@ import { say, starterSkills } from "./subjects.ts";
  * evaluation's episodes run — one agent, the starter skills, the default provider's profile.
  */
 export interface AgentConfiguration {
-  /** The agents; the first is the one whose request is read. */
+  /** The agents; the one whose request is read is the first by name, as the roster lists them. */
   team?: EpisodeOptions["team"];
   /** The skills the prompt lists. Default: the starter skills. */
   skills?: EpisodeOptions["skills"];
   /** A desktop index, when the browser tools are to be offered. */
   display?: number;
   provider?: ProviderProfile;
+  /** A turn nobody is waiting on — a schedule's — instead of a person's: another tool list and the unattended conduct. */
+  unattended?: boolean;
 }
 
 export interface PromptSurface {
@@ -39,8 +41,14 @@ export interface PromptSurface {
   system: string;
   /** The tool list as sent: name, description and input schema of each. */
   tools: Anthropic.ToolUnion[];
-  /** UTF-8 bytes of the system prompt, and of the tool list as JSON. */
-  bytes: { system: number; tools: number };
+  /**
+   * The prompt on either side of the cache breakpoint (prompt.ts): what holds for the life of a conversation, and what
+   * the turn rewrites — here with no memory and no tasks, so its floor. Read off the two system blocks; where the
+   * provider has no breakpoints the second rides in the message instead and `volatile` is empty.
+   */
+  parts: { stable: string; volatile: string };
+  /** UTF-8 bytes of the system prompt, of its two parts, and of the tool list as JSON. */
+  bytes: { system: number; stable: number; volatile: number; tools: number };
   /** One name for the pair: two configurations with the same digest send the same prompt and tools. */
   digest: string;
 }
@@ -55,7 +63,11 @@ export async function promptSurface(configuration: AgentConfiguration = {}): Pro
   const starters = starterSkills();
   const result = await runEpisode({
     team: configuration.team ?? [{ name: "Nova" }],
-    says: ["hello"],
+    says: configuration.unattended === true ? [] : ["hello"],
+    ...(configuration.unattended === true ? { drive: async ({ bus, frontId }) => {
+      bus.sendFromUser(frontId, "[scheduled] hello", { steerable: false, lane: "background", synthetic: true });
+      await bus.runExclusive(frontId, { userDriven: true });
+    } } satisfies Pick<EpisodeOptions, "drive"> : {}),
     skills: configuration.skills ?? starters.skills,
     files: starters.files,
     client,
@@ -64,13 +76,15 @@ export async function promptSurface(configuration: AgentConfiguration = {}): Pro
   });
   result.cleanup();
   if (first === undefined) throw new Error("the turn made no model call, so there is no prompt to read");
-  const blocks = first.system;
-  const system = blankIds(typeof blocks === "string" ? blocks : (blocks ?? []).map(block => block.text).join("\n\n"));
+  const blocks = (typeof first.system === "string" ? [first.system] : (first.system ?? []).map(block => block.text)).map(blankIds);
+  const system = blocks.join("\n\n");
+  const parts = { stable: blocks[0] ?? "", volatile: blocks.slice(1).join("\n\n") };
   const tools = first.tools ?? [];
   return {
     system,
+    parts,
     tools,
-    bytes: { system: Buffer.byteLength(system), tools: Buffer.byteLength(JSON.stringify(tools)) },
+    bytes: { system: Buffer.byteLength(system), stable: Buffer.byteLength(parts.stable), volatile: Buffer.byteLength(parts.volatile), tools: Buffer.byteLength(JSON.stringify(tools)) },
     digest: digest(canonical({ system, tools })).slice(0, 12),
   };
 }
