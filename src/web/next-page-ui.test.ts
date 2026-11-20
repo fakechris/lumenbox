@@ -9,9 +9,45 @@ import { NEXT_PAGE } from "./page-locale.ts";
 import { nextLogic } from "./next-logic-ui.ts";
 import { DELIVERY_BRIEF, DELIVERY_SECTIONS, deliveryLabel } from "../host/delivery-report.ts";
 import { ASK_SENTENCES, askLabel, askProse, splitAsk } from "../host/person-ask.ts";
+import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
+
+test("automation refresh shows discovery, ignores an old response and renders the new paused routine", async () => {
+  const pending: { resolve: (got: unknown) => void; reject: (error: Error) => void }[] = [];
+  const settings = { routines: null as unknown };
+  const errors: Error[] = [];
+  const node = (tag: string, cls = "", text = "") => ({
+    tag, cls, text, kids: [] as unknown[],
+    appendChild(child: unknown) { this.kids.push(child); }, addEventListener() {},
+  });
+  let view = node("main");
+  const context = vm.createContext({
+    settings, next: { view: "auto" }, el: node, t: (key: string) => key, initial: () => "N",
+    getJson: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
+    failed: (error: Error) => errors.push(error),
+    render: () => { view = node("main"); vm.runInContext("renderAuto(view)", Object.assign(context, { view })); },
+  });
+  vm.runInContext(NEXT_AUTO_JS, context);
+  vm.runInContext("render()", context);
+  assert.match(JSON.stringify(view), /ui.next.auto.reading/);
+  vm.runInContext("reloadAuto()", context);
+  pending[1]!.resolve({ schedules: [{ slug: "new-routine", name: "New routine", paused: true }] });
+  await Promise.resolve();
+  pending[0]!.resolve({ schedules: [] });
+  await Promise.resolve();
+  assert.match(JSON.stringify(view), /New routine/);
+  assert.match(JSON.stringify(view), /ui.next.auto.paused/);
+  vm.runInContext("reloadAuto()", context);
+  pending[2]!.resolve({ schedules: [] });
+  await Promise.resolve();
+  assert.match(JSON.stringify(view), /ui.next.auto.empty/);
+  vm.runInContext("reloadAuto()", context);
+  pending[3]!.reject(new Error("offline"));
+  await Promise.resolve();
+  assert.equal(errors[0]?.message, "offline");
+});
 
 const row = (phase: string, blocker?: string, status = "doing") => ({ status, reading: { phase, ...(blocker ? { blocker: { kind: blocker } } : {}) } });
 

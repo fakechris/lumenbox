@@ -109,10 +109,6 @@ async function cmdBoxBuild(): Promise<number> {
 
 async function cmdBoxPush(): Promise<number> {
   const manager = new BoxManager(boxConfig());
-  if (!(await manager.imageExists())) {
-    err(`Image ${manager.config.image} is not on this machine. Run \`npm run build:image\` first.`);
-    return 1;
-  }
   try {
     await manager.push(line => out(dim(line)));
   } catch (error) {
