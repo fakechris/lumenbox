@@ -667,7 +667,7 @@ export class BoxManager {
   async push(onOutput?: (line: string) => void): Promise<void> {
     const script = ["../../scripts/build-image.mjs", "../scripts/build-image.mjs"].map(path => fileURLToPath(new URL(path, import.meta.url))).find(path => existsSync(path));
     if (!script) throw new DockerError("Publishing needs a checkout. Run `npm run push:image` there (requires Go, Docker Buildx and docker login).");
-    await dockerStream([script, "--push"], 2 * 60 * 60_000, onOutput, process.execPath);
+    await dockerStream([script, "--push", "--image", this.config.image], 2 * 60 * 60_000, onOutput, process.execPath);
   }
 
   /** Exposed for the test that pins where the daemon is published. */

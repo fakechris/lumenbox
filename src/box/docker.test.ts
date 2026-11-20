@@ -56,6 +56,8 @@ if (args[0] === 'version') {
   console.log(answer);
 } else if (args[0] === 'inspect') { console.error('No such object'); process.exit(1); }
 else if (args[0] === 'run') { console.error('reached run'); process.exit(1); }
+else if (args[0] === 'buildx' && args[1] === 'inspect') console.log('Driver: docker-container');
+else if (args[0] === 'buildx' && args[1] === 'build') { console.error('reached publish'); process.exit(1); }
 `, { mode: 0o755 });
   process.env.PATH = `${home}:${previousPath}`;
   try {
@@ -88,6 +90,13 @@ else if (args[0] === 'run') { console.error('reached run'); process.exit(1); }
     assert.equal(removed, false);
     const recreateCalls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
     assert.ok(!recreateCalls.some(args => args[0] === "run" || args[0] === "create"));
+    writeFileSync(log, "");
+    const output: string[] = [];
+    await assert.rejects(manager.push(line => output.push(line)), /failed/);
+    assert.ok(output.some(line => line.includes("reached publish")));
+    const pushCalls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+    const build = pushCalls.find(args => args[0] === "buildx" && args[1] === "build")!;
+    assert.deepEqual(build.flatMap((arg, i) => arg === "-t" ? [build[i + 1]] : []), [manager.config.image]);
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;

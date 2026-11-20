@@ -21,7 +21,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { engineBuildArgs, publishImage } from "./image-release.mjs";
+import { engineBuildArgs, publicationTarget, publishImage } from "./image-release.mjs";
 
 process.chdir(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -33,7 +33,7 @@ const pushing = process.argv.includes("--push");
 if (pushing) {
   try {
     publishImage(args => execFileSync("docker", args, { encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }), {
-      image: `${REPO}:${VERSION}`, latest: `${REPO}:latest`, context: CONTEXT, buildArgs,
+      ...publicationTarget(process.argv.slice(2), REPO, VERSION), context: CONTEXT, buildArgs,
     });
   } catch (error) {
     console.error(`${error.message}\nA push to Docker Hub needs docker login on an account that can write ${REPO}.`);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { engineBuildArgs, publishImage, requireReleasePlatforms } from "./image-release.mjs";
+import { engineBuildArgs, publicationTarget, publishImage, requireReleasePlatforms } from "./image-release.mjs";
 
 test("a release tag must carry both runnable Linux platforms, not just attestations", () => {
   const amd64 = { os: "linux", architecture: "amd64" };
@@ -20,24 +20,29 @@ test("local and published builds share pins and refuse incomplete release builds
 });
 
 test("publishing creates a multi-platform builder when absent, or reuses a suitable one", () => {
-  for (const exists of [false, true]) {
-    const calls = [];
-    publishImage(args => {
-      calls.push(args);
-      if (args[1] === "inspect") {
-        assert.deepEqual(args, ["buildx", "inspect", "lumenbox-release"]);
-        if (!exists) throw new Error("no builder");
-        return "Name:          lumenbox-release\nDriver:        docker-container\nNodes:\n";
-      }
-      return "";
-    }, { image: "repo:1", latest: "repo:latest", context: "context", buildArgs: ["--build-arg", "PI_VERSION=3"] });
-    assert.equal(calls.some(args => args[1] === "create"), !exists);
-    const build = calls.find(args => args[1] === "build");
-    assert.equal(build[build.indexOf("--platform") + 1], "linux/amd64,linux/arm64");
-    assert.ok(build.includes("--push"));
-    for (const tag of ["repo:1", "repo:latest"]) assert.ok(build.some((arg, i) => arg === "-t" && build[i + 1] === tag));
-    assert.ok(build.includes("PI_VERSION=3"));
+  for (const argv of [[], ["--image", "registry.example:5000/team/box:custom"]]) {
+    const target = publicationTarget(argv, "repo", "1");
+    for (const exists of [false, true]) {
+      const calls = [];
+      publishImage(args => {
+        calls.push(args);
+        if (args[1] === "inspect") {
+          assert.deepEqual(args, ["buildx", "inspect", "lumenbox-release"]);
+          if (!exists) throw new Error("no builder");
+          return "Name:          lumenbox-release\nDriver:        docker-container\nNodes:\n";
+        }
+        return "";
+      }, { ...target, context: "context", buildArgs: ["--build-arg", "PI_VERSION=3"] });
+      assert.equal(calls.some(args => args[1] === "create"), !exists);
+      const build = calls.find(args => args[1] === "build");
+      assert.equal(build[build.indexOf("--platform") + 1], "linux/amd64,linux/arm64");
+      assert.ok(build.includes("--push"));
+      const tags = build.flatMap((arg, i) => arg === "-t" ? [build[i + 1]] : []);
+      assert.deepEqual(tags, argv.length ? [argv[1]] : ["repo:1", "repo:latest"]);
+      assert.ok(build.includes("PI_VERSION=3"));
+    }
   }
+  for (const args of [["--image"], ["--image", ""], ["--image", "--push"]]) assert.throws(() => publicationTarget(args, "repo", "1"), /requires an image reference/);
   for (const inspection of ["Name: lumenbox-release\nDriver: docker\n", ""]) {
     assert.throws(() => publishImage(() => inspection, {}), /docker-container driver/);
   }

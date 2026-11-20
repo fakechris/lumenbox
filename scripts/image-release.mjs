@@ -16,6 +16,13 @@ export function engineBuildArgs(env, say = console.log) {
   return args;
 }
 
+export function publicationTarget(args, repo, version) {
+  const at = args.indexOf("--image");
+  const image = at < 0 ? `${repo}:${version}` : args[at + 1]?.trim();
+  if (!image || image.startsWith("--")) throw new Error("--image requires an image reference");
+  return { image, latest: image === `${repo}:${version}` ? `${repo}:latest` : undefined };
+}
+
 export function publishImage(run, { image, latest, context, buildArgs }) {
   const builder = "lumenbox-release";
   let inspection;
@@ -24,7 +31,8 @@ export function publishImage(run, { image, latest, context, buildArgs }) {
   if (inspection !== undefined && !/^Driver:\s+docker-container\s*$/m.test(inspection)) {
     throw new Error(`Builder ${builder} must use the docker-container driver; select a different name or remove the conflicting builder.`);
   }
-  run(["buildx", "build", "--builder", builder, "--platform", RELEASE_PLATFORMS.join(","), "--push", ...buildArgs, "-t", image, "-t", latest, context]);
+  const tags = latest && latest !== image ? [image, latest] : [image];
+  run(["buildx", "build", "--builder", builder, "--platform", RELEASE_PLATFORMS.join(","), "--push", ...buildArgs, ...tags.flatMap(tag => ["-t", tag]), context]);
 }
 
 export function requireReleasePlatforms(tag, image) {
