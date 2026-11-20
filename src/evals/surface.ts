@@ -65,7 +65,8 @@ export async function promptSurface(configuration: AgentConfiguration = {}): Pro
     team: configuration.team ?? [{ name: "Nova" }],
     says: configuration.unattended === true ? [] : ["hello"],
     ...(configuration.unattended === true ? { drive: async ({ bus, frontId }) => {
-      bus.sendFromUser(frontId, "[scheduled] hello", { steerable: false, lane: "background", synthetic: true });
+      // Sent as the orchestrator sends a routine's run, so the turn is the one a schedule starts.
+      bus.sendFromUser(frontId, "[scheduled] hello", { steerable: false, lane: "background", synthetic: true }); // model-text: routine
       await bus.runExclusive(frontId, { userDriven: true });
     } } satisfies Pick<EpisodeOptions, "drive"> : {}),
     skills: configuration.skills ?? starters.skills,
