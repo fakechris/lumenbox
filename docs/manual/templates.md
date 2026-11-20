@@ -29,8 +29,8 @@ The app opens in the new view. There, templates live in the agent forms:
 
 - **Make an agent from one:** press `+` beside *Agents* in the sidebar and open *Or start
   from a template* at the bottom of the form. Type in *Find a template…* to narrow the list,
-  which groups *Ready-made*, *Made here*, *Roles* and *Crews (several at once)*, and press
-  *Create from it*.
+  which groups *Ready-made*, *Roles*, *Crews (several at once)* and, once you have saved
+  some, *Made here*; press *Create from it*.
 - **Use one somebody sent:** in the same list, open *A template somebody sent*, choose the file
   or paste the template, and press *Import and create*.
 - **Add a crew:** a crew is a row under *Crews (several at once)* in the same list.
@@ -44,7 +44,8 @@ of the sidebar to reach it (and *Back to the new view* to return):
 - **Stamp one:** press *Templates* at the bottom of the sidebar. Choose the box under *Stamp
   into*, find a template under *Ready-made agents* (type in *filter* to narrow the list), and
   press *Preview* to read it or *Stamp* to make the agent. To stamp a shared one, press
-  *Paste or link…* in the same dialog and paste the template or its link.
+  *Paste or link…* in the same dialog and paste the template or its link into the form it
+  opens.
 - **Share an agent:** open Configure on the agent and press *Ask it to draft a template*.
 
 ### In a chat
