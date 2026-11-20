@@ -16,7 +16,7 @@
 import { rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONTAINER, readBoxToken } from "../src/box/docker.ts";
+import { DEFAULT_CONTAINER, defaultBoxImage, readBoxToken } from "../src/box/docker.ts";
 import { openEvalBox } from "./lib/eval-box.mjs";
 import { liveOwners, smokeHome, smokeTarget } from "./smoke-target.mjs";
 import { resolveBoxProvisioner } from "../src/box/provisioner.ts";
@@ -60,6 +60,10 @@ const owners = target.localLive ? liveOwners(process.env.AGENTBOX_AGENTS_DIR ?? 
 if (target.localLive) {
   process.env.AGENTBOX_TOKEN ??= readBoxToken(target.name);
   if (!process.env.AGENTBOX_TOKEN) throw new Error(`No token for ${target.name}. Set AGENTBOX_TOKEN to the box's token.`);
+}
+if ((target.mode === "create" || target.mode === "keep") &&
+    !(process.argv.includes("--image") && process.argv[process.argv.indexOf("--image") + 1] === "build")) {
+  process.env.AGENTBOX_IMAGE ??= defaultBoxImage();
 }
 const scratch = smokeHome(process.env);
 process.once("exit", scratch.close);
