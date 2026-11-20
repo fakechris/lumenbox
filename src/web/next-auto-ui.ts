@@ -18,7 +18,7 @@ function autoForm() {
   var pick = function (labelText, select) { var label = el("label", "", labelText); label.appendChild(select); return label; };
   var option = function (select, value, text) { var node = el("option", "", text); node.value = value; select.appendChild(node); };
   option(who, "", t("ui.next.auto.anyone"));
-  agentsHere().forEach(function (agent) { option(who, agent.name, agent.name); });
+  (settings.runnerAgents || []).forEach(function (name) { option(who, name, name); });
   ["schedule", "webhook", "message"].forEach(function (value) { option(kind, value, t("ui.next.auto.kind." + value)); });
   AUTO_TIMES.forEach(function (pair) { option(when, pair[1], t("ui.next.auto.time." + pair[0])); });
   option(when, "", t("ui.next.auto.time.custom"));
@@ -70,7 +70,7 @@ function renderAuto(view) {
     view.appendChild(el("p", "why", t("ui.next.auto.reading")));
     getJson("/api/schedules").then(function (got) {
       if (read !== auto.read) return;
-      settings.routines = got.schedules || []; if (next.view === "auto") render();
+      settings.routines = got.schedules || []; settings.runnerAgents = got.runnerAgents || []; if (next.view === "auto") render();
     }, function (error) { if (read === auto.read) failed(error); });
     return;
   }

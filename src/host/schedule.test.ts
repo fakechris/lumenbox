@@ -668,6 +668,9 @@ test("a skill runs as the agent the host saw write it, and as nobody else", asyn
   });
   await scheduler.tick();
   assert.deepEqual(runs, ["agent-ada"], "only Ada's own skill ran, as Ada");
+  assert.equal(scheduler.runnerDecision({ slug: "adas-brief", runAs: "Ada" }).agent, "agent-ada");
+  assert.equal(scheduler.runnerDecision({ slug: "orphan" }).agent, "agent-ops");
+  assert.match(scheduler.runnerDecision({ slug: "bobs-retro", runAs: "Ada" }).reason!, /Choose agent-ops or Bob/);
   assert.ok(
     lines.some(line => /bobs-retro: refuses to run as "Ada" — the host saw Bob write it/.test(line)),
     `the writer is named: ${lines.join(" | ")}`
@@ -676,6 +679,38 @@ test("a skill runs as the agent the host saw write it, and as nobody else", asyn
     lines.some(line => /orphan: refuses to run as "Ada" — the host has no record of who wrote it/.test(line)),
     "an unattributed skill is refused and says so"
   );
+});
+
+test("webhooks and manual schedules keep the same default and writer identity gate", async () => {
+  const runs: string[] = [];
+  const skills = [undefined, "Ada", "Quinn"].map((runAs, i) => ({
+    slug: `routine-${i}`, name: `Routine ${i}`, path: "/p", runAs, schedule: scheduleOf("@every 1h"),
+  }));
+  const scheduler = new Scheduler({
+    due: async () => skills, hooked: async () => skills,
+    defaultAgent: () => "ada", resolveAgent: name => ({ Ada: "ada", Quinn: "quinn" })[name],
+    run: async agent => { runs.push(agent); }, path: null, log: () => {},
+  });
+  for (const skill of skills) {
+    assert.equal((await scheduler.runNow(skill.slug)).ok, skill.runAs !== "Quinn");
+    await new Promise(resolve => setImmediate(resolve));
+    const fired = await scheduler.fireWebhook(skill.slug, "payload");
+    assert.equal(fired.ok, skill.runAs !== "Quinn");
+    if (!fired.ok) assert.match(fired.reason, /No agent to run/);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.deepEqual(runs, ["ada", "ada", "ada", "ada"]);
+  const authored = new Scheduler({
+    due: async () => [skills[2]!], hooked: async () => [skills[2]!],
+    defaultAgent: () => "ada", resolveAgent: () => "quinn",
+    writerOf: () => ({ agentId: "quinn", agentName: "Quinn" }),
+    run: async agent => { runs.push(agent); }, path: null,
+  });
+  assert.equal((await authored.runNow("routine-2")).ok, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await authored.fireWebhook("routine-2", "payload")).ok, true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(runs.slice(-2), ["quinn", "quinn"]);
 });
 
 test("a listener fires once per matching message, in the thread it was said in, under the runner rules", async () => {

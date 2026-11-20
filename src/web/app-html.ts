@@ -5398,8 +5398,7 @@ document.getElementById("autonew").addEventListener("click", function (e) {
   $("autocreate").style.display = autoCreateOpen ? "" : "none";
   if (autoCreateOpen) {
     // populate agent dropdown
-    $("autoagent").innerHTML = '<option value="">{{ui.app.first-agent}}</option>' +
-      agents.map(function (a) { return '<option value="' + esc(a.name) + '">' + esc(a.name) + '</option>'; }).join("");
+    $("autoagent").innerHTML = '<option value="">{{ui.app.first-agent}}</option>';
   }
 });
 

@@ -790,26 +790,29 @@ export class Scheduler {
    * (docs/13). Until then this errs towards refusing work rather than running somebody
    * else's.
    */
-  private runnerFor(skill: { slug: string; name: string; runAs?: string; boxId?: string }): string | undefined {
+  runnerDecision(skill: { slug: string; runAs?: string; boxId?: string }, display: (id: string) => string = id => id): { agent?: string; reason?: string } {
     const fallback = this.deps.defaultAgent(skill.boxId);
-    if (skill.runAs === undefined) return fallback;
+    if (skill.runAs === undefined) return fallback === undefined ? { reason: "No default agent is available to run this automation." } : { agent: fallback };
     const named = this.deps.resolveAgent?.(skill.runAs);
-    if (named !== undefined && named === fallback) return named;
-    if (named === undefined && skill.runAs === fallback) return fallback;
+    if (named !== undefined && named === fallback) return { agent: named };
+    if (named === undefined && skill.runAs === fallback) return { agent: fallback };
     // An agent may schedule its own skill to run as itself: the host saw it write the file, so the
     // permissions the run carries are its own. Any other name is still borrowing.
     const writer = this.deps.writerOf?.(skill.slug);
-    if (named !== undefined && writer !== undefined && writer.agentId === named) return named;
+    if (named !== undefined && writer !== undefined && writer.agentId === named) return { agent: named };
     const seen =
       writer === undefined
         ? "the host has no record of who wrote it"
         : `the host saw ${writer.agentName} write it`;
-    this.log(
-      `${skill.name}: refuses to run as "${skill.runAs}" — ${seen}, and a skill runs as the ` +
-        `agent that wrote it or as this installation's default agent, never as someone else, ` +
-        `because naming another agent in a file you can write is a way to borrow its permissions.`
-    );
-    return undefined;
+    const options = [...new Set([fallback === undefined ? undefined : display(fallback), writer?.agentName].filter(value => value !== undefined))];
+    return { reason: `${seen}; a routine runs as this installation's default agent or as the agent that wrote it, ` +
+      `because naming another agent would borrow its permissions. ${options.length ? `Choose ${options.join(" or ")}.` : "No allowed agent is available."}` };
+  }
+
+  private runnerFor(skill: { slug: string; name: string; runAs?: string; boxId?: string }): string | undefined {
+    const decision = this.runnerDecision(skill);
+    if (decision.reason) this.log(`${skill.name}: refuses to run as "${skill.runAs}" — ${decision.reason}`);
+    return decision.agent;
   }
 
   /**
