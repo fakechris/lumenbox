@@ -217,7 +217,7 @@ function drawEntries(target, entries, between, conversation) {
 /** The agent's one conversation: what was said here, with its topics in other chats set among it by time. */
 function renderThread(view) {
   var thread = el("div", "thread"), agent = next.agents[chat.agentId];
-  topicsOf(chat.agentId);
+  topicsOf(chat.agentId); renderReplyTo();
   // Looking for something: only what was said that holds it, here and in the topics, and none of the cards around it.
   if (chat.find) {
     var found = conversationEntries().filter(function (entry) { return threadFinds(entry, chat.find); });
@@ -228,6 +228,8 @@ function renderThread(view) {
   // What waits on the person is a card: a result to look at, or a request the agent wrote. One the person put off is a pin again until then.
   var mine = next.rows.filter(function (row) { return row.assigneeId === chat.agentId; }), delivered = mine.filter(function (row) { return nextStateOf(row).key === "review" && !putOff(row); });
   var asking = mine.filter(function (row) { return row.status === "blocked" && nextNeedOf(row) && !putOff(row) && (row.conversation || "main") === chat.conversation; });
+  // All of it is one entry that stays above the conversation, and what was settled is a line among what was said (next-dock-ui.ts).
+  var dock = agent ? needDock(agent) : null, settled = receiptsAmong(); if (dock) thread.appendChild(dock);
   mine.filter(function (row) { return nextGroupOf(nextStateOf(row).key) !== "done" && delivered.indexOf(row) < 0 && asking.indexOf(row) < 0; }).forEach(function (row) {
     var pin = el("button", "pin"), body = el("span", "body");
     body.appendChild(el("div", "title", row.title)); body.appendChild(el("div", "why", reasonOf(row)));
@@ -241,16 +243,13 @@ function renderThread(view) {
   if (setup) thread.appendChild(setup);
   if (plan) thread.appendChild(plan);
   var older = olderTopicsButton(); if (older) thread.appendChild(older);
-  var topics = topicsBetween(delivered), drew = drawEntries(thread, chat.entries, topics.before);
-  topics.rest().forEach(function (node) { thread.appendChild(node); });
+  var topics = topicsBetween(delivered), drew = drawEntries(thread, chat.entries, function (entry) { return settled.before(entry).concat(topics.before(entry)); });
+  topics.rest().concat(settled.rest()).forEach(function (node) { thread.appendChild(node); });
   var lastAsk = drew.lastAsk;
   // A card drawn in the turn still running is not in the record yet: it is kept from the live event.
   Object.keys(chat.liveSurfaces).forEach(function (id) { if (!drew.drawn[id]) thread.appendChild(feedSurface(id, "", [], false)); });
   if (lastAsk && chat.expired[lastAsk.question.question]) thread.appendChild(el("div", "aside", t("ui.next.chat.expired", { name: agent ? agent.name : "" })));
   else if (lastAsk && !chat.live) thread.appendChild(askCard(lastAsk, agent));
-  if (agent) pendingCards(agent).forEach(function (card) { thread.appendChild(card); });
-  asking.forEach(function (row) { thread.appendChild(needCard(row)); });
-  delivered.filter(function (row) { return (row.conversation || "main") === chat.conversation; }).forEach(function (row) { thread.appendChild(resultCard(row)); });
   if (chat.live) {
     // Its words and its steps are shown as they come only for what the person asked; other work is one line saying it is busy.
     var own = ownTurn();
@@ -318,6 +317,8 @@ function sendMessage() {
   if (!text || !id) return;
   var to = addressed(text);
   if (to && to.text) { input.value = to.text; openChat(to.agent.id); sendMessage(); return; }
+  // With a card on show the reply is that card's (next-dock-ui.ts); detached, it is an ordinary message, this once.
+  if (need.detached) need.detached = ""; else if (sendReply(text)) return;
   input.value = ""; input.style.height = "";
   chat.entries = chat.entries.concat([{ kind: "text", role: "user", text: text }]);
   chat.live = { text: "", doing: "" }; chat.jump = true;

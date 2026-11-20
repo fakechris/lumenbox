@@ -25,6 +25,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [04-design](04-design.md) | Design | current | 2026-11-19 |
 | [05-data](05-data.md) | Data | current | 2026-11-11 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-11-06 |
+| [101-speaking-unprompted](101-speaking-unprompted.md) | Speaking unprompted: what a member says to a person nobody asked it to say | current | 2026-11-20 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-07 |
@@ -33,7 +34,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-12 |
 | [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-19 |
 | [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
-| [99-user-work](99-user-work.md) | A person's work: requests, work, and what happens inside it | current | 2026-11-19 |
+| [99-user-work](99-user-work.md) | A person's work: requests, work, and what happens inside it | current | 2026-11-20 |
 | [glossary](glossary.md) | Glossary and controlled vocabulary | current | 2026-11-07 |
 
 ## manual

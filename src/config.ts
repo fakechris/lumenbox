@@ -49,6 +49,7 @@ export interface AgentboxConfig {
   effort?: "lean" | "standard" | "open";
   /** Minutes between two things a member tells the person in one turn (Tell, INV-1853). Absent means 2; 0 lifts the wait, not the three-a-turn limit. */
   tellGapMinutes?: number;
+  quiet?: { minutes?: number; capMinutes?: number; urgent?: string[] }; // when a message nobody asked for may go into a conversation (INV-1928); read and bounded by quiet-delivery.ts
   /**
    * The local hour (0–23) at which an unattended upgrade may run.
    *
@@ -354,6 +355,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
   return {
     activityLimit: readInteger(raw.activityLimit, DEFAULT_CONFIG.activityLimit, { min: 1, max: MAX_ACTIVITY_LIMIT }, "activityLimit", onWarn),
     ...(raw.tellGapMinutes !== undefined ? { tellGapMinutes: readInteger(raw.tellGapMinutes, 2, { min: 0, max: 720 }, "tellGapMinutes", onWarn) } : {}),
+    ...(typeof raw.quiet === "object" && raw.quiet !== null && !Array.isArray(raw.quiet) ? { quiet: raw.quiet as NonNullable<AgentboxConfig["quiet"]> } : {}),
     ...(readTurnBudget(raw.turnBudget, onWarn) !== undefined ? { turnBudget: readTurnBudget(raw.turnBudget, onWarn) } : {}),
     ...(typeof raw.longWork === "object" && raw.longWork !== null && !Array.isArray(raw.longWork) ? { longWork: raw.longWork as NonNullable<AgentboxConfig["longWork"]> } : {}),
     ...(raw.effort === "lean" || raw.effort === "standard" || raw.effort === "open" ? { effort: raw.effort } : {}),

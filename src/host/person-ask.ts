@@ -9,7 +9,7 @@
  * what stays the person's to check.
  *
  * This file is the one home of that writing: the names, the sentence the prompt asks for it with,
- * the reading of a note back into a request, and the lines a chat is sent. The page card, the inbox
+ * the reading of a note back into a request, its short form, and the lines a chat is sent. The page card, the inbox
  * row and the chat all read it from here, so they say the same thing.
  *
  * Like a delivery (delivery-report.ts), it is stored as the note the member wrote and nothing is
@@ -99,10 +99,32 @@ export function splitAsk(text: string | undefined): { ask?: PersonAsk; rest: str
   };
 }
 
-/** A request as the lines a chat is sent: the same title and sentences the page card shows, under the same names. */
+/**
+ * A request at the level a person reads first: the member's sentences as one running paragraph, and
+ * apart from it what stays the person's to check. The names the sentences were written under are how
+ * a member writes, not something to read past on a card: they are shown one click away, in the work's
+ * panel. Each sentence is closed if the member left it open, so two do not run into one. One name is
+ * kept, in line: what the member does meanwhile is what tells a person the work has not stopped.
+ *
+ * Self-contained on purpose: the page runs this same source (next-need-ui.ts), so card and chat agree.
+ */
+export function askProse(ask: { said?: { key: string; text: string }[]; lang?: string }): { text: string; yours?: string } {
+  const zh = ask.lang === "zh", closed = (text: string): string => (/[.!?。！？…:：;；)）`*]$/.test(text.trim()) ? text.trim() : text.trim() + (zh ? "。" : "."));
+  const said = ask.said ?? [], yours = said.find(row => row.key === "unverified")?.text.trim();
+  // What it keeps doing is a fragment without its name ("the September books."), so that one keeps it, in line.
+  const lead = (key: string): string => (key !== "meanwhile" ? "" : zh ? "我同时在做：" : "Meanwhile: ");
+  const text = said.filter(row => row.key !== "unverified" && row.text.trim() !== "").map(row => lead(row.key) + closed(row.text)).join(zh ? "" : " ");
+  return yours ? { text, yours } : { text };
+}
+
+/** A request as the lines a chat is sent, by the rule the page card follows: the action, the running text, what stays the person's to check. */
 export function askLines(ask: PersonAsk): string[] {
-  const colon = ask.lang === "zh" ? "：" : ": ";
-  return [`${askLabel(ask.kind, ask.lang)}${colon}${ask.title}`, ...ask.said.map(row => `${askLabel(row.key, ask.lang)}${colon}${row.text}`)];
+  const colon = ask.lang === "zh" ? "：" : ": ", prose = askProse(ask);
+  return [
+    `${askLabel(ask.kind, ask.lang)}${colon}${ask.title}`,
+    ...(prose.text === "" ? [] : [prose.text]),
+    ...(prose.yours === undefined ? [] : [`${askLabel("unverified", ask.lang)}${colon}${prose.yours}`]),
+  ];
 }
 
 /** The request a member's newest word on a task carries, while the task waits on a person: blocked, or delivered for a look. */

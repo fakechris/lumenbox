@@ -27,7 +27,7 @@ import { currentFlag } from "./task-flag.ts";
 import { claimedButNotDelivered } from "./task-deliverables.ts";
 import { DOCKER_WORK } from "./box-paths.ts"; import { openBlockers } from "./task-deps.ts";
 import type { Draft } from "./outbox-drafts.ts";
-import { askLines, askOf, type PersonAsk } from "./person-ask.ts";
+import { askLines, askOf, type PersonAsk } from "./person-ask.ts"; import { receiptOf } from "./person-word.ts";
 import { STAGE_LABEL, stageWorldOf, type TaskStage, taskStage } from "./task-stage.ts";
 
 export interface AttentionItem {
@@ -283,12 +283,13 @@ export function attentionFor(input: AttentionInput): Attention {
     }
     // A blocked task whose member wrote a request is that request, also when it offered no answers; the card draws its buttons from what is in the way.
     if (ask !== undefined && later) continue;
-    if (ask !== undefined && task.status === "blocked" && stages[task.id]?.startsWith("person/") === true && task.mandate?.stale === undefined && isMe(task.requester)) {
+    const answered = task.status === "blocked" && receiptOf(task) !== undefined; // the person has said their word: the member's move now (person-word.ts)
+    if (!answered && ask !== undefined && task.status === "blocked" && stages[task.id]?.startsWith("person/") === true && task.mandate?.stale === undefined && isMe(task.requester)) {
       const to = task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId), answer: { agentId: task.assigneeId, conversation: task.conversation ?? "main" } } : {};
       mine.push({ kind: "question", ref: task.id, stage: stages[task.id], title: ask.title, detail: askLines(ask).slice(1).join(" · "), ask, ...to });
       continue;
     }
-    if (stages[task.id] === "person/answer" && task.mandate?.stale === undefined && isMe(task.requester)) {
+    if (!answered && stages[task.id] === "person/answer" && task.mandate?.stale === undefined && isMe(task.requester)) {
       const last = task.history.at(-1);
       mine.push({ kind: "question", ref: task.id, stage: stages[task.id], title: task.title, detail: `${last?.note ?? "a question is pending"}${last?.options !== undefined && last.options.length > 0 ? ` — ${last.options.join(" / ")}` : ""}`, ...(task.assigneeId !== undefined ? { with: input.nameOf(task.assigneeId), answer: { agentId: task.assigneeId, conversation: task.conversation ?? "main", ...(last?.options?.length ? { options: last.options } : {}) } } : {}) });
       continue;

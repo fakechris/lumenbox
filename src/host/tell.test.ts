@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { satisfies } from "./action-claims.ts";
 import { GOAL_BOOKKEEPING_TOOLS } from "./goal-mode.ts";
 import { PushBudget } from "./push-budget.ts";
+import { QuietQueue } from "./quiet-delivery.ts";
 import { admitTell, awaitingAnswer, TELL, Teller, TELLS_PER_TURN, type TellRequest } from "./tell.ts";
 import { BOOKKEEPING_TOOLS, PERSON_FACING_TOOLS } from "./tools.ts";
 import type { TurnEvent } from "./turn-events.ts";
@@ -22,6 +23,48 @@ test("a Tell goes when the turn has room for it, and each refusal says what to d
   assert.equal(admitTell({ ...quiet, pushesLeft: 0 }).allow, true, "an exhausted allowance never silences a turn somebody is waiting on");
   assert.match(refused({ ...quiet, awaiting: "AskUser" }), /asked the person a question.*have not answered/);
   assert.match(refused({ ...quiet, awaiting: "ShowUI" }), /card with a choice.*have not answered/);
+
+  assert.deepEqual(admitTell({ ...quiet, waited: false, busy: true }), { allow: true, counted: true, wait: true }, "nobody is waiting on the turn and a person is in the conversation: it goes when that is quiet (INV-1928)");
+  assert.deepEqual(admitTell({ ...quiet, busy: true }), { allow: true, counted: false }, "a turn the person is waiting on is never made to wait: they are there, and asked");
+});
+
+test("a Tell from a turn nobody is waiting on waits for its conversation to be quiet, on the page as in the chat, and can be reworded or taken back until it goes (INV-1928)", async () => {
+  let now = 0, personAt: number | undefined;
+  const queue = new QuietQueue({ now: () => now, lastPersonAt: () => personAt, answering: () => false });
+  const page: string[] = [], chat: string[] = [], filed: string[] = [], staged: string[] = [];
+  const budget = new PushBudget(undefined, () => new Date("2026-11-20T10:00:00Z"));
+  const teller = new Teller({
+    budget, quiet: queue, gapMinutes: 0, now: () => now, chatOf: conversation => (conversation === "feishu-oc_room" ? "feishu:oc_room" : undefined),
+    toChat: async (_chatKey, text) => { chat.push(text); return { delivered: true }; },
+    toPage: event => { if (event.type === "told") page.push(`${event.conversation}: ${event.text}${event.files !== undefined ? ` [${event.files.map(file => file.name).join()}]` : ""}`); },
+    filed: told => { filed.push(`${told.turnId}: ${told.text}`); },
+  });
+  const request = (more: Partial<TellRequest>): TellRequest => ({ agentId: "a1", agentName: "Ada", conversation: "main", turnId: "wake-1", text: "The export finished.", waited: false, ...more });
+  const attach = async () => ({ files: [{ name: "export.csv", path: "/home/box/work/export.csv" }], stage: async () => { staged.push("export.csv"); }, left: async () => [] });
+
+  personAt = 0; now = MINUTE;
+  const attended = await teller.tell(request({ turnId: "turn-1", waited: true, text: "March is short by 3%." }));
+  assert.deepEqual([attended.delivered && attended.queued, page], [undefined, ["main: March is short by 3%."]], "the person asked and is waiting: told at once, a minute after they wrote");
+
+  const onPage = await teller.tell(request({}));
+  const inChat = await teller.tell(request({ conversation: "feishu-oc_room", text: "Three invoices are overdue.", attach }));
+  const second = await teller.tell(request({ conversation: "feishu-oc_room", text: "The audit closed." }));
+  assert.deepEqual([onPage, inChat, second].map(told => told.delivered && told.queued), ["q1", "q2", "q3"]);
+  assert.match(onPage.delivered ? onPage.where : "", /once that conversation is quiet, within 30 min/);
+  assert.deepEqual([page.length, chat, filed, staged], [1, [], [], []], "nothing reaches the page, the chat, the record or the chat's outbox while the person is writing");
+  assert.equal(budget.counts("a1").sent, 3, "each is counted when it is taken: its delivery is owed from then on");
+
+  assert.deepEqual(teller.takeBack("a1", "q2", "Two invoices are overdue."), { ok: true });
+  assert.deepEqual(teller.takeBack("a1", "q3"), { ok: true });
+  const gone = teller.takeBack("a1", "q3");
+  assert.match(gone.ok ? "" : gone.why, /nothing of yours is waiting as q3.*Waiting now: q1 “The export finished.”, q2 “Two invoices are overdue.”/);
+  assert.equal(teller.takeBack("a2", "q1").ok, false, "another member's message is not this one's to take back");
+
+  now = 3 * MINUTE;
+  assert.equal(await queue.sweep(), 2);
+  assert.deepEqual(page.slice(1), ["main: The export finished.", "feishu-oc_room: Two invoices are overdue. [export.csv]"], "the page gets them when the chat does, in order");
+  assert.deepEqual([chat, staged], [["Two invoices are overdue."], ["export.csv"]], "the chat gets the new words, with the file it was told with");
+  assert.deepEqual(filed, ["wake-1: The export finished.", "wake-1: Two invoices are overdue."], "and each is filed as said only once it was");
 });
 
 function desk(options: { chat?: string; fails?: string; budget?: PushBudget; clock?: { at: number } } = {}) {
