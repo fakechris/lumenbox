@@ -22,7 +22,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [01-requirements](01-requirements.md) | Requirements | current | 2026-08-22 |
 | [02-product](02-product.md) | Product | current | 2026-11-06 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-11-19 |
-| [04-design](04-design.md) | Design | current | 2026-09-27 |
+| [04-design](04-design.md) | Design | current | 2026-11-19 |
 | [05-data](05-data.md) | Data | current | 2026-11-11 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-11-06 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
@@ -31,7 +31,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-10-26 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-12 |
-| [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-07 |
+| [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-19 |
 | [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
 | [99-user-work](99-user-work.md) | A person's work: requests, work, and what happens inside it | current | 2026-11-19 |
 | [glossary](glossary.md) | Glossary and controlled vocabulary | current | 2026-11-07 |
@@ -42,7 +42,7 @@ this file and the headers disagree. Edit the header, not this table.
 |---|---|---|---|
 | [manual/agent](manual/agent.md) | Agent | current | 2026-11-06 |
 | [manual/approvals](manual/approvals.md) | Approvals | current | 2026-11-19 |
-| [manual/automations](manual/automations.md) | Automations | current | 2026-11-06 |
+| [manual/automations](manual/automations.md) | Automations | current | 2026-11-19 |
 | [manual/box](manual/box.md) | Box | current | 2026-11-06 |
 | [manual/channels](manual/channels.md) | Channels | current | 2026-11-06 |
 | [manual/memory](manual/memory.md) | Memory | current | 2026-11-06 |

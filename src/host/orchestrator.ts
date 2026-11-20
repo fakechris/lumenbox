@@ -131,7 +131,7 @@ import type { HistoryEntry } from "./compaction.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
 import { SkillCache } from "./skills.ts";
-import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts";
+import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts"; import { lastPersonMessage } from "./routine-idle.ts";
 import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
 import { UsageLog } from "./usage.ts"; import type { SpendLimits } from "./spend-limits.ts"; import { PersonRecords } from "./person.ts"; import { ORG_KNOWLEDGE_FILE, OrgKnowledge } from "./org-knowledge.ts"; import { MEMORY_CONFLICTS_FILE, MemoryConflicts } from "./memory-conflicts.ts"; import { boxRegistrationModeAt } from "./installation.ts"; import { principalsPath } from "./principals.ts";
 import { AcpDelegates } from "./acp-delegate.ts";
@@ -641,7 +641,7 @@ export class Orchestrator {
   readonly scheduler = new Scheduler({
     allowed: skill => !this.governance.revoked(routineResource(skill)),
     precheck: async (skill, agent) => this.credentials.forRoutine(skill, agent), // skipped and held with missing_credentials (INV-1666)
-    spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId), workDirOf: agent => workDir(this.registry.tryGet(agent) !== undefined ? this.boxEntryOf(agent) : undefined), // the run's prompt names its box's (INV-1737)
+    idle: { lastPersonAt: boxId => lastPersonMessage(this.bus.heard, this.registry.agentsIn(boxId ?? this.registry.box.id).map(agent => agent.id)) }, spentSinceAgent: (sinceMs, agentId) => this.usage.spentSinceAgent(sinceMs, agentId), workDirOf: agent => workDir(this.registry.tryGet(agent) !== undefined ? this.boxEntryOf(agent) : undefined), // the run's prompt names its box's (INV-1737)
     due: async () => {
       const everywhere = await this.skillsEverywhere();
       return [...this.heartbeats(), ...everywhere.flatMap(({ boxId, skills }) => skills
@@ -658,7 +658,7 @@ export class Orchestrator {
           ...(skill.deliverWhen !== undefined ? { deliverWhen: skill.deliverWhen } : {}),
           ...(skill.authoredBy !== undefined ? { authoredBy: skill.authoredBy } : {}),
           ...(skill.because !== undefined ? { because: skill.because } : {}),
-          ...(skill.paused === true ? { paused: true } : {}),
+          ...(skill.paused === true ? { paused: true } : {}), ...(skill.whenIdle !== undefined ? { whenIdle: skill.whenIdle } : {}),
           ...(skill.mode !== undefined ? { mode: skill.mode } : {}),
           ...(skill.allowedTools !== undefined ? { allowedTools: skill.allowedTools } : {}),
         })))];

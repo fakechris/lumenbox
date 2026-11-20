@@ -292,6 +292,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.auto.noRuns": ["还没有运行过。", "It has not run yet."],
   "ui.next.auto.byHand": ["手动", "by hand"],
   "ui.next.auto.held": ["连续失败后被暂停：{reason}", "Paused after failing repeatedly: {reason}"],
+  "ui.next.auto.heldIdle": ["已暂停：有一段时间没有人发消息了。有人再发消息时会自动恢复。", "Paused: nobody has sent a message for a while. It starts again by itself when someone writes."],
   "ui.next.auto.outcome.done": ["完成", "Done"],
   "ui.next.auto.outcome.failed": ["失败", "Failed"],
   "ui.next.auto.outcome.skipped": ["跳过", "Skipped"],

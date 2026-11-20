@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: skills
-     updated: 2026-11-07
+     updated: 2026-11-19
 -->
 # Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine
 
@@ -87,6 +87,7 @@ refused, because the description is the only thing read when choosing a skill.
 | `match` | With `trigger: message`, a `/regex/flags` or a phrase matched case-insensitively. Fires once per matching message from a person and replies where it was said. | — | Missing with `trigger: message`; set without it; set with `trigger: webhook`; an invalid regex. |
 | `chat` | With `trigger: message`, the one chatKey (or its threads) to listen in. | Every chat. | — (ignored without a listener). |
 | `paused` | `true`: off until a person turns it on. | Not paused. Only the exact word `true` pauses. | — |
+| `when_idle` | `run`: the routine keeps its schedule when nobody has written to the box for days (a weekly report). `pause`: it stops with the rest and resumes when a person writes (docs/04 §14, INV-741). | `pause`. | Any other word. |
 | `mode` | `off`, `observe` or `auto`: how a routine may act (§4). | `auto`. | Any other word — "observe" misspelt must not mean "run". |
 | `authored_by` | Who wrote it, when an agent did. Provenance, not a permission; turns on the authoring hints. | — | — |
 | `because` | Why it exists, in the author's words. Shown wherever the routine is listed. | — | — |

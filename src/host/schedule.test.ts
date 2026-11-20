@@ -856,3 +856,64 @@ test("the ledger's finished line carries the run's result when the runner says i
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("nobody writing pauses a due routine across a restart; turning it on by hand buys a fresh week; no record of anyone is not idleness (INV-741)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-idle-"));
+  try {
+    const path = join(dir, "schedules.jsonl");
+    const DAY = 86_400_000;
+    let clock = new Date("2026-11-01T09:00:00Z");
+    let lastPerson: Date | undefined = new Date("2026-11-01T08:00:00Z");
+    const runs: string[] = [];
+    const told: string[][] = [];
+    // A heartbeat reports to no chat: it stops like the rest, and there is nobody to tell.
+    const skills: Scheduled[] = ["brief", "heartbeat:ada"].map(slug => ({ slug, name: slug, path: "/p", schedule: scheduleOf("@every 1d"), ...(slug === "brief" ? { deliver: "telegram:1" } : {}) }));
+    const make = () => {
+      const scheduler = new Scheduler({
+        due: async () => skills,
+        run: async (_agent, _prompt, _deliver, slug) => { runs.push(slug ?? "?"); },
+        defaultAgent: () => "agent-ada",
+        writerOf: () => ({ agentId: "agent-ada", agentName: "Ada" }),
+        idle: { lastPersonAt: () => lastPerson, days: () => 7 },
+        now: () => clock,
+        path,
+      });
+      scheduler.idleExplain = idled => { told.push(idled.map(routine => routine.slug)); };
+      return scheduler;
+    };
+    const at = async (scheduler: Scheduler, day: number) => { clock = new Date(Date.parse("2026-11-01T09:00:00Z") + day * DAY); await scheduler.tick(); await new Promise(resolve => setImmediate(resolve)); return runs.splice(0).sort(); };
+
+    let scheduler = make();
+    assert.deepEqual(await at(scheduler, 0), ["brief", "heartbeat:ada"]);
+    assert.deepEqual(await at(scheduler, 8), [], "eight days after the last message, nothing due runs");
+    assert.deepEqual(told, [["brief"]], "only the routine that reports to a chat has a chat to tell");
+    assert.deepEqual(scheduler.held().map(entry => [entry.slug, entry.hold.code, entry.hold.by]), [["brief", "idle_owner", "host"], ["heartbeat:ada", "idle_owner", "host"]]);
+    assert.match(scheduler.held()[0]!.hold.reason, /no message from a person for 8 days/);
+    assert.deepEqual(scheduler.runs("brief").map(run => [run.outcome, run.code ?? null]), [["skipped", "idle_owner"], ["done", null]], "the window that did not run is on the run list with why");
+    assert.match((await scheduler.runNow("brief") as { reason: string }).reason, /is paused \(no message from a person/);
+
+    // A restart reads the hold back: the next window neither runs nor explains a second time.
+    scheduler = make();
+    assert.deepEqual(await at(scheduler, 9), []);
+    assert.equal(told.length, 1);
+
+    // A person turning one on in the app is somebody there, for that routine: it gets a fresh week, across a restart too.
+    assert.equal(scheduler.resume("brief", "Chris"), true);
+    scheduler = make();
+    assert.deepEqual(await at(scheduler, 10), ["brief"]);
+    assert.deepEqual(await at(scheduler, 15), ["brief"]);
+    assert.deepEqual(await at(scheduler, 18), [], "and after it, with still no message, it pauses again");
+    assert.deepEqual(told, [["brief"], ["brief"]], "a new pause is said once more");
+
+    // A person writes: both come back at the next tick, by the host's own hand.
+    lastPerson = new Date(clock.getTime() + 3_600_000);
+    assert.deepEqual(await at(scheduler, 19), ["brief", "heartbeat:ada"]);
+    assert.deepEqual(scheduler.held(), []);
+
+    // A box the record knows nobody in is not called idle, however long that has been.
+    lastPerson = undefined;
+    assert.deepEqual(await at(scheduler, 60), ["brief", "heartbeat:ada"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
