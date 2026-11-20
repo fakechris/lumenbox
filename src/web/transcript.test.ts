@@ -128,7 +128,7 @@ test("a wake prompt in a transcript becomes a peer entry; it is part of a reques
     { role: "assistant", text: "on it", at: "t" },
   ];
   const display = toDisplayEntries(entries, roster);
-  assert.deepEqual(display[2], { kind: "peer", messages: [{ from: "Ada", priority: false, text: "over to you" }] });
+  assert.deepEqual(display[2], { kind: "peer", messages: [{ from: "Ada", priority: false, text: "over to you" }], at: "t" });
   assert.deepEqual(display[3], { kind: "text", role: "assistant", text: "Ada says 42.", at: "t" }, "the answer the person was waiting for");
   assert.deepEqual(display.slice(4).map(entry => entry.background), [true, true], "a teammate nobody asked, and what the agent did about it, is not this conversation's");
 });

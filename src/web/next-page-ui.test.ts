@@ -247,6 +247,19 @@ test("a turn's process is one line saying how long it took, a teammate's message
 
   assert.equal(workedFor("2026-11-20T09:00:00Z", "2026-11-20T09:00:40Z"), "ui.next.chat.workedBrief");
   assert.equal(workedFor("2026-11-20T09:00:00Z", "2026-11-20T10:30:00Z"), "ui.next.chat.workedHours(1.5)");
+  // A run a teammate's reply started is timed from that reply, and a card between two runs splits the time between them (Devin Review on #752).
+  const card = fakeEl("div", "card", "the card");
+  const split = fakeEl("div", "thread");
+  (pageFunction("drawEntries", { ...shared, fold: pageFunction("fold", shared), feedSurface: () => card }) as typeof drawEntries)(split, [
+    { kind: "text", role: "assistant", text: "Asked Bob.", at: "2026-11-20T09:00:00Z" },
+    { kind: "peer", messages: [{ from: "Bob", text: "go ahead" }], at: "2026-11-20T09:10:00Z" },
+    { kind: "tools", at: "2026-11-20T09:10:30Z", tools: [{ name: "bash" }] },
+    { kind: "tools", at: "2026-11-20T09:12:00Z", tools: [{ name: "ShowUI", surface: { surfaceId: "s", messages: [] } }] },
+    { kind: "tools", at: "2026-11-20T09:13:00Z", tools: [{ name: "bash" }] },
+    { kind: "text", role: "assistant", text: "Done.", at: "2026-11-20T09:15:00Z" },
+  ]);
+  assert.deepEqual(split.kids.map(node => node.cls === "fold" ? node.kids[0]!.text : node.text),
+    ["Asked Bob.", "ui.next.chat.with(Bob|1)", "ui.next.chat.worked(2)", "the card", "ui.next.chat.worked(3)", "Done."], "not the ten minutes waiting for Bob, and not the first run twice");
   const untimed = fakeEl("div", "thread");
   drawEntries(untimed, [{ kind: "tools", tools: [{ name: "bash" }, { name: "read_file" }] }, { kind: "text", role: "assistant", text: "done" }]);
   assert.equal(untimed.kids[0]!.kids[0]!.text, "ui.next.chat.steps(2)", "a run nobody timed (a live one) still says how many steps");

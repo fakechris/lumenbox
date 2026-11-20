@@ -182,6 +182,7 @@ function drawEntries(target, entries, between, conversation) {
     var summary = workedFor(since, until || lastAt) || t("ui.next.chat.steps", { n: steps.length });
     target.appendChild(fold(summary, steps.map(function (tool) { return { head: (tool.phrase && tool.phrase["{{@locale}}"]) || tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
     steps = [];
+    since = until || lastAt; // the next run starts where this one ended, not at what was said before it
   }
   entries.forEach(function (entry, index) {
     var before = between ? between(entry) : [];
@@ -201,7 +202,7 @@ function drawEntries(target, entries, between, conversation) {
     if (entry.kind === "text" && entry.role === "user") lastAsk = null; // answered by what was said next
     if (entry.kind === "text" && entry.aside) return; // commentary beside steps: the fold's, not the thread's
     flush(entry.at);
-    if (entry.at) since = entry.at;
+    since = entry.at || ""; // after an untimed entry nothing can be timed: the fold says how many steps instead
     if (entry.kind === "text") { var said = bubble(entry); said.dataset.entry = index; target.appendChild(said); }
     else if (entry.kind === "peer") target.appendChild(fold(withMembers(entry.messages || []), (entry.messages || []).map(function (message) { return { head: message.from, text: message.text }; })));
     else if (entry.kind === "sent") target.appendChild(sentRow(entry));
