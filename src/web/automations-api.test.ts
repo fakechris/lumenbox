@@ -7,11 +7,14 @@ import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AttachedBoxProvisioner } from "../box/provisioner.ts";
 import { BOXD_PROTOCOL } from "../protocol/index.ts";
+import { Principals } from "../host/principals.ts";
 import { startWebServer } from "./server.ts";
 
 test("automation saves refuse borrowed identities before writing, for timers and webhooks", async () => {
   const home = mkdtempSync(join(tmpdir(), "automations-api-")), previous = process.env.AGENTBOX_HOME;
+  const previousGateway = process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY;
   process.env.AGENTBOX_HOME = home;
+  process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
   const files = new Map<string, string>();
   const daemon = createServer(async (req, res) => {
     let raw = "";
@@ -32,6 +35,8 @@ test("automation saves refuse borrowed identities before writing, for timers and
     const address = daemon.address();
     assert.ok(address && typeof address !== "string");
     const registry = new AgentRegistry();
+    new Principals().save([{ id: "outsider", name: "Outsider", role: "driver", identities: ["web:outsider"] }]);
+    registry.updateBox(registry.defaultBox().id, { members: [] });
     registry.create({ name: "Ada" }); registry.create({ name: "Quinn" });
     let base = "";
     stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "fixture", onLog: () => {},
@@ -59,9 +64,18 @@ test("automation saves refuse borrowed identities before writing, for timers and
     }
     const choices = await (await fetch(base + "/api/schedules", { headers })).json() as { runnerAgents: string[] };
     assert.deepEqual(choices.runnerAgents, ["Ada"], "the new-routine picker offers only a usable identity");
+    const excluded = await fetch(base + "/api/schedules", {
+      headers: { ...headers, "x-agentbox-user": "web:outsider", "x-agentbox-role": "member" },
+    });
+    assert.equal(excluded.status, 200);
+    const hidden = await excluded.json() as { runnerAgents: string[]; boxes: unknown[] };
+    assert.deepEqual(hidden.boxes, [], "this caller cannot read the default box");
+    assert.deepEqual(hidden.runnerAgents, [], "the picker must not disclose its default agent's name");
   } finally {
     stop?.(); await new Promise<void>(resolve => daemon.close(() => resolve()));
     if (previous === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous;
+    if (previousGateway === undefined) delete process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY;
+    else process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = previousGateway;
     rmSync(home, { recursive: true, force: true });
   }
 });

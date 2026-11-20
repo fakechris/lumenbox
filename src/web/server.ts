@@ -3906,7 +3906,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             // The places (INV-430): the view groups routines by the box they live in.
             boxes: registry.listBoxes().filter(box => mayReadBox(box.id)).map(box => ({ id: box.id, name: box.name })),
             defaultBox: registry.box.id,
-            runnerAgents: registry.list().filter(agent => orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs: agent.id }).agent !== undefined).map(agent => agent.profile.name),
+            runnerAgents: registry.list().filter(agent => mayReadAgent(agent.id) && orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs: agent.id }).agent !== undefined).map(agent => agent.profile.name),
           });
           return;
         }
