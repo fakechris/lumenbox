@@ -182,6 +182,28 @@ test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an o
   assert.equal(all(notice()!).find(node => node.href)?.href, "/bootstrap", "a refusal keeps the available first-admin path");
 });
 
+test("welcome setup uses the latest box result even when setup is the last response", async () => {
+  const settings = { setup: { installationId: "fresh", box: false } };
+  const boxes = { list: [], own: "", state: null };
+  const setupCard = pageFunction("setupCard", { settings, next: { agents: {} }, localStorage: { getItem: () => null }, t: String, el: fakeEl });
+  const boxStep = () => (setupCard() as Fake).kids[2]!;
+  let finishSetup!: (setup: typeof settings.setup) => void;
+  const delayedSetup = new Promise<typeof settings.setup>(resolve => { finishSetup = resolve; });
+  const drawn: string[][] = [];
+  const refresh = pageFunction("refresh", {
+    next: { agents: {} }, settings, boxes, chat: {}, member: {}, panel: {},
+    getJson: (path: string) => path === "/api/setup" ? delayedSetup : Promise.resolve({ boxes: [{ id: "b1", connected: true }] }),
+    render: () => { drawn.push(boxStep().kids.map(node => node.text)); },
+    failed: (error: unknown) => { throw error; },
+  });
+  assert.deepEqual(boxStep().kids.map(node => node.text), ["○", "ui.next.setup.box", "ui.next.box.off", "ui.next.setup.go"]);
+  const pending = refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  finishSetup({ installationId: "fresh", box: true });
+  await pending;
+  assert.deepEqual(drawn, [["✓", "ui.next.setup.box", "ui.next.box.on"]], "the refresh redraws the card from the new setup response");
+});
+
 test("\"@Bob …\" typed to Ada is said to Bob; a name mid-sentence, an unknown name and the agent's own are not", () => {
   const agents = { a: { id: "a", name: "Ada" }, b: { id: "b", name: "Bob" } };
   const addressed = pageFunction("addressed", { next: { agents }, chat: { agentId: "a" } });

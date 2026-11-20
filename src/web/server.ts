@@ -320,6 +320,7 @@ type OutboundEvent =
   | { type: "reaction"; agentId: string; conversation: string; index: number; emoji: string | null; by: string }
   /** One line of docker output while the box is brought up from the page. */
   | { type: "box_setup"; line: string; done?: boolean; ok?: boolean }
+  | { type: "box_status"; boxId: string }
   /** An approval was just created; the desktop shell turns this into a notification. */
   | { type: "approval_pending"; id: string; agentId: string; agentName: string; description: string }
   /** An approval was answered, here or in a chat; the card in the thread settles. */
@@ -2454,9 +2455,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         broadcast({ type: "error", boxId: registry.boxByName(change.name)?.id ?? "", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
       }
     }).catch(() => {});
-    void keeper.tick().then(state => { box = state; }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
-    // Configurable only so a test can watch a recovery without waiting half a minute
-    // for each tick; nothing in production has a reason to change it.
+    void keeper.tick().then(state => {
+      const changed = state.connected !== box.connected;
+      box = state;
+      if (changed) broadcast({ type: "box_status", boxId: registry.box.id });
+    }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
   }, envNumber("AGENTBOX_BOX_WATCH_MS", 30_000));
   boxWatch.unref?.();
 

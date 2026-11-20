@@ -105,6 +105,7 @@ function setupCard() {
     var row = el("div", "setup-step"), go = el("button", "act", t("ui.next.setup.go"));
     row.appendChild(el("span", step.done ? "setup-done" : "setup-todo", step.done ? "✓" : "○"));
     row.appendChild(el("span", "body", t("ui.next.setup." + step.key) + (step.optional ? " " + t("ui.next.setup.optional") : "")));
+    if (step.key === "box") row.appendChild(el("span", step.done ? "chip-run" : "chip", t(step.done ? "ui.next.box.on" : "ui.next.box.off")));
     go.addEventListener("click", step.open);
     if (!step.done) row.appendChild(go);
     card.appendChild(row);

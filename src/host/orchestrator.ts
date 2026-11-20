@@ -1162,7 +1162,7 @@ export class Orchestrator {
       return { connected: false, detail: "box disabled by --no-box" };
     }
 
-    const own = this.registry.box.id;
+    const own = this.registry.box.id, previous = this.box;
     let result: { connected: boolean; detail: string };
     try {
       if (this.options.boxClient !== undefined) {
@@ -1178,8 +1178,6 @@ export class Orchestrator {
         this.boxClients.set(own, client);
         this.resolution = health.resolution;
         this.resolutions.set(own, health.resolution);
-        // Read here, not at construction: connecting again may be a *different* box, and the class belongs to the box. The roster's
-        // box record name is the fallback for attached provisioners, whose boxName is a URL — see classifyBox for why a URL never keys the lookup.
         this.boxAccess = classifyBox(provisioner.boxName, loadConfig(), this.registry.box.name);
         this.boxAccesses.set(own, this.boxAccess);
         // Connecting again may be a different box — updated, recreated, restarted; nothing it had is guaranteed, and a remembered desktop is the one that never appears.
@@ -1190,15 +1188,17 @@ export class Orchestrator {
         result = { connected: true, detail: `box ready (${size}) via ${provisioner.label}` };
       }
     } catch (error) {
+      if (previous !== undefined && this.box === previous) {
+        this.box = undefined;
+        this.boxClients.delete(own);
+        this.forgetDesktopsOf(own);
+      }
       result = { connected: false, detail: error instanceof Error ? error.message : String(error) };
     }
-    // The attached boxes, each on its own: one that is down costs its own agents their
-    // computer, not everyone theirs.
     for (const entry of this.registry.listBoxes()) {
       if (entry.id === own) continue;
       await this.connectAttached(entry);
     }
-    // A box that just appeared has none of the mirror files; a reconnect may be a different box.
     void this.memoryMirror.syncAll();
     return result;
   }
