@@ -4866,3 +4866,100 @@ test("a result sent back with a reason wakes the member, which reads the reason 
     assert.deepEqual(result.score.said.map(row => row.text), ["导出修好了，等你过目。", "切换日 02:30 的问题修了，请再看。"]);
   } finally { result.cleanup(); }
 });
+
+// ── INV-741: the morning brief that kept arriving after everybody had left ───────────────────
+//
+// A person stops using a box and its routines carry on: each window a turn is run, billed and
+// delivered to a chat nobody opens. On the real stack — the scheduler firing real turns through the
+// bus, the heard record written by the bus as turns take their messages, the proactive budget — with
+// the clock moved by hand: a week after the last message from a person the brief does not run, is
+// paused with why, and its chat is told once. The routine's own turns, a teammate and a host notice
+// do not count as somebody being there. A person writing again starts it; a routine a person paused,
+// and one the host holds for another reason, stay as they were.
+
+test("a week after the last message from a person a due routine pauses and says so once, and only a person writing again starts it (INV-741)", async () => {
+  const { mock } = await import("node:test");
+  const { Scheduler, parseSchedule } = await import("./schedule.ts");
+  const { HeardRecord } = await import("../agents/heard-record.ts");
+  const { FollowUpBudget } = await import("./follow-up-budget.ts");
+  const { explainIdlePause, lastPersonMessage } = await import("./routine-idle.ts");
+  const DAY = 86_400_000;
+  const heardDir = mkdtempSync(join(tmpdir(), "agentbox-idle-heard-"));
+  const start = Date.now();
+  mock.timers.enable({ apis: ["Date"], now: start });
+  const day = (n: number) => mock.timers.setTime(start + n * DAY);
+  const pushed: { chatKey: string; text: string }[] = [];
+  const ran: string[] = [];
+  let prompts = 0;
+  let result: Awaited<ReturnType<typeof runEpisode>> | undefined;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }, { name: "Mira" }], says: [],
+      script: async () => { prompts += 1; return { say: "Brief: nothing new." }; },
+      drive: async ({ bus, registry, frontId, say }) => {
+        bus.heard = new HeardRecord(heardDir);
+        const everyone = registry.list().map(agent => agent.id), teammate = everyone.find(id => id !== frontId)!;
+        const daily = parseSchedule("@every 1d");
+        assert.ok("schedule" in daily);
+        const routine = (slug: string, more: object = {}) => ({ slug, name: slug, path: `/home/box/work/skills/${slug}/SKILL.md`, schedule: daily.schedule, deliver: "feishu:oc_team", ...more });
+        const routines = [routine("morning-brief"), routine("weekly-report", { whenIdle: "run" as const }), routine("switched-off", { paused: true }), routine("no-key")];
+        const followUps = new FollowUpBudget();
+        let telling: Promise<void> = Promise.resolve();
+        const scheduler = new Scheduler({
+          due: async () => routines,
+          run: async (agent, prompt, _deliver, slug) => {
+            ran.push(slug ?? "?");
+            bus.sendFromUser(agent, prompt, { steerable: false, lane: "background", synthetic: true });
+            await bus.runExclusive(agent, { userDriven: true });
+            return { result: "done" };
+          },
+          defaultAgent: () => frontId,
+          idle: { lastPersonAt: () => lastPersonMessage(bus.heard, everyone), days: () => 7 },
+          path: null,
+        });
+        scheduler.idleExplain = (idled, days) => { telling = explainIdlePause({ followUps, push: async (chatKey, text) => { pushed.push({ chatKey, text }); return { delivered: true }; }, log: () => {} }, idled, days); };
+        scheduler.hold(routines[3]!, { code: "missing_credentials", text: "its key is not in the vault" });
+        const window = async (n: number) => { day(n); await scheduler.tick(); await bus.idle(); await telling; const fired = ran.splice(0); return fired.sort(); };
+        const paused = async () => (await scheduler.status()).filter(entry => entry.paused).map(entry => `${entry.slug}:${entry.hold?.code ?? "by a person"}`).sort();
+
+        await say("Morning. Keep the brief coming.");
+        assert.deepEqual(await window(0), ["morning-brief", "weekly-report"]);
+        assert.deepEqual(await window(6), ["morning-brief", "weekly-report"], "six days of silence is not a week");
+
+        // Day 8. The only things heard since day 0 are the routines' own turns: they are not somebody being there.
+        assert.deepEqual(await window(8), ["weekly-report"], "the brief does not run; the routine marked when_idle: run does");
+        assert.deepEqual(await paused(), ["morning-brief:idle_owner", "no-key:missing_credentials", "switched-off:by a person"]);
+        assert.equal(pushed.length, 1, "its chat is told");
+        assert.equal(pushed[0]!.chatKey, "feishu:oc_team");
+        assert.match(pushed[0]!.text, /morning-brief/, "which routine stopped");
+        assert.match(pushed[0]!.text, /7 天/, "why, in the language of the door it reports to");
+        assert.doesNotMatch(pushed[0]!.text, /weekly-report|switched-off|no-key/, "and nothing that did not stop for this");
+        assert.equal(followUps.remaining("feishu:oc_team"), 1, "the explanation is one of the room's proactive messages for the day");
+
+        assert.deepEqual(await window(9), ["weekly-report"]);
+        assert.equal(pushed.length, 1, "the next window says nothing again");
+
+        // What the host and a teammate send is not a person coming back.
+        bus.sendFromUser(frontId, "A background job ended.", { steerable: false, lane: "background", synthetic: true, origin: "host:jobs" });
+        await bus.runExclusive(frontId);
+        const turnsBefore = prompts;
+        bus.send({ fromId: teammate, toId: frontId, text: "Anything for me today?" });
+        await bus.wake(frontId);
+        await bus.idle();
+        assert.ok(prompts > turnsBefore, "the teammate's message was a real turn");
+        assert.deepEqual(await window(10), ["weekly-report"], "still paused");
+        assert.deepEqual(await paused(), ["morning-brief:idle_owner", "no-key:missing_credentials", "switched-off:by a person"]);
+
+        await say("I am back. What did I miss?");
+        assert.deepEqual(await window(11), ["morning-brief", "weekly-report"], "a person wrote: the brief runs at its next window without anyone turning it on");
+        assert.deepEqual(await paused(), ["no-key:missing_credentials", "switched-off:by a person"], "what a person paused, and what the host holds for another reason, are left alone");
+        assert.equal(pushed.length, 1);
+      },
+    });
+    assert.ok(prompts >= 8, "the routines that ran were real turns");
+  } finally {
+    mock.timers.reset();
+    result?.cleanup();
+    rmSync(heardDir, { recursive: true, force: true });
+  }
+});

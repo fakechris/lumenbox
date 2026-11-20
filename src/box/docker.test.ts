@@ -17,6 +17,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { BACKUP_EXCLUDES, BOX_IMAGE_REPO, BoxManager, boxImageRef, boxTokenPath, boxUiToken, defaultBoxConfig, DockerError, ensureLocalImage, loadBoxToken, networkNameFor, packageVersion, readBoxToken, uiToken } from "./docker.ts";
 import { SPILL_AT_BYTES, SPOOL_DIR } from "../boxd/shell-service.ts";
+import { DEFAULT_RECORDINGS_DIR } from "../boxd/record-service.ts";
 import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -204,6 +205,18 @@ test("the spool does not travel out of the box in a backup", () => {
   assert.ok(
     BACKUP_EXCLUDES.includes("./.spool"),
     `the spool must be excluded from volume archives; excludes are ${BACKUP_EXCLUDES.join(", ")}`
+  );
+});
+
+test("recordings are disposable and stay out of volume backups (INV-1949)", () => {
+  // Pinned to the daemon's constant: a recordings directory that moved would otherwise put
+  // every recording back into every archive without a test noticing.
+  const WORK_ROOT = "/home/box/work";
+  assert.ok(DEFAULT_RECORDINGS_DIR.startsWith(`${WORK_ROOT}/`));
+  const relative = `.${DEFAULT_RECORDINGS_DIR.slice(WORK_ROOT.length)}`;
+  assert.ok(
+    BACKUP_EXCLUDES.includes(relative),
+    `the exclude list does not cover ${relative}; it has ${BACKUP_EXCLUDES.join(", ")}`
   );
 });
 

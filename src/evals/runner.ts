@@ -20,6 +20,9 @@ import { type GraderResult, gradeObservation } from "./graders.ts";
 import type { JudgeSection } from "./judges.ts";
 import type { Subject } from "./subjects.ts";
 
+/** What a record was run over: one side of the corpus, or both pooled, which only a comparison of two versions does. */
+export type RunSplit = Split | "dev+test";
+
 export interface TokenUse {
   calls: number;
   inputTokens: number;
@@ -56,7 +59,7 @@ export interface EvalRun {
   at: string;
   commit: string;
   dirty: boolean;
-  split: Split;
+  split: RunSplit;
   corpus: { version: string; tasks: number };
   k: number;
   /** True when a deterministic stand-in answered instead of a model: the numbers measure nothing. */
@@ -76,7 +79,7 @@ export interface Tier {
 
 export interface RunOptions {
   tasks: readonly EvalTask[];
-  split: Split;
+  split: RunSplit;
   k?: number;
   subjects: Readonly<Record<SubjectName, Subject>>;
   /** The real models, per tier. Unused when `fake` is given, except for the profile. */

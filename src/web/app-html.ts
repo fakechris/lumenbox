@@ -4346,7 +4346,7 @@ function agentById(id) {
 
 function select(id, conversation) {
   var switching = id !== current;
-  current = id;
+  current = id; if (switching) loadRecordings(); // recordings are per box (INV-1949)
   // Selecting an agent selects its box: a link into another box's agent changes the page.
   var owner = agentById(id);
   if (owner && owner.boxId && owner.boxId !== currentBox && boxesSeen.some(function (b) { return b.id === owner.boxId; })) {
@@ -5189,8 +5189,8 @@ function automationRow(s, rows) {
   var origin = s.authoredBy
     ? '<span style="color:var(--accent-2);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px">{{ui.app.by}} ' + esc(s.authoredBy) + "</span>"
     : "";
-  var pausedTag = s.paused
-    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px"' + (s.hold ? ' title="' + esc(s.hold.reason) + '">{{ui.app.paused-by}} ' + esc(s.hold.by) : ">{{ui.app.paused-2}}") + "</span>"
+  var holdWhy = s.hold && s.hold.code === "idle_owner" ? "{{ui.app.paused-idle}}" : esc(s.hold ? s.hold.reason : ""), pausedTag = s.paused
+    ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px"' + (s.hold ? ' title="' + holdWhy + '">{{ui.app.paused-by}} ' + esc(s.hold.by) : ">{{ui.app.paused-2}}") + "</span>"
     : "";
   var toggle = s.paused
     ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">{{ui.app.turn-on}}</button>'
@@ -5239,7 +5239,7 @@ function automationRow(s, rows) {
       (s.agent ? " {{ui.app.as}} " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
     (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
-    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">{{ui.app.paused}} ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + esc(s.hold.reason) + " {{ui.app.turn-on-resumes-it}}</div>" : "") + lastResult + observed +
+    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">{{ui.app.paused}} ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + holdWhy + " {{ui.app.turn-on-resumes-it}}</div>" : "") + lastResult + observed +
     hookBlock + '<div data-runs-for="' + esc(s.slug) + '" style="display:none"></div>' +
   "</div>";
 }
@@ -6356,7 +6356,7 @@ $("clipout").onclick = function () {
  */
 var recording = null;
 
-function renderRecordings(list) {
+function renderRecordings(list, agent) {
   var box = $("recordings");
   if (!list || !list.length) {
     box.style.display = "none";
@@ -6366,7 +6366,7 @@ function renderRecordings(list) {
   for (var i = 0; i < Math.min(list.length, 6); i++) {
     var item = list[i];
     var size = item.size_bytes ? Math.round(item.size_bytes / 1024) + "KB" : "recording…";
-    html += '<a href="/recording?name=' + encodeURIComponent(item.file) + '" target="_blank"' +
+    html += '<a href="/recording?agent=' + encodeURIComponent(agent) + '&amp;name=' + encodeURIComponent(item.file) + '" target="_blank"' +
       ' rel="noopener">' + esc(item.file.replace(/\.mp4$/, "")) + " (" + size + ")</a>";
   }
   box.innerHTML = html;
@@ -6374,9 +6374,9 @@ function renderRecordings(list) {
 }
 
 function loadRecordings() {
-  return fetch("/api/recordings")
+  var agent = current; renderRecordings([]); if (!agent) return Promise.resolve(); return fetch("/api/recordings?agent=" + encodeURIComponent(agent)) // the member's own box (INV-1949)
     .then(function (r) { return r.json(); })
-    .then(function (data) { renderRecordings(data.recordings); })
+    .then(function (data) { if (agent === current) renderRecordings(data.recordings, agent); }) // a late answer for the last agent is dropped
     .catch(function () { /* the box may be down; the pane just stays hidden */ });
 }
 

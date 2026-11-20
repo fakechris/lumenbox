@@ -227,6 +227,55 @@ test("a draft waiting to be sent and a proposal to close are decided on their in
   assert.equal(buttons("review").length, 0, "a row with nothing to decide on it has no buttons");
 });
 
+test("a turn's process is one line saying how long it took, a teammate's messages one line saying who and how many; a click opens all of it", () => {
+  // INV-1924: the default level is what was said and a line per process; the steps, their inputs and the teammates' words are a click away.
+  const t = (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : "");
+  const document = { createTextNode: (text: string) => fakeEl("#text", "", text) };
+  const workedFor = pageFunction("workedFor", { t, Date, Math }) as (from: string, to: string) => string;
+  const shared = { t, el: fakeEl, document, clip: pageFunction("clip", { String }), workedFor, withMembers: pageFunction("withMembers", { t }), bubble: (entry: { text: string }) => fakeEl("div", "msg", entry.text) };
+  const drawEntries = pageFunction("drawEntries", { ...shared, fold: pageFunction("fold", shared) }) as (target: Fake, entries: unknown[]) => unknown;
+  const long = "Checked the DST branch. ".repeat(20).trim();
+  const entries = [
+    { kind: "text", role: "user", text: "Fix the export time zone.", at: "2026-11-20T09:00:00Z" },
+    { kind: "text", role: "assistant", opening: true, text: "Looking now.", at: "2026-11-20T09:00:04Z" },
+    { kind: "tools", at: "2026-11-20T09:01:20Z", tools: [{ name: "bash", phrase: { en: "running a command" }, detail: "npm test -- export" }] },
+    { kind: "text", role: "assistant", aside: true, text: "one failing", at: "2026-11-20T09:03:00Z" },
+    { kind: "tools", at: "2026-11-20T09:05:00Z", tools: [{ name: "edit_file", phrase: { en: "editing src/export.ts" }, detail: "offset = zoneOffset(at)" }] },
+    { kind: "text", role: "assistant", text: "Fixed; Bob is checking.", at: "2026-11-20T09:07:52Z" },
+    { kind: "peer", messages: [{ from: "Bob", text: long }, { from: "Bob", text: "One nit." }] },
+    { kind: "text", role: "assistant", text: "Bob confirmed.", at: "2026-11-20T09:09:00Z" },
+  ];
+  const thread = fakeEl("div", "thread");
+  drawEntries(thread, entries);
+  const said = (node: Fake): string => node.text + node.kids.map(said).join("");
+  assert.deepEqual(thread.kids.map(node => node.cls === "fold" ? node.kids[0]!.text : node.text),
+    ["Fix the export time zone.", "Looking now.", "ui.next.chat.worked(8)", "Fixed; Bob is checking.", "ui.next.chat.with(Bob|2)", "Bob confirmed."],
+    "both runs of steps and the aside between them are one line timed from the last thing said to the next; the teammate's two messages one more");
+  const [steps, peer] = thread.kids.filter(node => node.cls === "fold");
+  assert.ok(!thread.kids.filter(node => node.cls !== "fold").some(node => said(node).includes("npm test")), "no step's input is drawn outside its fold");
+  assert.ok(said(steps!).includes("running a command") && said(steps!).includes("editing src/export.ts"), "opened, the fold has every step");
+  assert.ok(said(peer!).includes(long) && said(peer!).includes("One nit."), "opened, the teammate's words are whole, not clipped");
+
+  assert.equal(workedFor("2026-11-20T09:00:00Z", "2026-11-20T09:00:40Z"), "ui.next.chat.workedBrief");
+  assert.equal(workedFor("2026-11-20T09:00:00Z", "2026-11-20T10:30:00Z"), "ui.next.chat.workedHours(1.5)");
+  // A run a teammate's reply started is timed from that reply, and a card between two runs splits the time between them (Devin Review on #752).
+  const card = fakeEl("div", "card", "the card");
+  const split = fakeEl("div", "thread");
+  (pageFunction("drawEntries", { ...shared, fold: pageFunction("fold", shared), feedSurface: () => card }) as typeof drawEntries)(split, [
+    { kind: "text", role: "assistant", text: "Asked Bob.", at: "2026-11-20T09:00:00Z" },
+    { kind: "peer", messages: [{ from: "Bob", text: "go ahead" }], at: "2026-11-20T09:10:00Z" },
+    { kind: "tools", at: "2026-11-20T09:10:30Z", tools: [{ name: "bash" }] },
+    { kind: "tools", at: "2026-11-20T09:12:00Z", tools: [{ name: "ShowUI", surface: { surfaceId: "s", messages: [] } }] },
+    { kind: "tools", at: "2026-11-20T09:13:00Z", tools: [{ name: "bash" }] },
+    { kind: "text", role: "assistant", text: "Done.", at: "2026-11-20T09:15:00Z" },
+  ]);
+  assert.deepEqual(split.kids.map(node => node.cls === "fold" ? node.kids[0]!.text : node.text),
+    ["Asked Bob.", "ui.next.chat.with(Bob|1)", "ui.next.chat.worked(2)", "the card", "ui.next.chat.worked(3)", "Done."], "not the ten minutes waiting for Bob, and not the first run twice");
+  const untimed = fakeEl("div", "thread");
+  drawEntries(untimed, [{ kind: "tools", tools: [{ name: "bash" }, { name: "read_file" }] }, { kind: "text", role: "assistant", text: "done" }]);
+  assert.equal(untimed.kids[0]!.kids[0]!.text, "ui.next.chat.steps(2)", "a run nobody timed (a live one) still says how many steps");
+});
+
 test("a conversation exported is what was said, by whom, in order; steps and asides stay behind", () => {
   const threadMarkdown = pageFunction("threadMarkdown", {});
   const entries = [

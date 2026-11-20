@@ -110,6 +110,8 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
       { name: "bash", phrase: { en: "running a command (ls)", zh: "运行命令(ls)" }, detail: "ls -la /home/box", result: "work", isError: false },
       { name: "computer", phrase: { en: "using the desktop (click, screenshot)", zh: "操作桌面(click, screenshot)" }, detail: "click + screenshot", result: "failed", isError: true },
     ],
+     // When it was called, so the page can say how long the steps took (INV-1924).
+    at: "t",
   });
   assert.equal(display[3], undefined);
 });
@@ -126,7 +128,7 @@ test("a wake prompt in a transcript becomes a peer entry; it is part of a reques
     { role: "assistant", text: "on it", at: "t" },
   ];
   const display = toDisplayEntries(entries, roster);
-  assert.deepEqual(display[2], { kind: "peer", messages: [{ from: "Ada", priority: false, text: "over to you" }] });
+  assert.deepEqual(display[2], { kind: "peer", messages: [{ from: "Ada", priority: false, text: "over to you" }], at: "t" });
   assert.deepEqual(display[3], { kind: "text", role: "assistant", text: "Ada says 42.", at: "t" }, "the answer the person was waiting for");
   assert.deepEqual(display.slice(4).map(entry => entry.background), [true, true], "a teammate nobody asked, and what the agent did about it, is not this conversation's");
 });
@@ -196,6 +198,7 @@ test("a message to a teammate is recorded by name, not by id", () => {
   assert.deepEqual(display[0], {
     kind: "tools",
     tools: [{ name: "SendToAgent", phrase: { en: "messaging a teammate", zh: "给队友发消息" }, detail: "Bob: please verify r1.txt" }],
+     at: "t",
   });
 });
 

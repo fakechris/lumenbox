@@ -1,16 +1,24 @@
 /**
- * End-to-end smoke test against a running box. No API credentials required.
+ * End-to-end smoke test in a disposable box and home. No API credentials required.
  *
  * This covers the paths that unit tests cannot: everything that only breaks when
  * a real X server, a real ffmpeg, and a real container are involved. Those are
  * also the paths that fail silently, which is why they are worth re-checking
  * after any change to the box image or the daemon.
  *
- * Usage:  npm run smoke        (with the box already up)
+ * Usage: npm run smoke         creates/removes lumenbox-eval-smoke-<id>
+ *   --box use <name>           use an existing test box; removes nothing
+ *   --live-box                 allow the installation's box (destructive)
+ * AGENTBOX_CONTAINER / AGENTBOX_BOXD_URL also select an existing box.
+ * Only --live-box reads the installation's owner token; all registry writes are temporary.
  */
 
-import { readFileSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
+import { DEFAULT_CONTAINER, defaultBoxImage, readBoxToken } from "../src/box/docker.ts";
+import { openEvalBox } from "./lib/eval-box.mjs";
+import { liveOwners, requiredSmokeToken, smokeHome, smokeTarget } from "./smoke-target.mjs";
 import { resolveBoxProvisioner } from "../src/box/provisioner.ts";
 import { startEgressRelay } from "../src/egress/relay.ts";
 import { DisplayLease } from "../src/box/display-lease.ts";
@@ -45,11 +53,27 @@ function assert(condition, message) {
 
 // --- connect ---------------------------------------------------------------
 
-const token = process.env.AGENTBOX_TOKEN
-  ?? readFileSync(`${homedir()}/.agentbox/token`, "utf8").trim();
-// Through the provisioner, so this also covers the path a deployment uses: set
-// AGENTBOX_BOXD_URL and the whole suite runs against a box nothing here started.
-process.env.AGENTBOX_TOKEN ??= token;
+const target = smokeTarget(process.argv, process.env, DEFAULT_CONTAINER);
+if (target.mode !== "attached") delete process.env.AGENTBOX_BOXD_URL;
+if (target.overridesAttached) delete process.env.AGENTBOX_TOKEN;
+const realHome = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
+const owners = target.localLive ? liveOwners(process.env.AGENTBOX_AGENTS_DIR ?? join(realHome, "agents")) : new Map();
+if (target.localLive || (target.overridesAttached && target.mode === "use")) {
+  process.env.AGENTBOX_TOKEN = requiredSmokeToken(readBoxToken(target.name), target.name);
+}
+if ((target.mode === "create" || target.mode === "keep") &&
+    !(process.argv.includes("--image") && process.argv[process.argv.indexOf("--image") + 1] === "build")) {
+  process.env.AGENTBOX_IMAGE ??= defaultBoxImage();
+}
+const scratch = smokeHome(process.env);
+process.once("exit", scratch.close);
+let evaluation;
+try {
+if (target.mode !== "attached") {
+  const argv = target.mode === "use" ? ["--box", "use", target.name] : process.argv;
+  evaluation = await openEvalBox({ argv, runId: `smoke-${Date.now().toString(36)}`, isolated: !target.live });
+}
+const token = process.env.AGENTBOX_TOKEN;
 const provisioner = resolveBoxProvisioner();
 
 let box;
@@ -57,8 +81,7 @@ try {
   box = await provisioner.connect();
 } catch (error) {
   console.error(`${RED}Cannot reach the box:${OFF} ${error.message}`);
-  console.error("Start it with:  node dist/cli.js box up");
-  process.exit(1);
+  throw error;
 }
 
 console.log(`${DIM}smoke test against ${provisioner.label}${OFF}\n`);
@@ -70,7 +93,7 @@ console.log(`${DIM}smoke test against ${provisioner.label}${OFF}\n`);
 const smokeRegistry = new AgentRegistry();
 const owner = (display = 1) => {
   try {
-    return smokeRegistry.boxOwnerTokenForDisplay(display);
+    return owners.get(display) ?? smokeRegistry.boxOwnerTokenForDisplay(display);
   } catch {
     return undefined;
   }
@@ -947,4 +970,8 @@ await check("unicode typing reaches an application", async () => {
 // --- summary ---------------------------------------------------------------
 
 console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);
+process.exitCode = failed === 0 ? 0 : 1;
+} finally {
+  await evaluation?.close();
+  scratch.close();
+}

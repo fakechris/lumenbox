@@ -134,6 +134,9 @@ Every file in `docs/` opens with a header block naming what it is:
 - **`npm test` is the gate.** It is hermetic: no credentials, no network, no live `~/.agentbox`.
   Never merge on a red suite. `npm run release:check` builds *and launches* the artifact — a
   green build is not evidence that the thing runs.
+- **`npm run smoke` uses a disposable box and home.** It removes its own container, volumes
+  and network; existing test boxes need `--box use <name>` or an explicit endpoint/token.
+  `--live-box` opts into destructive checks on the installation's box; never use it during work.
 - **A conduct fix is not finished until the episode is a scenario.** `src/host/scenario.ts` runs
   a whole multi-agent episode on the real stack with a scripted model and scores it; add one to
   `scenario.test.ts` for every run that went wrong (docs/43).

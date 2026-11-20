@@ -376,7 +376,8 @@ export function lintManual(dir) {
 }
 
 /**
- * The evaluation reports (INV-1772): `docs/evals/REPORT-<date>.md`, written by
+ * The evaluation reports (INV-1772): `docs/evals/REPORT-<date>.md`, and the comparisons of two
+ * versions (INV-1862): `docs/evals/COMPARE-<date>-<base>-<candidate>.md`, written by
  * `scripts/eval-report.mjs` and kept as results. Outside the numbered documents — a report is a
  * dated measurement, not a design — but each opens with the generator's own header, and that
  * header must say a model was measured. The runner can also be driven by a deterministic
@@ -388,8 +389,8 @@ export function lintEvalReports(dir) {
   if (!existsSync(dir)) return problems;
   for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
     const at = `evals/${file}`;
-    const name = /^(REPORT-\d{4}-\d{2}-\d{2})\.md$/.exec(file)?.[1];
-    if (name === undefined) { problems.push(`${at}: a page in docs/evals/ is a report named REPORT-<yyyy-mm-dd>.md.`); continue; }
+    const name = /^(REPORT-\d{4}-\d{2}-\d{2}|COMPARE-\d{4}-\d{2}-\d{2}-[0-9a-f]{7}-[0-9a-f]{7})\.md$/.exec(file)?.[1];
+    if (name === undefined) { problems.push(`${at}: a page in docs/evals/ is a report named REPORT-<yyyy-mm-dd>.md, or a comparison named COMPARE-<yyyy-mm-dd>-<base>-<candidate>.md.`); continue; }
     const text = readFileSync(join(dir, file), "utf8");
     const end = text.indexOf("-->");
     if (!text.startsWith("<!-- eval-report:") || end < 0) { problems.push(`${at}: no eval-report header. A report is written by scripts/eval-report.mjs, not by hand.`); continue; }

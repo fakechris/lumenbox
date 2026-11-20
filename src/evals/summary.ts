@@ -64,7 +64,8 @@ export interface Summary {
   comparison?: { comparable: false; why: string } | ({ comparable: true; baselineCommit: string; baselineAt: string; dropped: number } & PairedComparison);
 }
 
-const reliable = (task: TaskResult): boolean => task.attempts.length > 0 && task.attempts.every(attempt => attempt.pass);
+/** A task passes in a comparison when every one of its attempts did: the one definition, for every pairing. */
+export const reliable = (task: TaskResult): boolean => task.attempts.length > 0 && task.attempts.every(attempt => attempt.pass);
 
 function groupBy(tasks: readonly TaskResult[], keyOf: (task: TaskResult) => string): GroupRow[] {
   const rows = new Map<string, GroupRow>();
