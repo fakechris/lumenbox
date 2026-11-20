@@ -22,6 +22,78 @@ import { DURABLE_RESULT_CHARS } from "../protocol/index.ts";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ensureImagePlatform, imagePlatformProblem } from "./image-platform.ts";
+
+test("platform diagnostics name both platforms and a native install path", () => {
+  const problem = imagePlatformProblem("image:1", "linux/arm64\n", "linux/amd64\n")!;
+  for (const detail of ["image:1", "linux/arm64", "linux/amd64", "npm run build:image", "Go toolchain", "agentbox box up --recreate", "release image"]) {
+    assert.ok(problem.includes(detail), `missing ${detail}: ${problem}`);
+  }
+  assert.equal(imagePlatformProblem("image:1", "linux/arm64", "linux/arm64"), undefined);
+  assert.equal(imagePlatformProblem("image:1", "", "linux/amd64"), undefined);
+  assert.equal(imagePlatformProblem("image:1", "linux/arm64", "  "), undefined);
+});
+
+test("box up checks the local image before creating any container", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-platform-"));
+  const previousPath = process.env.PATH;
+  const log = join(home, "calls");
+  const imageAnswer = join(home, "platform");
+  const serverAnswer = join(home, "server");
+  writeFileSync(join(home, "docker"), `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'version') {
+  if (args.includes('{{.Server.Os}}/{{.Server.Arch}}')) {
+    const answer = fs.readFileSync(${JSON.stringify(serverAnswer)}, 'utf8');
+    if (answer === 'fail') process.exit(1);
+    console.log(answer);
+  } else console.log('29');
+} else if (args[0] === 'image' && args.includes('{{.Os}}/{{.Architecture}}')) {
+  const answer = fs.readFileSync(${JSON.stringify(imageAnswer)}, 'utf8');
+  if (answer === 'fail') process.exit(1);
+  console.log(answer);
+} else if (args[0] === 'inspect') { console.error('No such object'); process.exit(1); }
+else if (args[0] === 'run') { console.error('reached run'); process.exit(1); }
+`, { mode: 0o755 });
+  process.env.PATH = `${home}:${previousPath}`;
+  try {
+    const manager = new BoxManager({ containerName: "platform-test", image: "image:1", token: "t", host: "127.0.0.1", boxdPort: 0,
+      displayWidth: 1280, displayHeight: 800, runArgs: [] });
+    for (const [image, server, refuses] of [
+      ["linux/arm64", "linux/amd64", true], ["linux/arm64", "linux/arm64", false],
+      ["linux/amd64", "linux/amd64", false], ["", "linux/amd64", false],
+      ["linux/arm64", "", false], ["fail", "linux/amd64", false], ["linux/arm64", "fail", false],
+    ] as const) {
+      writeFileSync(log, "");
+      writeFileSync(imageAnswer, image);
+      writeFileSync(serverAnswer, server);
+      await assert.rejects(manager.up(), refuses ? /platform is linux\/arm64.*server platform is linux\/amd64/ : /reached run/);
+      const calls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+      assert.equal(calls.some(args => args[0] === "run" || args[0] === "create"), !refuses);
+      if (refuses) assert.ok(!calls.some(args => args[0] === "network"), "refuse before network/gate creation too");
+    }
+    writeFileSync(log, "");
+    writeFileSync(imageAnswer, "linux/arm64");
+    writeFileSync(serverAnswer, "linux/amd64");
+    manager.state = async () => "exited";
+    let removed = false;
+    manager.down = async () => { removed = true; };
+    await assert.rejects(manager.up({ recreate: true }), /platform is linux\/arm64/);
+    assert.equal(removed, true);
+    const recreateCalls = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+    assert.ok(!recreateCalls.some(args => args[0] === "run" || args[0] === "create"));
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("platform probing tolerates inspection errors", async () => {
+  await ensureImagePlatform(async () => { throw new Error("engine unavailable"); }, "image:1");
+});
 
 test("the published image is fakechris/lumenbox at this package's version", () => {
   const version = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version;
@@ -341,5 +413,3 @@ test("the machine's web and the box's web hold different secrets (INV-572)", () 
     rmSync(home, { recursive: true, force: true });
   }
 });
-
-

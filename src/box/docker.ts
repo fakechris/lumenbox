@@ -17,7 +17,7 @@ import { promisify } from "node:util";
 import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import { boxNetworkArguments, describeOutbound, gateNameFor, networkNameFor, outboundPlan, prepareBoxNetwork, removeGate, startGate, stopGate, type OutboundPlan } from "./box-network.ts";
 import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts"; import { redactSecretAssignments, secretsOutOfArgs } from "./secret-env.ts"; import { runContainer } from "./run-container.ts";
-
+import { ensureImagePlatform } from "./image-platform.ts";
 const execFileAsync = promisify(execFile);
 
 /**
@@ -88,7 +88,6 @@ export function boxImageRef(version: string = packageVersion()): string {
 }
 
 export const DEFAULT_IMAGE = boxImageRef();
-
 export { networkNameFor } from "./box-network.ts";
 
 export interface BoxConfig {
@@ -801,6 +800,7 @@ export class BoxManager {
         { exists: () => this.imageExists(), pull: () => this.pull(onOutput) },
         onOutput,
       );
+      await ensureImagePlatform(docker, this.config.image);
       onOutput?.(`starting container ${this.config.containerName}`);
       await prepareBoxNetwork(docker, { containerName: this.config.containerName, image: this.config.image, publish: this.boxdPublication(), plan: this.outbound() });
       await runContainer({ run: () => docker(this.runArguments(), 120_000), state: () => this.state(), start: () => docker(["start", this.config.containerName], 60_000), remove: () => docker(["rm", "--force", this.config.containerName], 60_000), say: line => onOutput?.(line) }); // a run that hangs or fails is settled by what it left (INV-1561)
