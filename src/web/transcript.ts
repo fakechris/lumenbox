@@ -135,7 +135,7 @@ export type DisplayEntry = (
    * filled bubble (docs/46), which is the usual way a display bug is finally seen.
    */
   | { kind: "trigger"; provenance?: "host" | "unknown"; label: string; text: string; at?: string; /** On the line that leads a shortened thread: how many entries came before it (INV-1624). */ skipped?: number }
-  | { kind: "tools"; tools: DisplayTool[] }
+  | { kind: "tools"; tools: DisplayTool[]; at?: string }
   /** Something the host wrote in the agent's place when a turn ended early: a state of the turn, not something the agent said. */
   | { kind: "status"; what: "stopped" | "budget"; text: string; at?: string }
   /** Turns nobody asked for in this conversation, folded to a count (request-thread.ts). `first`/`last` index the unfolded entries. */
@@ -272,7 +272,7 @@ export function toDisplayEntries(
         ...(verdictOf(String(block.id ?? "")) !== undefined ? { gate: verdictOf(String(block.id ?? ""))! } : {}),
       }));
       if (tools.length > 0) {
-        const entryWithTools = { kind: "tools" as const, tools };
+        const at = stamp(raw).at, entryWithTools = { kind: "tools" as const, tools, ...(at ? { at } : {}) };
         push(entryWithTools);
         awaiting = {
           entry: display.at(-1) as typeof entryWithTools,

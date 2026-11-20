@@ -110,6 +110,8 @@ test("tool traffic becomes tool rows, not empty bubbles", () => {
       { name: "bash", phrase: { en: "running a command (ls)", zh: "运行命令(ls)" }, detail: "ls -la /home/box", result: "work", isError: false },
       { name: "computer", phrase: { en: "using the desktop (click, screenshot)", zh: "操作桌面(click, screenshot)" }, detail: "click + screenshot", result: "failed", isError: true },
     ],
+     // When it was called, so the page can say how long the steps took (INV-1924).
+    at: "t",
   });
   assert.equal(display[3], undefined);
 });
@@ -196,6 +198,7 @@ test("a message to a teammate is recorded by name, not by id", () => {
   assert.deepEqual(display[0], {
     kind: "tools",
     tools: [{ name: "SendToAgent", phrase: { en: "messaging a teammate", zh: "给队友发消息" }, detail: "Bob: please verify r1.txt" }],
+     at: "t",
   });
 });
 
