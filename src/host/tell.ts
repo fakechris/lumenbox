@@ -271,15 +271,14 @@ export function withTellTool(tools: { name: string; input_schema: unknown }[]): 
     name: TELL,
     description:
       "Tell the person one thing now and keep working: a finding, a file, a changed plan. It reaches them where they are, " +
-      `at once. Not for narrating steps, and not the reply — that is still your final text. At most ${TELLS_PER_TURN} a turn. ` +
-      "On a turn nobody is waiting on, it waits while a person is writing in that conversation, and you are told the name it waits under.",
+      `at once. Not for narrating steps, and not the reply — that is still your final text. At most ${TELLS_PER_TURN} a turn.`,
     input_schema: {
       type: "object",
       properties: {
         text: { type: "string", description: "What they should know, in words that stand alone." },
         files: { type: "array", items: { type: "string" }, description: "Files to attach: paths in your box, or a deliverable's id." },
-        replaces: { type: "string", description: "The name of a message of yours that is still waiting (q3): `text` goes in its place." },
-        withdraw: { type: "string", description: "The name of a message of yours that is still waiting, to take back: your reply already said it, or it is no longer true. No `text`." },
+        replaces: { type: "string", description: "A waiting message of yours (q3): `text` takes its place." },
+        withdraw: { type: "string", description: "A waiting message of yours (q3) to take back. No `text`." },
       },
     },
   } as never);
