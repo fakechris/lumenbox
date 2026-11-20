@@ -13,10 +13,10 @@
  * Only --live-box reads the installation's owner token; all registry writes are temporary.
  */
 
-import { readFileSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_CONTAINER } from "../src/box/docker.ts";
+import { DEFAULT_CONTAINER, readBoxToken } from "../src/box/docker.ts";
 import { openEvalBox } from "./lib/eval-box.mjs";
 import { liveOwners, smokeHome, smokeTarget } from "./smoke-target.mjs";
 import { resolveBoxProvisioner } from "../src/box/provisioner.ts";
@@ -58,7 +58,8 @@ if (target.mode !== "attached") delete process.env.AGENTBOX_BOXD_URL;
 const realHome = process.env.AGENTBOX_HOME ?? join(homedir(), ".agentbox");
 const owners = target.localLive ? liveOwners(process.env.AGENTBOX_AGENTS_DIR ?? join(realHome, "agents")) : new Map();
 if (target.localLive) {
-  process.env.AGENTBOX_TOKEN ??= readFileSync(join(realHome, "token"), "utf8").trim();
+  process.env.AGENTBOX_TOKEN ??= readBoxToken(target.name);
+  if (!process.env.AGENTBOX_TOKEN) throw new Error(`No token for ${target.name}. Set AGENTBOX_TOKEN to the box's token.`);
 }
 const scratch = smokeHome(process.env);
 process.once("exit", scratch.close);
