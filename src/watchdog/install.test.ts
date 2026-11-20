@@ -48,7 +48,7 @@ test("install mints a token for the one admin, keeps it in a 0600 file, and regi
     const plist = readFileSync(join(h.agents, `${DEFAULT_LABEL}.plist`), "utf8");
     assert.ok(!plist.includes(SECRET), "the job file never holds the token");
     assert.ok(!said.join("\n").includes(SECRET), "nor does anything install says");
-    for (const piece of ["<string>/Applications/LumenBox.app/Contents/MacOS/LumenBox</string>", "<string>--experimental-transform-types</string>", "<string>watchdog</string>", "<string>--token-file</string>", `<string>${tokenFile}</string>`, "<string>--judge</string>", "<key>KeepAlive</key>", "<key>RunAtLoad</key>", "<key>ELECTRON_RUN_AS_NODE</key>", join(h.home, "watchdog", "watchdog.log")]) {
+    for (const piece of ["<string>/Applications/LumenBox.app/Contents/MacOS/LumenBox</string>", "<string>--experimental-transform-types</string>", "<string>watchdog</string>", "<string>--token-file</string>", `<string>${tokenFile}</string>`, "<string>--judge</string>", "<key>KeepAlive</key>", "<key>RunAtLoad</key>", "<key>ELECTRON_RUN_AS_NODE</key>", "<string>--on-down</string>", "display notification", join(h.home, "watchdog", "watchdog.log")]) {
       assert.ok(plist.includes(piece), `the job has ${piece}`);
     }
     assert.deepEqual(h.ran, [`launchctl bootstrap gui/501 ${join(h.agents, `${DEFAULT_LABEL}.plist`)}`]);
@@ -57,6 +57,23 @@ test("install mints a token for the one admin, keeps it in a 0600 file, and regi
     assert.equal(h.requests.length, 1, "a second install mints nothing");
   } finally {
     h.cleanup();
+  }
+});
+
+test("off macOS the suggested unit carries no osascript; a notification named with --on-down is kept", async () => {
+  const bare = harness(), named = harness();
+  try {
+    bare.deps.platform = named.deps.platform = "linux";
+    const [head, unit, note] = await installWatchdog({ url: "http://127.0.0.1:17776", judge: true }, bare.deps);
+    assert.match(head!, /Not macOS, so nothing was registered/);
+    assert.ok(!unit!.includes("osascript") && !unit!.includes("--on-down"), "no macOS-only default and no --on-down at all");
+    assert.match(note!, /No --on-down was given/);
+    assert.deepEqual(bare.ran, [], "nothing registered with launchctl");
+    const own = (await installWatchdog({ url: "http://127.0.0.1:17776", judge: true, onDown: "notify-send LumenBox down" }, named.deps)).join("\n");
+    assert.ok(own.includes("--on-down notify-send LumenBox down"), "the person's own command is the unit's");
+    assert.ok(!own.includes("osascript") && !own.includes("No --on-down"));
+  } finally {
+    bare.cleanup(); named.cleanup();
   }
 });
 

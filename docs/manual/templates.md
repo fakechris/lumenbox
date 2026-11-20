@@ -4,7 +4,7 @@
      status: current
      covers: template
      audience: user
-     updated: 2026-11-06
+     updated: 2026-11-20
 -->
 # Templates
 
@@ -25,15 +25,28 @@ each missing secret or connector.
 
 ### In the app
 
+The app opens in the new view. There, templates live in the agent forms:
+
+- **Make an agent from one:** press `+` beside *Agents* in the sidebar and open *Or start
+  from a template* at the bottom of the form. Type in *Find a template…* to narrow the list,
+  which groups *Ready-made*, *Roles*, *Crews (several at once)* and, once you have saved
+  some, *Made here*; press *Create from it*.
+- **Use one somebody sent:** in the same list, open *A template somebody sent*, choose the file
+  or paste the template, and press *Import and create*.
+- **Add a crew:** a crew is a row under *Crews (several at once)* in the same list.
+- **Share an agent:** open the agent and press its name at the top of the chat to open its
+  settings. Open *Make a template of it* and press *Ask … to draft one*. The agent writes the
+  draft in its chat; when it is staged, the same section shows it with a *Download* link.
+
+The classic view still has the template dialog. Press *Back to the classic view* at the bottom
+of the sidebar to reach it (and *Back to the new view* to return):
+
 - **Stamp one:** press *Templates* at the bottom of the sidebar. Choose the box under *Stamp
   into*, find a template under *Ready-made agents* (type in *filter* to narrow the list), and
-  press *Preview* to read it or *Stamp* to make the agent.
-- **Stamp a shared one:** in the same dialog, press *Paste or link…* and paste the template
-  or its link.
-- **Add a crew:** press `+` beside *Agents* and choose one *From catalog*.
-- **Share an agent:** open Configure on the agent and press *Ask it to draft a template*. The
-  agent writes the draft in its chat; when it is staged, Configure shows it with a download
-  link.
+  press *Preview* to read it or *Stamp* to make the agent. To stamp a shared one, press
+  *Paste or link…* in the same dialog and paste the template or its link into the form it
+  opens.
+- **Share an agent:** open Configure on the agent and press *Ask it to draft a template*.
 
 ### In a chat
 
@@ -54,7 +67,8 @@ agentbox template download <agent> [-o <file>]    # save the latest staged templ
 
 - The sidebar: the new agent appears in the list, in the box you chose.
 - The new agent's chat: its first turn installs the recipe and asks its questions.
-- Configure → *Share as template*: the latest staged template and its download link.
+- The agent's settings → *Make a template of it* (Configure → *Share as template* in the classic
+  view): the latest staged template and its download link.
 
 ## Limits
 
