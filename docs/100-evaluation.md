@@ -36,6 +36,7 @@ change it could have seen. A number without those three reads as more than it is
 | compare | `src/evals/compare.ts` | two versions on the same tasks: what they share, the difference, the gate |
 | golden trend | `src/evals/golden-trend.ts` | `agentbox golden` runs kept and read back |
 | command | `scripts/eval-report.mjs` (`npm run eval`) | the provider, the clock and the disk |
+| candidates | `src/host/eval-candidates.ts` (`agentbox eval candidates`) | replies the answer review judged not PASS, as cases a person may confirm into the corpus |
 
 Each piece takes the others as arguments. A new way to run a task is one more subject; a new
 comparison is a function over two records. The judges run over a record, not inside the runner,
@@ -86,12 +87,79 @@ no file of the repository, so their slices are empty:
   *Expected* section);
 - tasks a live run already scored (`npm run scenario -- --material <dir>`).
 
-Nothing here reads either. A person adds one by appending a line to `evals/corpus/dev.jsonl` or
-`test.jsonl` with `source.kind` `review-ledger` or `learning-material`, `source.ref` naming the
-message or the material task, `subject: "episode"`, `input.says` holding the request, and a
-`gold` of `facts` the right answer must contain and `forbidden` text it must not. Hand-added
-lines are carried through a rebuild untouched. The third live scenario, `heavy`, walks a real
-file tree with a real shell and stays with `npm run scenario`.
+Nothing in the corpus, its loader or the runner reads either. A person adds one by appending a
+line to `evals/corpus/dev.jsonl` or `test.jsonl` with `source.kind` `review-ledger` or
+`learning-material`, `source.ref` naming the message or the material task, `subject: "episode"`,
+`input.says` holding the request, and a `gold` of `facts` the right answer must contain and
+`forbidden` text it must not. Hand-added lines are carried through a rebuild untouched. The third
+live scenario, `heavy`, walks a real file tree with a real shell and stays with `npm run scenario`.
+
+## Candidates from real replies
+
+The first of those two slices does not have to be typed out from memory (INV-820):
+
+```
+agentbox eval candidates --from 2026-11-01T00:00:00Z --to 2026-11-20T00:00:00Z [--box <id|name>] [--out <file>]
+```
+
+It reads `answer-review.jsonl` for the range (the last 30 days when none is given), and for every
+verdict that is not PASS walks back by the message id to the turn that message opened — in any
+context version of the conversation, so a conversation that has since been switched still has its
+words — and takes what the person asked and the last thing the agent said in that turn. Both, and
+the review's reason, go through the audit export's scrubbing: every value the config and the vault
+hold, and every credential-shaped string. It makes no model call. The review ledger itself still
+holds hashes only; the words are read on the operator's machine, when this command is run.
+
+The file is JSON Lines, readable by its owner alone, at
+`~/.agentbox/exports/eval-candidates-<from>-<to>.jsonl` unless `--out` says otherwise. A path
+inside a git work tree is refused unless `--in-repo` is given. The command prints where it wrote,
+how many records it left out and why:
+
+| left out | why |
+|---|---|
+| judged PASS | nothing failed |
+| the review could not decide, or the reviewer was unavailable | no failure was named, so there is nothing for a task to catch |
+| judged twice | one message, one case |
+| opened by the host | a routine's prompt, an audit or a cue is not something a person asked (`request-provenance.ts`) |
+| no door or heard record | the turn is stamped as a person's and nothing shows a person sent it |
+| no longer in a transcript | named one by one, with the reason: no turn cites the message, the turn has no reply, the agent is gone |
+
+A line is a corpus task with its `gold` empty and a `candidate` block beside it:
+
+```json
+{"id":"review.ada.2026-11-10.m-1","subject":"episode",
+ "source":{"kind":"review-ledger","ref":"answer-review.jsonl#m-1"},
+ "failureType":"non-answer",
+ "input":{"says":"…what the person asked…"},
+ "gold":{},
+ "candidate":{"actual":"…what the agent said…",
+   "review":{"category":"NON_ANSWER","confidence":0.9,"reason":"…","at":"…","mode":"shadow"},
+   "agent":"Ada","agentId":"…","conversation":"main","epoch":0,"messageId":"m-1","turnId":"…",
+   "build":{"version":"…","commit":"…"},"model":"…","evidence":"door",
+   "sameAsReviewed":{"input":true,"actual":true}}}
+```
+
+`sameAsReviewed` says whether the words found hash to what the review recorded; `false` means the
+text differs from what was judged (a reply the channel trimmed, a value redacted when the
+transcript was written) and the case wants a closer look.
+
+**Nothing is added to the corpus, the golden tasks or the scenarios.** The loader refuses a
+candidate as it stands — `gold needs at least one of …` — and for no other reason. To confirm one:
+
+1. Read `input.says` and `candidate.actual`. The scrubbing removes held values and credential
+   shapes, not names, addresses or anything else that identifies somebody: the corpus is committed,
+   so rewrite the request until it could be shown to anyone and still asks the same thing.
+2. Write `gold`: the `facts` a right answer must contain, the `forbidden` text it must not (often a
+   phrase from `candidate.actual`), or a `state` bound. This is the one field that must be filled.
+3. Check `failureType` — it is the review's category in lower case — and reword it if the failure
+   has a better name; set `group` when two cases must stay on one side of the split.
+4. Delete the `candidate` block, and append the line to `evals/corpus/dev.jsonl` (may be tuned
+   against) or `evals/corpus/test.jsonl` (never tuned against).
+5. `npm run eval -- plan` loads the corpus through the same check and refuses a line that is not a
+   task, or an input that is now on both sides.
+
+The golden tasks (`agentbox golden`) are written in code and scored by the state a box ends in; a
+case that needs a real box is written there by hand, with the candidate as its brief.
 
 ## A run
 
