@@ -214,6 +214,8 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.panel.askedFold": ["原始要求", "The request"],
   "ui.next.chat.moreFiles": ["还有 {n} 个文件，在详情里", "{n} more files are in the details"],
   "ui.next.composer.useSkill": ["使用 {name} 技能。", "Use the {name} skill."],
+  "ui.next.composer.modelMissing": ["模型尚未配置，请先添加凭据。", "The model is not configured. Add credentials before sending."],
+  "ui.next.composer.modelSettings": ["设置 → 模型", "Settings → Model"],
   "ui.next.composer.noSkill": ["没有匹配的技能", "No skill matches"],
   "ui.next.composer.noAgent": ["这台电脑上没有这个成员", "No agent by that name on this computer"],
   "ui.next.desk.take": ["我来操作", "Take over"],

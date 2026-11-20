@@ -10,6 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { describeProvider, effectiveProviderFor, effortConfig, effortForKind, providerConfigured, providerNames, resolveProvider, type ProviderProfile } from "./provider.ts";
+import { modelConfigured } from "./model-readiness.ts";
 import { buildTools } from "./tools.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -44,6 +45,25 @@ const CLEAN = {
   AGENTBOX_CACHING: undefined,
   AGENTBOX_THINKING: undefined,
 };
+
+test("model readiness refuses only absent selected auth, preserving profiles and local endpoints", async () => {
+  const anthropic = resolveProvider("anthropic"), other = resolveProvider("minimax");
+  const absent = async () => null;
+  assert.equal(await modelConfigured(anthropic, false, absent), false);
+  assert.equal(await modelConfigured(other, false, async () => ({ authentication: {} })), false);
+  assert.equal(await modelConfigured(anthropic, false, async () => ({ authentication: { type: "user_oauth" } })), true);
+  assert.equal(await modelConfigured(anthropic, false, async () => { throw new Error("unreadable config"); }), true);
+  assert.equal(await modelConfigured({ ...other, baseUrl: "http://localhost:1234" }, false, absent), true);
+  for (const vars of [
+    { ANTHROPIC_API_KEY: "fixture", ANTHROPIC_AUTH_TOKEN: undefined },
+    { ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "fixture" },
+    { ANTHROPIC_API_KEY: "", ANTHROPIC_AUTH_TOKEN: "" },
+  ]) {
+    let ready: Promise<boolean> | undefined;
+    withEnv(vars, () => { ready = modelConfigured(anthropic, undefined, absent); });
+    assert.equal(await ready, Boolean(vars.ANTHROPIC_API_KEY || vars.ANTHROPIC_AUTH_TOKEN));
+  }
+});
 
 test("anthropic is the default and has every capability", () => {
   withEnv(CLEAN, () => {

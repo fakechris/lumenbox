@@ -14,6 +14,7 @@
  */
 
 export const SERVER_ERRORS = {
+  "err.model-not-configured": ["模型尚未配置。请前往设置 → 模型添加凭据后再发送。", "The model is not configured. Open Settings → Model to add credentials before sending."],
   "err.work-management-refused": ["未执行所选处置，请刷新范围后重试：{reason}", "Selected disposition was not executed; refresh its scope and retry: {reason}"],
   "err.surface-work-unavailable": ["卡片操作未执行，也未新建任务：{reason}", "Card action not executed; no new task was created: {reason}"],
   "err.task-check-unknown": ["工作不存在或你无权查看。", "Work unavailable."],

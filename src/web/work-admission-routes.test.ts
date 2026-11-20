@@ -10,7 +10,8 @@ import {TaskStore} from "../host/tasks.ts";
 import {startWebServer} from "./server.ts";
 
 test("202 means the user request is durably visible; an unwritable root is refused before acknowledgement",async()=>{
- const home=mkdtempSync(join(tmpdir(),"work-http-")),previous=process.env.AGENTBOX_HOME;
+ const home=mkdtempSync(join(tmpdir(),"work-http-")),previous=process.env.AGENTBOX_HOME,previousKey=process.env.ANTHROPIC_API_KEY;
+ process.env.ANTHROPIC_API_KEY="fixture-not-real";
  process.env.AGENTBOX_HOME=home;let stop:(()=>void)|undefined;
  try {
   const registry=new AgentRegistry(join(home,"agents")),agent=registry.create({name:"Mia"});
@@ -34,5 +35,9 @@ test("202 means the user request is durably visible; an unwritable root is refus
   assert.ok(new TaskStore(join(home,"tasks.jsonl")).get(saved[0]!.id)!.workRoot?.cancellation);
   rmSync(join(home,"tasks.jsonl"));mkdirSync(join(home,"tasks.jsonl"));
   assert.equal((await post("/api/prompt",{...body,messageId:"cannot-save",workRelation:"new"})).status,500);
- } finally {stop?.();if(previous===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previous;rmSync(home,{recursive:true,force:true});}
+ } finally {
+  stop?.();if(previous===undefined)delete process.env.AGENTBOX_HOME;else process.env.AGENTBOX_HOME=previous;
+  if(previousKey===undefined)delete process.env.ANTHROPIC_API_KEY;else process.env.ANTHROPIC_API_KEY=previousKey;
+  rmSync(home,{recursive:true,force:true});
+ }
 });

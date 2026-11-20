@@ -273,6 +273,7 @@ function renderChat(view) {
   $("view-title").textContent = agent ? agent.name : t("ui.next.nav.chat");
   $("view-hint").textContent = agent ? (agent.title || agent.description || "") : "";
   $("composer").hidden = !agent;
+  renderModelNotice();
   $("composer-text").placeholder = agent ? t("ui.next.chat.placeholder", { name: agent.name }) : "";
   if (agent && chat.loading !== chat.agentId && chat.loadedFor !== chat.agentId) loadThread();
   if (chat.loadedFor === chat.agentId || !agent) renderThread(view);
@@ -312,11 +313,12 @@ function addressed(text) {
   return other ? { agent: other, text: text.slice(match[0].length) } : null;
 }
 
-function sendMessage() {
+async function sendMessage() {
   var input = $("composer-text"), text = input.value.trim(), id = chat.agentId;
   if (!text || !id) return;
   var to = addressed(text);
   if (to && to.text) { input.value = to.text; openChat(to.agent.id); sendMessage(); return; }
+  if (!await composerCanSend() || chat.agentId !== id || input.value.trim() !== text) return;
   // With a card on show the reply is that card's (next-dock-ui.ts); detached, it is an ordinary message, this once.
   if (need.detached) need.detached = ""; else if (sendReply(text)) return;
   input.value = ""; input.style.height = "";
