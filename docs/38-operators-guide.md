@@ -2,7 +2,7 @@
      title: The operator's guide (what the README used to be)
      family: guide
      status: current
-     updated: 2026-11-19
+     updated: 2026-11-20
 -->
 # 38 — The operator's guide (what the README used to be)
 
@@ -74,7 +74,10 @@ npm run agentbox -- box build
 npm run agentbox -- box up
 ```
 
-`box up` prints the noVNC URL. Open it to watch the agents work.
+`box up` prints the daemon's URL (`daemon: http://127.0.0.1:…`), which is the API the
+orchestrator drives, not a page to open. To watch the agents work, run `npm run agentbox -- web`
+and open the address it prints: each agent's desktop is on its page. (`box up --with-host`
+prints a `web UI:` address instead, served from inside the box.)
 
 Credentials come from `ANTHROPIC_API_KEY`, or from an `ant auth login` profile.
 

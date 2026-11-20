@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { soleAdmin } from "../host/principals.ts";
 
 export const DEFAULT_LABEL = "com.lumenbox.watchdog";
+const MAC_NOTIFICATION = `osascript -e 'display notification "The LumenBox door is not answering" with title "LumenBox watchdog"'`;
 
 export interface InstallOptions {
   url: string;
@@ -121,20 +122,23 @@ export async function installWatchdog(options: InstallOptions, deps: InstallDeps
   mkdirSync(dirOf(deps), { recursive: true, mode: 0o700 });
   writeFileSync(tokenPath(deps), `${minted.token}\n`, { mode: 0o600 });
   chmodSync(tokenPath(deps), 0o600);
+  // osascript is macOS's; elsewhere a notification is only what the person names with --on-down.
+  const onDown = options.onDown ?? (deps.platform === "darwin" ? MAC_NOTIFICATION : undefined);
   const args = [
     deps.program.execPath, ...deps.program.execArgv, deps.program.script, "watchdog",
     "--url", options.url, "--token-file", tokenPath(deps),
     ...(options.judge ? ["--judge"] : []),
     ...(options.stallMinutes !== undefined ? ["--stall-minutes", String(options.stallMinutes)] : []),
     ...(options.pausedMinutes !== undefined ? ["--paused-minutes", String(options.pausedMinutes)] : []),
-    "--on-down", options.onDown ?? `osascript -e 'display notification "The LumenBox door is not answering" with title "LumenBox watchdog"'`,
+    ...(onDown !== undefined ? ["--on-down", onDown] : []),
   ];
   const plist = join(deps.launchAgentsDir, `${label}.plist`);
   const record: InstallRecord = { label, url: options.url, principalId, createdAt: minted.createdAt, plist, installedAt: new Date().toISOString() };
   writeFileSync(recordPath(deps), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
   const body = plistFor(label, args, deps.program.env, logPath(deps));
   if (deps.platform !== "darwin") {
-    return [`Token issued and saved to ${tokenPath(deps)}. Not macOS, so nothing was registered; a systemd user unit runs:`, args.join(" ")];
+    const told = onDown === undefined ? ["No --on-down was given, so nothing runs when the door stops answering."] : [];
+    return [`Token issued and saved to ${tokenPath(deps)}. Not macOS, so nothing was registered; to keep it running, have your service manager (a systemd user unit, say) run:`, args.join(" "), ...told];
   }
   mkdirSync(deps.launchAgentsDir, { recursive: true });
   writeFileSync(plist, body);

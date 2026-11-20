@@ -3,10 +3,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { applyUpdate, type ImageState, type UpdateDeps } from "./box-update.ts";
+import { RecreateRefusedError } from "./docker.ts";
 
 const OLD: ImageState = { runningRef: "fakechris/lumenbox:0.3.9", runningId: "sha256:old0000000000000", expectedRef: "fakechris/lumenbox:0.3.10", expectedId: "sha256:new", available: true, needsPull: false };
 
-function fake(overrides: Partial<{ state: ImageState; busy: string[][]; verify: (string | Error | undefined)[]; recreateFails: number }> = {}) {
+function fake(overrides: Partial<{ state: ImageState; busy: string[][]; verify: (string | Error | undefined)[]; recreateFails: number; recreateError: Error }> = {}) {
   const recreated: (string | undefined)[] = [];
   const said: string[] = [];
   let backedUp = false;
@@ -16,7 +17,7 @@ function fake(overrides: Partial<{ state: ImageState; busy: string[][]; verify: 
   const deps: UpdateDeps = {
     state: async () => overrides.state ?? OLD,
     busy: async () => busy.length > 1 ? busy.shift()! : busy[0]!,
-    recreate: async image => { recreated.push(image); if (failures-- > 0) throw new Error("pull failed"); return { containerName: "agentbox-box", state: "running" } as never; },
+    recreate: async image => { recreated.push(image); if (failures-- > 0) throw overrides.recreateError ?? new Error("pull failed"); return { containerName: "agentbox-box", state: "running" } as never; },
     verify: async () => { const v = verify.length > 1 ? verify.shift() : verify[0]; if (v instanceof Error) throw v; return v; },
     backup: async () => { backedUp = true; return ["work.tar", "config.tar"]; },
     onOutput: line => said.push(line),
@@ -69,6 +70,12 @@ test("a box that comes back broken goes back to the image it had, by id; when th
   const pullFails = fake({ recreateFails: 1 });
   const afterPull = await applyUpdate(pullFails.deps);
   assert.deepEqual([afterPull.outcome, pullFails.recreated], ["rolled_back", [undefined, "sha256:old0000000000000"]], "a failed recreate also goes back");
+  const platformMessage = "Cannot start image image:1: its platform is linux/arm64, but the Docker server platform is linux/amd64.";
+  const refused = fake({ recreateFails: 1, recreateError: new RecreateRefusedError(platformMessage) });
+  const afterRefusal = await applyUpdate(refused.deps);
+  assert.equal(afterRefusal.outcome, "failed");
+  assert.ok(afterRefusal.detail.includes(platformMessage));
+  assert.deepEqual(refused.recreated, [undefined], "a refusal before removal must not recreate the working box as a rollback");
   const fresh = fake({ state: { expectedRef: "fakechris/lumenbox:0.3.10", available: false, needsPull: true }, verify: ["no"] });
   assert.equal((await applyUpdate(fresh.deps, { force: true })).outcome, "failed", "no box before: nothing to go back to");
 });

@@ -42,6 +42,8 @@ deploy/kubernetes/local/
 
 # Native audit daemon build artifact (docs/47), like hostd.mjs/boxd.cjs
 docker/box/xwatchdog
+docker/box/xwatchdog-amd64
+docker/box/xwatchdog-arm64
 src/xwatchdog/xwatchdog
 
 # Runtime scratch space — anything a developer creates while testing locally that
