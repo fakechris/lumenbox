@@ -119,6 +119,85 @@ test("\"@Bob …\" typed to Ada is said to Bob; a name mid-sentence, an unknown 
   assert.equal(addressed("@Ada hello"), null, "already talking to Ada");
 });
 
+test("automations send and save a timezone only for schedules (INV-1967)", async () => {
+  const { createServer } = await import("node:http");
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { AttachedBoxProvisioner } = await import("../box/provisioner.ts");
+  const { BOXD_PROTOCOL } = await import("../protocol/index.ts");
+  const { startWebServer } = await import("./server.ts");
+  const { parseSkillFile } = await import("../host/skills.ts");
+  const home = mkdtempSync(join(tmpdir(), "automation-timezone-")), previous = process.env.AGENTBOX_HOME;
+  const previousTtl = process.env.AGENTBOX_SKILL_TTL_MS;
+  process.env.AGENTBOX_HOME = home;
+  process.env.AGENTBOX_SKILL_TTL_MS = "0";
+  const files = new Map<string, string>();
+  const daemon = createServer(async (req, res) => {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    const body = raw ? JSON.parse(raw) : {};
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/health") { res.end(JSON.stringify({ ok: true, protocol: BOXD_PROTOCOL })); return; }
+    if (req.url === "/fs/write") files.set(body.path, body.content);
+    if (req.url === "/fs/read") {
+      if (!files.has(body.path)) { res.statusCode = 404; res.end("{}"); return; }
+      res.end(JSON.stringify({ content: files.get(body.path) })); return;
+    }
+    const prefix = String(body.path) + "/";
+    const names = [...new Set([...files.keys()].filter(path => path.startsWith(prefix)).map(path => path.slice(prefix.length).split("/")[0]!))];
+    res.end(JSON.stringify({ entries: names.map(name => ({ name, type: files.has(prefix + name) ? "file" : "directory" })), stdout: "", stderr: "", exit_code: 0 }));
+  });
+  let stop: (() => void) | undefined;
+  try {
+    await new Promise<void>(resolve => daemon.listen(0, "127.0.0.1", resolve));
+    const address = daemon.address();
+    assert.ok(address && typeof address !== "string");
+    let base = "";
+    stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "automation-fixture", onLog: () => {},
+      boxProvisioner: new AttachedBoxProvisioner({ baseUrl: `http://127.0.0.1:${address.port}`, token: "daemon-fixture" }), onReady: url => { base = url; } });
+    const headers = { authorization: "Bearer automation-fixture", "content-type": "application/json" };
+    const request = (path: string, body?: unknown) => fetch(base + path, { headers, ...(body ? { method: "POST", body: JSON.stringify(body) } : {}) });
+    for (const trigger of ["webhook", "message", "schedule"]) {
+      const fields: { input: Fake; label: Fake }[] = [];
+      let submitted: Record<string, unknown> = {};
+      const form = pageFunction("autoForm", {
+        el: fakeEl, field: () => { const field = { input: fakeEl("input"), label: fakeEl("label") }; fields.push(field); return field; },
+        t: (key: string) => key, agentsHere: () => [], auto: { trigger }, AUTO_TIMES: [["daily", "0 9 * * *"]],
+        Intl: { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: "Asia/Shanghai" }) }) },
+        postJson: (_path: string, body: Record<string, unknown>) => { submitted = body; return Promise.resolve({}); },
+        toast: () => {}, reloadAuto: () => {}, failed: () => {},
+      })() as Fake;
+      fields[0]!.input.value = trigger; fields[1]!.input.value = "Summarise the inbox.";
+      fields[2]!.input.value = "0 9 * * *"; fields[3]!.input.value = "hello";
+      form.kids.at(-1)!.kids[0]!.press!();
+      assert.equal(submitted.timezone, trigger === "schedule" ? "Asia/Shanghai" : undefined);
+      assert.equal(Object.hasOwn(submitted, "timezone"), trigger === "schedule");
+      const response = await request("/api/automations", submitted);
+      assert.equal(response.status, 200, await response.text());
+      // Old clients can still send the irrelevant field: the create route must not store it.
+      const stale = await request("/api/automations", { ...submitted, name: trigger + " stale", timezone: "Asia/Shanghai" });
+      assert.equal(stale.status, 200, await stale.text());
+      for (const slug of [trigger, trigger + "-stale"]) {
+        const stored = [...files].find(([path]) => path.endsWith(`/${slug}/SKILL.md`))?.[1];
+        assert.ok(stored, slug);
+        assert.equal(parseSkillFile(stored).meta.timezone, trigger === "schedule" ? "Asia/Shanghai" : undefined);
+      }
+    }
+    const response = await request("/api/skills");
+    assert.equal(response.status, 200);
+    const loaded = await response.json() as { skills: { slug: string }[]; problems: string[] };
+    assert.equal(loaded.skills.length, 6, "all created routines pass skill validation");
+    assert.ok(!loaded.problems.some(problem => problem.includes("timezone")), JSON.stringify(loaded.problems));
+  } finally {
+    stop?.();
+    await new Promise<void>(resolve => daemon.close(() => resolve()));
+    if (previous === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous;
+    if (previousTtl === undefined) delete process.env.AGENTBOX_SKILL_TTL_MS; else process.env.AGENTBOX_SKILL_TTL_MS = previousTtl;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("a press on an agent's card is the line the server parses it from", async () => {
   const { parseActionText } = await import("../host/show-ui.ts");
   const { MESSAGES } = await import("../i18n/messages.ts");

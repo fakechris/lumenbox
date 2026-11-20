@@ -4029,7 +4029,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (typeof body.deliver === "string" && body.deliver.trim() !== "") {
             frontmatter += `deliver: "${body.deliver.trim().replace(/"/g, '\\"')}"\n`;
           }
-          if (typeof body.timezone === "string" && body.timezone.trim() !== "") {
+          if (triggerType === "schedule" && typeof body.timezone === "string" && body.timezone.trim() !== "") {
             frontmatter += `timezone: "${body.timezone.trim().replace(/"/g, '\\"')}"\n`;
           }
           frontmatter += `paused: true\nauthored_by: web\n---\n`;
