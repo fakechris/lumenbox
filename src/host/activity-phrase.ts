@@ -76,6 +76,7 @@ const TEMPLATES: Record<string, Template> = {
   AskSecret: { en: "asking you for a credential", zh: "向你请求凭据" },
   ShowUI: { en: "showing you a card", zh: "给你看一张卡片" },
   Tell: { en: "telling you something", zh: "告诉你一件事" },
+  Reminder: { en: "setting itself a reminder", zh: "给自己设提醒" },
   Teammates: { en: "looking up teammates", zh: "查看队友" },
   SendToAgent: { en: "messaging a teammate", zh: "给队友发消息" },
   CreateAgent: { en: "creating a teammate", zh: "创建队友" },

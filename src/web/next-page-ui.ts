@@ -16,6 +16,7 @@ import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
+import { NEXT_REMINDER_JS } from "./next-reminder-ui.ts";
 import { NEXT_THREAD_JS } from "./next-thread-ui.ts";
 import { NEXT_RESULT_JS } from "./next-result-ui.ts";
 import { NEXT_TOPICS_JS } from "./next-topics-ui.ts";
@@ -481,6 +482,7 @@ ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
 ${NEXT_SETTINGS_JS}
 ${NEXT_AUTO_JS}
+${NEXT_REMINDER_JS}
 ${NEXT_THREAD_JS}
 ${NEXT_RESULT_JS}
 ${NEXT_TOPICS_JS}

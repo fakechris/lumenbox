@@ -45,7 +45,7 @@ import { McpFace } from "./mcp-face.ts";
 import { ModelRelay } from "./model-relay.ts";
 import { DelegateSessions } from "./delegate-sessions.ts";
 import { EXTENSIONS_SERVER, Extensions, extensionsDir } from "./extensions.ts";
-import { Effects } from "./effects.ts";
+import { Effects } from "./effects.ts"; import { reminderPrompt } from "./reminders.ts";
 import { Orchestrations } from "./orchestrate.ts"; import { planCards } from "./plan-cards.ts"; import { watchDependencies } from "./task-deps.ts";
 import { FileVersions } from "./files.ts";
 import {
@@ -700,8 +700,8 @@ export class Orchestrator {
     },
     observed: (slug, would) => this.policy.notifyObserved(slug, would), finished: (skill, agent, result, reason) => noteRoutineEnd(this.exceptions, skill.slug, agent, result, reason), // The observe-mode audit row (INV-1458); every run's end on the exception list (INV-1741).
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
-    run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity) => {
-      const scope = toolScope !== undefined ? { toolScope } : {};
+    run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity, origin) => {
+      const scope = { ...(toolScope !== undefined ? { toolScope } : {}), ...(origin !== undefined ? { origin } : {}) }; // origin: a member's reminder, the host's words and not a person's (INV-1878)
       const startedMs = Date.now();
       const resultOf = (agentId: string) => routineResult(this.turns?.endedSince(agentId, startedMs) ?? []);
       const why = (agentId: string) => { const reason = routineReason(this.turns?.endedSince(agentId, startedMs) ?? []); return reason === undefined ? {} : { reason }; }; // the run history's line (INV-1665)
@@ -1014,7 +1014,7 @@ export class Orchestrator {
             mcp: () => this.mcp,
             deliver: (agentId, text, conversation, workId) =>
               this.bus.deliverSystem(agentId, text, conversation, workId) !== undefined || this.bus.inboxless,
-            log: line => console.error(`[effects] ${line}`),
+            log: line => console.error(`[effects] ${line}`), report: due => this.scheduler.once({ agent: due.agentId, prompt: reminderPrompt(due), deliver: due.chat, identity: `reminder:${due.id}`, origin: "host:reminder" }),
           });
     if (this.extensions !== undefined) {
       this.extensions.onJobDone = (jobId, text, ok) => this.effects?.jobDone(EXTENSIONS_SERVER, jobId, text, ok) ?? false;
@@ -2697,7 +2697,7 @@ export const ALL_TOOLS: readonly string[] = [
   "AskUser",
   "AskSecret",
   "HandOverDesktop",
-  "ShowUI", "Tell",
+  "ShowUI", "Tell", "Reminder",
   "CreateAgent",
   "UpdateAgent",
   "PackTemplate",
