@@ -5477,7 +5477,7 @@ $("autosave").addEventListener("click", function () {
   var deliver = $("autodeliver").value.trim();
   if (deliver) payload.deliver = deliver;
   var tz = $("autotimezone").value.trim();
-  if (tz) payload.timezone = tz;
+  if (autoTrigger === "schedule" && tz) payload.timezone = tz;
   
   $("autosave").disabled = true;
   $("autoerror").style.display = "none";

@@ -13,8 +13,10 @@ import { startWebServer } from "./server.ts";
 test("automation saves refuse borrowed identities before writing, for timers and webhooks", async () => {
   const home = mkdtempSync(join(tmpdir(), "automations-api-")), previous = process.env.AGENTBOX_HOME;
   const previousGateway = process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY;
+  const previousSkillTtl = process.env.AGENTBOX_SKILL_TTL_MS;
   process.env.AGENTBOX_HOME = home;
   process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
+  process.env.AGENTBOX_SKILL_TTL_MS = "0";
   const files = new Map<string, string>();
   const daemon = createServer(async (req, res) => {
     let raw = "";
@@ -23,6 +25,15 @@ test("automation saves refuse borrowed identities before writing, for timers and
     res.setHeader("content-type", "application/json");
     if (req.url === "/health") { res.end(JSON.stringify({ ok: true, protocol: BOXD_PROTOCOL })); return; }
     if (req.url === "/fs/write") files.set(body.path, body.content);
+    if (req.url === "/fs/list") {
+      const prefix = body.path.replace(/\/$/, "") + "/", entries = new Map<string, { name: string; type: string }>();
+      for (const path of files.keys()) {
+        if (!path.startsWith(prefix)) continue;
+        const rest = path.slice(prefix.length), name = rest.split("/")[0]!;
+        entries.set(name, { name, type: rest.includes("/") ? "directory" : "file" });
+      }
+      res.end(JSON.stringify({ entries: [...entries.values()] })); return;
+    }
     if (req.url === "/fs/read") {
       if (!files.has(body.path)) { res.statusCode = 404; res.end(JSON.stringify({ error: "not found" })); return; }
       res.end(JSON.stringify({ content: files.get(body.path) })); return;
@@ -48,7 +59,7 @@ test("automation saves refuse borrowed identities before writing, for timers and
     assert.equal((await save({})).status, 400);
     assert.equal((await save({ name: "Empty", body: "" })).status, 400);
     for (const triggerType of ["schedule", "webhook"]) {
-      const body = { name: `Routine ${triggerType}`, body: "Report status", triggerType, schedule: "0 * * * *" };
+      const body = { name: `Routine ${triggerType}`, body: "Report status", triggerType, schedule: "0 * * * *", timezone: "UTC" };
       const skillFiles = () => [...files].filter(([path]) => path.endsWith("/SKILL.md"));
       const before = skillFiles();
       const denied = await save({ ...body, agent: "Quinn" });
@@ -61,6 +72,15 @@ test("automation saves refuse borrowed identities before writing, for timers and
       assert.equal((await save({ ...body, agent: "Ada" })).status, 200);
       assert.equal((await save({ ...body, agent: "Ada" })).status, 409, "creation cannot overwrite an existing skill");
       assert.equal((await save({ ...body, name: `Default ${triggerType}` })).status, 200);
+      const listed = await (await fetch(base + "/api/schedules", { headers })).json() as {
+        schedules: { slug: string; kind: string; timezone?: string }[];
+      };
+      for (const slug of [`routine-${triggerType}`, `default-${triggerType}`]) {
+        const routine = listed.schedules.find(entry => entry.slug === slug);
+        assert.ok(routine, "a saved automation must be loadable and listed");
+        assert.equal(routine.kind, triggerType);
+        assert.equal(routine.timezone, triggerType === "schedule" ? "UTC" : undefined);
+      }
     }
     const choices = await (await fetch(base + "/api/schedules", { headers })).json() as { runnerAgents: string[] };
     assert.deepEqual(choices.runnerAgents, ["Ada"], "the new-routine picker offers only a usable identity");
@@ -76,6 +96,8 @@ test("automation saves refuse borrowed identities before writing, for timers and
     if (previous === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous;
     if (previousGateway === undefined) delete process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY;
     else process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = previousGateway;
+    if (previousSkillTtl === undefined) delete process.env.AGENTBOX_SKILL_TTL_MS;
+    else process.env.AGENTBOX_SKILL_TTL_MS = previousSkillTtl;
     rmSync(home, { recursive: true, force: true });
   }
 });

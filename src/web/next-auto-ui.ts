@@ -34,7 +34,7 @@ function autoForm() {
     if (kind.value === "schedule") body.schedule = when.value || custom.input.value.trim();
     if (kind.value === "message") body.match = match.input.value.trim();
     if (who.value) body.agent = who.value;
-    try { body.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (error) {}
+    try { if (kind.value === "schedule") body.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (error) {}
     save.disabled = true;
     postJson("/api/automations", body).then(function () { auto.creating = false; toast(t("ui.next.member.created")); reloadAuto(); }, function (error) { save.disabled = false; failed(error); });
   });
