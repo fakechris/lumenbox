@@ -36,7 +36,7 @@ export const REVIEW_LAPSE_MS = envNumber("AGENTBOX_REVIEW_LAPSE_DAYS", 7) * 86_4
 export type SignOff = "blocks" | "files" | "asked" | "unfinished" | "undecided" | "remarked";
 
 /** Who writes notes to keep the books, not to say anything about the result. */
-const BOOKKEEPERS: ReadonlySet<string> = new Set(["aging", "audit-guard", "review-guard", "restart", "host", "channel", SETTLE_ACTOR]);
+export const BOOKKEEPERS: ReadonlySet<string> = new Set(["aging", "audit-guard", "review-guard", "restart", "host", "channel", SETTLE_ACTOR]);
 
 /** The board as the rule reads it: a lookup and the whole list (task-deps.ts owns what waits on what). */
 type Board = { get(id: string): Task | undefined; list(): Task[] };

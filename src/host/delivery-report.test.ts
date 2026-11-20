@@ -60,6 +60,6 @@ test("a chat is told what was not verified, and what it is asked, when the reply
   assert.equal(fresh()("t999", "Fixed."), undefined);
   // INV-1923: a delivery that also asks the person for something. The chat hears the request the card shows, unless the reply said it.
   const asking = deliver("请你确认：核对第 12 行的差额\n对完了。\n主要改动：report.xlsx\n我同时在做：十一月的对账\n未做与局限：无");
-  assert.equal(fresh()(asking, "对完了，见 report.xlsx。"), "请你确认：核对第 12 行的差额\n我同时在做：十一月的对账");
+  assert.equal(fresh()(asking, "对完了，见 report.xlsx。"), "请你确认：核对第 12 行的差额\n我同时在做：十一月的对账。");
   assert.equal(fresh()(asking, "对完了，请核对第 12 行的差额。"), undefined, "the reply already asks it");
 });

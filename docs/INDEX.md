@@ -25,6 +25,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [04-design](04-design.md) | Design | current | 2026-11-19 |
 | [05-data](05-data.md) | Data | current | 2026-11-11 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-11-06 |
+| [101-speaking-unprompted](101-speaking-unprompted.md) | Speaking unprompted: what a member says to a person nobody asked it to say | current | 2026-11-20 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-07 |
@@ -33,7 +34,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-12 |
 | [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-19 |
 | [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
-| [99-user-work](99-user-work.md) | A person's work: requests, work, and what happens inside it | current | 2026-11-19 |
+| [99-user-work](99-user-work.md) | A person's work: requests, work, and what happens inside it | current | 2026-11-20 |
 | [glossary](glossary.md) | Glossary and controlled vocabulary | current | 2026-11-07 |
 
 ## manual
@@ -67,7 +68,7 @@ this file and the headers disagree. Edit the header, not this table.
 | doc | title | status | updated |
 |---|---|---|---|
 | [06-deployment](06-deployment.md) | Deployment | current | 2026-11-19 |
-| [100-evaluation](100-evaluation.md) | The evaluation report: one corpus, k attempts, four numbers | current | 2026-11-19 |
+| [100-evaluation](100-evaluation.md) | The evaluation report: one corpus, k attempts, four numbers | current | 2026-11-20 |
 | [12-upgrades](12-upgrades.md) | Upgrading somebody's box | current | 2026-11-06 |
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
@@ -92,7 +93,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [07-review](07-review.md) | Review against the specification | current | 2026-08-20 |
 | [09-tenancy](09-tenancy.md) | Tenancy: teams, users, and who may drive which agent | superseded by [22-domain-model](22-domain-model.md) — §3 retires per-agent visibility; §0 sets uniformity | 2026-08-19 |
 | [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-11-19 |
-| [101-verification-reports](101-verification-reports.md) | 带录像的验证报告：场景与断言两级、时间轴、结论，在对话里是一张卡 | current | 2026-11-20 |
+| [102-verification-reports](102-verification-reports.md) | 带录像的验证报告：场景与断言两级、时间轴、结论，在对话里是一张卡 | current | 2026-11-20 |
 | [14-from-outside-reading](14-from-outside-reading.md) | Ideas taken from outside reading | current | 2026-08-26 |
 | [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-11-01 |
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-10-20 |

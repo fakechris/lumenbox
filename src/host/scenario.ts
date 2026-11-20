@@ -48,7 +48,7 @@ import { Rememberer, readsExternalContent, summariseExchange, turnReadOutside } 
 import { compileSurface, type SurfaceRecord } from "./show-ui.ts";
 import type { Skill } from "./skills.ts";
 import type { SpendLimits } from "./spend-limits.ts"; import type { PersonRecords } from "./person.ts";
-import type { TaskStore } from "./tasks.ts"; import { watchDependencies } from "./task-deps.ts";
+import type { TaskStore } from "./tasks.ts"; import { watchDependencies } from "./task-deps.ts"; import { watchPersonWord } from "./person-word.ts";
 import type { OutboxDrafts } from "./outbox-drafts.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import { runTurn, type TurnEvent } from "./turn.ts";
@@ -583,6 +583,8 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       : undefined;
   // A task whose last blocker closed wakes its assignee (INV-1740), wired as the orchestrator wires it.
   if (options.tasks !== undefined) watchDependencies(options.tasks, (task, text) => { bus.deliverSystem(task.assigneeId!, text, task.conversation ?? "main", taskWorkId(task,bus)); });
+  // A person's word on waiting work reaches its member and starts a turn (INV-1923), wired as the orchestrator wires it.
+  if (options.tasks !== undefined) watchPersonWord(options.tasks, id => registry.has(id), (task, text) => { bus.deliverSystem(task.assigneeId!, text, task.conversation ?? "main", undefined, true); });
   goalLoop = options.goalLoop?.({ bus, registry, tasks: options.tasks, files });
   options.tasks?.onChange(task => taskAttentionChanged(bus, task));
   // A person's delivered request ends unless their word changes something (INV-1904), wired as the orchestrator wires it, a running check included.

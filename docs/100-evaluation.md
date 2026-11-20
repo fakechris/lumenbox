@@ -2,13 +2,13 @@
      title: The evaluation report: one corpus, k attempts, four numbers
      family: guide
      status: current
-     updated: 2026-11-19
+     updated: 2026-11-20
 -->
 # 100 — The evaluation report: one corpus, k attempts, four numbers
 
 How to measure whether the product got better or worse, and how to read the answer. One gold
 corpus, one runner, one page (INV-1772; the trend and the "too small to say" verdict come from
-INV-821).
+INV-821), and the same runner over two versions of the prompt and tools (INV-1862).
 
 Before this, evaluation lived in pieces that each printed their own table: the starter skills'
 cases, the teach fixtures, the auto-review and steward agreement scripts, the live scenarios. None
@@ -30,7 +30,10 @@ change it could have seen. A number without those three reads as more than it is
 | calibration | `src/evals/calibration.ts` | the label file, the sheet a person fills in, kappa and catch rate per question, "may not gate" |
 | statistics | `src/evals/stats.ts` | intervals, pass^k, McNemar, the detectable difference, kappa |
 | summary | `src/evals/summary.ts` | from a record to the numbers; when two runs may be compared |
-| page | `src/evals/report.ts` | the report and the trend lines |
+| page | `src/evals/report.ts` | the report, the comparison page and the trend lines |
+| surface | `src/evals/surface.ts` | the system prompt and tool schema an agent is sent, read off a real turn's first request |
+| frozen | `src/evals/frozen.ts` | a commit's product in a scratch tree, driven by this checkout's subjects |
+| compare | `src/evals/compare.ts` | two versions on the same tasks: what they share, the difference, the gate |
 | golden trend | `src/evals/golden-trend.ts` | `agentbox golden` runs kept and read back |
 | command | `scripts/eval-report.mjs` (`npm run eval`) | the provider, the clock and the disk |
 
@@ -203,8 +206,77 @@ leaves the entry `skipped` and says why.
 model, each task's last runs side by side and the latest run against the one before under the
 same rule: one red row is INCOMPLETE, not a regression.
 
+## Comparing two versions of the prompt and tools
+
+A change to `src/host/prompt.ts` or to a tool's description changes behaviour with no diff a
+reviewer can read the effect from. This puts the two versions on the same tasks:
+
+```
+npm run eval -- plan --compare origin/main HEAD    # what it will cost; makes no call
+npm run eval -- --compare origin/main HEAD         # base, then candidate
+```
+
+**It costs twice a plain run** where the two versions send different requests: every task runs on
+both. On the corpus as it stands that is at most 1,752 model calls (876 a version: dev and test,
+3 attempts). `plan --compare` prints the figure; the run prints it again before a provider is read.
+
+How the two are kept apart, and what they share:
+
+- **Each version is that commit's product.** `freezeRef` (`frozen.ts`) exports the commit's tree
+  into a scratch directory with `git archive` — nothing is registered in the repository, so no
+  worktree can be left behind in a checkout other sessions use — lays this checkout's `src/evals/`
+  over it, and imports the subjects from there. They reach the product by relative import, so
+  they drive that commit's prompt, tools and parsers. The scratch tree is removed afterwards.
+  Packages are this checkout's; a commit whose `package-lock.json` differs is refused.
+- **The tasks and graders are the running checkout's, for both.** A commit's own corpus is never
+  read: a task worded differently on each side is two questions. The page says when a commit's
+  own corpus differs from the one used. Dev and test are both run and shown apart — dev is what
+  the prompt may have been tuned against, so a gain that test does not show is the tuning.
+- **One cache, keyed by the request.** Nothing in a key names a side. The system prompt and tool
+  list are in every request an agent sends, so versions that differ there never share an entry.
+  A request both send byte for byte alike — the steward's, when only the agent's prompt changed —
+  is asked once and answered the same on both sides: asking twice would pay for noise the change
+  did not cause. A commit compared with itself therefore costs one run and shows no difference.
+- **`promptSurface`** (`surface.ts`) is what a version sends: the system prompt and the tool list
+  of one agent configuration, read off the first request of a real turn. The page prints its size
+  and digest for each side, and says so when the two are the same. It also gives the prompt's two
+  halves — before and after the cache breakpoint — and their bytes, and can read a turn nobody is
+  waiting on (`unattended`); the size ratchet (`scripts/prompt-ratchet.mjs`, `prompt-baseline.json`,
+  run by `npm run arch`) holds those numbers for four configurations so they only shrink (INV-1857).
+
+The page (`docs/evals/COMPARE-<date>-<base>-<candidate>.md`, to be committed; the record goes to
+`~/.agentbox/scorecards/compare-…json`) gives both pass rates with their intervals; the
+difference — the mean over tasks of the change in each task's own pass rate — with its interval;
+McNemar over tasks that passed every attempt on one side and not on the other, with the same
+REVIEW / INCOMPLETE reading as above; the tasks that got worse and better with what the graders
+found; and the cost per passed attempt on each side.
+
+**The gate is red** when either holds:
+
+- the pass rate fell and the whole 95% interval of the difference is below zero;
+- more than `--max-broken` tasks (default 0) went from passing every attempt to passing none.
+
+The second catches a change that breaks some tasks outright while fixing others, which the first
+averages away. It counts outright breaks rather than every task that got worse, because tasks
+change sides by chance: at one failed attempt in ten, two runs of the very same version disagree
+on about a fifth of the tasks, and a count of those would be red on noise. `--max-worse <n>` adds
+that count for whoever wants it. A task the harness failed on either side is left out of the
+pairing and named.
+
+**The gate reads code graders only.** No judge is asked in a comparison: none is calibrated, so
+none may gate. Not red is not safe — a fall smaller than the detectable difference passes unseen,
+and the McNemar line says INCOMPLETE and how many tasks would settle it.
+
+`--fake` runs the whole comparison on the stand-in. The stand-in opens a skill only when the
+request it is sent still lists that skill and still carries `read_file`, so a version whose prompt
+dropped either fails those tasks; otherwise it draws its wrong answers afresh for each distinct
+prompt, as a model would. Its page is marked as no measurement and is refused in `docs/evals/`.
+
+The pull request template asks a change to the prompt or to a tool's description for this page.
+That is a request to the author; no check enforces it.
+
 ## Not a gate
 
-CI does not run this and nothing gates on it. A gate comes after a measured run, sized against the
-detectable difference that run reports, and on a judge's verdict only for a question marked "may
-gate".
+CI does not run this and nothing in CI gates on it. The comparison's gate is read by a person on a
+page. A gate on a single run comes after a measured run, sized against the detectable difference
+that run reports, and on a judge's verdict only for a question marked "may gate".

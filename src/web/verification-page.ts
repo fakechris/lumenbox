@@ -1,5 +1,5 @@
 /**
- * A verification report's page (INV-1925, docs/101): the recording on the left with the current
+ * A verification report's page (INV-1925, docs/102): the recording on the left with the current
  * step over it, a timeline split by scenario with failures in red, and on the right the counts,
  * the conclusion and the two-level list. Clicking an assertion plays the recording from just
  * before it was checked. Drawn on the server from the report; the script only moves the video.

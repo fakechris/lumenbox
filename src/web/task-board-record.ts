@@ -4,6 +4,7 @@ import { summarizeTaskProgress, type ProgressSourceAccess } from "../host/task-p
 import type { Task } from "../host/tasks.ts";
 import { type DeliveryPart, parseDelivery } from "../host/delivery-report.ts";
 import { askOf, splitAsk } from "../host/person-ask.ts";
+import { receiptOf } from "../host/person-word.ts";
 const preview = (text: string | undefined, limit: number) => text === undefined ? undefined : text.length > limit ? text.slice(0, limit) + "…" : text;
 /** Who writes a note to keep the books rather than to say what was done. */
 const BOOKKEEPERS: ReadonlySet<string> = new Set(["aging", "audit-guard", "review-guard", "restart", "host", "channel"]);
@@ -20,8 +21,8 @@ export function lastReport(task: Pick<Task, "history" | "createdAt">, limit = 70
   const parts = parseDelivery(said?.note)?.parts.map(part => ({ key: part.key, text: preview(part.text, Math.ceil(limit / 2))! }));
   return said ? { at: said.at, by: said.by, note: preview(splitAsk(said.note).rest, limit)!, ...(parts ? { parts } : {}) } : undefined;
 }
-export function taskBoardRecord(task: Task, access?: ProgressSourceAccess) {
-  const last = task.history.at(-1), report = lastReport(task), ask = askOf(task);
+export function taskBoardRecord(task: Task, access?: ProgressSourceAccess, isAgent?: (id: string) => boolean) {
+  const last = task.history.at(-1), report = lastReport(task), ask = askOf(task), receipt = receiptOf(task, isAgent);
   return {
     work:workRootSummary(task),
     progress: summarizeTaskProgress(task, 3, access),
@@ -32,6 +33,8 @@ export function taskBoardRecord(task: Task, access?: ProgressSourceAccess) {
     ...(task.discovery ? { discovery: { kind: task.discovery.kind, source: task.discovery.source, evidence: preview(task.discovery.evidence, 160), whyNow: preview(task.discovery.whyNow, 160) } } : {}),
     ...(task.closeProposal ? { closeProposal: { by: task.closeProposal.by, at: task.closeProposal.at, decideBy: task.closeProposal.decideBy, reason: preview(task.closeProposal.reason, 160) } } : {}),
     ...(report ? { report } : {}), ...(ask ? { ask } : {}),
+    // How the newest wait on the person ended, when it has: the one line its card collapsed to (person-word.ts).
+    ...(receipt ? { receipt } : {}),
     // What was handed over, by name: the card lists the files and opens them where it stands (INV-1923).
     ...(task.deliverables?.length ? { deliverables: task.deliverables.map(file => ({ id: file.id, name: file.name, note: file.note, size: file.size })) } : {}),
     history: last ? [{ at: last.at, by: last.by, status: last.status, note: preview(last.note, 160), ...(last.options?.length ? { options: last.options } : {}) }] : [],

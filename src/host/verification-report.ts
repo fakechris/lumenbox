@@ -1,5 +1,5 @@
 /**
- * A verification report with its recording (INV-1925, docs/101).
+ * A verification report with its recording (INV-1925, docs/102).
  *
  * A member writes the plan first (scenarios, each with the facts it will observe), starts recording
  * its own desktop, checks each assertion as it goes and finishes with a conclusion. The host stamps

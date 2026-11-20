@@ -19,6 +19,19 @@
  *                                            --out/--cache/--report name a place, and docs/evals/
  *                                            is refused
  *     --no-judges                            code graders only; skip the judge questions
+ *   npm run eval -- --compare <base-ref> <candidate-ref>
+ *                                            two versions of the prompt and tools on the same tasks:
+ *                                            each commit's product is frozen and run on dev and test,
+ *                                            k attempts a task, with this checkout's tasks and graders.
+ *                                            Twice the calls of a plain run where the two send
+ *                                            different requests — `plan --compare a b` says how many.
+ *                                            Prints both pass rates, the difference, the tasks that
+ *                                            moved and a gate; takes --split, --k, --only, --subject,
+ *                                            --provider, --offline, --cache, --out, --report, --fake
+ *     --max-broken 0                         red above this many tasks going from every attempt
+ *                                            passing to none
+ *     --max-worse <n>                        also red above this many tasks getting worse (off unless given)
+ *     --repo <dir>                           where the two refs are resolved; default: this checkout
  *   npm run eval -- judge <result.json> [--out <file>] [--fake]       ask the judge questions of a
  *                                            record already made; its attempts are not run again
  *   npm run eval -- label-sheet <result.json> [--count 30] [--out <file>]
@@ -31,7 +44,8 @@
  *                                            material (src/evals/corpus-build.ts); --check only says
  *
  * Not part of `npm test` and not a gate: CI never runs a model. The pieces live in src/evals/ —
- * corpus, graders, subjects, cache, runner, judges, calibration, stats, summary, report — and this file only wires them
+ * corpus, graders, subjects, cache, runner, judges, calibration, stats, summary, report, and frozen, surface and
+ * compare for two versions — and this file only wires them
  * to a provider, a clock and the disk. Credentials are read by the provider client from the
  * operator's configuration, as every live script does, and never printed.
  */
@@ -52,7 +66,7 @@ function parseArgs(argv) {
     const at = argv.indexOf(name);
     return at < 0 ? undefined : argv[at + 1];
   };
-  return { command: argv[0] !== undefined && !argv[0].startsWith("--") ? argv[0] : "run", flag, has: name => argv.includes(name), rest: argv.slice(1) };
+  return { command: argv[0] !== undefined && !argv[0].startsWith("--") ? argv[0] : "run", flag, has: name => argv.includes(name), rest: argv.slice(1), argv };
 }
 
 const git = args => {
@@ -88,15 +102,33 @@ function resultsIn(dir) {
 
 async function chosenTasks(args) {
   const { loadCorpus } = await import("../src/evals/corpus.ts");
-  const split = args.flag("--split") ?? "test";
-  if (split !== "dev" && split !== "test") throw new Error(`--split needs dev or test, not ${split}`);
+  // A comparison of two versions reads both halves unless told otherwise; a plain run reads test.
+  const split = args.flag("--split") ?? (args.has("--compare") ? "dev+test" : "test");
+  if (split !== "dev" && split !== "test" && !(split === "dev+test" && args.has("--compare"))) throw new Error(`--split needs dev or test, not ${split}`);
   const only = args.flag("--only");
   const subject = args.flag("--subject");
-  const tasks = loadCorpus(CORPUS_DIR)[split].filter(task => (only === undefined || task.id.startsWith(only)) && (subject === undefined || task.subject === subject));
+  const corpus = loadCorpus(CORPUS_DIR);
+  const wanted = half => (split === half || split === "dev+test" ? corpus[half].filter(task => (only === undefined || task.id.startsWith(only)) && (subject === undefined || task.subject === subject)) : []);
+  const halves = { dev: wanted("dev"), test: wanted("test") };
+  const tasks = [...halves.dev, ...halves.test];
   if (tasks.length === 0) throw new Error(`no task in the ${split} split matches`);
   const k = Number(args.flag("--k") ?? 3);
   if (!Number.isInteger(k) || k < 1) throw new Error(`--k needs a whole number of attempts, not ${args.flag("--k")}`);
-  return { split, tasks, k };
+  return { split, tasks, halves, k };
+}
+
+/** The two refs after --compare. */
+function comparedRefs(args) {
+  const at = args.argv.indexOf("--compare");
+  const refs = [args.argv[at + 1], args.argv[at + 2]];
+  if (refs.some(ref => ref === undefined || ref.startsWith("--"))) throw new Error("--compare needs two refs: the base, then the candidate");
+  return { base: refs[0], candidate: refs[1] };
+}
+
+/** What a comparison costs, said before anything is spent: every task runs on both versions, and no judge is asked. */
+function compareBudgetLine(budget, refs) {
+  return `Comparing ${refs.base} with ${refs.candidate} runs every task on both versions: at most ${budget.total * 2} model calls, twice the ${budget.total} of a plain run. ` +
+    "A request the two send byte for byte alike is made once. No judge is asked: none is calibrated, and the gate reads code graders only.";
 }
 
 async function plan(args, out) {
@@ -105,8 +137,10 @@ async function plan(args, out) {
   const { split, tasks, k } = await chosenTasks(args);
   const budget = callBudget(tasks, SUBJECT_TABLE, k);
   const { judgeCallBudget } = await import("../src/evals/judges.ts");
-  const judged = args.has("--no-judges") ? 0 : judgeCallBudget(tasks, k);
-  out(`${tasks.length} tasks from the ${split} split × ${k} attempts: at most ${budget.total} model calls, and ${judged} judge calls after them.`);
+  const comparing = args.has("--compare");
+  const judged = args.has("--no-judges") || comparing ? 0 : judgeCallBudget(tasks, k);
+  if (comparing) out(compareBudgetLine(budget, comparedRefs(args)));
+  out(`${tasks.length} tasks from the ${split} split × ${k} attempts: at most ${budget.total} model calls${comparing ? " a version" : ""}, and ${judged} judge calls after them.`);
   for (const [name, cell] of Object.entries(budget.bySubject)) {
     out(`  ${name.padEnd(12)} ${String(cell.tasks).padStart(3)} tasks  ≤ ${String(cell.calls).padStart(4)} calls  (${SUBJECT_TABLE[name].tier} model)`);
   }
@@ -148,7 +182,94 @@ async function modelTiers(args, fake, out) {
   return { tiers, rates, home };
 }
 
+/** An episode builds a whole agent home; none of that may land in the operator's. */
+async function inScratchHome(work) {
+  const scratch = mkdtempSync(join(tmpdir(), "lumenbox-eval-"));
+  const realHome = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = scratch;
+  try {
+    return await work();
+  } finally {
+    if (realHome === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = realHome;
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** A stand-in's page is not a result: it may be printed or written elsewhere, never filed where results are kept. */
+function refuseStandInPage(fake, reportFile) {
+  if (fake && reportFile !== undefined && !relative(REPORTS_DIR, resolve(reportFile)).startsWith("..")) {
+    throw new Error("a stand-in run is not a result: its page may not be written into docs/evals/");
+  }
+}
+
+async function compare(args, out) {
+  const fake = args.has("--fake");
+  const refs = comparedRefs(args);
+  const { halves, tasks, k } = await chosenTasks(args);
+  const { SUBJECT_TABLE } = await import("../src/evals/subjects.ts");
+  const { callBudget } = await import("../src/evals/runner.ts");
+  const { freezeRef, resolveRef } = await import("../src/evals/frozen.ts");
+  const { runCompare, compareSides } = await import("../src/evals/compare.ts");
+  const { renderComparison } = await import("../src/evals/report.ts");
+  const { FileCache } = await import("../src/evals/cache.ts");
+  const repo = args.flag("--repo") ?? root;
+  const number = name => {
+    const given = args.flag(name);
+    if (given !== undefined && !(Number.isInteger(Number(given)) && Number(given) >= 0)) throw new Error(`${name} needs a whole number of tasks, not ${given}`);
+    return given === undefined ? undefined : Number(given);
+  };
+  const limits = { maxBroken: number("--max-broken"), maxWorse: number("--max-worse") };
+  // Both refs are checked, and the cost said, before a provider is read or a tree is exported.
+  const shas = { base: resolveRef(repo, refs.base), candidate: resolveRef(repo, refs.candidate) };
+  out(compareBudgetLine(callBudget(tasks, SUBJECT_TABLE, k), refs));
+  const { tiers, rates, home } = await modelTiers(args, fake, out);
+  const cacheDir = args.flag("--cache") ?? (home !== undefined ? join(home, "eval-cache") : undefined);
+  const at = new Date().toISOString();
+  const name = `COMPARE-${at.slice(0, 10)}-${shas.base.slice(0, 7)}-${shas.candidate.slice(0, 7)}`;
+  const outFile = args.flag("--out") ?? (home !== undefined ? join(home, "scorecards", `compare-${at.replace(/[:.]/g, "-")}-${shas.base.slice(0, 7)}-${shas.candidate.slice(0, 7)}.json`) : undefined);
+  const reportFile = args.flag("--report") ?? (fake ? undefined : join(REPORTS_DIR, `${name}.md`));
+  refuseStandInPage(fake, reportFile);
+
+  const frozen = [];
+  let record;
+  try {
+    record = await inScratchHome(async () => {
+      const build = async ref => {
+        // Two refs naming one commit are one tree.
+        const one = frozen.find(held => held.sha === resolveRef(repo, ref)) ?? (await freezeRef({ repo, ref }));
+        if (!frozen.includes(one)) frozen.push(one);
+        return { ref, sha: one.sha, subjects: one.subjects, surface: await one.promptSurface(), ownCorpus: one.ownCorpus };
+      };
+      return runCompare({
+        base: await build(refs.base), candidate: await build(refs.candidate), tasks: halves, k, tiers, at,
+        ...(fake ? { fake: { wrongShare: Number(args.flag("--wrong") ?? 0.2) } } : {}),
+        ...(cacheDir !== undefined ? { cache: new FileCache(cacheDir) } : {}),
+        offline: args.has("--offline"),
+        progress: line => out(`  ${line}`),
+      });
+    });
+  } finally {
+    for (const one of frozen) one.release();
+  }
+
+  const comparison = compareSides(record, { rates, ...(limits.maxBroken !== undefined ? { maxBroken: limits.maxBroken } : {}), ...(limits.maxWorse !== undefined ? { maxWorse: limits.maxWorse } : {}) });
+  const page = renderComparison(record, comparison, { name });
+  if (outFile !== undefined) {
+    writeFile(outFile, `${JSON.stringify(record, null, 2)}\n`);
+    out(`result: ${outFile}`);
+  }
+  if (reportFile !== undefined) {
+    writeFile(reportFile, page);
+    out(`report: ${reportFile}`);
+  } else out(`\n${page}`);
+  out(`gate: ${comparison.gate.status.replaceAll("_", " ")}${comparison.gate.reasons.length > 0 ? ` — ${comparison.gate.reasons.join("; ")}` : ""}${record.fake ? " (stand-in; not a measurement)" : ""}`);
+  out(`model calls: ${record.base.run.calls.made + record.candidate.run.calls.made} made, ${record.base.run.calls.cached + record.candidate.run.calls.cached} from the cache`);
+  return 0;
+}
+
 async function run(args, out) {
+  if (args.has("--compare")) return compare(args, out);
   const fake = args.has("--fake");
   const { split, tasks, k } = await chosenTasks(args);
   const { SUBJECT_TABLE } = await import("../src/evals/subjects.ts");
@@ -168,29 +289,16 @@ async function run(args, out) {
   const baseline = baselineFile !== undefined ? readRun(baselineFile) : undefined;
   const name = `REPORT-${at.slice(0, 10)}`;
   const reportFile = args.flag("--report") ?? (fake ? undefined : join(REPORTS_DIR, `${name}.md`));
-  if (fake && reportFile !== undefined && !relative(REPORTS_DIR, resolve(reportFile)).startsWith("..")) {
-    throw new Error("a stand-in run is not a result: its page may not be written into docs/evals/");
-  }
+  refuseStandInPage(fake, reportFile);
 
-  // An episode builds a whole agent home; none of that may land in the operator's.
-  const scratch = mkdtempSync(join(tmpdir(), "lumenbox-eval-"));
-  const realHome = process.env.AGENTBOX_HOME;
-  process.env.AGENTBOX_HOME = scratch;
-  let result;
-  try {
-    result = await runEval({
-      tasks, split, k, subjects: SUBJECT_TABLE, tiers,
-      ...(fake ? { fake: { wrongShare: Number(args.flag("--wrong") ?? 0.2) } } : {}),
-      ...(cacheDir !== undefined ? { cache: new FileCache(cacheDir) } : {}),
-      offline: args.has("--offline"),
-      meta: { at, commit, dirty: git(["status", "--porcelain"]) !== "" },
-      progress: line => out(`  ${line}`),
-    });
-  } finally {
-    if (realHome === undefined) delete process.env.AGENTBOX_HOME;
-    else process.env.AGENTBOX_HOME = realHome;
-    rmSync(scratch, { recursive: true, force: true });
-  }
+  const result = await inScratchHome(() => runEval({
+    tasks, split, k, subjects: SUBJECT_TABLE, tiers,
+    ...(fake ? { fake: { wrongShare: Number(args.flag("--wrong") ?? 0.2) } } : {}),
+    ...(cacheDir !== undefined ? { cache: new FileCache(cacheDir) } : {}),
+    offline: args.has("--offline"),
+    meta: { at, commit, dirty: git(["status", "--porcelain"]) !== "" },
+    progress: line => out(`  ${line}`),
+  }));
 
   if (!args.has("--no-judges")) {
     result.judges = await judgeRun(result, tasks, {

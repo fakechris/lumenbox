@@ -11,8 +11,9 @@
  * things. It stands in the agent's one conversation, wherever the work was asked (INV-1896).
  *
  * Where the agent wrote what it needs of the person (person-ask.ts, INV-1923), that is the card's
- * title and its first sentences; the fixed line and the reasons from the table are what is shown
- * where it did not. The files open where the card stands, and the look can be put off (next-need-ui.ts).
+ * title, over the delivery in its short form; the fixed line and the reasons from the table are what
+ * is shown where it did not. The files open where the card stands, and the look can be put off
+ * (next-need-ui.ts). The card stands above the conversation with whatever else waits (next-dock-ui.ts).
  */
 import { DELIVERY_BRIEF, DELIVERY_SECTIONS } from "../host/delivery-report.ts";
 
@@ -170,22 +171,31 @@ function reportBlock(report, keys) {
   return box;
 }
 
-/** A result waiting for the person: what it is, where it came from, what was reported, and the decision. */
+/**
+ * A result waiting for the person, as one card: what to decide, the delivery in its short form, the decision.
+ *
+ * Where the agent wrote what it needs (person-ask.ts), its action is the title and the delivery says the rest: the
+ * request's own sentences are not stacked on the delivery's parts, which tell the same facts, and stand in the work's
+ * panel. A result with no delivery to read shows those sentences instead. Where the agent wrote neither, the card is the
+ * fixed line, why it waits and the note, as before. What was not done or not verified is on the card in every case.
+ */
 function resultCard(row) {
   var card = el("div", "card-plain"), acts = el("div", "acts"), files = row.deliverables || [], report = row.report, maker = agentName(row.assigneeId), ask = row.ask;
   var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes")), open = el("button", "act", t("ui.next.act.details"));
   card.dataset.result = row.id;
   card.appendChild(el("div", "card-head", ask ? ask.title : t("ui.next.chat.review")));
-  signOffLines(row).forEach(function (line) { card.appendChild(line); });
-  card.appendChild(el("div", "", row.title));
-  card.appendChild(el("div", "why", originOf(row)));
-  if (ask && (ask.said || []).length) card.appendChild(askBlock(ask));
-  if (report && report.note) {
-    card.appendChild(el("div", "why", t("ui.next.chat.reported", { name: agentName(report.by) || maker, when: agoText(report.at) })));
-    card.appendChild(reportBlock(report, REPORT_BRIEF));
+  if (!ask) signOffLines(row).forEach(function (line) { card.appendChild(line); });
+  card.appendChild(el("div", "why", row.title + " · " + originOf(row)));
+  if (report && report.parts) card.appendChild(reportBlock(report, REPORT_BRIEF));
+  else {
+    if (ask) askBrief(card, ask);
+    if (report && report.note) {
+      if (!ask) card.appendChild(el("div", "why", t("ui.next.chat.reported", { name: agentName(report.by) || maker, when: agoText(report.at) })));
+      card.appendChild(reportBlock(report, REPORT_BRIEF));
+    }
   }
   embedInto(card, row);
-  if (files.length === 0 && !(report && report.note)) card.appendChild(el("div", "why", t("ui.next.chat.noReport")));
+  if (files.length === 0 && !(report && (report.note || report.parts)) && !ask) card.appendChild(el("div", "why", t("ui.next.chat.noReport")));
   accept.addEventListener("click", function () {
     postJson("/api/tasks/update", { id: row.id, status: "done" }).then(function () { toast(t("ui.next.done.accepted")); refreshSoon(); }, failed);
   });
@@ -204,7 +214,7 @@ function resultCard(row) {
   }
   changes.addEventListener("click", function () { chat.changing = row.id; render(); var field = document.querySelector("[data-result='" + row.id + "'] textarea"); if (field) field.focus(); });
   acts.appendChild(accept); acts.appendChild(changes); acts.appendChild(open); acts.appendChild(laterButton(row.id, refreshSoon)); card.appendChild(acts);
-  card.appendChild(el("div", "why", t("ui.next.chat.reviewHint", { name: maker })));
+  acts.title = t("ui.next.chat.reviewHint", { name: maker }); // what the two decisions do, for whoever wants it before pressing
   return card;
 }
 `;

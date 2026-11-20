@@ -378,7 +378,7 @@ export interface ChannelManagerDeps {
   incarnationOf?: (chatKey: string) => number;
   /** The speaking right of a host-initiated push (INV-1459): refused with a reason when its purpose's claim does not hold. */
   outbound?: (purpose: OutboundPurpose, chatKey: string) => { allow: true } | { allow: false; reason: string };
-  outbox?: OutboxSender; sent?: SentLedger; // outbox: sends under a receipt, retried and ordered per chat (INV-1460); sent: a line for everything a door sends (INV-1841)
+  outbox?: Pick<OutboxSender, "send">; sent?: SentLedger; // outbox: sends under a receipt, retried and ordered per chat (INV-1460); sent: a line for everything a door sends (INV-1841)
   /**
    * The door's own default (docs/22 §2): who answers a message that names nobody,
    * per adapter. Absent, or undefined for an adapter, falls through to the

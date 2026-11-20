@@ -1,0 +1,22 @@
+{
+  "single": {
+    "stable": 24132,
+    "volatile": 16298,
+    "tools": 44142
+  },
+  "team-member": {
+    "stable": 24132,
+    "volatile": 17068,
+    "tools": 44142
+  },
+  "desktop": {
+    "stable": 24132,
+    "volatile": 16298,
+    "tools": 49999
+  },
+  "unattended": {
+    "stable": 23632,
+    "volatile": 17653,
+    "tools": 37145
+  }
+}

@@ -32,6 +32,9 @@ jobs:
       # SHA-pinned rather than tagged: a tag can be moved, and an action runs with access to this
       # repository's checkout.
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The merge commit and its parents: the hint below reads what the pull request changed.
+          fetch-depth: 2
 
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
@@ -45,8 +48,13 @@ jobs:
 
       - name: lint
         run: npm run lint
-      - name: architecture ratchet (arch-baseline.json only shrinks)
+      - name: architecture ratchet (arch-baseline.json and prompt-baseline.json only shrink)
         run: npm run arch
+      # Not a check: it prints a notice and exits zero whatever it finds (INV-1857). A pull request's
+      # HEAD here is the merge commit, so its first parent is the base it is compared with.
+      - name: a change to the prompt or the tools is reminded of the comparison (a hint, never a failure)
+        if: github.event_name == 'pull_request'
+        run: node scripts/prompt-ratchet.mjs --hint HEAD^1
       - name: let the test runner open a network namespace (ubuntu 24.04 restricts unprivileged userns)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: the host sandbox's Linux mechanism (INV-1344), so its tests run rather than skip

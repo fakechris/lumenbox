@@ -7,7 +7,7 @@ import { evidenceDigest } from "../host/review-dispatch.ts";
 import { resultCheckRoute } from "./result-check-routes.ts";
 import { verificationRoute } from "./verification-routes.ts";
 import { reportAttention, reportsDir, VerificationReports } from "../host/verification-report.ts";
-import { taskDeliveryRoute } from "./task-delivery-routes.ts"; import { owedToChat } from "../host/delivery-report.ts"; import { askOf } from "../host/person-ask.ts";
+import { taskDeliveryRoute } from "./task-delivery-routes.ts"; import { owedToChat } from "../host/delivery-report.ts"; import { askOf } from "../host/person-ask.ts"; import { receiptOf } from "../host/person-word.ts";
 import { DeliveryRecovery, replyExecutionKey } from "../host/delivery-recovery.ts";
 import { deliveryRecoveryRoute } from "./delivery-recovery-routes.ts";
 import { taskAudience } from "../host/task-audience.ts";
@@ -240,7 +240,7 @@ import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
 import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
-import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { Teller } from "../host/tell.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
+import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { quietWiring } from "./quiet-wiring.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
@@ -431,7 +431,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * restart — see src/web/activity.ts. How much to keep is a preference someone sets
    * once, so it lives in the config file rather than in an environment variable.
    */
-  const { activityLimit, tellGapMinutes } = loadConfig(line => log(line));
+  const { activityLimit, ...speaking } = loadConfig(line => log(line));
   const activity = new ActivityLog({
     path: join(agentboxHome(), "activity.jsonl"),
     limit: activityLimit,
@@ -544,9 +544,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // the process does is not a budget.
   const followUps = new FollowUpBudget(join(agentboxHome(), "follow-ups.jsonl"));
   const pushBudget = new PushBudget(join(agentboxHome(), "push-budget.jsonl")); // what an agent may push unprompted per day (INV-1576)
-  // One thing a member says mid-turn (Tell, INV-1853): to the page, and to the chat the turn came from as an ordinary message whose files leave through that chat's outbox.
-  const teller = new Teller({ budget: pushBudget, ...(tellGapMinutes !== undefined ? { gapMinutes: tellGapMinutes } : {}), redact: text => outboundRedactor(vault.heldValues())(text), toPage: told => broadcast(told),
-    chatOf: conversation => conversations.chatKeyFor(conversation), toChat: async (chatKey, text, about) => chats?.tryPushToChat(chatKey, text, { kind: "notice", about }) ?? { delivered: false, why: "no channels are configured" } });
+  // One thing a member says mid-turn (Tell, INV-1853), and the queue where what nobody asked for waits for its conversation to be quiet (INV-1928).
+  const unprompted = quietWiring({ path: join(agentboxHome(), "quiet-queue.jsonl"), config: speaking, budget: pushBudget, redact: text => outboundRedactor(vault.heldValues())(text), toPage: told => broadcast(told), log,
+    chatOf: conversation => conversations.chatKeyFor(conversation), registry, orchestrator: () => orchestrator, chats: () => chats }), teller = unprompted.teller;
 
   /**
    * One JSON-RPC call to Involute's MCP endpoint, as one agent (INV-553).
@@ -740,7 +740,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         log(`push from ${fromAgentId} held for ${chatKey}'s digest: past its ${pushBudget.perDayOf(fromAgentId!)}-a-day allowance`);
         return { delivered: true, why: "held for today's digest: past the agent's daily allowance" };
       }
-      return chats.tryPushToChat(chatKey, text, { kind: "notice", about: `report from ${fromAgentId ?? "a routine"}` });
+      return chats.tryPushToChat(chatKey, text, { kind: "notice", about: `report from ${fromAgentId ?? "a routine"}`, urgent: exempt === true, ...(fromAgentId !== undefined ? { from: fromAgentId } : {}) });
     },
     onTurnEvent: event => {
       // An edit_file call goes to the page with its diff attached, computed here once, so
@@ -1033,7 +1033,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const guestDesk = new GuestDesk({ settings: join(agentboxHome(), "guests.jsonl"), turns: join(agentboxHome(), "guest-turns.jsonl"), reviews: join(agentboxHome(), "guest-reviews.jsonl") }); // who answers guests, what is public to them, their turns and the reviews of their answers (INV-1708, INV-1713, docs/97)
   const channels = new ChannelManager({
     interactionTask: (message, name) => { const agent = registry.resolve(name ?? ""), parsed = parseActionText(message.text); const result = surfaceActionWork({ action: parsed ? { surface: parsed.surfaceId, name: parsed.name } : undefined, text: message.text, agentId: agent.id, conversation: conversationIdFor(message.threadKey ?? message.chatKey ?? message.identity), surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }); if ("error" in result) throw new Error(result.error); return result.taskBinding.taskId; },
-    outbox: outboxSender, sent: sentLedger, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
+    outbox: unprompted.door(outboxSender), sent: sentLedger, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
     // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
     outbound: (purpose, chatKey) => {
       const verdict = outboundVerdict(purpose, {
@@ -3887,8 +3887,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         let readingBuilt = false; let readingWorld: Parameters<typeof stageWorldOf<Task>>[1] | undefined; const childReferences = new Map<string, string[]>(), readingCache = new Map<string, ReturnType<typeof workReading>>();
         const readingFor = (task: Task) => { if (!readingBuilt) { readingBuilt = true; for (const row of orchestrator.tasks?.list() ?? []) if (row.origin?.parentId && mayReadTask(row)) { const ids = childReferences.get(row.origin.parentId) ?? []; ids.push(row.id); childReferences.set(row.origin.parentId, ids); } } let reading = readingCache.get(task.id); if (!reading) { const reference = (id: string, relation: "parent" | "dependency" | "collaboration") => workReference(id, relation, id => orchestrator.tasks?.get(id), mayReadTask); readingWorld ??= { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending }; reading = workReading(task, { stage: stageWorldOf(task, readingWorld!), checks: orchestrator.resultChecks.snapshot(task), verdicts: orchestrator.verifications.recordsFor(task.id, evidenceDigest(task)), references: [...(task.origin?.parentId ? [reference(task.origin.parentId, "parent")] : []), ...(task.blockedBy ?? []).map(id => reference(id, "dependency")), ...(childReferences.get(task.id) ?? []).map(id => reference(id, "collaboration"))] }); readingCache.set(task.id, reading); } return reading; };
         if (taskExecutionRoute(route, url, res, { executions: taskExecutions, access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, record: id => ({ ...taskRecord(orchestrator.tasks!.get(id)!, { nameOf: id => registry.tryGet(id)?.profile.name ?? id, stageWorld: sideDoorStage, progressAccess: { agent: mayReadAgent, box: mayReadBox } }), reading: readingFor(orchestrator.tasks!.get(id)!) }), send })) return;
-        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, report: lastReport(task, 8000), ask: askOf(task), reading: readingFor(task), work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id), orchestrator.resultChecks), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
-        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }), reading: readingFor(task), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id), orchestrator.resultChecks), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
+        const audienceAgents = new Set(registry.list().map(agent=>agent.id)), audiencePeople = new Set(principals.list().flatMap(person=>[person.id,...person.identities])); const taskView = (task: Task) => { const forks = orchestrator.pendingWork?.forks?.ofTask(task.id) ?? []; return { ...task, report: lastReport(task, 8000), ask: askOf(task), receipt: receiptOf(task, id => registry.has(id)), reading: readingFor(task), work:workRootSummary(task), workRoot:undefined, progress: summarizeTaskProgress(task, 128, { agent: mayReadAgent, box: mayReadBox }), needsApprovals: taskExecutions.approvals(task.id, { task: () => mayReadTask(task), agent: mayReadAgent, box: mayReadBox }, orchestrator.policy.pending()), stage: taskStage(task, sideDoorStage(task)), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id), orchestrator.resultChecks), configVersions: switchesForTask(registry, task.id), ...(forks.length ? { forks } : {}), ...dependencyView(task, orchestrator.tasks!) }; };
+        if (taskListRoute(route, url, res, { audience: task => taskAudience(task,audienceAgents,audiencePeople), pages: taskListPages, tasks: () => orchestrator.tasks?.list() ?? [], allowed: mayReadTask, detail: taskView, summary: task => ({ ...taskBoardRecord(task, { agent: mayReadAgent, box: mayReadBox }, id => registry.has(id)), reading: readingFor(task), signOffBecause: signOffView(task, orchestrator.tasks!, id => registry.has(id), orchestrator.resultChecks), ...dependencyView(task, orchestrator.tasks!) }), send })) return;
         if (route === "GET /api/tasks") {
           send(res, 200, { tasks: orchestrator.tasks?.list().filter(mayReadTask).map(taskView) ?? [] });
           return;

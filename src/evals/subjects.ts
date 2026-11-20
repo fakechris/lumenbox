@@ -57,7 +57,7 @@ function reply(content: Anthropic.ContentBlock[], stop: Anthropic.Message["stop_
     usage: { input_tokens: tokens.input, output_tokens: tokens.output },
   } as unknown as Anthropic.Message;
 }
-const say = (text: string, tokens?: { input: number; output: number }): Anthropic.Message => reply([{ type: "text", text } as Anthropic.ContentBlock], "end_turn", tokens);
+export const say = (text: string, tokens?: { input: number; output: number }): Anthropic.Message => reply([{ type: "text", text } as Anthropic.ContentBlock], "end_turn", tokens);
 /** What a fake call reports having used, so the cost column has something to add up. */
 const FAKE_TOKENS = { input: 1000, output: 100 };
 
@@ -144,9 +144,16 @@ function starterSkillSet() {
   return { skills, files };
 }
 let starterSet: ReturnType<typeof starterSkillSet> | undefined;
+/** Built once: the same set for every episode, and for the prompt read off one (surface.ts). */
+export const starterSkills = (): ReturnType<typeof starterSkillSet> => (starterSet ??= starterSkillSet());
 
 const skillPath = (slug: string): string => `${SKILLS_DIR}/${slug}/SKILL.md`;
 const DEFAULT_CAP = 4;
+const OPENS_WITH = "read_file";
+/** Whether a request names this file in its system prompt and carries the tool that reads it. */
+function offers(params: Anthropic.MessageCreateParams, path: string): boolean {
+  return (params.tools ?? []).some(tool => "name" in tool && tool.name === OPENS_WITH) && JSON.stringify(params.system ?? "").includes(path);
+}
 /** How a reply the harness wrote in the model's place begins: never read as the model's answer. */
 const CUT = "(cut:";
 
@@ -155,7 +162,7 @@ const episode: Subject = {
   tier: "primary",
   maxCalls: task => Number(task.input.cap ?? DEFAULT_CAP),
   async run(task, context): Promise<Observation> {
-    starterSet ??= starterSkillSet();
+    const starters = starterSkills();
     const cap = Number(task.input.cap ?? DEFAULT_CAP);
     let calls = 0;
     let answered = false;
@@ -180,8 +187,8 @@ const episode: Subject = {
       result = await runEpisode({
         team: [{ name: "Nova" }],
         says: [String(task.input.says ?? "")],
-        skills: starterSet.skills,
-        files: { ...starterSet.files, ...((task.input.files as Record<string, string> | undefined) ?? {}) },
+        skills: starters.skills,
+        files: { ...starters.files, ...((task.input.files as Record<string, string> | undefined) ?? {}) },
         client,
         provider: context.profile,
       });
@@ -215,10 +222,14 @@ const episode: Subject = {
     const mustNot = task.gold.labels?.none?.find(label => label.startsWith("skill:"));
     const opens = wrong ? (mustOpen === undefined ? mustNot : undefined) : mustOpen;
     let call = 0;
-    return async () => {
+    return async params => {
       call += 1;
-      if (call === 1 && opens !== undefined) {
-        return reply([{ type: "tool_use", id: "toolu_eval_1", name: "read_file", input: { path: skillPath(opens.slice("skill:".length)) } } as Anthropic.ContentBlock], "tool_use", FAKE_TOKENS);
+      // It opens only a skill the request offers it, with the tool the request gives it: a prompt
+      // that stopped listing the skill, or a tool list without `read_file`, costs the stand-in the
+      // task as it would cost a model. That is what lets two versions of the prompt differ here.
+      const offered = opens !== undefined && offers(params, skillPath(opens.slice("skill:".length)));
+      if (call === 1 && offered) {
+        return reply([{ type: "tool_use", id: "toolu_eval_1", name: OPENS_WITH, input: { path: skillPath(opens!.slice("skill:".length)) } } as Anthropic.ContentBlock], "tool_use", FAKE_TOKENS);
       }
       // A task graded on its end state and not on a skill has no wrong skill to open: silence is its wrong answer.
       return say(wrong && mustOpen === undefined && mustNot === undefined ? "" : "A deterministic stand-in answered; no model was asked.", FAKE_TOKENS);

@@ -45,6 +45,7 @@ import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { NEXT_CARDS_JS } from "./next-cards-ui.ts";
 import { NEXT_NEED_JS } from "./next-need-ui.ts";
+import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
 import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
 
 const STYLE = `
@@ -242,6 +243,21 @@ button.file { width: 100%; text-align: left; background: none; cursor: pointer; 
 .preview img, .preview video { max-width: 100%; max-height: 420px; border-radius: 6px; align-self: flex-start; } .preview pre { margin: 0; overflow: auto; max-height: 320px; font-size: 12.5px; }
 .preview .report { max-height: 320px; overflow: auto; } .needbox .parts { margin: 8px 0; } .needbox input { width: 100%; margin-top: 10px; }
 .card-plain .why, .panel .why { white-space: normal; }
+/* What waits on the person: one entry that stays at the top while the conversation scrolls under it (next-dock-ui.ts). */
+.needdock { position: sticky; top: -20px; align-self: stretch; margin-top: -20px; padding: 20px 0 10px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.needdock { display: flex; flex-direction: column; gap: 6px; max-height: 64vh; overflow: auto; }
+.needdock > .card-need, .needdock > .card-plain, .needdock > .card-stuck { max-width: none; align-self: stretch; }
+.pager { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.pager span { margin-right: 4px; } .pager button { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); line-height: 1; }
+.card-need > .said p, .card-plain > .said p, .yours .said p { margin: 0; } .card-need > .said, .card-plain > .said { overflow-wrap: anywhere; }
+.yours { border-left: 2px solid var(--warn); padding-left: 10px; font-size: 13.5px; overflow-wrap: anywhere; } .yours b { display: block; font-size: 12px; font-weight: 600; color: var(--warn); }
+.embeds { display: flex; flex-direction: column; gap: 8px; } .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; } .chips .why { white-space: nowrap; }
+.chip-file { display: inline-block; max-width: 220px; padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface); font-size: 12.5px; text-decoration: none; }
+.chip-file { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } button.chip-file[aria-expanded="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.receipt { align-self: flex-start; max-width: 100%; display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--soft); text-align: left; }
+.receipt .mark { color: var(--ok); flex: none; } .receipt .what { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .receipt .why { flex: none; font-size: 12px; }
+.reply-to { max-width: 780px; margin: 0 auto 6px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+.reply-to span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .reply-to button { flex: none; width: 20px; height: 20px; border-radius: 6px; color: var(--muted); }
 .panel .report { margin-bottom: 12px; }
 .card-plain textarea { width: 100%; min-height: 64px; }
 .sent { align-self: flex-start; max-width: 82%; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; color: var(--soft); }
@@ -332,6 +348,7 @@ body.electron-mac .side { padding-top: 40px; }
   .row { flex-wrap: wrap; } .when { display: none; }
   .board { grid-template-columns: 1fr; }
   .panel { inset: 0; width: auto; border-radius: 0; }
+  .needdock { top: -14px; margin-top: -14px; padding-top: 14px; max-height: 70vh; } .receipt { flex-wrap: wrap; } .receipt .what { flex: 1; white-space: normal; } .receipt .why { flex-basis: 100%; padding-left: 20px; }
   .back { display: inline-flex !important; }
 }
 .back { display: none; padding: 4px 8px; border-radius: 8px; color: var(--muted); }
@@ -401,6 +418,7 @@ export const NEXT_HTML = `<!doctype html>
   <section class="view" id="view"></section>
   <div class="composer" id="composer" hidden>
     <div class="picker" id="composer-menu" hidden></div>
+    <div class="reply-to" id="reply-to" hidden></div>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
   </div>
 </main>
@@ -491,6 +509,7 @@ ${NEXT_MEMBER_JS}
 ${NEXT_BOXES_JS}
 ${NEXT_CARDS_JS}
 ${NEXT_NEED_JS}
+${NEXT_DOCK_JS}
 ${NEXT_SYSTEM_JS}
 nextStart();
 </script>

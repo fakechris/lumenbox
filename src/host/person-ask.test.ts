@@ -1,7 +1,7 @@
 /** A member's request to the person read back out of its note (INV-1923): the card, the inbox row and the chat all depend on this reading. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ASK_KINDS, ASK_SENTENCES, PERSON_ASK_RULE, askLabel, askLines, askOf, splitAsk } from "./person-ask.ts";
+import { ASK_KINDS, ASK_SENTENCES, PERSON_ASK_RULE, askLabel, askLines, askProse, askOf, splitAsk } from "./person-ask.ts";
 import { parseDelivery } from "./delivery-report.ts";
 import { TaskStore } from "./tasks.ts";
 
@@ -44,7 +44,17 @@ test("every name can be read back as it is asked for, the prompt asks for all of
     for (const key of [...ASK_KINDS, ...ASK_SENTENCES]) assert.ok(PERSON_ASK_RULE.includes(askLabel(key, lang)), `the rule names ${askLabel(key, lang)}`);
   }
   assert.match(PERSON_ASK_RULE, /keep doing whatever else does not need them/, "waiting on a person is not stopping");
-  assert.equal(askLines(splitAsk(ASK).ask!).join("\n"), ASK, "what the chat is sent is what the member wrote, under the same names");
+  // What a person reads first, on the card and in a chat alike: the action, the sentences as one running paragraph without
+  // the names they were written under, and apart from it what stays theirs to check. The names are the member's format.
+  assert.deepEqual(askLines(splitAsk(ASK).ask!), [
+    "请你做：登录供应商后台，下载十月发票",
+    "对账到第 3 步，后台要短信验证码。验证码只发到你的手机。打开 https://vendor.example/login ，登录后把 PDF 放进 inbox/。我同时在做：九月和八月的对账，不受影响。",
+    "仍归你检查：发票抬头是否是新公司名。",
+  ]);
+  const open = splitAsk("Please do: Rotate the key\nWhat happened: The key expired\nHow: Open the vault; rotate it:\nMeanwhile: reviewing the logs").ask!;
+  assert.deepEqual(askProse(open), { text: "The key expired. Open the vault; rotate it: Meanwhile: reviewing the logs." }, "a sentence left open is closed, so two do not run into one; nothing to check is no line");
+  for (const lang of ["en", "zh"] as const) assert.ok(askProse({ lang, said: [{ key: "meanwhile", text: "x" }] }).text.startsWith(askLabel("meanwhile", lang)), "the one name kept in line is the name it is written under");
+  assert.deepEqual(askLines(splitAsk("Please approve: Send it").ask!), ["Please approve: Send it"], "a title alone is a request");
 });
 
 test("a delivery that also asks is read as both: the request is no part of the delivery", () => {

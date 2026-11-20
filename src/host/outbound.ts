@@ -26,7 +26,8 @@ export type OutboundPurpose =
   | { kind: "attention"; ref: string; question: string }
   | { kind: "answer"; deliveryId: string }
   | { kind: "ack"; messageId: string }
-  | { kind: "notice"; about?: string }
+  /** `urgent`: it does not wait for the conversation to be quiet (quiet-delivery.ts); `from`: the member whose message it is. */
+  | { kind: "notice"; about?: string; urgent?: boolean; from?: string }
   | { kind: "draft"; id: string };
 
 /** What the gate reads; each answers one purpose's claim. */

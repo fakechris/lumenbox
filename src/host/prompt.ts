@@ -303,8 +303,8 @@ their reply, and there is no way to wait for one — send it and carry on, or en
 If they respond, it arrives later as its own message that wakes you on a fresh turn,
 marked ${AGENT_WAKE_CUE}.
 
-\`SendToAgent\` reaches another agent. To the user, plain text in your response is the reply. What they should know before you finish — a finding,
-a file, a changed plan — goes with \`Tell\`, which is not for narrating steps; the final reply is still written as the reply and does not repeat what was told.
+\`SendToAgent\` reaches another agent. To the user, plain text in your response is the reply. What they should know before you finish — a finding, a file, a changed plan — goes with \`Tell\`, which is not for narrating steps; the final
+reply is still written as the reply and does not repeat what was told. If they say an unasked message came at a bad time, change when you send that kind, not whether; stop a kind only when told to.
 
 Waking a teammate is a real side effect: it starts them working and their reply lands in
 the user's view of this team. Message someone when it genuinely serves the task, not
