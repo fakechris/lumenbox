@@ -6,7 +6,7 @@ import { BOX_OWNER_FILENAME, PROFILE_FILENAME } from "../src/agents/registry.ts"
 
 export function smokeTarget(argv, env, liveName) {
   const live = argv.includes("--live-box");
-  const url = env.AGENTBOX_BOXD_URL?.trim();
+  const url = argv.includes("--box") ? undefined : env.AGENTBOX_BOXD_URL?.trim();
   const chosen = live && !argv.includes("--box") && env.AGENTBOX_CONTAINER === undefined
     ? { mode: "use", name: liveName } : boxMode(argv, env);
   if (chosen.mode === "use" && !live) assertNotLiveBox(chosen.name, liveName);
