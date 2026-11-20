@@ -11,14 +11,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const recordingsDir = mkdtempSync(join(tmpdir(), "agentbox-rec-"));
 process.env.BOXD_RECORDINGS_DIR = recordingsDir;
 
-const { RecordService, RecordingError, buildFfmpegArgs, sanitizeName } = await import(
+const { RecordService, RecordingError, buildFfmpegArgs, pruneRecordings, recordingRetentionFrom, sanitizeName } = await import(
   "./record-service.ts"
 );
 
@@ -235,4 +235,93 @@ test("orphaned encoders are looked for, and finding none is not an error", () =>
   // harmless there rather than throwing on startup.
   const service = new RecordService(() => {});
   assert.equal(service.reclaimOrphans(), 0);
+});
+
+const DAY = 24 * 60 * 60_000;
+const MB = 1024 * 1024;
+
+/** A finished recording of `bytes`, last written `ageMs` before `now`. */
+function recordingAt(dir: string, name: string, bytes: number, now: number, ageMs: number): void {
+  const path = join(dir, name);
+  writeFileSync(path, Buffer.alloc(bytes));
+  utimesSync(path, (now - ageMs) / 1000, (now - ageMs) / 1000);
+}
+
+test("retention defaults to 14 days and 2 GB per box, and is configurable (INV-1949)", () => {
+  assert.deepEqual(recordingRetentionFrom({}), { keepMs: 14 * DAY, keepBytes: 2048 * MB, minFreeBytes: 512 * MB });
+  const set = recordingRetentionFrom({ BOXD_RECORDINGS_KEEP_DAYS: "3", BOXD_RECORDINGS_KEEP_MB: "100", BOXD_RECORDINGS_MIN_FREE_MB: "0" });
+  assert.deepEqual(set, { keepMs: 3 * DAY, keepBytes: 100 * MB, minFreeBytes: 0 });
+  assert.equal(recordingRetentionFrom({ BOXD_RECORDINGS_KEEP_DAYS: "soon" }).keepMs, 14 * DAY, "garbage keeps the default");
+});
+
+test("recordings past the retention period are deleted; younger ones and other files stay", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-rec-age-"));
+  const now = Date.UTC(2026, 10, 19);
+  recordingAt(dir, "old.mp4", 10, now, 15 * DAY);
+  recordingAt(dir, "young.mp4", 10, now, 13 * DAY);
+  recordingAt(dir, "notes.txt", 10, now, 30 * DAY);
+
+  const pruned = pruneRecordings(dir, { keepMs: 14 * DAY, keepBytes: 0 }, now);
+
+  assert.deepEqual(pruned, { removed: ["old.mp4"], freedBytes: 10 });
+  assert.deepEqual(readdirSync(dir).sort(), ["notes.txt", "young.mp4"]);
+});
+
+test("over the per-box ceiling the oldest recordings go first, until the rest fit", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-rec-size-"));
+  const now = Date.UTC(2026, 10, 19);
+  recordingAt(dir, "a-oldest.mp4", 400, now, 3 * DAY);
+  recordingAt(dir, "b-older.mp4", 400, now, 2 * DAY);
+  recordingAt(dir, "c-newer.mp4", 400, now, 1 * DAY);
+  recordingAt(dir, "d-newest.mp4", 400, now, 0);
+
+  const pruned = pruneRecordings(dir, { keepMs: 14 * DAY, keepBytes: 1000 }, now);
+
+  assert.deepEqual(pruned.removed, ["a-oldest.mp4", "b-older.mp4"]);
+  assert.deepEqual(readdirSync(dir).sort(), ["c-newer.mp4", "d-newest.mp4"]);
+});
+
+test("a recording still being written is never pruned, however old or large", () => {
+  const now = Date.UTC(2026, 10, 19);
+  const lines: string[] = [];
+  const service = new RecordService(
+    line => lines.push(line),
+    () => new FakeChild() as never,
+    () => now,
+    { keepMs: DAY, keepBytes: 1, minFreeBytes: 0 },
+    () => undefined
+  );
+  recordingAt(recordingsDir, "stale-before.mp4", 10, now, 2 * DAY);
+  const live = service.start({ display: 7, resolution, name: "live" });
+  assert.equal(existsSync(join(recordingsDir, "stale-before.mp4")), false, "starting a recording applies the retention");
+  recordingAt(recordingsDir, live.file, 10, now, 2 * DAY);
+
+  service.prune();
+
+  assert.ok(existsSync(join(recordingsDir, live.file)), "the file ffmpeg is writing stays");
+  assert.ok(lines.some(line => /removed \d+ recording\(s\) past retention/.test(line)), JSON.stringify(lines));
+});
+
+test("a recording is refused, with the reason, when the work volume is nearly full", () => {
+  const spawned: FakeChild[] = [];
+  const service = new RecordService(
+    () => {},
+    () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child as never;
+    },
+    () => Date.now(),
+    { keepMs: 14 * DAY, keepBytes: 2048 * MB, minFreeBytes: 512 * MB },
+    () => ({ free: 100 * MB, total: 10_000 * MB })
+  );
+
+  assert.throws(
+    () => service.start({ display: 8, resolution }),
+    (error: unknown) =>
+      error instanceof RecordingError &&
+      /Not enough disk space to record desktop 8: 100 MB free.*at least 512 MB/.test(error.message)
+  );
+  assert.equal(spawned.length, 0, "no encoder is started");
+  assert.equal(service.isRecording(8), false);
 });

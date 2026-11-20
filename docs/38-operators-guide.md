@@ -673,11 +673,22 @@ link in the desktop pane starts and stops a recording of the desktop being watch
 finished files are listed beneath it — the browser plays them directly.
 
 Files land in `/home/box/work/recordings/` on the work volume, so they outlive the
-container. 12fps and CRF 30 by default, which is a few KB per second: this shares a CPU
-with the agents' browser, and the point is reviewing what happened rather than producing
-video. Fragmented MP4, flushed per packet, with a fragment closed every second — a
-recorder that gets killed then leaves a file that still plays up to near where it
-stopped, instead of an unplayable stub.
+container. 12fps and CRF 30 by default: this shares a CPU with the agents' browser, and
+the point is reviewing what happened rather than producing video. Plan on about 25 KB per
+second, 1.4–1.6 MB a minute, for a desktop being worked on (measured by running the recorder's
+own ffmpeg arguments locally, not on a real box); a mostly still screen is less (13.7 KB/s,
+0.8 MB a minute, for a terminal running `top` in a test container) and a busy one more. Fragmented MP4,
+flushed per packet, with a fragment closed every second — a recorder that gets killed then
+leaves a file that still plays up to near where it stopped, instead of an unplayable stub.
+
+Recordings are evidence, not work product, and they expire (INV-1949). A finished recording
+is deleted once it is 14 days old (`BOXD_RECORDINGS_KEEP_DAYS`), and while a box holds more
+than 2 GB of them (`BOXD_RECORDINGS_KEEP_MB`) the oldest go first; the one being written is
+never touched. A recording is refused, with the reason, when the work volume has less than
+512 MB free (`BOXD_RECORDINGS_MIN_FREE_MB`). They are left out of `backup` archives like the
+exec spool, so restoring a box brings its files back but not its recordings. A recording is
+fetched through the member whose desktop it is (`/recording?agent=…`), from that member's
+box, and only by someone who may enter that box.
 
 ### What survives, and what does not
 

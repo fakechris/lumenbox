@@ -4346,7 +4346,7 @@ function agentById(id) {
 
 function select(id, conversation) {
   var switching = id !== current;
-  current = id;
+  current = id; if (switching) loadRecordings(); // recordings are per box (INV-1949)
   // Selecting an agent selects its box: a link into another box's agent changes the page.
   var owner = agentById(id);
   if (owner && owner.boxId && owner.boxId !== currentBox && boxesSeen.some(function (b) { return b.id === owner.boxId; })) {
@@ -6366,7 +6366,7 @@ function renderRecordings(list) {
   for (var i = 0; i < Math.min(list.length, 6); i++) {
     var item = list[i];
     var size = item.size_bytes ? Math.round(item.size_bytes / 1024) + "KB" : "recording…";
-    html += '<a href="/recording?name=' + encodeURIComponent(item.file) + '" target="_blank"' +
+    html += '<a href="/recording?agent=' + encodeURIComponent(current) + '&amp;name=' + encodeURIComponent(item.file) + '" target="_blank"' +
       ' rel="noopener">' + esc(item.file.replace(/\.mp4$/, "")) + " (" + size + ")</a>";
   }
   box.innerHTML = html;
@@ -6374,7 +6374,7 @@ function renderRecordings(list) {
 }
 
 function loadRecordings() {
-  return fetch("/api/recordings")
+  if (!current) { renderRecordings([]); return Promise.resolve(); } return fetch("/api/recordings?agent=" + encodeURIComponent(current)) // the member's own box (INV-1949)
     .then(function (r) { return r.json(); })
     .then(function (data) { renderRecordings(data.recordings); })
     .catch(function () { /* the box may be down; the pane just stays hidden */ });
