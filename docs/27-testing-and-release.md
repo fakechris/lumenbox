@@ -78,13 +78,17 @@ captured-payload corpus is the cheaper insurance for us than a live tier.
 The order a release goes out in, mechanical since INV-858 (2026-09-29, after 0.3.0 shipped
 installers with three packages in node_modules and every new user's first launch died):
 
-1. **Build and push the image first**: `npm run build:image`, then `npm run push:image`
-   (needs `docker login`), publishing `fakechris/lumenbox:<version>` and `:latest`.
+1. **Build and push the image first**: export all four engine `*_VERSION` pins and set
+   `LUMENBOX_RELEASE_IMAGE=1`, then `npm run push:image` (needs Go, Docker Buildx and
+   `docker login`). It builds both watchdog binaries and publishes `fakechris/lumenbox:<version>`
+   and `:latest` as linux/amd64 + linux/arm64 manifests using the `lumenbox-release`
+   docker-container builder. Cross-platform builds need binfmt/QEMU or native builder nodes.
+   `npm run build:image` remains a single-platform local developer build, not a release push.
    The app pins its pull at the package version — an app published before its tag
    exists breaks every fresh install of that version on the first start.
 2. **`npm run release:check`**, which now also refuses to bless a release whose packaged
    zips do not carry the full production dependency closure, whose dmg is missing beside a
-   zip, or whose image tag is absent from Docker Hub (skippable with
+   zip, or whose image tag is absent from Docker Hub or lacks either Linux architecture (skippable with
    `RELEASE_CHECK_SKIP_IMAGE=1`, which CI sets — the gate belongs to the publishing machine).
 3. **Build the app** (`npm run dist:mac`, …), and upload only artifacts the check above
    saw. Overriding `AGENTBOX_DIST_DIR` points the check at a candidate directory. The
@@ -186,4 +190,3 @@ first line:
   `network: NOT denied by the OS — <why>` and goes on with the in-process layer alone; the
   self-test then reports the gap instead of asserting the deny. `AGENTBOX_TEST_NO_SANDBOX=1`
   switches the OS layer off on purpose. CI (Linux) has it on.
-

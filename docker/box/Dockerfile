@@ -375,7 +375,8 @@ COPY box-healthcheck /usr/local/bin/box-healthcheck
 COPY wait-compositor /usr/local/bin/wait-compositor
 COPY vnc-probe /usr/local/bin/vnc-probe
 COPY box-keepalive /usr/local/bin/box-keepalive
-COPY xwatchdog /usr/local/bin/xwatchdog
+ARG TARGETARCH
+COPY xwatchdog-${TARGETARCH} /usr/local/bin/xwatchdog
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/start-display /usr/local/bin/desktop-processes \
       /usr/local/bin/box-chrome /usr/local/bin/box-clip \
       /usr/local/bin/box-doctor /usr/local/bin/box-init \
