@@ -239,7 +239,10 @@ How the two are kept apart, and what they share:
   did not cause. A commit compared with itself therefore costs one run and shows no difference.
 - **`promptSurface`** (`surface.ts`) is what a version sends: the system prompt and the tool list
   of one agent configuration, read off the first request of a real turn. The page prints its size
-  and digest for each side, and says so when the two are the same.
+  and digest for each side, and says so when the two are the same. It also gives the prompt's two
+  halves — before and after the cache breakpoint — and their bytes, and can read a turn nobody is
+  waiting on (`unattended`); the size ratchet (`scripts/prompt-ratchet.mjs`, `prompt-baseline.json`,
+  run by `npm run arch`) holds those numbers for four configurations so they only shrink (INV-1857).
 
 The page (`docs/evals/COMPARE-<date>-<base>-<candidate>.md`, to be committed; the record goes to
 `~/.agentbox/scorecards/compare-…json`) gives both pass rates with their intervals; the
