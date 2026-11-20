@@ -137,6 +137,11 @@ test("docs/evals/ keeps only reports of a measured run: a stand-in's page, a han
     assert.match(lintEvalReports(dir)[0], /no eval-report header/);
     writeFileSync(join(dir, "REPORT-2026-11-20.md"), page("yes"));
     assert.ok(lintEvalReports(dir).some(p => /header says eval-report: REPORT-2026-11-19, filename says REPORT-2026-11-20/.test(p)));
+    const comparison = "COMPARE-2026-11-19-0a1b2c3-4d5e6f7";
+    writeFileSync(join(dir, `${comparison}.md`), page("no — a deterministic stand-in answered").replace("REPORT-2026-11-19", comparison));
+    assert.ok(lintEvalReports(dir).some(p => p.startsWith(`evals/${comparison}.md: measured: no`)), "a comparison of two versions is held to the same rule");
+    writeFileSync(join(dir, `${comparison}.md`), page("yes").replace("REPORT-2026-11-19", comparison));
+    assert.ok(!lintEvalReports(dir).some(p => p.includes(comparison)));
     writeFileSync(join(dir, "notes.md"), "x");
     assert.ok(lintEvalReports(dir).some(p => /evals\/notes\.md: a page in docs\/evals\/ is a report/.test(p)));
   } finally { rmSync(dir, { recursive: true, force: true }); }

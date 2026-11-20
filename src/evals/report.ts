@@ -11,6 +11,7 @@
  */
 
 import { KAPPA_TO_GATE, MIN_LABELS, twoPlaces } from "./calibration.ts";
+import type { CompareRecord, Comparison, MovedTask, Side } from "./compare.ts";
 import type { EvalRun } from "./runner.ts";
 import type { GroupRow, Summary } from "./summary.ts";
 
@@ -154,10 +155,118 @@ export function renderReport(run: EvalRun, summary: Summary, options: { name: st
     for (const task of failing) {
       const bad = task.attempts.find(attempt => !attempt.pass)!;
       const finding = bad.infra !== undefined ? `harness: ${bad.infra}` : bad.graders.filter(grader => !grader.pass).map(grader => `${grader.name}${grader.detail !== undefined ? ` — ${grader.detail}` : ""}`).join("; ");
-      lines.push(`| ${task.id} | ${task.attempts.filter(attempt => attempt.pass).length}/${task.attempts.length} | ${finding.replaceAll("|", "\\|").replace(/\s+/g, " ").slice(0, 200)} |`);
+      lines.push(`| ${task.id} | ${task.attempts.filter(attempt => attempt.pass).length}/${task.attempts.length} | ${cell(finding)} |`);
     }
     lines.push("");
   }
+  return lines.join("\n");
+}
+
+const signed = (value: number, digits = 1): string => `${value > 0 ? "+" : value < 0 ? "−" : ""}${Math.abs(value).toFixed(digits)}`;
+const cell = (text: string): string => text.replaceAll("|", "\\|").replace(/\s+/g, " ").slice(0, 200);
+
+function movedTable(title: string, tasks: readonly MovedTask[], which: string): string[] {
+  if (tasks.length === 0) return [`## ${title}`, "", "None.", ""];
+  return [
+    `## ${title}`, "",
+    `| task | split | base | candidate | ${which} |`, "|---|---|---|---|---|",
+    ...tasks.map(task => `| ${task.id}${task.outright ? " **(outright)**" : ""} | ${task.split ?? "—"} | ${task.base} | ${task.candidate} | ${cell(task.finding)} |`),
+    "",
+  ];
+}
+
+/**
+ * The page of a comparison of two versions (INV-1862): the gate first, then the two sides, the
+ * difference, the tasks that moved, and what the page does not say. Same header as a report, so a
+ * stand-in's comparison is kept out of `docs/evals/` by the same check.
+ */
+export function renderComparison(record: CompareRecord, comparison: Comparison, options: { name: string }): string {
+  const { base, candidate, gate, paired, difference } = comparison;
+  const run = record.candidate.run;
+  const models = Object.entries(run.models).map(([tier, model]) => `${tier}: ${model.provider} ${model.model}`).join("; ");
+  const named = (side: Side): string => `${side.ref} (${side.sha.slice(0, 7)})`;
+  const rate = (summary: typeof base): string => `**${pct(summary.passRate?.estimate)}** (${pct(summary.passRate?.low)} – ${pct(summary.passRate?.high)})`;
+  const perPass = (summary: typeof base): string =>
+    summary.cost.tokensPerPass === undefined ? "—" : `${count(summary.cost.tokensPerPass)} tokens${summary.cost.usdPerPass !== undefined ? `, $${summary.cost.usdPerPass.toFixed(4)}` : ""}`;
+  const corpusNote = (side: Side, name: string): string =>
+    side.ownCorpus === "same" ? "" : side.ownCorpus === "none" ? ` The ${name} commit has no corpus of its own.` : ` The ${name} commit's own corpus differs from it and was not used.`;
+  const lines: string[] = [
+    `<!-- eval-report: ${options.name}`,
+    `     measured: ${record.fake ? "no — a deterministic stand-in answered; these numbers measure nothing" : "yes"}`,
+    `     split: ${run.split}`,
+    `     corpus: ${run.corpus.version}`,
+    `     base: ${named(record.base)}`,
+    `     candidate: ${named(record.candidate)}`,
+    `     models: ${models}`,
+    "-->",
+    `# Comparison ${record.at.slice(0, 10)}: ${record.base.ref} → ${record.candidate.ref}${record.fake ? " — NOT A MEASUREMENT (stand-in model)" : ""}`,
+    "",
+  ];
+  if (record.fake) {
+    lines.push(
+      "> No model was asked. A deterministic stand-in answered both versions — the gold answer where the prompt it was sent still offers it, " +
+        "or the wrong one — to exercise the comparison and this page. Nothing below describes the product.",
+      "",
+    );
+  }
+  lines.push(
+    gate.status === "RED" ? `**Gate: RED** — ${gate.reasons.join("; ")}.` : gate.status === "NOT_READ" ? `**Gate: not read** — ${gate.reasons.join("; ")}.` : "**Gate: not red.**",
+    "",
+    `Red is a fall in the pass rate whose whole 95% interval is below zero, or more than ${gate.maxBroken} task${gate.maxBroken === 1 ? "" : "s"} going from passing every attempt to passing none` +
+      `${gate.maxWorse !== undefined ? `, or more than ${gate.maxWorse} tasks getting worse` : ""}. ` +
+      "The gate reads code graders only: no judge was asked, and no judge has been checked against a person's labels, so none may gate. Nothing in CI reads this page; a person does.",
+    "",
+    "## The two versions",
+    "",
+    "| | commit | system prompt | tools | prompt and tools |",
+    "|---|---|---|---|---|",
+    ...([["base", record.base], ["candidate", record.candidate]] as const).map(([name, side]) =>
+      `| ${name}: ${side.ref} | ${side.sha.slice(0, 7)} | ${count(side.surface.systemBytes)} bytes | ${side.surface.tools}, ${count(side.surface.toolsBytes)} bytes | ${side.surface.digest} |`),
+    "",
+    record.base.surface.digest === record.candidate.surface.digest
+      ? "**The two versions send the same prompt and the same tools.** Whatever differs below comes from the product's handling of the answers, not from what the model was told."
+      : `The candidate's system prompt is ${signed(record.candidate.surface.systemBytes - record.base.surface.systemBytes, 0)} bytes ` +
+        `and its tool list ${signed(record.candidate.surface.toolsBytes - record.base.surface.toolsBytes, 0)} bytes against the base.`,
+    "",
+    `${base.tasks} tasks from the **${run.split}** split${run.split === "dev+test" ? "s" : ""} (corpus ${run.corpus.version}), ${record.k} attempts each on each side, graded by the same code. ${models}. ` +
+      `The tasks and graders are the running checkout's, for both sides.${corpusNote(record.base, "base")}${corpusNote(record.candidate, "candidate")}`,
+    `Model calls: ${record.base.run.calls.made + record.candidate.run.calls.made} made, ${record.base.run.calls.cached + record.candidate.run.calls.cached} answered from the cache. ` +
+      "A request the two versions send byte for byte alike is asked once and answered the same on both sides.",
+    "",
+    "## The numbers",
+    "",
+    "| | base | candidate | difference |",
+    "|---|---|---|---|",
+    `| Pass rate (95% interval) | ${rate(base)} | ${rate(candidate)} | ` +
+      (difference === undefined ? "— |" : `**${signed(difference.estimate * 100)} points** (${signed(difference.low * 100)} to ${signed(difference.high * 100)}), task by task |`),
+    `| pass^${record.k} — a task passes every time | ${pct(base.passHatK)} | ${pct(candidate.passHatK)} | ${paired.worse} worse, ${paired.better} better of ${paired.paired} paired |`,
+    `| McNemar | | | p = ${paired.p.toFixed(3)} — **${paired.verdict.replaceAll("_", " ")}**: ${paired.why} |`,
+    `| Cost per passed attempt | ${perPass(base)} | ${perPass(candidate)} | ` +
+      (comparison.cost.tokensPerPass === undefined ? "— |" : `${signed(comparison.cost.tokensPerPass, 0)} tokens${comparison.cost.usdPerPass !== undefined ? `, ${signed(comparison.cost.usdPerPass, 4)} $` : ""} |`),
+    `| Smallest detectable difference | | | ${pct(base.detectableDifference)} — a true change smaller than this is usually not told from noise by ${base.tasks} tasks |`,
+    "",
+    "The difference is the mean, over paired tasks, of the change in each task's own pass rate; its interval resamples tasks. " +
+      `A task is worse when every one of its ${record.k} attempts passed on the base and not on the candidate, better the other way round.` +
+      (comparison.unpaired.length > 0
+        ? ` **${comparison.unpaired.length} task(s) were not paired** because the harness failed on a side (${cell(comparison.unpaired.join(", "))}): ` +
+          "they are in each side's pass rate as failures and in no difference."
+        : ""),
+    "",
+    "| split | paired tasks | base passes every time | candidate passes every time | worse | better |",
+    "|---|---|---|---|---|---|",
+    ...comparison.bySplit.map(row => `| ${row.split} | ${row.tasks} | ${row.base} | ${row.candidate} | ${row.worse} | ${row.better} |`),
+    "",
+    "Dev is what a prompt may have been tuned against; a gain there that test does not show is the tuning.",
+    "",
+    ...movedTable("Tasks that got worse", comparison.worse, "what the graders found on the candidate"),
+    ...movedTable("Tasks that got better", comparison.better, "what the graders found on the base"),
+    "## What this does not say",
+    "",
+    "- Not red is not safe. A fall smaller than the detectable difference above passes this gate unseen; the McNemar line says INCOMPLETE and how many tasks would settle it when that is the case.",
+    "- A task that moved is not always the prompt's doing: between two runs of one version, tasks change sides by chance. The gate counts only tasks that broke outright for that reason.",
+    "- The corpus holds what the repository already stated as a right answer; what no task asks, this cannot see.",
+    "",
+  );
   return lines.join("\n");
 }
 
