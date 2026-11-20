@@ -13,7 +13,9 @@
  * - `background_job` — the extension started work that finishes later. `api.jobDone` delivers the
  *   result to the agent that started it; after a restart the harness calls `resumeTool` with
  *   `{ jobId, recovering: true }` so the extension can pick the job back up.
- * - `reminder` — delivered to the agent as a system note at or after `at`.
+ * - `reminder` — delivered to the agent as a system note at or after `at`. The record is the one a
+ *   member's own `Reminder` tool writes (reminders.ts, INV-1878), so both count towards one limit
+ *   and both show on the automations page; only a member's may name a chat to report to.
  *
  * Each is written to the pending-work ledger before the agent hears it was accepted, and settled
  * once delivered, so a restart neither loses one nor delivers it twice in silence. Anything outside
@@ -26,9 +28,7 @@ import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_SEPARATOR } from "./mcp.ts";
 import type { OpenFork, PendingWork } from "./pending-work.ts";
 import type { PendingApproval } from "./policy.ts";
-
-/** A reminder further out than this is refused: it is a plan, and plans belong in a task or a routine. */
-export const MAX_REMINDER_MS = 366 * 24 * 3_600_000;
+import { MAX_REMINDER_MS, type Reminder, setReminder } from "./reminders.ts";
 
 /** Reads effects from a tool's raw result, keeping only well-formed members of the closed set. */
 export function parseEffects(raw: unknown): { effects: ToolEffect[]; problems: string[] } {
@@ -78,6 +78,12 @@ export interface EffectsDeps {
   mcp: () => McpManager | undefined;
   /** Queues a system note durably in the conversation; returns whether it was admitted. */
   deliver: (agentId: string, text: string, conversation: string, workId?: string) => boolean;
+  /**
+   * Runs a member's turn on a reminder that names a chat and reports what it said there — the
+   * routine's report door, so nothing reaches a person by a second way. Absent, such a reminder is
+   * delivered as a note like any other.
+   */
+  report?: (reminder: Reminder & { chat: string }) => Promise<void>;
   log?: (line: string) => void;
   now?: () => Date;
 }
@@ -177,15 +183,8 @@ export class Effects {
             applied.notes.push(`[The reminder was not set: "${effect.at}" is not a time within a year.]`);
             continue;
           }
-          this.deps.pendingWork.prepare({
-            agentId: input.agentId,
-            kind: "reminder",
-            parent: input.conversation,
-            child: "reminder",
-            brief: effect.text,
-            data: { text: effect.text, at: at.toISOString(), tool: input.tool },
-          });
-          applied.notes.push(`[Reminder set for ${at.toISOString()}.]`);
+          const set = setReminder(this.deps.pendingWork, { agentId: input.agentId, conversation: input.conversation, text: effect.text, due: at, tool: input.tool, now });
+          applied.notes.push(set.ok ? `[Reminder set for ${at.toISOString()}.]` : `[The reminder was not set: ${set.reason}.]`);
           break;
         }
       }
@@ -263,6 +262,21 @@ export class Effects {
       if (Number.isNaN(at.getTime()) || at > now) continue;
       const body = String(reminder.data?.text ?? reminder.brief);
       const text = reminder.data?.verbatim === true ? body : `[Reminder you set: ${body}]`;
+      const chat = reminder.data?.chat, report = this.deps.report;
+      if (typeof chat === "string" && report !== undefined) {
+        // Closed before its turn starts, as a schedule's window is marked before its run: a restart in
+        // the middle of the turn must not start it a second time. If the turn cannot start at all, the
+        // member still gets its note, so the reminder is late to the chat rather than lost.
+        this.deps.pendingWork.commit([{ id: reminder.id, how: "done" }], now);
+        count += 1;
+        void report({ id: reminder.id, agentId: reminder.agentId, text: body, due: at.toISOString(), setAt: reminder.at, conversation: reminder.parent, chat }).catch(error => {
+          const why = error instanceof Error ? error.message : String(error);
+          this.log(`reminder ${reminder.id}: its turn for ${chat} did not run (${why}); delivered to the member as a note instead`);
+          const note = `${text} [It was to be reported to ${chat}, but that turn could not run: ${why.slice(0, 200)}]`;
+          if (!this.deps.deliver(reminder.agentId, note, reminder.parent, reminder.workId)) this.log(`reminder ${reminder.id}: the note was not admitted either`);
+        });
+        continue;
+      }
       if (!this.deps.deliver(reminder.agentId, text, reminder.parent, reminder.workId)) continue;
       this.deps.pendingWork.commit([{ id: reminder.id, how: "done" }], now);
       count += 1;

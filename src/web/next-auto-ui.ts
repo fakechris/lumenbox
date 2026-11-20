@@ -3,14 +3,15 @@
  *
  * Default: one row per automation — its name, what it does, when it next runs, on or paused.
  * Detail, one press: its recent runs and how each ended. Making one asks four things: a name, what
- * to do, who does it, and what starts it. The routes are the classic page's.
+ * to do, who does it, and what starts it. The routes are the classic page's. Under the routines,
+ * the reminders members set for themselves (next-reminder-ui.ts).
  */
 export const NEXT_AUTO_JS = `
 var auto = { creating: false, open: "", runs: null, trigger: "schedule", read: 0 };
 // minute hour day month weekday, as the scheduler reads it
 var AUTO_TIMES = [["hourly", "0 * * * *"], ["daily", "0 9 * * *"], ["weekdays", "0 9 * * 1-5"], ["monday", "0 9 * * 1"]];
 
-function reloadAuto() { settings.routines = null; render(); }
+function reloadAuto() { settings.routines = null; remind.list = null; render(); }
 
 function autoForm() {
   var form = el("section", "setting"), name = field(t("ui.next.auto.name"), ""), what = field(t("ui.next.auto.what"), "", true);
@@ -80,7 +81,7 @@ function renderAuto(view) {
     add.addEventListener("click", function () { auto.creating = true; render(); });
     view.appendChild(add);
   }
-  if (settings.routines.length === 0) { view.appendChild(el("p", "empty", t("ui.next.auto.empty"))); return; }
+  if (settings.routines.length === 0) { view.appendChild(el("p", "empty", t("ui.next.auto.empty"))); renderReminders(view); return; }
   var list = el("div", "list");
   settings.routines.forEach(function (routine) {
     var row = el("div", "row"), open = el("button", "open"), body = el("span", "body"), acts = el("span", "acts");
@@ -103,5 +104,6 @@ function renderAuto(view) {
     if (auto.open === routine.slug) list.appendChild(autoRuns(routine));
   });
   view.appendChild(list);
+  renderReminders(view);
 }
 `;

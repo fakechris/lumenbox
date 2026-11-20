@@ -5159,3 +5159,145 @@ test("a Tell on a turn the person is waiting on is not delayed; from a wake nobo
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── 2026-11-20, INV-1878: a member that said "I will look again tomorrow" had nothing to hold it to that ──
+//
+// It could write a skill file with an `@at` schedule, or hope. Now it sets a reminder. On the real
+// stack — the tool reached the way a member reaches it, the pending-work ledger on a file, the effects
+// that fire it, a turn on the bus, the room's chat door behind the quiet queue — with the clock moved
+// by hand and a new process over the same files where a restart matters.
+test("a member sets itself a reminder in a chat: it fires once at its time as the host's turn, its result waits for the conversation to be quiet, a dismissed one never fires, and a week of silence does not stop it (INV-1878)", async () => {
+  const { mock } = await import("node:test");
+  const { TurnLedger } = await import("./resume.ts");
+  const { Effects } = await import("./effects.ts");
+  const { PendingWork } = await import("./pending-work.ts");
+  const { PolicyGate } = await import("./policy.ts");
+  const { pendingReminders, REMINDER_ORIGIN, reminderPrompt } = await import("./reminders.ts");
+  const { reminderRoute } = await import("../web/reminder-routes.ts");
+  const { Scheduler, parseSchedule } = await import("./schedule.ts");
+  const { lastPersonMessage } = await import("./routine-idle.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-reminder-room-")), start = Date.now(), DAY = 1_440;
+  mock.timers.enable({ apis: ["Date"], now: start });
+  const minute = (n: number) => mock.timers.setTime(start + n * 60_000);
+  const turns = new TurnLedger(join(dir, "turns.jsonl")), ledgerPath = join(dir, "pending-work.jsonl"), pendingWork = new PendingWork(ledgerPath);
+  /** Each model call: the newest message it was shown, and the tools it was offered. */
+  const calls: { seen: string; offered: string[] }[] = [], chat: string[] = [];
+  const steps: ({ say: string } | { call: string; input: Record<string, unknown> })[] = [];
+  const policy = new PolicyGate({ path: join(dir, "policy.jsonl"), limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] }, spentSince: () => 0 });
+  let result: Awaited<ReturnType<typeof runEpisode>> | undefined;
+  try {
+    result = await runEpisode({
+      team: [{ name: "Nova" }], says: [], turns, pendingWork,
+      script: context => {
+        calls.push({ seen: JSON.stringify(context.messages.at(-1)).replaceAll("\\", ""), offered: context.offered });
+        return steps.shift() ?? { say: "Noted." };
+      },
+      drive: async context => {
+        const { bus, registry, frontId } = context;
+        const room = await quietRoom(dir, context, turns, chat);
+        let reporting: Promise<void> = Promise.resolve();
+        const reported: string[] = [];
+        /** One process's effects over the ledger file, wired as the orchestrator wires them: a note goes to the inbox, a report runs a turn and goes out by the room's door. */
+        const host = () => new Effects({
+          pendingWork: new PendingWork(ledgerPath), policy, mcp: () => undefined,
+          deliver: (agentId, text, conversation, workId) => bus.deliverSystem(agentId, text, conversation, workId) !== undefined || bus.inboxless,
+          report: due => (reporting = (async () => {
+            const messageId = `reminder_${due.id}`, conversation = conversationIdFor(due.chat);
+            reported.push(messageId);
+            bus.sendFromUser(due.agentId, reminderPrompt(due), { conversation, steerable: false, lane: "background", synthetic: true, origin: REMINDER_ORIGIN, messageId });
+            await bus.runExclusive(due.agentId, { conversation });
+            const said = replyForMessage(registry.readTranscript(due.agentId, conversation), messageId);
+            if (said !== undefined && said.trim() !== "") await room.manager().tryPushToChat(due.chat, said, { kind: "notice", about: `report from ${due.agentId}`, from: due.agentId });
+          })()),
+        });
+        let effects = host();
+        const fire = async () => { const fired = effects.deliverDue(); await reporting; await bus.idle(); return fired; };
+        const set = (input: Record<string, unknown>) => ({ call: "UseMcpTool", input: { tool: "Reminder", arguments: { action: "set", ...input } } });
+
+        // The member is asked for something tomorrow, and holds itself to it.
+        steps.push(set({ message: "Say whether the March export landed, with the row count.", due: "1d", chat: room.key }), { say: "I will tell you here tomorrow morning." });
+        await room.person("Tell us tomorrow morning whether the March export landed.");
+        assert.match(calls.at(-1)!.seen, /Reminder pw-[0-9a-f-]+ set for .* What you say then is reported to feishu:oc_ops\./, "set through the lookup pair, where the tool lives");
+        assert.equal(calls[0]!.offered.includes("Reminder"), false, "it is not one of the tools in the list");
+        assert.ok(calls[0]!.offered.includes("UseMcpTool"));
+        assert.equal(pendingReminders(pendingWork, frontId).length, 1);
+
+        minute(DAY - 1);
+        assert.equal(await fire(), 0, "a minute early");
+
+        // It comes due while the person is in the middle of something else in the same chat.
+        minute(DAY);
+        steps.push({ say: "Two things: the audit call at ten, and the March export." });
+        await room.person("Morning. What is on today?");
+        minute(DAY + 1);
+        steps.push({ say: "The March export landed at 08:40: 1,204 rows." });
+        assert.equal(await fire(), 1);
+        const turn = calls.at(-1)!;
+        assert.match(turn.seen, /\[reminder\] This turn was started by a reminder you set for yourself/, "the turn opens with the host's words");
+        assert.match(turn.seen, /Your note: Say whether the March export landed, with the row count\./);
+        assert.doesNotMatch(turn.seen, /from the host \(host:reminder\)/, "which say so themselves, so the host's label is not added a second time");
+        assert.ok(turn.offered.includes("NothingToSay"), "nobody is waiting on this turn, so silence is offered");
+        const prompt = (registry.readTranscript(frontId, room.conversation) as { role?: string; kind?: string; text?: string; host?: true; fromPerson?: true }[]).find(entry => entry.kind === undefined && entry.role === "user" && entry.text?.startsWith("[reminder]") === true)!;
+        assert.equal(prompt.host, true, "recorded as the host's");
+        assert.equal(prompt.fromPerson, undefined, "and not as something the person said");
+        assert.notEqual(bus.heard!.get(frontId, reported[0]!)?.speaker?.by, "person", "the heard record does not count it as a person writing");
+        assert.equal(chat.includes("The March export landed at 08:40: 1,204 rows."), false, "the person wrote a minute ago: the result waits");
+        minute(DAY + 3);
+        assert.equal(await room.queue().sweep(), 1);
+        assert.equal(chat.at(-1), "The March export landed at 08:40: 1,204 rows.", "and arrives once the conversation has been quiet for the window");
+
+        // A new process over the same files.
+        effects = host();
+        await room.restart();
+        assert.equal(await fire(), 0, "it does not fire a second time");
+        assert.equal(await room.queue().sweep(), 0);
+        assert.equal(chat.filter(text => text.startsWith("The March export landed")).length, 1);
+        assert.equal(reported.length, 1);
+
+        // Two more, with no chat: one a person dismisses on the page, one left to fire.
+        minute(DAY + 10);
+        steps.push(set({ message: "Look at the April export.", due: "30m" }), set({ message: "Check the supplier replied.", due: "30m" }), { say: "Both noted." });
+        await room.person("Keep an eye on April and the supplier.");
+        const waiting = pendingReminders(new PendingWork(ledgerPath), frontId);
+        assert.deepEqual(waiting.map(reminder => reminder.text), ["Look at the April export.", "Check the supplier replied."]);
+        const page = { readJson: async () => ({ id: waiting[0]!.id }), refused: () => false, agentName: () => "Nova", mayReadAgent: () => true };
+        assert.equal((await reminderRoute("POST /api/reminders/dismiss", new PendingWork(ledgerPath), page))!.status, 200);
+        minute(DAY + 41);
+        steps.push({ say: "The supplier replied on the 19th; nothing is owed." });
+        const before = calls.length;
+        assert.equal(await fire(), 1, "only the one nobody dismissed");
+        assert.equal(calls.length, before + 1, "one turn");
+        assert.match(calls.at(-1)!.seen, /Reminder you set: Check the supplier replied\./, "the member is woken with its note, in the conversation it set it in");
+        assert.doesNotMatch(calls.map(call => call.seen).join("\n"), /Reminder you set: Look at the April export/);
+
+        // Ten days in which nobody writes. A routine reporting to this room stops; the reminder is one message somebody was promised.
+        steps.push(set({ message: "Say whether the audit closed.", due: "10d", chat: room.key }), { say: "I will report on the audit in ten days." });
+        await room.person("Tell us in ten days whether the audit closed.");
+        const daily = parseSchedule("@every 1d");
+        assert.ok("schedule" in daily);
+        const ran: string[] = [];
+        const scheduler = new Scheduler({
+          due: async () => [{ slug: "morning-brief", name: "morning-brief", path: "/home/box/work/skills/morning-brief/SKILL.md", schedule: daily.schedule, deliver: room.key }],
+          run: async (_agent, _prompt, _deliver, slug) => { ran.push(slug ?? "?"); },
+          defaultAgent: () => frontId,
+          idle: { lastPersonAt: () => lastPersonMessage(bus.heard, [frontId]), days: () => 7 },
+          path: null,
+        });
+        minute(11 * DAY + 45);
+        await scheduler.tick();
+        assert.deepEqual(ran, [], "the routine does not run for nobody");
+        assert.equal(scheduler.holds.holdOf("morning-brief")?.code, "idle_owner");
+        steps.push({ say: "The audit closed on the 28th with no findings." });
+        assert.equal(await fire(), 1, "the reminder does");
+        assert.equal(chat.at(-1), "The audit closed on the 28th with no findings.", "and with nobody mid-conversation it goes at once");
+        room.manager().stop();
+      },
+    });
+    assert.deepEqual(result.score.refusals, []);
+    assert.equal(steps.length, 0, "every scripted step ran");
+  } finally {
+    mock.timers.reset();
+    result?.cleanup();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

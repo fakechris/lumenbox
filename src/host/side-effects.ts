@@ -114,7 +114,7 @@ const DECLARED: Record<string, SideEffect> = {
   HandOverDesktop: { tier: "self" },
   ShowUI: { tier: "self" },
   // One thing said to the person this turn is for, where they already are (INV-1853): no evidence that anything was sent anywhere else.
-  Tell: { tier: "self" },
+  Tell: { tier: "self" }, Reminder: { tier: "self" }, // a note to itself for later (INV-1878): what its turn then sends is gated as that turn's
   // Staged only; nothing is shared until the person publishes it from the card.
   PackTemplate: { tier: "self" },
   // Deletes the person's own copies, at their request. Its gate is its own two-turn protocol — a plan,
