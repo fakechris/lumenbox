@@ -73,6 +73,8 @@ export const SERVER_ERRORS = {
   "err.box-id-invalid": ["boxId 必须是一个 box 的 id。", "boxId must be a box id."],
   "err.box-unknown": ["没有这台 box。", "No such box."],
   "err.box-not-yours": ["你无权使用这台 box。", "This box is not available to this caller."],
+  "err.verification-unknown": ["没有这份验证报告。", "There is no such verification report."],
+  "err.verification-no-recording": ["这份验证报告没有录像。", "This verification report has no recording."],
   "err.box-unavailable": ["box 暂时不可用。", "The box is not available."],
   "err.box-not-running": ["box 没有在运行。", "The box is not running."],
   "err.no-box": ["没有接入的 box。", "No box is connected."],
