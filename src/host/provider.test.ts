@@ -9,7 +9,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeProvider, effectiveProviderFor, effortConfig, effortForKind, modelConfigured, providerConfigured, providerNames, resolveProvider, type ProviderProfile } from "./provider.ts";
+import { describeProvider, effectiveProviderFor, effortConfig, effortForKind, providerConfigured, providerNames, resolveProvider, type ProviderProfile } from "./provider.ts";
+import { modelConfigured } from "./model-readiness.ts";
 import { buildTools } from "./tools.ts";
 import { buildSystemPrompt } from "./prompt.ts";
 import { AgentRegistry } from "../agents/registry.ts";

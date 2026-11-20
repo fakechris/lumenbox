@@ -7,6 +7,7 @@ import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 test("unconfigured send keeps the draft and shows the Model settings entry point", async () => {
   const nodes = new Map<string, any>();
   const node = () => ({ children: [] as any[], hidden: true, value: "Hello Ada", style: {},
+    setAttribute() {}, prepend(child: unknown) { this.children.unshift(child); },
     replaceChildren() { this.children = []; }, appendChild(child: unknown) { this.children.push(child); },
     addEventListener(_type: string, action: () => void) { this.click = action; }, click: () => {} });
   let configured = false, posts = 0, opened = "";
@@ -20,7 +21,7 @@ test("unconfigured send keeps the draft and shows the Model settings entry point
   vm.runInContext(NEXT_CHAT_JS + NEXT_COMPOSER_JS + '; chat.agentId = "ada";', context);
   await vm.runInContext("sendMessage()", context);
   assert.equal(posts, 0); assert.equal(nodes.get("composer-text").value, "Hello Ada");
-  const notice = nodes.get("composer-model");
+  const notice = nodes.get("composer").children[0];
   assert.equal(notice.hidden, false); assert.equal(notice.children[0].text, "ui.next.composer.modelMissing");
   notice.children[1].click(); assert.equal(opened, "model");
   configured = true;

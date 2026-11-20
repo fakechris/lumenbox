@@ -417,7 +417,6 @@ export const NEXT_HTML = `<!doctype html>
   </div>
   <section class="view" id="view"></section>
   <div class="composer" id="composer" hidden>
-    <div id="composer-model" role="status" hidden></div>
     <div class="picker" id="composer-menu" hidden></div>
     <div class="reply-to" id="reply-to" hidden></div>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>

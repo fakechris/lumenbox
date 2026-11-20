@@ -19,7 +19,6 @@
 
 import { envNumber } from "../config.ts";
 import Anthropic from "@anthropic-ai/sdk";
-import { loadConfig as loadAnthropicConfig } from "@anthropic-ai/sdk/core/credentials";
 import { OpenAIWireClient } from "./openai-wire.ts";
 import { accountOf, gateClient } from "./provider-rest.ts";
 import { startRemainsPolling } from "./quota-window.ts";
@@ -627,26 +626,6 @@ export function createClient(profile: ProviderProfile): Anthropic {
 /** Whether a preset has a key to call it with (INV-1578): a fallback without one is no fallback. */
 export function hasCredential(profile: ProviderProfile): boolean {
   return Boolean(process.env[profile.keyEnv]) || (profile.keyEnv === "ANTHROPIC_API_KEY" && Boolean(process.env.ANTHROPIC_AUTH_TOKEN));
-}
-
-/** Refuse only a known absence, without making a model request or refreshing a token. */
-export async function modelConfigured(
-  profile: ProviderProfile,
-  credentialPresent = hasCredential(profile),
-  defaultConfig: () => Promise<unknown> = loadAnthropicConfig,
-): Promise<boolean> {
-  if (credentialPresent) return true;
-  if (profile.baseUrl) {
-    try {
-      if (["localhost", "127.0.0.1", "[::1]"].includes(new URL(profile.baseUrl).hostname)) return true;
-    } catch { return true; }
-  }
-  if (profile.keyEnv !== "ANTHROPIC_API_KEY") return false;
-  try {
-    return (await defaultConfig()) !== null;
-  } catch {
-    return true;
-  }
 }
 
 /** The account a profile's client speaks for (INV-1577), for asking whether it rests. */

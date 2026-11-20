@@ -82,7 +82,7 @@ import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
-import { modelReady } from "./model-readiness.ts";
+import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
@@ -6655,11 +6655,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, { id: agentId, name: updated.profile.name });
           return;
         }
-        if (route === "GET /api/model-readiness") {
-          const id = url.searchParams.get("agent") ?? "";
-          if (refused(id)) return;
-          send(res, 200, { configured: await modelReady(registry, orchestrator.provider, id) }); return;
-        }
+        if (await modelReadinessRoute(route, url, registry, orchestrator.provider, refused, body => send(res, 200, body))) return;
         if (route === "POST /api/prompt") {
           const body = await readJson(req);
           const agentId = String(body.agent ?? "");

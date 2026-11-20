@@ -5,7 +5,7 @@
  */
 export const NEXT_COMPOSER_JS = `
 var composer = { skills: null, rows: [], at: 0, kind: "" };
-var modelReadiness = { agent: "", configured: null, request: 0 };
+var modelReadiness = { agent: "", configured: null, request: 0, notice: null };
 
 function refreshModelReadiness() {
   var id = chat.agentId, request = ++modelReadiness.request;
@@ -18,7 +18,12 @@ function refreshModelReadiness() {
 }
 
 function renderModelNotice() {
-  var notice = $("composer-model");
+  var notice = modelReadiness.notice;
+  if (!notice) {
+    notice = modelReadiness.notice = el("div");
+    notice.setAttribute("role", "status");
+    $("composer").prepend(notice);
+  }
   if (modelReadiness.agent !== chat.agentId) refreshModelReadiness();
   notice.replaceChildren(); notice.hidden = modelReadiness.configured !== false;
   if (notice.hidden) return;
@@ -31,6 +36,21 @@ function renderModelNotice() {
 
 function composerCanSend() {
   return refreshModelReadiness();
+}
+
+async function sendMessage() {
+  var input = $("composer-text"), text = input.value.trim(), id = chat.agentId;
+  if (!text || !id) return;
+  var to = addressed(text);
+  if (to && to.text) { input.value = to.text; openChat(to.agent.id); sendMessage(); return; }
+  if (!await composerCanSend() || chat.agentId !== id || input.value.trim() !== text) return;
+  // With a card on show the reply is that card's (next-dock-ui.ts); detached, it is an ordinary message, this once.
+  if (need.detached) need.detached = ""; else if (sendReply(text)) return;
+  input.value = ""; input.style.height = "";
+  chat.entries = chat.entries.concat([{ kind: "text", role: "user", text: text }]);
+  chat.live = { text: "", doing: "" }; chat.jump = true;
+  render();
+  postJson("/api/prompt", { agent: id, conversation: chat.conversation, text: text }).catch(function (error) { chat.live = null; failed(error); loadThread(); });
 }
 
 /** What is being asked for at the caret: a skill, a colleague, or nothing. */
