@@ -60,6 +60,8 @@ export function speakerOf(message: InboundMessage, isAgent: (id: string) => bool
 export class HeardRecord {
   private readonly cache = new Map<string, Map<string, HeardRow>>();
   private readonly saidCache = new Map<string, Map<string, SaidRow[]>>();
+  /** When a person last spoke to each agent, by the rows read and written here. */
+  private readonly lastPersonAt = new Map<string, string>();
 
   /**
    * What the agent said to the person, written where the turn files it — the same place the chat reply is read
@@ -106,6 +108,7 @@ export class HeardRecord {
         const row: HeardRow = { id: message.id, at: message.receivedAt, conversation, speaker, asked, ...(root !== undefined ? { root } : {}) };
         appendLine(this.pathFor(agentId), JSON.stringify(row));
         rows.set(row.id, row);
+        this.spoke(agentId, row);
       }
     } catch (error) {
       this.onError(`heard record: ${messages.length} message(s) to ${agentId} were not recorded (${error instanceof Error ? error.message : String(error)})`);
@@ -115,6 +118,22 @@ export class HeardRecord {
   /** What the host knew about one message, or undefined for a message from before this record. */
   get(agentId: string, id: string): HeardRow | undefined {
     return this.rows(agentId).get(id);
+  }
+
+  /**
+   * When a person last spoke to this agent, or undefined when this record has no message of theirs
+   * (INV-741). The speaker is the one the host wrote down when the turn took the message, so a
+   * routine's prompt, a teammate, a webhook and a host notice are none of them this.
+   */
+  lastPerson(agentId: string): string | undefined {
+    this.rows(agentId);
+    return this.lastPersonAt.get(agentId);
+  }
+
+  private spoke(agentId: string, row: HeardRow): void {
+    if (row.speaker?.by !== "person" || typeof row.at !== "string") return;
+    const last = this.lastPersonAt.get(agentId);
+    if (last === undefined || row.at > last) this.lastPersonAt.set(agentId, row.at);
   }
 
   private rows(agentId: string): Map<string, HeardRow> {
@@ -129,7 +148,7 @@ export class HeardRecord {
         if (row.said === true) {
           const turns = this.saidCache.get(agentId) ?? new Map<string, SaidRow[]>(); this.saidCache.set(agentId, turns);
           const said = row as unknown as SaidRow; turns.set(said.turnId, [...(turns.get(said.turnId) ?? []), said]);
-        } else rows.set(row.id, row);
+        } else { rows.set(row.id, row); this.spoke(agentId, row); }
       } catch { /* a torn last line is the crash it records */ }
     }
     this.cache.set(agentId, rows);

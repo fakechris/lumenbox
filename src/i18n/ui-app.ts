@@ -389,6 +389,7 @@ export const UI_APP: Record<string, readonly [zh: string, en: string]> = {
   "ui.app.paused-2": ["已暂停", "paused"],
   "ui.app.paused-after": ["：已暂停，已连续", ": paused after"],
   "ui.app.paused-by": ["暂停人：", "paused by"],
+  "ui.app.paused-idle": ["有一段时间没有人发消息了。有人再发消息时会自动恢复。", "nobody has sent a message for a while. It starts again by itself when someone writes."],
   "ui.app.pdf-open-it-in-a": ["PDF — 在标签页中打开，或保存。", "PDF — open it in a tab, or save it."],
   "ui.app.people": ["人 /", "people /"],
   "ui.app.permanently-delete-this-personal-box": ["永久删除这个个人 box 及其保存的数据？请先移除其中的 agent。", "Permanently delete this personal box and its saved data? Remove its agents first."],

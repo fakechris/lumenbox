@@ -155,20 +155,39 @@ function planCard() {
 
 function clip(text, limit) { text = String(text || "").replace(/\\s+/g, " "); return text.length > limit ? text.slice(0, limit) + "…" : text; }
 
+/** A run of steps by how long it took, from what was drawn before it to what came after; "" when the entries carry no times. */
+function workedFor(from, to) {
+  var ms = Date.parse(to) - Date.parse(from);
+  if (!(ms >= 0)) return "";
+  if (ms < 60000) return t("ui.next.chat.workedBrief");
+  var minutes = Math.round(ms / 60000);
+  return minutes >= 60 ? t("ui.next.chat.workedHours", { n: Math.round(minutes / 6) / 10 }) : t("ui.next.chat.worked", { n: minutes });
+}
+
+/** What teammates said, by who said it and how much: the words themselves are one click away. */
+function withMembers(messages) {
+  var who = [];
+  messages.forEach(function (message) { if (who.indexOf(message.from) < 0) who.push(message.from); });
+  return t("ui.next.chat.with", { who: who.join(t("ui.next.chat.sep")), n: messages.length });
+}
+
 /**
- * Entries drawn as a person reads them: adjacent steps become one fold, the host's notes are left out. between(entry) gives
- * what goes before an entry in time (the agent's topics, in its own conversation); what it gives is drawn after the steps so far.
+ * Entries drawn as a person reads them: adjacent steps become one fold saying how long they took (INV-1924), the host's
+ * notes are left out. between(entry) gives what goes before an entry in time (the agent's topics, in its own conversation); what it gives is drawn after the steps so far.
  */
 function drawEntries(target, entries, between, conversation) {
-  var steps = [], lastAsk = null, drawn = {};
-  function flush() {
+  var steps = [], lastAsk = null, drawn = {}, since = "", lastAt = "";
+  function flush(until) {
     if (steps.length === 0) return;
-    target.appendChild(fold(t("ui.next.chat.steps", { n: steps.length }), steps.map(function (tool) { return { head: (tool.phrase && tool.phrase["{{@locale}}"]) || tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
+    var summary = workedFor(since, until || lastAt) || t("ui.next.chat.steps", { n: steps.length });
+    target.appendChild(fold(summary, steps.map(function (tool) { return { head: (tool.phrase && tool.phrase["{{@locale}}"]) || tool.name, text: clip(tool.detail, 160), bad: tool.isError }; })));
     steps = [];
+    since = until || lastAt; // the next run starts where this one ended, not at what was said before it
   }
   entries.forEach(function (entry, index) {
     var before = between ? between(entry) : [];
     if (before.length) { flush(); before.forEach(function (node) { target.appendChild(node); }); }
+    if (entry.at) lastAt = entry.at;
     if (entry.kind === "tools") {
       (entry.tools || []).forEach(function (tool) { if (tool.question && tool.result === undefined) lastAsk = tool; });
       (entry.tools || []).forEach(function (tool) {
@@ -182,9 +201,10 @@ function drawEntries(target, entries, between, conversation) {
     }
     if (entry.kind === "text" && entry.role === "user") lastAsk = null; // answered by what was said next
     if (entry.kind === "text" && entry.aside) return; // commentary beside steps: the fold's, not the thread's
-    flush();
+    flush(entry.at);
+    since = entry.at || ""; // after an untimed entry nothing can be timed: the fold says how many steps instead
     if (entry.kind === "text") { var said = bubble(entry); said.dataset.entry = index; target.appendChild(said); }
-    else if (entry.kind === "peer") target.appendChild(fold(t("ui.next.chat.team", { n: (entry.messages || []).length }), (entry.messages || []).map(function (message) { return { head: message.from, text: clip(message.text, 300) }; })));
+    else if (entry.kind === "peer") target.appendChild(fold(withMembers(entry.messages || []), (entry.messages || []).map(function (message) { return { head: message.from, text: message.text }; })));
     else if (entry.kind === "sent") target.appendChild(sentRow(entry));
     else if (entry.kind === "background") target.appendChild(backgroundRow(entry, conversation));
     else if (entry.kind === "status") target.appendChild(statusRow(entry));

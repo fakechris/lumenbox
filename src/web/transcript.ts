@@ -91,6 +91,12 @@ export function questionOf(input: unknown): { question: string; options?: string
 
 
 /** The entry's own time, when the transcript kept one. */
+/** When a teammate's messages reached the agent, so the work they started is timed from then (INV-1924). */
+function heardAt(raw: unknown): { at?: string } {
+  const at = stamp(raw).at;
+  return at ? { at } : {};
+}
+
 function stamp(raw: unknown): { at?: string; turnId?: string; executionId?: string; textThrough?: number; causedBy?: string[] } {
   const entry = raw as { at?: unknown; turnId?: unknown; executionId?: unknown; textThrough?: unknown; causedBy?: unknown };
   return { ...(Array.isArray(entry.causedBy) ? { causedBy: entry.causedBy.filter((id): id is string => typeof id === "string") } : {}),
@@ -125,7 +131,7 @@ export type DisplayEntry = (
       turnId?: string; executionId?: string; textThrough?: number; causedBy?: string[];
     }
   /** A turn a teammate started: the messages, without the scaffolding around them. */
-  | { kind: "peer"; messages: WakeMessage[] }
+  | { kind: "peer"; messages: WakeMessage[]; at?: string }
   /**
    * A turn nobody typed: a webhook fired, a timer came round, the process restarted.
    *
@@ -135,7 +141,7 @@ export type DisplayEntry = (
    * filled bubble (docs/46), which is the usual way a display bug is finally seen.
    */
   | { kind: "trigger"; provenance?: "host" | "unknown"; label: string; text: string; at?: string; /** On the line that leads a shortened thread: how many entries came before it (INV-1624). */ skipped?: number }
-  | { kind: "tools"; tools: DisplayTool[] }
+  | { kind: "tools"; tools: DisplayTool[]; at?: string }
   /** Something the host wrote in the agent's place when a turn ended early: a state of the turn, not something the agent said. */
   | { kind: "status"; what: "stopped" | "budget"; text: string; at?: string }
   /** Turns nobody asked for in this conversation, folded to a count (request-thread.ts). `first`/`last` index the unfolded entries. */
@@ -272,7 +278,7 @@ export function toDisplayEntries(
         ...(verdictOf(String(block.id ?? "")) !== undefined ? { gate: verdictOf(String(block.id ?? ""))! } : {}),
       }));
       if (tools.length > 0) {
-        const entryWithTools = { kind: "tools" as const, tools };
+        const entryWithTools = { kind: "tools" as const, tools, ...heardAt(raw) };
         push(entryWithTools);
         awaiting = {
           entry: display.at(-1) as typeof entryWithTools,
@@ -336,7 +342,8 @@ export function toDisplayEntries(
         push({ kind: "text", role: "user", text, ...(door !== undefined ? { source: door } : {}), ...stamp(raw) });
       } else if (by("teammate")) {
         background = !heard.some(row => row.asked);
-        push({ kind: "peer", messages: parseWakePrompt(text, knownNames) ?? heard.flatMap(row => row.speaker.by === "teammate" ? [{ from: row.speaker.from, priority: false, text }] : []) });
+        const messages = parseWakePrompt(text, knownNames) ?? heard.flatMap(row => row.speaker.by === "teammate" ? [{ from: row.speaker.from, priority: false, text }] : []);
+        push({ kind: "peer", messages, ...heardAt(raw) });
       } else {
         // A routine a person set opens a request; the host's own notes belong to one only when it stood behind them.
         background = by("routine") ? false : !heard.some(row => row.asked);
@@ -351,7 +358,7 @@ export function toDisplayEntries(
       // names them (model-text.ts), so a notice recorded before the flag is not shown as typed.
       const host = (raw as { host?: boolean }).host === true || entryChannel(raw as HistoryEntry) === "host", person = (raw as { fromPerson?: boolean }).fromPerson === true && !host;
       const peers = person ? undefined : parseWakePrompt(text, knownNames);
-      if (peers) { owedOpening = false; background = !peers.some(message => asked.has(message.from)); push({ kind: "peer", messages: peers }); continue; }
+      if (peers) { owedOpening = false; background = !peers.some(message => asked.has(message.from)); push({ kind: "peer", messages: peers, ...heardAt(raw) }); continue; }
       const trigger = host ? "System context" : triggerOf(text, person);
       if (trigger !== undefined) {
         // A teammate's message whose sender cannot be read (it left the roster) cannot be tied to a request either.

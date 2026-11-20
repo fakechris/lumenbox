@@ -53,7 +53,7 @@ function autoRuns(routine) {
     getJson("/api/schedules/runs?slug=" + encodeURIComponent(routine.slug) + "&limit=10").then(function (got) { if (auto.open === routine.slug) { auto.runs = got; render(); } }, failed);
     return box;
   }
-  if (auto.runs.hold) box.appendChild(el("p", "why", t("ui.next.auto.held", { reason: auto.runs.hold.reason || "" })));
+  if (auto.runs.hold) box.appendChild(el("p", "why", auto.runs.hold.code === "idle_owner" ? t("ui.next.auto.heldIdle") : t("ui.next.auto.held", { reason: auto.runs.hold.reason || "" })));
   if (!(auto.runs.runs || []).length) box.appendChild(el("p", "why", t("ui.next.auto.noRuns")));
   (auto.runs.runs || []).forEach(function (run) {
     var line = el("div", "fact"), known = MSG["ui.next.auto.outcome." + run.outcome];

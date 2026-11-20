@@ -4,7 +4,7 @@
      status: current
      covers: routine
      audience: user
-     updated: 2026-11-06
+     updated: 2026-11-19
 -->
 # Automations
 
@@ -63,6 +63,12 @@ A webhook routine is started with an HTTP POST to its URL, with
   failure as the reason, until someone presses *Turn on*.
 - A routine whose secret or connector is missing does not start: the run is skipped and the
   routine is held until it is turned on again.
+- When nobody has sent the box a message for 7 days, a routine that comes due does not run. It
+  is paused, and the chat it reports to is told once. It starts again by itself when someone
+  writes to an agent in that box, in the app or in any chat; *Turn on* also restarts it, for
+  another 7 days. A routine you paused yourself stays paused. Write `when_idle: run` in a
+  routine's file to keep it running regardless — a weekly report, say.
+  `AGENTBOX_ROUTINE_IDLE_DAYS` changes the 7; 0 never pauses.
 - A routine with no mode written runs: it is `auto`, shown as "auto (no mode set)".
 
 ## Next
