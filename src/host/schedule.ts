@@ -790,7 +790,7 @@ export class Scheduler {
    * (docs/13). Until then this errs towards refusing work rather than running somebody
    * else's.
    */
-  runnerDecision(skill: { slug: string; runAs?: string; boxId?: string }, display: (id: string) => string = id => id): { agent?: string; reason?: string } {
+  runnerDecision(skill: { slug: string; runAs?: string; boxId?: string }, display: (id: string) => string = id => id): { agent?: string; reason?: string; seen?: string } {
     const fallback = this.deps.defaultAgent(skill.boxId);
     if (skill.runAs === undefined) return fallback === undefined ? { reason: "No default agent is available to run this automation." } : { agent: fallback };
     const named = this.deps.resolveAgent?.(skill.runAs);
@@ -805,13 +805,13 @@ export class Scheduler {
         ? "the host has no record of who wrote it"
         : `the host saw ${writer.agentName} write it`;
     const options = [...new Set([fallback === undefined ? undefined : display(fallback), writer?.agentName].filter(value => value !== undefined))];
-    return { reason: `${seen}; a routine runs as this installation's default agent or as the agent that wrote it, ` +
+    return { seen, reason: `${skill.runAs} can't run this automation: a routine runs as this installation's default agent or as the agent that wrote it, ` +
       `because naming another agent would borrow its permissions. ${options.length ? `Choose ${options.join(" or ")}.` : "No allowed agent is available."}` };
   }
 
   private runnerFor(skill: { slug: string; name: string; runAs?: string; boxId?: string }): string | undefined {
     const decision = this.runnerDecision(skill);
-    if (decision.reason) this.log(`${skill.name}: refuses to run as "${skill.runAs}" — ${decision.reason}`);
+    if (decision.reason) this.log(`${skill.name}: refuses to run as "${skill.runAs}" — ${decision.seen ? `${decision.seen}; ` : ""}${decision.reason}`);
     return decision.agent;
   }
 

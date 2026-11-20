@@ -39,24 +39,23 @@ test("automation saves refuse borrowed identities before writing, for timers and
       onReady: url => { base = url; },
     });
     const headers = { authorization: "Bearer fixture", "content-type": "application/json" };
-    const save = (method: string, body: unknown) => fetch(base + "/api/automations", { method, headers, body: JSON.stringify(body) });
-    assert.equal((await save("POST", {})).status, 400);
-    assert.equal((await save("POST", { name: "Empty", body: "" })).status, 400);
-    assert.equal((await save("PUT", { name: "Missing", body: "Report", slug: "../escape" })).status, 400);
+    const save = (body: unknown) => fetch(base + "/api/automations", { method: "POST", headers, body: JSON.stringify(body) });
+    assert.equal((await save({})).status, 400);
+    assert.equal((await save({ name: "Empty", body: "" })).status, 400);
     for (const triggerType of ["schedule", "webhook"]) {
       const body = { name: `Routine ${triggerType}`, body: "Report status", triggerType, schedule: "0 * * * *" };
-      for (const method of ["POST", "PUT"]) {
-        const skillFiles = () => [...files].filter(([path]) => path.endsWith("/SKILL.md"));
-        const before = skillFiles();
-        const denied = await save(method, { ...body, slug: `routine-${triggerType}`, agent: "Quinn" });
-        assert.equal(denied.status, 400);
-        const said = (await denied.json()) as { error: string };
-        assert.match(said.error, /Quinn/); assert.match(said.error, /borrow its permissions/); assert.match(said.error, /Choose Ada/);
-        assert.deepEqual(skillFiles(), before, "a refused save writes no routine");
-      }
-      assert.equal((await save("POST", { ...body, agent: "Ada" })).status, 200);
-      assert.equal((await save("PUT", { ...body, slug: `routine-${triggerType}` })).status, 200, "omitted means default on edit too");
-      assert.equal((await save("POST", { ...body, name: `Default ${triggerType}` })).status, 200);
+      const skillFiles = () => [...files].filter(([path]) => path.endsWith("/SKILL.md"));
+      const before = skillFiles();
+      const denied = await save({ ...body, agent: "Quinn" });
+      assert.equal(denied.status, 400);
+      const said = (await denied.json()) as { error: string };
+      assert.match(said.error, /^Quinn can't run this automation:/);
+      assert.match(said.error, /borrow its permissions/); assert.match(said.error, /Choose Ada/);
+      assert.doesNotMatch(said.error, /who wrote it/);
+      assert.deepEqual(skillFiles(), before, "a refused save writes no routine");
+      assert.equal((await save({ ...body, agent: "Ada" })).status, 200);
+      assert.equal((await save({ ...body, agent: "Ada" })).status, 409, "creation cannot overwrite an existing skill");
+      assert.equal((await save({ ...body, name: `Default ${triggerType}` })).status, 200);
     }
     const choices = await (await fetch(base + "/api/schedules", { headers })).json() as { runnerAgents: string[] };
     assert.deepEqual(choices.runnerAgents, ["Ada"], "the new-routine picker offers only a usable identity");

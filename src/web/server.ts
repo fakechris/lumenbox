@@ -3977,7 +3977,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        if (route === "POST /api/automations" || route === "PUT /api/automations") {
+        if (route === "POST /api/automations") {
           if (refused()) return;
           const body = await readJson(req);
           const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -3990,16 +3990,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, apiError("routine-needs-body"));
             return;
           }
-          const editing = req.method === "PUT", slug = editing ? String(body.slug ?? "") : slugify(name);
-          if (!/^[A-Za-z0-9_-]+$/.test(slug)) { send(res, 400, apiError("skill-slug-invalid")); return; }
-          const runAs = typeof body.agent === "string" && body.agent.trim() !== "" ? body.agent.trim() : undefined;
-          const decision = orchestrator.scheduler.runnerDecision({ slug: editing ? slug : "", boxId: registry.defaultBox().id, runAs }, id => registry.tryGet(id)?.profile.name ?? id);
-          if (decision.reason) { const reason = `${runAs ?? name}: ${decision.reason}`; send(res, 400, { error: reason }); return; }
+          
+          const slug = slugify(name), runAs = typeof body.agent === "string" && body.agent.trim() !== "" ? body.agent.trim() : undefined;
+          const decision = orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs }, id => registry.tryGet(id)?.profile.name ?? id);
+          if (decision.reason) { send(res, 400, { error: decision.reason }); return; }
           const box = orchestrator.boxClient();
           if (box === undefined) {
             send(res, 503, apiError("no-box"));
             return;
           }
+
           const triggerType = typeof body.triggerType === "string" ? body.triggerType : "";
           let triggerLines = "";
           if (triggerType === "schedule") {
@@ -4022,8 +4022,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, apiError("routine-trigger-invalid"));
             return;
           }
+          
           const firstLine = (instruction.split("\n")[0] ?? "").trim().slice(0, 200).replace(/"/g, '\\"');
           let frontmatter = `---\nname: "${name.replace(/"/g, '\\"')}"\ndescription: "${firstLine}"\n${triggerLines}\n`;
+          
           if (typeof body.agent === "string" && body.agent.trim() !== "") {
             frontmatter += `agent: "${body.agent.trim().replace(/"/g, '\\"')}"\n`;
           }
@@ -4034,12 +4036,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             frontmatter += `timezone: "${body.timezone.trim().replace(/"/g, '\\"')}"\n`;
           }
           frontmatter += `paused: true\nauthored_by: web\n---\n`;
+          
           const fileContent = frontmatter + instruction + "\n";
           const dirPath = `${skillsDir(registry.defaultBox())}/${slug}`; // orchestrator.boxClient() is the installation's own box
+          
           try {
+            // Refuse to overwrite an existing skill — renaming or editing is a different action.
             const existing = await box.readFile(`${dirPath}/${SKILL_FILENAME}`).catch(() => undefined);
-            if (editing && existing === undefined) { send(res, 404, apiError("skill-read-failed", { path: dirPath, detail: "not found" })); return; }
-            if (!editing && existing !== undefined) {
+            if (existing !== undefined) {
               send(res, 409, apiError("skill-exists", { slug }));
               return;
             }
