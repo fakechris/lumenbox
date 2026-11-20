@@ -15,7 +15,7 @@
 import type { BoxStatus } from "./docker.ts";
 import { join } from "node:path";
 import { agentboxHome } from "../config.ts";
-import { BoxManager, docker } from "./docker.ts";
+import { BoxManager, docker, RecreateRefusedError } from "./docker.ts";
 
 export interface ImageState {
   /** The image reference the box was created from, e.g. fakechris/lumenbox:0.3.7; absent with no box. */
@@ -118,6 +118,7 @@ export async function applyUpdate(deps: UpdateDeps, options: UpdateOptions = {})
     status = await deps.recreate(undefined, say);
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
+    if (error instanceof RecreateRefusedError) return { outcome: "failed", detail: `${why} The existing box was left untouched.` };
     return goBack(deps, before, `the new box could not be created: ${why}`);
   }
   say("checking the box that came back");
