@@ -805,16 +805,24 @@ otherwise only fail against the live API — that a `tool_use` block reaches
 dispatch, that a screenshot returns as an image block, and that `SendToAgent`
 really wakes the other agent.
 
-### 2. Smoke test — needs the box, still no API key
+### 2. Smoke test — disposable box, still no API key
 
 ```bash
 npm run build
 npm run agentbox -- box build     # first time only, ~10 min
-npm run agentbox -- box up
 npm run smoke
 ```
 
-16 checks against the running container, covering everything unit tests cannot
+The suite creates a `lumenbox-eval-smoke-<id>` container and a temporary
+`AGENTBOX_HOME`, then removes the container, volumes, network and scratch home.
+It does not use the installation's registry or token. `--box use <name>`,
+`AGENTBOX_CONTAINER`, or `AGENTBOX_BOXD_URL` can select an existing test box
+(supply its `AGENTBOX_TOKEN`); that box is not removed. The default container
+`agentbox-box` requires `npm run smoke -- --live-box`, which reads the real owner
+token and runs destructive checks on the live desktop. Never use it while agents
+are working. Registry writes still go to the temporary home.
+
+Checks cover everything unit tests cannot
 reach: that screenshots decode as valid WebP with the patched size fields, that a
 coordinate sent to the model's space lands where `xdotool getmouselocation` says
 it should, that a failed action still returns a screenshot, that an injected
