@@ -233,6 +233,7 @@ ${renderSettingsTabs()}
     </div>
     <div class="field" data-tier="personal" id="setmcptokenswrap" style="display:none" data-settab="mine">
       <label>{{ui.settings.your-mcp-tokens}}</label>
+      <div class="fieldnote" id="setmcpsetup" role="status"></div>
       <div id="setmcptokens" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:6px;margin-top:6px">
         <input id="setmcplabel" placeholder="{{ui.settings.what-it-is-for-e}}" style="flex:1">

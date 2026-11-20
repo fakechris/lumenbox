@@ -6,6 +6,10 @@
  */
 
 export const UI_SECTIONS: Record<string, readonly [zh: string, en: string]> = {
+  "ui.mcp.owner-needed": ["个人 token 必须属于某个人。", "A personal token needs an owner."],
+  "ui.mcp.first-admin": ["设置首位管理员", "Set up the first administrator"],
+  "ui.mcp.bootstrap-code": ["使用这个安装本地 bootstrap-code 文件中的一次性验证码；设置页面会说明飞书登录的要求。", "Use the one-time code in the installation's local bootstrap-code file; the setup page explains the Feishu sign-in requirements."],
+  "ui.mcp.sign-in": ["请以有驾驶员或管理员权限的身份登录后再签发个人 token。如果尚未加入，请让安装的管理员添加你；若没有管理员且初始化不可用，请让安装的维护者修复本地名单或初始化状态。", "Sign in as a driver or administrator to issue a personal token. Ask an installation administrator to add you if needed. If there are no administrators and setup is unavailable, ask the installation operator to repair the local roster or bootstrap state."],
   "ui.agent-pause.agents": ["Agent", "Agents"],
   "ui.agent-pause.background-job-s-stopped": ["个后台运行已停止。", "background job(s) stopped."],
   "ui.agent-pause.its-turn-stops-its-background": ["？它的回合和后台运行都会停止，在有人恢复它之前不会再启动。原因（可选）：", "? Its turn stops, its background jobs stop, and nothing starts it until someone resumes it. Why (optional):"],

@@ -126,6 +126,12 @@ test("installation and organisation are an admin's; a person's own access is the
     };
     const nobody = await operator("/api/mcp/tokens", { label: "my editor" });
     assert.equal(nobody.status, 400);
+    assert.deepEqual((await operator("/api/mcp")).body.setup, { admins: 0, bootstrap: false }, "a nonempty driver/viewer roster cannot bootstrap");
+    const before = (await operator("/api/mcp")).body.tokens;
+    const nonexistent = await operator("/api/mcp/tokens", { label: "no owner", principalId: "missing-person" });
+    assert.equal(nonexistent.status, 400);
+    assert.equal(nonexistent.body.code, "token-needs-person");
+    assert.deepEqual((await operator("/api/mcp")).body.tokens, before, "refusals mint nothing");
     // A program reads the code; a person reads the words in their language, the count in both (INV-1686).
     assert.equal(nobody.body.code, "token-needs-person");
     assert.match(String(nobody.body.error), /有 0 位管理员/, "no admin to issue it to is said, with the count, in the default language");

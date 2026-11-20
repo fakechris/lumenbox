@@ -24,6 +24,8 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     let base = "";
     const start = async () => startWebServer({ port: 0, host: "127.0.0.1", token: "fixture", useBox: false, loginFetch, onLog: line => logs.push(line), onReady: url => { base = url; } });
     stop = await start();
+    const setup = async (headers: Record<string, string>) => (await (await fetch(base + "/api/mcp", { headers })).json()).setup;
+    assert.deepEqual(await setup({ authorization: "Bearer fixture" }), { admins: 0, bootstrap: true });
     for (const body of ["{", "null", "[]"]) {
       const malformed = await fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(1500) });
       assert.equal(malformed.status, 400);
@@ -48,6 +50,18 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     }
     const results = await Promise.all(states.map((state, i) => fetch(base + `/auth/fixture/callback?state=${state}&code=person${i}`, { redirect: "manual" })));
     assert.deepEqual(results.map(response => response.status).sort(), [302, 409]);
+    const winner = results.find(response => response.status === 302)!;
+    const cookie = winner.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
+    assert.ok(cookie, "bootstrap creates the authenticated admin session");
+    assert.deepEqual(await setup({ cookie }), { admins: 1, bootstrap: false });
+    const issued = await fetch(base + "/api/mcp/tokens", {
+      method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ label: "first editor" }),
+    });
+    assert.equal(issued.status, 200);
+    assert.ok((await issued.json() as { token: string }).token.startsWith("lmbx_"));
+    const tokens = (await (await fetch(base + "/api/mcp", { headers: { cookie } })).json()).tokens;
+    assert.equal(tokens.length, 1);
+    assert.equal(tokens[0].principalId, new Principals().list()[0]!.id, "the token belongs to the redeemed vendor identity");
     const roster = new Principals().list();
     assert.equal(roster.length, 1); assert.match(roster[0]!.id, /^fixture:person[01]$/); assert.equal(roster[0]!.role, "admin");
     assert.equal((await begin(code)).status, 400);
