@@ -447,6 +447,7 @@ export const UI_APP: Record<string, readonly [zh: string, en: string]> = {
   "ui.app.rename-team": ["把团队“", "Rename team “"],
   "ui.app.rename-this-team-on-every": ["为所有成员重命名此团队", "Rename this team on every member"],
   "ui.app.reply-in": ["回复到", "Reply in"],
+  "ui.app.replies-in-triggering-chat": ["在触发它的聊天中回复", "replies in the chat that triggered it"],
   "ui.app.reports-to": ["报告发往", "reports to"],
   "ui.app.resend": ["重发", "resend"],
   "ui.app.restart-to-connect-this-channel": ["重启后连接此渠道", "restart to connect this channel"],

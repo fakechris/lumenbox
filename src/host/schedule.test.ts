@@ -778,7 +778,7 @@ test("a paused routine is not due, does not hear, and refuses to be fired by han
   assert.deepEqual(runs, [], "paused is not due");
   assert.deepEqual(await scheduler.heard({ text: "hello there", chatKey: "feishu:oc_1" }), [], "paused does not hear");
   const byHand = await scheduler.runNow("digest");
-  assert.ok(!byHand.ok && /paused; turn it on first/.test(byHand.reason));
+  assert.ok(!byHand.ok && /paused.*In Automations, select Turn on.*Run now again/.test(byHand.reason));
   assert.equal((await scheduler.status())[0]?.paused, true, "and the status says so");
   assert.deepEqual(lines, [], "not logged per tick");
 });

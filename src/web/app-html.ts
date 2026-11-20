@@ -5111,7 +5111,7 @@ function automationGroups(list, rows, boxes, defaultBox) {
     if (!byBox[id]) { byBox[id] = []; order.push(id); }
     byBox[id].push(s);
   });
-  var kinds = [["schedule", "{{ui.app.recurring}}"], ["once", "{{ui.app.one-time}}"], ["webhook", "{{ui.app.on-call}}"]];
+  var kinds = [["schedule", "{{ui.app.recurring}}"], ["once", "{{ui.app.one-time}}"], ["webhook", "{{ui.app.on-call}}"], ["message", "{{ui.next.auto.kind.message}}"]];
   return order.map(function (id) {
     var head = boxes.length > 1
       ? '<div style="padding:8px 16px 2px;font-size:12px;font-weight:600">' + esc(names[id] || id || "{{ui.app.this-box}}") + "</div>"
@@ -5135,8 +5135,7 @@ function automationRow(s, rows) {
   // Next, by the tick's own rules.
   if (s.nextRun && !s.running) last += " {{ui.app.next}} " + esc(new Date(s.nextRun).toLocaleString());
   else if (s.kind === "once" && s.lastRun) last += " {{ui.app.done}}";
-  // Where it reports: a skill with no deliver says nothing in any chat.
-  var where = s.deliver
+  var where = s.kind === "message" ? '<span class="dim">{{ui.app.replies-in-triggering-chat}}</span>' : s.deliver
     ? "{{ui.app.reports-to}} " + esc(s.deliver)
     : '<span class="dim">{{ui.app.writes-files-only-no-chat}}</span>';
   if (s.deliver && s.deliverWhen === "always") where += ' <span class="dim">{{ui.app.every-run}}</span>';
@@ -5155,8 +5154,7 @@ function automationRow(s, rows) {
   var holdWhy = s.hold && s.hold.code === "idle_owner" ? "{{ui.app.paused-idle}}" : esc(s.hold ? s.hold.reason : ""), pausedTag = s.paused
     ? '<span style="color:var(--warn);font-size:10.5px;border:1px solid var(--border);border-radius:5px;padding:0 5px"' + (s.hold ? ' title="' + holdWhy + '">{{ui.app.paused-by}} ' + esc(s.hold.by) : ">{{ui.app.paused-2}}") + "</span>"
     : "";
-  var toggle = s.paused
-    ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">{{ui.app.turn-on}}</button>'
+  var toggle = s.paused ? '<button class="btn ghost sm" data-resume="' + esc(s.slug) + '">{{ui.app.turn-on}}</button>'
     : '<button class="btn ghost sm" data-pause="' + esc(s.slug) + '">{{ui.app.pause}}</button>';
   // How it may act (INV-1458); a file that says nothing is auto, marked so.
   var mode = s.mode || "auto";
@@ -5196,13 +5194,14 @@ function automationRow(s, rows) {
     '<div style="display:flex;gap:9px;align-items:baseline">' +
       '<span style="flex:1;font-size:13px;font-weight:500">' + esc(s.name) + " " + origin + " " + pausedTag + " " + modeTag + "</span>" +
       modeSwitch + toggle +
-      '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">{{ui.app.run-now}}</button>" + '<button class="btn ghost sm" data-runs="' + esc(s.slug) + '" title="{{ui.app.the-last-20-runs-and}}">{{ui.app.runs}}</button>' +
+      (s.kind === "webhook" || s.kind === "message" ? "" : '<button class="btn ghost sm" data-run="' + esc(s.slug) + '"' + (s.running || s.paused ? " disabled" : "") + ">{{ui.app.run-now}}</button>") + '<button class="btn ghost sm" data-runs="' + esc(s.slug) + '" title="{{ui.app.the-last-20-runs-and}}">{{ui.app.runs}}</button>' +
     "</div>" +
     '<div class="dim" style="font-size:11px;margin-top:3px">' + when +
       (s.agent ? " {{ui.app.as}} " + esc(s.agent) : "") + " · " + where + "</div>" +
     '<div class="dim" style="font-size:11px">' + last + ' · <span class="mono">' + esc(s.schedule) + "</span></div>" +
     (s.because ? '<div class="dim" style="font-size:11px;font-style:italic">' + esc(s.because) + "</div>" : "") +
-    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">{{ui.app.paused}} ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + holdWhy + " {{ui.app.turn-on-resumes-it}}</div>" : "") + lastResult + observed +
+    (s.hold ? '<div style="color:var(--warn);font-size:11px;margin-top:3px">{{ui.app.paused}} ' + esc(new Date(s.hold.at).toLocaleString()) + ": " + holdWhy + " {{ui.app.turn-on-resumes-it}}</div>" :
+      s.paused ? '<div class="dim" style="font-size:11px">{{ui.app.turn-on-resumes-it}}</div>' : "") + lastResult + observed +
     hookBlock + '<div data-runs-for="' + esc(s.slug) + '" style="display:none"></div>' +
   "</div>";
 }
@@ -5428,6 +5427,8 @@ $("autosave").addEventListener("click", function () {
     var cron = autoCron || $("autocron").value.trim();
     if (!cron) { $("autoerror").textContent = "{{ui.app.pick-a-schedule-or-enter}}"; $("autoerror").style.display = ""; return; }
     payload.schedule = cron;
+    var tz = $("autotimezone").value.trim();
+    if (tz) payload.timezone = tz;
   }
   if (autoTrigger === "message") {
     var match = $("automatch").value.trim();
@@ -5439,8 +5440,6 @@ $("autosave").addEventListener("click", function () {
   if (agent) payload.agent = agent;
   var deliver = $("autodeliver").value.trim();
   if (deliver) payload.deliver = deliver;
-  var tz = $("autotimezone").value.trim();
-  if (autoTrigger === "schedule" && tz) payload.timezone = tz;
   
   $("autosave").disabled = true;
   $("autoerror").style.display = "none";
