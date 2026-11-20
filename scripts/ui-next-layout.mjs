@@ -42,6 +42,8 @@ try {
     // The conversation: the result card and the box you type in sit in the same column, on screen.
     const view = await box("#view"), card = await box("[data-result]"), composer = await box("#composer-text");
     inside(card, view, "the result card"); inside(composer, { x: 0, width }, "the composer");
+    // What waits stands above the conversation, which starts under it: no message is half behind the card (INV-1926).
+    const dock = await box("#dock"); assert.ok(view.y >= dock.y + dock.height - 1, `${where}: the conversation runs behind the card above it`);
     assert.ok(composer.y + composer.height <= 900 + 1, `${where}: the composer is below the fold`);
     // Its buttons: side by side or wrapped, never on top of each other.
     const buttons = await page.locator("[data-result] .acts button").evaluateAll(nodes => nodes.map(node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, cut: node.scrollWidth > node.clientWidth + 1 }; }));

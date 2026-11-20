@@ -27,25 +27,6 @@ function owedText(item) {
   return item.detail || "";
 }
 
-/** The sentence under a row's title: what the person is asked, else what holds the work, else where it stands. */
-function reasonOf(row) {
-  // What the agent itself asks of the person comes before any sentence from the table (INV-1923).
-  if (row.ask && !putOff(row)) return row.ask.title;
-  var owed = next.mine.filter(function (item) { return item.ref === row.id; })[0];
-  if (owed && owedText(owed)) return owedText(owed);
-  // What a job is waiting on outside the agent — credentials it lacks, most often — is the reason, in the board's words.
-  if (row.waitingOn) return row.waitingOn;
-  var reading = row.reading || {};
-  if (reading.blocker && MSG["ui.wr.blocker." + reading.blocker.kind]) {
-    var tools = (reading.blocker.tools || []).join(", ");
-    return t("ui.wr.blocker." + reading.blocker.kind) + (tools ? " (" + tools + ")" : "");
-  }
-  // Finished work needs no sentence: the word says it, and the panel has the result.
-  var state = nextStateOf(row).key;
-  if (state === "done" || state === "stopped") return "";
-  return MSG["ui.wr.reason." + reading.reason] ? t("ui.wr.reason." + reading.reason) : "";
-}
-
 function chip(state) { return el("span", "chip " + state.tone, t("ui.next.state." + state.key)); }
 
 function meter(progress) {
@@ -59,7 +40,7 @@ function workRow(row) {
   var state = nextStateOf(row), node = el("div", "row"), open = el("button", "open");
   var body = el("span", "body");
   body.appendChild(el("div", "title", row.title));
-  body.appendChild(el("div", "why", reasonOf(row)));
+  body.appendChild(lineNode("why", reasonOf(row))); // next-line-ui.ts
   var progress = nextProgressOf(row.progress);
   if (progress) body.appendChild(meter(progress));
   open.appendChild(el("span", "who", initial(agentName(row.assigneeId))));
@@ -75,7 +56,7 @@ function workCard(row) {
   var card = el("button", "card"), foot = el("div", "foot"), progress = nextProgressOf(row.progress);
   card.appendChild(chip(nextStateOf(row)));
   card.appendChild(el("div", "title", row.title));
-  card.appendChild(el("div", "why", reasonOf(row)));
+  card.appendChild(lineNode("why", reasonOf(row)));
   if (progress) card.appendChild(meter(progress));
   foot.appendChild(el("span", "who", initial(agentName(row.assigneeId))));
   foot.appendChild(el("span", "", agentName(row.assigneeId)));
@@ -236,9 +217,9 @@ function restoreEdits(view, kept) {
 
 function render() {
   var view = $("view"), drawing = [next.view, settings.pane, next.view === "chat" ? chat.agentId + "/" + chat.conversation : ""].join("|");
-  var kept = drawing === next.drawn ? keepEdits(view) : null;
+  var kept = drawing === next.drawn ? [keepEdits(view), keepEdits($("dock"))] : null; // the card above the conversation holds fields too
   next.drawn = drawing;
-  try { renderView(view); } finally { if (kept) restoreEdits(view, kept); }
+  try { renderView(view); } finally { if (kept) { restoreEdits(view, kept[0]); restoreEdits($("dock"), kept[1]); } }
 }
 
 function renderView(view) {
@@ -247,7 +228,7 @@ function renderView(view) {
   document.body.dataset.view = next.view;
   renderSide();
   $("work-tools").hidden = next.view !== "work";
-  $("composer").hidden = true;
+  $("composer").hidden = true; placeDock(null); // the conversation puts back what waits above it
   document.querySelectorAll("[data-nav]").forEach(function (button) { button.setAttribute("aria-current", String(button.dataset.nav === next.view)); });
   document.querySelectorAll("[data-layout]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.layout === next.layout)); });
   renderScreen();
@@ -316,7 +297,7 @@ function nextStart() {
   panelStart();
   // A field the person touched is theirs until it is sent or the view changes.
   ["input", "change"].forEach(function (kind) {
-    $("view").addEventListener(kind, function (event) { if (event.target && event.target.dataset) event.target.dataset.edited = "1"; }, true);
+    [$("view"), $("dock")].forEach(function (root) { root.addEventListener(kind, function (event) { if (event.target && event.target.dataset) event.target.dataset.edited = "1"; }, true); });
   });
   composerStart(); // first: its Enter, with the menu open, is not the composer's
   chatStart();
@@ -341,6 +322,7 @@ function nextStart() {
     var event; try { event = JSON.parse(message.data); } catch (error) { return; }
     var kind = event && event.type;
     if (["box_status", "task_changed", "approval_pending", "approval_settled", "question", "turn_finished", "turn_failed", "reset"].includes(kind)) refreshSoon();
+    if (kind === "tool_end" && event.tool === "SetTodos") refreshSoon(); // a member moved through its list: its row's line is what it marked doing
     if ((kind === "task_changed" || kind === "task_execution") && event.taskId) panelChanged(event.taskId);
     if (kind === "turn_started" || kind === "turn_finished" || kind === "turn_failed") { var who = next.agents[event.agentId]; if (who) who.running = kind === "turn_started"; }
     chatEvent(event);

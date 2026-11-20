@@ -693,7 +693,7 @@ test("a request the agent wrote is the card: its title, its sentences, and the b
   const page = { rows: [release, act, result, elsewhere, answered, { ...silent, snoozeUntil: "2999-01-01T00:00:00.000Z" }] as Record<string, unknown>[], agents: { mia: { id: "mia", name: "Mia" } }, view: "chat" };
   const talk = { agentId: "mia", conversation: "feishu-1", find: "" }, held = [el("div", "card-need", "consent")];
   const putOff = pageFunction("putOff", {}), world = { ...shared, next: page, chat: talk, nextNeedOf: nextLogic.nextNeedOf, putOff, pendingCards: () => held };
-  const waitsHere = pageFunction("waitsHere", world), dockEntries = pageFunction("dockEntries", { ...world, waitsHere }), dockShown = pageFunction("dockShown", { ...world, dockEntries });
+  const waitsOnPerson = pageFunction("waitsOnPerson", world), waitsHere = pageFunction("waitsHere", { ...world, waitsOnPerson }), dockEntries = pageFunction("dockEntries", { ...world, waitsHere }), dockShown = pageFunction("dockShown", { ...world, dockEntries });
   const needDock = pageFunction("needDock", { ...world, dockShown, needCard, resultCard: (row: { id: string }) => el("div", "card-plain", row.id) }) as (agent: unknown) => Fake | null;
   const first = needDock(page.agents.mia)!;
   assert.deepEqual([first.dataset.dock, first.kids[0]!.kids[0]!.text], ["t0", "ui.next.need.page(1|4)"], "longest-waiting first, and it says how many: the result, two requests and a consent it holds; not the one put off, the one answered, or another conversation's");
@@ -723,4 +723,53 @@ test("a request the agent wrote is the card: its title, its sentences, and the b
   // The page names a sentence by the word the agent is asked to write it under.
   const { MESSAGES } = await import("../i18n/messages.ts");
   for (const key of ASK_SENTENCES) for (const locale of ["zh", "en"] as const) assert.equal(MESSAGES[locale][`ui.next.ask.${key}`], askLabel(key, locale), key);
+});
+
+test("a row's one line: what the member asks of the person, else what it says it is doing, else the fixed words (INV-1926)", async () => {
+  // The row read "Working", a job title, or a category from a table ("Linked execution is advancing this work").
+  const t = (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : "");
+  const { MESSAGES } = await import("../i18n/messages.ts");
+  const MSG = MESSAGES.en, page: { rows: Record<string, unknown>[]; mine: unknown[]; agents: Record<string, unknown> } = { rows: [], mine: [], agents: {} };
+  const base = { t, MSG, next: page, putOff: pageFunction("putOff", {}), nextNeedOf: nextLogic.nextNeedOf, nextStateOf: nextLogic.nextStateOf, NOW_FRESH_MS: 15 * 60_000, owedText: () => "" };
+  const waitsOnPerson = pageFunction("waitsOnPerson", base), askLine = pageFunction("askLine", base), nowLine = pageFunction("nowLine", base);
+  const memberLine = pageFunction("memberLine", { ...base, waitsOnPerson, askLine, nowLine }), reasonOf = pageFunction("reasonOf", { ...base, nowOnRow: pageFunction("nowOnRow", { ...base, nowLine }) });
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString(), said = "Matching the October statement against the ledger";
+  const mia = { id: "mia", name: "Mia", title: "Operations", running: true, facts: { unreadCount: 0, now: { text: said, at: ago(2), conversation: "main", taskId: "t1" } as Record<string, unknown> } };
+  const working = { id: "t1", assigneeId: "mia", conversation: "main", status: "doing", title: "Reconcile October", updatedAt: ago(30), reading: { phase: "working", reason: "working" } };
+  const other = { ...working, id: "t5", title: "Renewal notices" };
+  page.agents = { mia }; page.rows = [working, other];
+  // Working, and it said what on: its words, on the row of the work its turn is on and nowhere else.
+  assert.deepEqual([memberLine(mia), reasonOf(working), reasonOf(other)], [said, said, "ui.next.line.reason.working"]);
+  // It needs the person: what it asks comes first, on its row and on the work.
+  const asking = { ...working, id: "t2", status: "blocked", updatedAt: ago(10), reading: { phase: "needs", reason: "needs" }, ask: splitAsk("Please do: Sign in to the vendor portal\nWhy you: The code goes to your phone.").ask };
+  page.rows = [working, other, asking];
+  assert.deepEqual([memberLine(mia), reasonOf(asking)], ["Sign in to the vendor portal", "Sign in to the vendor portal"]);
+  page.rows = [working, other, { ...asking, snoozeUntil: "2999-01-01T00:00:00.000Z" }];
+  assert.equal(memberLine(mia), said, "put off: it asks nothing until then");
+  page.rows = [{ ...working, id: "t3", status: "review", reading: { phase: "review", reason: "review" } }];
+  assert.equal(memberLine(mia), "ui.next.line.reason.review", "a result with no title of its own: delivered, waiting for you to confirm");
+  // Stale: words written twenty minutes ago are not what it is doing now; an idle member has no words from the server at all.
+  page.rows = [working, other]; mia.facts.now.at = ago(20);
+  assert.deepEqual([memberLine(mia), reasonOf(working)], ["ui.next.agent.working", "ui.next.line.reason.working"]);
+  assert.equal(memberLine({ ...mia, running: false, facts: { unreadCount: 0 } }), "Operations", "idle and asking nothing: as it was");
+  // Words with no work named go on the one piece it is doing in that conversation, and are not guessed between two.
+  mia.facts.now = { text: "Drafting the notice", at: ago(1), conversation: "main" };
+  page.rows = [working];
+  assert.equal(reasonOf(working), "Drafting the notice");
+  page.rows = [working, other];
+  assert.equal(reasonOf(working), "ui.next.line.reason.working");
+  // The fixed words say where it is stuck; a gate's own description is not the row's line, a question is.
+  assert.equal(reasonOf({ ...other, status: "blocked", reading: { phase: "waiting", reason: "waiting", blocker: { kind: "dependency", tools: [] } } }), "ui.next.line.blocker.dependency");
+  const idle = (awaiting: unknown) => memberLine({ ...mia, running: false, facts: { unreadCount: 0, awaiting } });
+  assert.deepEqual([idle({ kind: "question", reason: "Which region?" }), idle({ kind: "approval", reason: "bash: rm -rf build" })], ["Which region?", "ui.next.line.await.approval"]);
+  // One line, the whole of it on hover.
+  const long = "x".repeat(300), node = pageFunction("lineNode", { el: fakeEl })("why", long) as Fake & { title?: string };
+  assert.deepEqual([node.cls, node.text.length, node.title], ["why", 300, long]);
+  // Every fixed word is in both languages, and none of them is the bookkeeping the table used to say.
+  const keys = Object.keys(MESSAGES.en).filter(key => key.startsWith("ui.next.line."));
+  assert.ok(keys.length > 20);
+  for (const key of keys) {
+    assert.ok(MESSAGES.zh[key] && MESSAGES.zh[key] !== MESSAGES.en[key], `${key} in Chinese`);
+    assert.doesNotMatch(MESSAGES.en[key]!, /execution|linked|retained|authori[sz]ed|scope/i, key);
+  }
 });

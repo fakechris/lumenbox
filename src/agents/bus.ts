@@ -726,6 +726,8 @@ export class AgentBus {
 
   /** How many of one agent's conversations have a turn in flight (INV-1559 diagnostics). */
   activeTurnsOf(agentId: string): number { let n = 0; for (const key of this.active.keys()) if (agentOfKey(key) === agentId) n++; return n; }
+  /** Which of one agent's conversations have a turn in flight: where what it says it is doing now can be true (INV-1926). */
+  activeConversationsOf(agentId: string): string[] { return [...this.active.keys()].filter(key => agentOfKey(key) === agentId).map(key => key.slice(agentId.length + 1)); }
 
   /**
    * Stops every turn these agents have in flight, saying why — their box went away under them
