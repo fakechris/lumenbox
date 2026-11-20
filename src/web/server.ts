@@ -6499,7 +6499,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           res.end(text);
           return;
         }
-
         // A paused routine is one frontmatter line; turning it on or off is that line.
         if (route === "POST /api/schedules/resume" || route === "POST /api/schedules/pause" || route === "POST /api/schedules/mode") {
           if (refused()) return;
