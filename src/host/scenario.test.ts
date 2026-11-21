@@ -5365,3 +5365,53 @@ test("a member sets itself a reminder in a chat: it fires once at its time as th
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// INV-703: a member woken hours after a long shell-heavy turn. The provider's cache is long cold,
+// so its old shell output is left out of the request — and when it needs one back, ReadKept by the
+// call's id returns what the shell actually printed, from the record, without running it again.
+test("a member woken after idle sends a smaller request, and reads a cleared result back by its id", async () => {
+  const start = Date.parse("2026-11-20T09:00:00.000Z");
+  const output = (round: number) => `round ${round}: ${"✔ suite passes — src/host/module.test.ts\n".repeat(45)}`;
+  const history: HistoryEntry[] = [{ role: "user", text: "Run the suite until it is green.", at: new Date(start).toISOString(), fromPerson: true }];
+  for (let round = 0; round < 12; round++) {
+    const id = `toolu_r${round}`;
+    history.push({ role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id, name: "bash", input: { command: "npm test" } }], at: new Date(start + round * 30_000 + 10_000).toISOString() });
+    history.push({ role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: output(round) }] }], at: new Date(start + round * 30_000 + 25_000).toISOString() });
+  }
+  history.push({ role: "assistant", text: "Green.", at: new Date(start + 400_000).toISOString() });
+  const verbatim = Buffer.byteLength(JSON.stringify(history.filter(entry => "kind" in entry).map(entry => (entry as { blocks: unknown }).blocks)));
+  let firstRequest = "";
+  let readBack = "";
+  // ReadKept looks for a kept copy under the box's home first; this one has none, so the record answers.
+  const home = mkdtempSync(join(tmpdir(), "agentbox-cold-wake-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  const result = await runEpisode({
+    team: [{ name: "Nova" }], history,
+    says: ["What exactly did the suite print in round 2?"],
+    script: ({ messages }) => {
+      const all = JSON.stringify(messages);
+      if (firstRequest === "") firstRequest = all;
+      const last = messages.at(-1)!.content;
+      const kept = all.includes('"name":"ReadKept"') && Array.isArray(last) ? last.find(block => block.type === "tool_result") : undefined;
+      if (kept !== undefined) {
+        readBack = JSON.stringify(kept);
+        return { say: "Round 2 printed forty-five passing suites." };
+      }
+      return { call: "ReadKept", input: { call: "toolu_r2" } };
+    },
+  });
+  try {
+    assert.match(firstRequest, /older bash output \([\d,]+ chars\) left out of this request/, "old shell output is a line on a cold wake");
+    assert.match(firstRequest, /ReadKept with call \\"toolu_r2\\"/);
+    assert.ok(Buffer.byteLength(firstRequest) < verbatim, "the request is smaller than the results it would have re-sent");
+    assert.ok(readBack.includes("round 2: ✔ suite passes"), `read back by id, it is the original: ${readBack.slice(0, 200)}`);
+    const stored = result.registry.readTranscript(result.registry.list()[0]!.id) as HistoryEntry[];
+    assert.ok(JSON.stringify(stored).includes(JSON.stringify(output(2)).slice(1, -1)), "the record on disk still holds it whole");
+  } finally {
+    result.cleanup();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});

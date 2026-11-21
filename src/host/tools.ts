@@ -89,7 +89,7 @@ import { type CommitHow, forkTag, type PendingWork } from "./pending-work.ts";
 import type { PolicyGate } from "./policy.ts";
 import { delegateCommand, delegateEnv, delegateModel, engineMissing, installCommand, PRESETS, presetNamed, probeCommand, quoteForShell } from "./presets.ts";
 import { readOutcome, textShape, withReadOutcome } from "./read-outcome.ts";
-import { findKeptResult } from "./results.ts";
+import { findKeptResult } from "./results.ts"; import { recordedResult } from "./cold-results.ts";
 import type { ScopeStore } from "./scopes.ts";
 import { skillWriteRefusal } from "./skill-contract.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
@@ -4812,7 +4812,7 @@ export async function dispatchTool(
         call,
         { agentId: context.agent.id, ...(context.conversation !== undefined ? { conversation: context.conversation } : {}) },
         context.fetchedHome
-      );
+      ) ?? recordedResult(context.registry.readTranscript(context.agent.id, context.conversation), call); // or as recorded (INV-703)
       // A result that is someone else's answers exactly as one that is not there. Telling
       // the two apart would be a way to ask whether another agent made a given call.
       if (found === undefined) {

@@ -108,7 +108,7 @@ import {
 import { anchorOf } from "./history.ts"; import { summaryInputFor } from "./summary-input.ts";
 import { DURABLE_RESULT_CHARS, type ResolutionConfig } from "../protocol/index.ts";
 import type { KeptEvidence } from "./resume.ts";
-import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts";
+import { keepToolResult, readKeptSources, RESULT_KEPT_MARKER } from "./results.ts"; import { requestHistory } from "./cold-results.ts";
 import { keptPointer, parseKeptPointer } from "./fetched.ts";
 import { checkQuotes, quoteReportLine } from "./quote-check.ts"; import { answerAfterSendBack, NOT_YET_SEEN } from "./sent-back.ts"; import { unrequestedTurn } from "./turn-standing.ts";
 import { deliverableReport, MAX_DELIVERABLE_NUDGES, outboxFindings } from "./deliverables.ts";
@@ -1967,9 +1967,9 @@ ${outcome.text}`;
   // the request, as docs/31 measured. The transcript keeps only what the person said.
   const tail = volatileInTail ? hostContext(promptParts.volatile + forkLine) : undefined;
   const messages: Anthropic.MessageParam[] = continuing
-    ? historyToMessages(history)
+    ? historyToMessages(requestHistory(history, provider))
     : [
-        ...historyToMessages(history),
+        ...historyToMessages(requestHistory(history, provider)),
         { role: "user", content: [turnText, endedNote, standingNotice, tail, opener].filter(part => part !== undefined).join("\n\n") },
       ];
   // A continued turn appends nothing new for the model to answer: the next observation is the
@@ -2270,7 +2270,7 @@ ${outcome.text}`;
     });
     // Completed tool pairs and their full-result pointers are on disk before this boundary.
     messages.length = 0;
-    messages.push(...historyToMessages(history));
+    messages.push(...historyToMessages(requestHistory(history, answering))); // cleared as the turn's first request was (cold-results.ts)
     const rebuilt = buildParts(memoryRecall).volatile + forkLine;
     if (volatileInTail) {
       const last = messages.at(-1);
