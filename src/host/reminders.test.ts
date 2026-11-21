@@ -26,19 +26,21 @@ function harness(report?: (reminder: Reminder & { chat: string }) => Promise<voi
   const path = join(dir, "pending-work.jsonl");
   const notes: { agentId: string; text: string; conversation: string }[] = [];
   const logged: string[] = [];
+  /** Whether the member's inbox admits a note. */
+  const inbox = { up: true };
   const policy = new PolicyGate({ path: join(dir, "policy.jsonl"), limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] }, spentSince: () => 0 });
   /** A process: its own ledger object and effects over the same file. */
   const start = () => {
     const ledger = new PendingWork(path);
     const effects = new Effects({
       pendingWork: ledger, policy, mcp: () => undefined, now: () => clock.now, log: line => logged.push(line),
-      deliver: (agentId, text, conversation) => { notes.push({ agentId, text, conversation }); return true; },
+      deliver: (agentId, text, conversation) => { if (!inbox.up) return false; notes.push({ agentId, text, conversation }); return true; },
       ...(report !== undefined ? { report } : {}),
     });
     const as = (agentId: string, conversation = "main") => (input: Record<string, unknown>) => reminderTool({ agent: { id: agentId } as never, conversation, pendingWork: ledger }, input, clock.now);
     return { ledger, effects, as };
   };
-  return { clock, notes, logged, start, at: (iso: string) => { clock.now = new Date(iso); }, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { clock, notes, logged, inbox, start, at: (iso: string) => { clock.now = new Date(iso); }, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("a due time is a span from now or an ISO instant; one in the past, one past a year and one that is not a time are refused in words that say what to do", () => {
@@ -136,7 +138,7 @@ test("a reminder a person dismissed on the page, or the member cancelled, does n
   } finally { h.cleanup(); }
 });
 
-test("a reminder that names a chat runs as the member's own turn through the report door, once across a restart, with a prompt that says the host opened it; if that turn cannot start the member still gets its note", async () => {
+test("a reminder that names a chat runs as the member's own turn through the report door, once across a restart, with a prompt that says the host opened it; if that turn cannot start the member still gets its note, retried until its inbox takes it and without a second turn", async () => {
   const reported: (Reminder & { chat: string })[] = [];
   let fail = false, last: Promise<void> = Promise.resolve();
   const h = harness(reminder => { reported.push(reminder); last = fail ? Promise.reject(new Error("Ada is paused")) : Promise.resolve(); return last; });
@@ -163,15 +165,34 @@ test("a reminder that names a chat runs as the member's own turn through the rep
     assert.equal(inboundChannel({ fromId: "user", origin: REMINDER_ORIGIN, text: prompt }), "host");
     assert.equal(asModelSees({ origin: REMINDER_ORIGIN, text: "Look at the export." }), "[from the host (host:reminder), not from a person] Look at the export.");
 
+    // INV-2009: the turn cannot start and the member's inbox refuses the note too. The reminder is
+    // not done: the note is owed, listed as such, and offered again until the inbox takes it.
     fail = true;
+    h.inbox.up = false;
     second.as("ada")({ action: "set", message: "Post the weekly numbers.", due: "1h", chat: "feishu:oc_ops" });
     h.at("2026-11-20T11:00:10Z");
     assert.equal(second.effects.deliverDue(), 1);
     await last.catch(() => {});
     await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reported.length, 2);
+    assert.equal(h.notes.length, 0);
+    assert.match(h.logged.join("\n"), /its turn for feishu:oc_ops did not run \(Ada is paused\); owed to the member as a note/);
+    const owed = pendingReminders(second.ledger, "ada");
+    assert.deepEqual(owed.map(entry => ({ text: entry.text, chat: entry.chat, missed: entry.missed })), [{ text: "Post the weekly numbers.", chat: undefined, missed: { chat: "feishu:oc_ops", why: "Ada is paused" } }], "still waiting, never shown as done");
+    assert.match(second.as("ada")({ action: "list" }).text, /could not report to feishu:oc_ops; waiting to reach you · Post the weekly numbers\./);
+    const page = await reminderRoute("GET /api/reminders", second.ledger, { readJson: async () => ({}), refused: () => false, agentName: () => "Ada", mayReadAgent: () => true });
+    assert.deepEqual((page!.body as { reminders: Reminder[] }).reminders.map(entry => entry.missed?.chat), ["feishu:oc_ops"]);
+
+    h.at("2026-11-20T11:01:10Z");
+    assert.equal(h.start().effects.deliverDue(), 0, "still refused after a restart: it stays waiting");
+    h.inbox.up = true;
+    const third = h.start();
+    assert.equal(third.effects.deliverDue(), 1);
+    assert.equal(third.effects.deliverDue(), 0);
+    assert.equal(h.start().effects.deliverDue(), 0);
+    assert.equal(reported.length, 2, "no restart or retry opened the chat's turn a second time");
     assert.deepEqual(h.notes.map(note => note.text), ["[Reminder you set: Post the weekly numbers.] [It was to be reported to feishu:oc_ops, but that turn could not run: Ada is paused]"]);
-    assert.match(h.logged.join("\n"), /its turn for feishu:oc_ops did not run \(Ada is paused\)/);
-    assert.equal(second.effects.deliverDue(), 0);
+    assert.equal(third.as("ada")({ action: "list" }).text, "You have no reminders waiting.");
   } finally { h.cleanup(); }
 });
 

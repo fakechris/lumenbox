@@ -314,6 +314,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.remind.title": ["成员给自己设的提醒", "Reminders members set for themselves"],
   "ui.next.remind.due": ["{when} 到期", "Due {when}"],
   "ui.next.remind.chat": ["结果发到 {chat}", "Reports to {chat}"],
+  "ui.next.remind.missed": ["没能发到 {chat}，正在改为提醒成员", "Could not report to {chat}; retrying as a note to the member"],
   "ui.next.remind.dismiss": ["取消提醒", "Dismiss"],
   "ui.next.remind.dismissed": ["已取消这条提醒", "The reminder was dismissed"],
   "ui.next.auto.outcome.done": ["完成", "Done"],
