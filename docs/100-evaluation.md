@@ -2,7 +2,7 @@
      title: The evaluation report: one corpus, k attempts, four numbers
      family: guide
      status: current
-     updated: 2026-11-20
+     updated: 2026-11-21
 -->
 # 100 — The evaluation report: one corpus, k attempts, four numbers
 
@@ -23,7 +23,7 @@ change it could have seen. A number without those three reads as more than it is
 | loader | `src/evals/corpus.ts` | the task schema, versions, and the checks that keep dev and test apart |
 | derivation | `src/evals/corpus-build.ts` | turning the repository's own cases into tasks, and each task's side |
 | graders | `src/evals/graders.ts` | labels, required facts, forbidden words, format, end state, the teach scorer |
-| subjects | `src/evals/subjects.ts` | how a task is put to the product: `episode`, `auto-review`, `steward`, `teach` — and each one's stand-in |
+| subjects | `src/evals/subjects.ts` | how a task is put to the product: `episode`, `auto-review`, `steward`, `teach`, `memory` — and each one's stand-in |
 | cache | `src/evals/cache.ts` | model calls keyed by request, task version and recipe |
 | runner | `src/evals/runner.ts` | every task k times; the record of each attempt |
 | judges | `src/evals/judges.ts` | one yes-or-no question per failure type, the quote check, the judge's model and question version on the record |
@@ -70,7 +70,7 @@ or a `group` appears on both sides. One request is often two tasks — the line 
 skill is the line that must not open its neighbour — so tasks sharing a group or an input are
 dealt to one side together. A task's side is decided once and kept when the corpus is rebuilt.
 
-**What is in it** (92 tasks: 17 dev, 75 test), all derived from files in the repository:
+**What is in it** (99 tasks: 19 dev, 80 test), all derived from files in the repository:
 
 | source | tasks | subject | graded by |
 |---|---|---|---|
@@ -78,6 +78,7 @@ dealt to one side together. A task's side is decided once and kept when the corp
 | the steward's labelled endings (`steward-tails.json`) | 22 | `steward` | the decision |
 | the auto-review trajectories (`auto-review-trajectories.json`) | 12 | `auto-review` | the verdict |
 | the teach fixtures (`teach-evals.ts`) | 6 | `teach` | the teach scorer's checks |
+| the memory extraction cases (`memory-extraction.json`) | 7 | `memory` | the decisions left after the quote check |
 | the live scenarios `team` and `vague` (`scenario-live.mjs`) | 2 | `episode` | the state the run ends in |
 
 `npm run eval -- build-corpus` rewrites the two files from those sources; the suite fails when a
@@ -171,8 +172,8 @@ npm run eval -- plan      # what it will cost in calls; makes none
 npm run eval -- run       # the test split, 3 attempts a task, on the configured provider
 ```
 
-`run` is the one command that spends money. On the test split as it stands it makes **at most 672
-model calls**, 75 tasks × 3 attempts × the most calls an attempt can make, **and then 87 judge
+`run` is the one command that spends money. On the test split as it stands it makes **at most 687
+model calls**, 80 tasks × 3 attempts × the most calls an attempt can make, **and then 87 judge
 calls**.
 
 | subject | tasks | calls per attempt | at most | model |
@@ -181,6 +182,7 @@ calls**.
 | `steward` | 15 | 1 | 45 | the cheap side-call model |
 | `auto-review` | 9 | 1 | 27 | the cheap side-call model |
 | `teach` | 4 | 1 | 12 | the agent's own |
+| `memory` | 5 | 1 | 15 | the cheap side-call model |
 | judges | 29 | 1 | 87 | the cheap side-call model |
 
 An episode stops at its cap and usually ends sooner. `--no-judges` leaves the last row out.
@@ -345,7 +347,7 @@ npm run eval -- --compare origin/main HEAD         # base, then candidate
 ```
 
 **It costs twice a plain run** where the two versions send different requests: every task runs on
-both. On the corpus as it stands that is at most 1,752 model calls (876 a version: dev and test,
+both. On the corpus as it stands that is at most 1,794 model calls (897 a version: dev and test,
 3 attempts). `plan --compare` prints the figure; the run prints it again before a provider is read.
 
 How the two are kept apart, and what they share:

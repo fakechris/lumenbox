@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-11-11
+     updated: 2026-11-21
 -->
 # Data
 
@@ -469,6 +469,21 @@ Extraction runs **after a turn and every third exchange**, on the cheap summaris
 allowed to find nothing — the sentinel is explicit and the prompt asks for it first. An extractor that
 must produce output invents something, and a memory of the obvious is worse than none because it is
 read on every future turn. Every fourth extraction condenses into an episode.
+
+Each extracted item is a **decision about the memory that exists** (INV-733, `memory-extract.ts`):
+`create` a new line, `confirm` a remembered one they said again, or `correct` one they said was wrong.
+The extractor is offered up to twelve live lines by number and a target must be one of them. A
+confirm appends the same record again, dated now, with the new place added to its `from` (at most eight: the first
+and the newest): its decay starts over and its history stays. A correction appends a
+retraction of the old line and then the new one, both citing where it was said. A change ("now I live
+in Hangzhou") is a create, not a correction — the old line was true when it was said. Every item
+quotes the person's own words, and the quote must be found exactly (`locateQuote`) in a stretch headed
+`They said` — or be one whole sentence of theirs, since `locateQuote` calls nothing under twelve
+characters evidence. An item resting on what the host wrote, what a teammate sent or what the agent
+replied is dropped, and `from` is the exchange the quote was found in. A malformed line, an unknown op,
+a target not offered or a quote not found loses that item only, and the drops are counted in the log.
+The quote is checked and not stored. Records written by the plain-line extractor before this carry no
+op and no quote, and load, recall and can be confirmed or corrected like any other.
 
 An exchange whose turn **read outside content is not extracted from** (INV-894). Extraction reads
 only what was said and what the agent replied, but a reply often repeats the page it just read — and

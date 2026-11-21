@@ -1,9 +1,9 @@
 /**
  * The corpus, derived from what the repository already holds (INV-1772).
  *
- * Five places already state a request and what a right result is: the starter skills' own cases,
- * the teach fixtures, the auto-review trajectories, the context steward's labelled endings, and
- * the live scenarios. Each is turned into tasks here, with the failure it exists to catch, and
+ * Six places already state a request and what a right result is: the starter skills' own cases,
+ * the teach fixtures, the auto-review trajectories, the context steward's labelled endings, the
+ * memory extraction cases, and the live scenarios. Each is turned into tasks here, with the failure it exists to catch, and
  * `evals/corpus/*.jsonl` is this function's output — a test holds the two together, so a case
  * edited at its source and not in the corpus (or the reverse) fails the suite.
  *
@@ -25,7 +25,7 @@ const DEV_PERCENT = 25;
 const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "x";
 
 /** The kinds this file derives; a task of any other kind in the corpus was added by a person. */
-export const DERIVED_KINDS: readonly SourceKind[] = ["skill-eval", "teach-fixture", "auto-review-trajectory", "steward-tail", "scenario"];
+export const DERIVED_KINDS: readonly SourceKind[] = ["skill-eval", "teach-fixture", "auto-review-trajectory", "steward-tail", "memory-extraction", "scenario"];
 
 /**
  * The two live scenarios an in-memory box can carry (scripts/scenario-live.mjs, by name). The
@@ -105,9 +105,24 @@ function stewardTasks(root: string): EvalTask[] {
   }));
 }
 
+/** The memory extractor's decisions after the quote check (INV-733): `wrong` is only the stand-in's. */
+function memoryTasks(root: string): EvalTask[] {
+  const file = "src/host/fixtures/memory-extraction.json";
+  type Case = { name: string; failure: string; known: string[]; exchanges: string[]; expected: string[]; never: string[]; reply: string; wrong: string };
+  const { cases } = JSON.parse(readFileSync(join(root, file), "utf8")) as { cases: Case[] };
+  return cases.map((one): EvalTask => ({
+    id: `memory.${slug(one.name)}`,
+    subject: "memory",
+    source: { kind: "memory-extraction", ref: `${file}#${one.name}` },
+    failureType: one.failure,
+    input: { known: one.known, exchanges: one.exchanges, wrong: one.wrong },
+    gold: { labels: { ...(one.expected.length > 0 ? { all: one.expected } : {}), none: one.never }, answer: one.reply },
+  }));
+}
+
 /** Every task the repository's own material yields, before any is given a side. */
 export function derivedTasks(root: string): EvalTask[] {
-  return [...skillTasks(), ...teachTasks(), ...autoReviewTasks(root), ...stewardTasks(root), ...SCENARIO_TASKS];
+  return [...skillTasks(), ...teachTasks(), ...autoReviewTasks(root), ...stewardTasks(root), ...memoryTasks(root), ...SCENARIO_TASKS];
 }
 
 const sideOf = (key: string): Split => (Number.parseInt(digest(key).slice(0, 8), 16) % 100 < DEV_PERCENT ? "dev" : "test");

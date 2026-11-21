@@ -575,93 +575,7 @@ export function describeFrom(from: readonly string[] | undefined): string {
   return ` — from ${places.join(", ")}${more}`;
 }
 
-export function buildExtractionPrompt(
-  exchange: string,
-  known: readonly MemoryRecord[],
-  exchangeCount = 1,
-  options: {
-    /**
-     * The exchanges are about to be summarised away (INV-778). A summary keeps a sentence per
-     * thread; what it loses first is that something *changed* — so the extractor is told to
-     * put reversals ahead of new facts.
-     */
-    stateChangesFirst?: boolean;
-  } = {}
-): string {
-  const existing =
-    known.length === 0
-      ? "(nothing yet)"
-      : known.map(record => `- ${record.text}`).join("\n");
-  // Citations are asked for only when there is something to cite by number. One exchange
-  // needs no numbering; the caller attributes the whole reply to it.
-  const cite =
-    exchangeCount > 1
-      ? [
-          "",
-          `The conversation below is ${exchangeCount} exchanges, each headed [n]. End each line with`,
-          "the exchange(s) it came from, like `[2]` or `[1,3]`. If you cannot say, leave it off.",
-        ]
-      : [];
-
-  return [
-    "Below is part of a conversation you had, and what you already remember.",
-    "",
-    `Reply with ${NOTHING_TO_KEEP} and nothing else unless the conversation taught you something`,
-    "that will still matter in a *different* conversation. Most exchanges teach nothing durable, and",
-    "a memory of something obvious is worse than no memory: it is read on every future turn and",
-    "crowds out what matters.",
-    "",
-    "Keep: a decision and its reason, a constraint about how they work or what they use, a",
-    "correction they gave you, a fact that was expensive to establish.",
-    "",
-    "Do not keep: what a tool can tell you again on demand, anything specific to this task, your own",
-    "plans, or a restatement of something already listed below.\nOnly a line headed `They said` is a person's own word; under any other heading, nothing is their preference, decision or correction.",
-    ...(options.stateChangesFirst === true
-      ? [
-          "",
-          "This part of the conversation is about to be replaced by a summary. A change of state comes",
-          "first: something reversed, completed, superseded or cancelled, a preference or constraint",
-          "they changed. Only after those, a new standing fact. A summary keeps the facts; what it",
-          "loses is that an earlier one stopped being true.",
-        ]
-      : []),
-    "",
-    "One line each, at most three lines, no numbering, no preamble. Each line must make sense with",
-    "none of this conversation around it — write \"they\" rather than \"the user above\".",
-    ...cite,
-    "",
-    "--- already remembered ---",
-    existing,
-    "",
-    "--- conversation ---",
-    exchange,
-  ].join("\n");
-}
-
-/**
- * Reads an extraction reply into records, dropping anything that fails on its own terms.
- *
- * Lenient about the shape it accepts — models add bullets and numbering whatever the instruction
- * says — and strict about what it stores. A line that is too long, empty, or a restatement of
- * something known is dropped silently: this runs after a turn with nobody watching, so a refusal has
- * nobody to explain itself to.
- */
-/**
- * Strips list markers, however many are stacked.
- *
- * A loop rather than one pass because a model asked for plain lines will sometimes emit `* 2. text` —
- * a bullet and a number — and one pass leaves the `2.` inside the memory, where it corrupts the
- * dedupe key and reads as part of the fact. Bounded so a line of nothing but markers terminates.
- */
-function stripMarkers(raw: string): string {
-  let text = raw.trim();
-  for (let pass = 0; pass < 4; pass++) {
-    const next = text.replace(/^(?:[-*•+]|\d+[.)])\s+/, "").trim();
-    if (next === text) break;
-    text = next;
-  }
-  return text;
-}
+// The extraction prompt and its parser: memory-extract.ts (INV-733).
 
 /**
  * Whether a line is the sentinel, however the model dressed it.
@@ -673,61 +587,8 @@ function stripMarkers(raw: string): string {
  * sentinel through, while a real sentence that merely contains the word ("nothing gets
  * past the reviewer") stays a sentence.
  */
-function isNothing(text: string): boolean {
+export function isNothing(text: string): boolean {
   return text.replace(/[^a-z]/gi, "").toUpperCase() === NOTHING_TO_KEEP;
-}
-
-/**
- * Splits a trailing citation like `[2]` or `[1, 3]` off a line and resolves it against the
- * numbered sources. Numbers that point at nothing are dropped, not guessed; a line with no
- * citation, or with none that resolve, comes back uncited — and when there is exactly one
- * source it is cited without being asked, since there is nothing else it could be from.
- */
-export function splitCitation(
-  line: string,
-  refs: readonly string[]
-): { text: string; from?: string[] } {
-  const match = /\s*\[(\d+(?:\s*,\s*\d+)*)\]\s*$/.exec(line);
-  const text = match === null ? line : line.slice(0, match.index).trimEnd();
-  if (refs.length === 1) return { text, from: [refs[0]!] };
-  if (match === null) return { text };
-  const from = [...new Set(
-    match[1]!.split(",").map(n => refs[Number(n.trim()) - 1]).filter((ref): ref is string => ref !== undefined)
-  )];
-  return from.length === 0 ? { text } : { text, from };
-}
-
-export function parseExtraction(
-  reply: string,
-  known: readonly MemoryRecord[],
-  now = new Date(),
-  refs: readonly string[] = []
-): MemoryRecord[] {
-  const trimmed = reply.trim();
-  if (trimmed === "" || trimmed.toUpperCase().startsWith(NOTHING_TO_KEEP) || isNothing(trimmed))
-    return [];
-
-  const knownKeys = new Set(known.map(record => dedupeKey(record.text)));
-  const out: MemoryRecord[] = [];
-  const seen = new Set<string>();
-
-  for (const raw of trimmed.split("\n")) {
-    const { text, from } = splitCitation(stripMarkers(raw), refs);
-    if (text === "" || validateRecord(text) !== undefined) continue;
-    if (isNothing(text)) continue;
-    const key = dedupeKey(text);
-    if (key === "" || knownKeys.has(key) || seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      at: now.toISOString(),
-      kind: "note",
-      text,
-      source: "extracted",
-      ...(from !== undefined ? { from } : {}),
-    });
-    if (out.length >= 3) break; // the instruction says three; enforce it rather than trust it
-  }
-  return out;
 }
 
 /** The prompt that condenses several exchanges into one durable episode. */
