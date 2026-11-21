@@ -251,6 +251,7 @@ import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
+import { approvedCallNotice } from "../host/approval-notice.ts";
 import {workRootSummary} from "../host/work-root-store.ts";
 import { stageWorldOf, taskStage } from "../host/task-stage.ts"; import { signOffView } from "../host/review-settle.ts";
 import { ChangeFeed, feedForks } from "./mcp-watch.ts";
@@ -5378,7 +5379,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (waiting.harnessResumes !== true && !parked) orchestrator.bus.deliverSystem(
               waiting.agentId,
               allowed
-                ? `[The person allowed it${scope === "once" ? " once" : scope === "session" ? " for this session" : ", standing until revoked"}: ${waiting.description}. Go ahead now.]`
+                ? approvedCallNotice(waiting.description, scope)
                 : `[The person refused it: ${waiting.description}. Do not retry it; do without, or say what cannot be done.]`, waiting.returnTo?.conversation ?? MAIN_CONVERSATION, waiting.returnTo?.work
             );
           }
