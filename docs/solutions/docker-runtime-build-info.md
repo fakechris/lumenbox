@@ -1,7 +1,7 @@
 ---
 module: release
 tags: [build, docker, kubernetes]
-problem_type: runtime
+problem_type: runtime-error
 found: 2026-11-21
 ---
 # The Docker host bundle needs package metadata beside it
