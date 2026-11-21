@@ -333,6 +333,7 @@ export interface EpisodeOptions {
   provider?: ProviderProfile;
   /** A policy gate every tool call is checked against (INV-753); absent means allow, as before. */
   policy?: PolicyGate;
+  claims?: import("./claims.ts").Claims;
   /** The kind of box the team lives in; `host` is the person's own machine (INV-438, INV-1700). */
   boxKind?: "docker" | "attached" | "host";
   /** What the turns emit — tool_start, tool_end with the gate's verdict (INV-1664) — as the page would receive it. */
@@ -519,6 +520,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       client,
       ...(options.provider !== undefined ? { provider: options.provider } : {}),
       ...(options.policy !== undefined ? { policy: options.policy } : {}), ...(options.boxKind !== undefined ? { boxKind: options.boxKind } : {}),
+      ...(options.claims !== undefined ? { claims: options.claims } : {}),
       ...(options.onEvent !== undefined ? { onEvent: options.onEvent } : {}),
       ...(options.turns !== undefined ? { turns: options.turns } : {}),
       ...(options.usage !== undefined ? { usage: options.usage } : {}),

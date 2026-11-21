@@ -3,6 +3,8 @@ import { writePause, clearPause } from "../agents/pause.ts";
 import { surfaceActionWork } from "./surface-action.ts";
 import { SurfaceLedger } from "./show-ui.ts";
 import { ResultChecks } from "./result-check-policy.ts";
+import { Claims } from "./claims.ts";
+import { PolicyGate } from "./policy.ts";
 /**
  * The episodes that went wrong, as tests.
  *
@@ -144,6 +146,41 @@ for (const expectResult of [true, false]) test(`web task SendToAgent runs the re
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("two L4 members claiming the same work through UseMcpTool see the conflict, not approval cards (INV-1992)", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "deferred-claims-episode-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const policy = new PolicyGate({ path: join(dir, "policy.jsonl"), limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] } });
+  const tasks = new TaskStore(null);
+  const called = new Set<string>();
+  const results = new Map<string, string>();
+  const episode = await runEpisode({
+    team: [{ name: "Ada" }, { name: "Rex" }], says: [], tasks, policy, claims: new Claims(join(dir, "claims.jsonl")),
+    script: ({ agent, messages, offered }) => {
+      if (!called.has(agent)) {
+        assert.ok(offered.includes("UseMcpTool"));
+        assert.ok(!offered.includes("ClaimWork"), "the claim really is deferred");
+        called.add(agent);
+        return { call: "UseMcpTool", input: { tool: "ClaimWork", arguments: { work: "Fix the parser" } } };
+      }
+      results.set(agent, JSON.stringify(messages));
+      return { say: "Claim checked." };
+    },
+    drive: async ({ registry, bus }) => {
+      for (const name of ["Ada", "Rex"]) {
+        const agent = registry.resolve(name);
+        const task = tasks.create({ title: "Fix the parser", requester: "user", assigneeId: agent.id })!;
+        tasks.update(task.id, { status: "doing", level: 4 }, agent.id);
+        bus.sendFromUser(agent.id, "Claim the parser work before starting.", { taskBinding: { taskId: task.id, role: "executor" } });
+        await bus.wake(agent.id); await bus.idle();
+        assert.equal(policy.pending().length, 0, "coordination never creates an approval");
+      }
+    },
+  });
+  t.after(episode.cleanup);
+  assert.match(results.get("Ada")!, /Claimed/);
+  assert.match(results.get("Rex")!, /Ada claimed this/);
+  assert.equal(policy.pending().length, 0);
+});
 test("user installation resumes to a verified artifact after failure; a hundred priority peers are answered beside it and never enter it (INV-1797, INV-1824)", async () => {
   const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
   const focus = new WorkAttention(); let rounds = 0; let reported = false; const handledPeers = new Set<number>(); const tasks = new TaskStore(null);
