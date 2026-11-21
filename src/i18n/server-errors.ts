@@ -162,6 +162,7 @@ export const SERVER_ERRORS = {
   "err.task-blocker-unknown": ["没有任务 {task} 可以等待。", "No task {task} to wait on."],
   "err.task-blocker-self": ["{task} 不能等待它自己。", "{task} cannot wait on itself."],
   "err.task-blocker-cycle": ["这样会形成循环（{path}）：每个任务都要等另一个完成才能开始。没有修改。", "That would be a cycle ({path}): each task would be ready only after the other. Not changed."],
+  "err.calibration-label": ["只能给这台安装上的一条判决标注“是”或“否”（{question}）。", "A label is yes or no about a verdict this installation holds ({question})."],
   "err.reminder-not-waiting": ["没有等待中的提醒 \"{id}\"：它已经触发，或已被取消。", "No reminder is waiting as \"{id}\": it has fired or was already dismissed."],
   "err.routine-needs-name": ["名称不能为空。", "Name is required."],
   "err.routine-needs-body": ["指令内容不能为空。", "Instruction body is required."],

@@ -124,7 +124,7 @@ export interface ToolContext extends TellContext {
   audit?: import("./audit-context.ts").AuditContext; resultChecks?: import("./result-check-policy.ts").ResultChecks;
   work?: import("../agents/work-attention.ts").WorkStamp; historyConversation?: string; /** Nobody asked for this turn (turn-standing.ts). */ unrequested?: boolean;
   /** A colleague's errand beside a person's waiting work (docs/99 §5): it reads no conversation of its own agent but its own. */
-  side?: boolean;
+  side?: boolean; /** The auto-review's reason for a BLOCK it may not enforce alone (INV-1773): the gate asks a person. */ reviewAsks?: string;
   progressContext?: import("./task-progress.ts").ProgressContext;
   taskBinding?: import("./execution-binding.ts").TaskBinding;
   agent: AgentRecord;

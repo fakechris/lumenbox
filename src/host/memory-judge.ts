@@ -17,7 +17,9 @@
  * The seven-question curator this borrows from (research 2026-10-23) also asks "general" and
  * "workflowCase"; those are about a different store. Four is what our ledger can act on.
  */
-import { choiceOf, type JevAsk, noulOf, type Question } from "./jev.ts";
+import { outputDigestOf } from "../evals/corpus.ts";
+import { choiceOf, digest, type JevAsk, noulOf, type Question } from "./jev.ts";
+import type { Judged } from "./judge-record.ts";
 import { dedupeKey, type MemoryRecord, selectRelevant } from "./memory.ts";
 import { MEMORY_TYPE_NAMES, type MemoryTypes, TYPE_INSTRUCTIONS } from "./memory-types.ts";
 
@@ -76,6 +78,22 @@ export function buildJudgePrompt(input: { conversation: string; candidates: read
     "--- the conversation they came from ---",
     input.conversation,
   ].join("\n");
+}
+
+/** The version of the default judge's words: its prompt over a fixed input (INV-1773). */
+export const memoryJudgePromptVersion = (): string => digest(buildJudgePrompt({ conversation: "C", candidates: ["X"], known: ["K"] }));
+
+/**
+ * Each candidate's four verdicts as a person labels them (INV-1773): `memory-judge:<question>`, the
+ * failure present when the judge said yes at the confidence that acts (HOLD_AT), matched to the
+ * candidate's text by its digest.
+ */
+export function judgedItems(candidates: readonly string[], verdicts: readonly Verdicts[]): Judged[] {
+  return verdicts.flatMap((v, i) => {
+    const text = candidates[i];
+    if (text === undefined) return [];
+    return JUDGE_QUESTIONS.map(q => ({ question: `memory-judge:${q}`, verdict: v[q].answer && v[q].confidence >= HOLD_AT ? "present" as const : "absent" as const, digest: outputDigestOf(text) }));
+  });
 }
 
 /** Reads the judge's JSON; a reply that does not carry one verdict per candidate is an error, not a guess. */
@@ -181,8 +199,16 @@ export interface Disposition {
   log: string[];
 }
 
-/** What becomes of each candidate under its verdicts. Pure, so the rules are the whole of it. */
-export function dispose(candidates: readonly MemoryRecord[], verdicts: readonly Verdicts[], known: readonly MemoryRecord[], now = new Date()): Disposition {
+/**
+ * What becomes of each candidate under its verdicts. Pure, so the rules are the whole of it.
+ *
+ * `handsBack` names the questions whose verdicts may only be a hint (INV-1773): a person labelled
+ * them and found the judge agrees under KAPPA_TO_GATE. Such a verdict may still make the outcome
+ * more careful — a hold is a person being asked — but it may not act on its own: a duplicate it
+ * finds is held for a person instead of dropped, a contradiction it is sure of is held instead of
+ * withdrawing the known line. Absent, every question acts as it did.
+ */
+export function dispose(candidates: readonly MemoryRecord[], verdicts: readonly Verdicts[], known: readonly MemoryRecord[], now = new Date(), handsBack: (question: JudgeQuestion) => boolean = () => false): Disposition {
   const out: Disposition = { keep: [], held: [], retractions: [], refreshed: [], log: [] };
   const retracted = new Set<string>();
   candidates.forEach((candidate, i) => {
@@ -200,6 +226,11 @@ export function dispose(candidates: readonly MemoryRecord[], verdicts: readonly 
       out.log.push(`candidate ${i + 1}: held, ${hold} ${v[hold].confidence.toFixed(2)}`);
       return;
     }
+    if (v.duplicate.answer && v.duplicate.confidence >= HOLD_AT && handsBack("duplicate")) {
+      out.held.push(held(record, "duplicate", v.duplicate.confidence));
+      out.log.push(`candidate ${i + 1}: held, duplicate ${v.duplicate.confidence.toFixed(2)} — the judge may not drop it on its own`);
+      return;
+    }
     if (v.duplicate.answer && v.duplicate.confidence >= HOLD_AT) {
       const target = v.duplicate.target !== undefined ? known[v.duplicate.target - 1] : undefined;
       if (target !== undefined) {
@@ -212,7 +243,7 @@ export function dispose(candidates: readonly MemoryRecord[], verdicts: readonly 
     }
     if (v.contradicts.answer && v.contradicts.confidence >= HOLD_AT) {
       const target = v.contradicts.target !== undefined ? known[v.contradicts.target - 1] : undefined;
-      if (v.contradicts.confidence >= CORRECT_AT && target !== undefined) {
+      if (v.contradicts.confidence >= CORRECT_AT && target !== undefined && !handsBack("contradicts")) {
         const key = dedupeKey(target.text);
         if (!retracted.has(key)) {
           retracted.add(key);

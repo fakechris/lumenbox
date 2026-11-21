@@ -34,7 +34,7 @@ import { GoalLoop } from "./goal-loop.ts";
 import { GoalGate } from "./goal-gate.ts";
 import { isRecoveryCommand } from "./task-recovery.ts";
 import { isRetryCommand } from "./retry-recovery.ts";
-import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts"; import { chargeGuest } from "./guest-turn.ts";
+import { AnswerReviewer, answerReviewMode, sampledForReview, type AnswerReviewInput, type AnswerVerdict } from "./answer-review.ts"; import { judgeBooks } from "./judge-calibration.ts"; import { chargeGuest } from "./guest-turn.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentBus, type BusEvent, type InboundMessage, type Lane } from "../agents/bus.ts";
 import { Inbox, inboxPath } from "../agents/inbox.ts";
@@ -994,7 +994,7 @@ export class Orchestrator {
       get client() { return self.remembererRuntime.client; },
       get provider() { return self.remembererRuntime.profile; },
       log: line => console.error(`[memory] ${line}`),
-      usage: this.usage,
+      usage: this.usage, judges: judgeBooks(agentboxHome()), // the memory judge's verdicts and standing (INV-1773)
       externalTool: tool => this.readsExternalContent(tool), heldValues: () => this.options.vault?.heldValues() ?? new Map(), orgKnowledge: this.orgKnowledge, conflicts: this.conflicts, // maintenance reads L1/L2 beside L3 and records what disagrees (INV-1732)
       onKept: (agentId, kept, principal) => { const added = this.people.absorb(kept, agentId, { ...(principal !== undefined ? { principal, name: this.personName?.(principal) } : {}) }); if (added.length > 0) console.error(`[memory] ${added.length} line(s) about the person taken from ${agentId}'s kept memories`); }, // INV-1653
     });
@@ -1952,7 +1952,7 @@ export class Orchestrator {
       // Same cheap profile. Shadow by default: the verdicts land in auto-review.jsonl and the web
       // log, and a week of them is what decides whether the classifier earns a veto.
       autoReview: new AutoReviewer({
-        ask: prompt => this.askCheaply(agent, prompt, "review"),
+        ask: prompt => this.askCheaply(agent, prompt, "review"), model: () => summaryRuntimeFor(this.provider, this.client).profile.model, handsBack: (judge, question) => judgeBooks(agentboxHome()).handsBack(judge, question), // INV-1773
         log: line => console.error(`[auto-review] ${line}`),
         record: entry => appendLine(join(agentboxHome(), "auto-review.jsonl"), JSON.stringify(redactDeep(entry))),
       }),
@@ -2350,7 +2350,7 @@ export class Orchestrator {
     if (agent === undefined) return { category: "UNKNOWN", confidence: 0, reason: "agent unavailable" };
     return new AnswerReviewer({
       ask: prompt => this.askCheaply(agent!, prompt, "review", input.source === "guest" ? { turnId: input.guest.turnId, door: input.guest.door, conversation: input.conversation } : undefined),
-      mode: () => answerReviewMode(),
+      mode: () => answerReviewMode(), model: () => summaryRuntimeFor(this.provider, this.client).profile.model, // who judged (INV-1773)
       record: entry => appendLine(join(agentboxHome(), "answer-review.jsonl"), JSON.stringify(redactDeep(entry))),
       keepCase: c => writeEvalCase(join(agentboxHome(), "evals"), redactDeep({ ...c, version: this.turns?.lastAgentVersion(agent!.id, input.conversation) })),
     }).review({ ...input, agentName: agent.profile.name });

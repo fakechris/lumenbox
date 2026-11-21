@@ -21,7 +21,7 @@
 | `team` | 团队 | 权限范围、密钥、人员与邀请、MCP 服务器，以及团队的各项上限：暂停的 agent、推送额度、花费上限、反复失败的例行任务、共享记忆审核。 | `mcpServers`, `teamMemoryReview` | `/api/scopes`, `/api/vault`, `/api/principals`, `/api/mcp`, `/api/extensions/reload`, `/api/agents/pauses`, `/api/agents/push-budget`, `/api/agents/spend-limits`, `/api/schedules/runs`, `/api/memory/team-review` | 页面自带 |
 | `mine` | 我的 | 属于你的东西：你的 MCP token、你的长期批准、闸门本会问你的事，以及 agent 对你的了解。 | — | `/api/mcp/tokens`, `/api/policy`, `/api/person` | 页面自带 |
 | `memory` | 记忆 | 每个 agent 记住了什么、每条记忆从哪里来，以及修改或删除它；提议写入组织知识的内容，批准它，以及为已有条目改错。 | — | `/api/memory`, `/api/org-knowledge`, `/api/memory/org/items` | 页面自带 |
-| `supervision` | 监督 | 看门狗：工作停滞时提醒你；监督者：你给它一个目标，它一直盯到结束。 | — | `/api/supervision` | 由脚本挂载 |
+| `supervision` | 监督 | 看门狗：工作停滞时提醒你；监督者：你给它一个目标，它一直盯到结束；以及模型评判的校准：每个评判和人的判断有多一致，并给它最近的判决做标注。 | — | `/api/supervision`, `/api/calibration` | 由脚本挂载 |
 | `machine` | 本机 | 这台机器的用途——个人的机器、个人 + 组织或组织的节点——在首次运行时选择；前两种之间靠加入或断开组织切换。只在桌面 app 里有；记录在 app 自己的数据目录，不在 ~/.agentbox。 | — | — | 由脚本挂载 |
 | `guests` | 访客 | 只在组织里有：agent 在群里给访客的每一条回答，可按群、agent、时间查看，附审查结论——替组织许诺或说了知识里没有的内容会标红；等管理员批准的回答；以及哪些群先审后发。谁回答访客和知识集在「团队」里设置。 | — | `/api/guests`, `/api/guests/audit` | 由脚本挂载 |
 | `organisations` | 组织 | 这个 app 在个人安装之外连接的组织：用地址或邀请链接加入、打开、断开。每个组织也是窗口最左一栏里的一项，显示你在那里的角色和它自己的计数；打开后在这个窗口里显示组织自己的页面。只在桌面 app 里有；每个组织的令牌存在系统钥匙串里。 | — | — | 由脚本挂载 |

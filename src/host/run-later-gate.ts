@@ -38,6 +38,8 @@ export function toolGateRequest(name: string, input: Record<string, unknown>, co
     ...(context.boxKind === "host" ? { onHostBox: true as const } : {}), // a write on the person's own machine asks (INV-1700)
     ...(context.turnId !== undefined ? { turnId: context.turnId } : {}),
     ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}), // the step the verdict is drawn on (INV-1664)
+    // A reviewer measured below the bar may not refuse alone: what it found becomes a person's question (INV-1773).
+    ...(context.reviewAsks !== undefined ? { reviewAsks: context.reviewAsks } : {}),
   };
 }
 

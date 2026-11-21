@@ -35,8 +35,9 @@ import {
   selectRelevant
 } from "./memory.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
-import { dispose, jevJudge, type MemoryJudge, modelJudge, verdictsSummary } from "./memory-judge.ts";
-import { type SwitchDeps, switched } from "./jev.ts";
+import { dispose, JUDGE_QUESTIONS, judgedItems, jevJudge, type MemoryJudge, memoryJudgePromptVersion, modelJudge, verdictsSummary } from "./memory-judge.ts";
+import { type SwitchDeps, switchedBy } from "./jev.ts";
+import { type JudgeName, provenanceOf } from "./judge-record.ts";
 import {
   buildMaintenancePrompt,
   type MaintenancePlan,
@@ -211,6 +212,12 @@ export interface RememberDeps {
   onKept?: (agentId: string, kept: readonly MemoryRecord[], principal: string | undefined) => void;
   /** The decision-model switch's dependencies (INV-1412); tests replace them, production reads the environment. */
   jev?: SwitchDeps;
+  /**
+   * Where the judge's verdicts are written, one line a candidate and question with who judged and
+   * the candidate's digest, never its text; and which questions are a hint only (INV-1773,
+   * judge-calibration.ts). Without it nothing is written and every question acts as before.
+   */
+  judges?: { record: (line: Record<string, unknown>) => void; handsBack: (judge: JudgeName, question: string) => boolean };
   /** The organisation's knowledge (INV-1726): what maintenance reads beside the agent's own lines, and where it proposes a supersession, held (INV-1732). */
   orgKnowledge?: Pick<OrgKnowledge, "recalledFor" | "append" | "lines">;
   /** Where maintenance records two items of different layers that disagree (INV-1732). Without it, the pass sees only the agent's own lines, as before. */
@@ -685,8 +692,19 @@ export class Rememberer {
     const own = this.deps.judge ?? modelJudge(prompt => this.ask(agentId, prompt, principal, 2048));
     const input = { conversation, candidates: candidates.map(record => record.text), known: known.map(record => record.text) };
     try {
-      const verdicts = await switched("memory_judge", { own: () => own(input), jev: ask => jevJudge(ask)(input), summary: verdictsSummary }, this.deps.jev);
-      return dispose(candidates, verdicts, known);
+      const { value: verdicts, by } = await switchedBy("memory_judge", {
+        own: () => own(input), jev: ask => jevJudge(ask)(input), summary: verdictsSummary,
+        provenance: { read: ["the candidate", "known memories", "the conversation"], judged: value => judgedItems(input.candidates, value) },
+      }, this.deps.jev);
+      const named = by.path === "jev" ? by : { path: "own" as const, model: this.deps.judge === undefined ? this.deps.provider.model : "injected", version: memoryJudgePromptVersion() };
+      const at = new Date().toISOString();
+      // judgedItems gives each candidate's questions in JUDGE_QUESTIONS order, so the nth item is candidate n/4's question n%4.
+      judgedItems(input.candidates, verdicts).forEach((item, n) => {
+        const confidence = verdicts[Math.floor(n / JUDGE_QUESTIONS.length)]![JUDGE_QUESTIONS[n % JUDGE_QUESTIONS.length]!].confidence;
+        this.deps.judges?.record({ at, agent: agentId, ...provenanceOf(item.question, named, item.digest), judged: item.verdict, confidence });
+      });
+      const judge = by.path === "jev" ? "jev" as const : "memory-judge" as const;
+      return dispose(candidates, verdicts, known, new Date(), question => this.deps.judges?.handsBack(judge, `memory-judge:${question}`) === true);
     } catch (error) {
       this.log(`the memory judge did not answer (${error instanceof Error ? error.message : String(error)}); holding ${candidates.length} candidate(s)`);
       return dispose(candidates, [], known);

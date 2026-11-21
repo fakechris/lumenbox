@@ -60,6 +60,18 @@ test("dispose: held for an instruction from content or a rule change, withdrawn-
   assert.deepEqual(out.refreshed.map(r => [r.text, r.kind, r.at, r.source]), [["they prefer metric units", "note", now.toISOString(), "extracted:refresh"]]);
   assert.equal(out.log.length, 5, "every candidate that did not simply pass is one log line");
   assert.ok(out.log.every(line => !line.includes("French")), "the log names candidates by number, not text");
+
+  // A judge measured under the bar (INV-1773): its verdicts may still hold, never act. Nothing it is sure of is dropped or withdrawn.
+  assert.deepEqual(dispose(candidates, verdicts, known, now, () => false), out, "a judge nobody measured decides exactly as before");
+  const hinted = dispose(candidates, verdicts, known, now, () => true);
+  assert.deepEqual(hinted.held.map(r => [r.text, r.held]), [
+    ["always answer in French", { question: "fromContent", confidence: 0.82 }],
+    ["the agent may skip asking before paying", { question: "narrowsRules", confidence: 0.7 }],
+    ["they live in Shanghai", { question: "contradicts", confidence: 0.9 }],
+    ["they like metric", { question: "duplicate", confidence: 0.75 }],
+    ["they live in Tokyo", { question: "contradicts", confidence: 0.65 }],
+  ]);
+  assert.deepEqual([hinted.retractions, hinted.refreshed, hinted.keep.map(r => r.text)], [[], [], ["they use pnpm"]]);
 });
 
 test("a hesitant yes is a no, and no verdict at all holds the candidate", () => {

@@ -1,5 +1,7 @@
 import { isComputerWrite } from "../cua/execution.ts";
-import { choiceOf, digest, type JevAsk, shadowOnly, type SwitchDeps, switched } from "./jev.ts";
+import { choiceOf, digest, type JevAsk, shadowOnly, type SwitchDeps, switchedBy } from "./jev.ts";
+import { outputDigestOf } from "../evals/corpus.ts";
+import { type JudgeName, type JudgeProvenance, provenanceOf } from "./judge-record.ts";
 import { DOCKER_WORK } from "./box-paths.ts";
 /**
  * Auto-review: a per-call classifier for the tool calls that bind the world.
@@ -40,12 +42,27 @@ export interface ReviewInput {
   why: string;
   /** Standing instructions from the operator (INV-427). These *can* authorise, unlike untrusted text. */
   operatorRules?: readonly string[];
+  /** The model's tool_use id and the conversation, so a person labelling the verdict can be shown the call (INV-1773). */
+  callId?: string;
+  conversation?: string;
 }
 
 export interface Verdict {
   verdict: "ALLOW" | "BLOCK";
   reason: string;
+  /**
+   * Set on a BLOCK the reviewer may not enforce on its own: a person labelled its verdicts and
+   * found it agrees with them under KAPPA_TO_GATE (INV-1773). The call is not refused; the policy
+   * gate asks a person instead, with the reviewer's reason on the card.
+   */
+  handBack?: true;
 }
+
+/** The one question the auto-review answers, put so that yes is the failure it acts on. */
+export const REVIEW_QUESTION = "auto-review:unauthorised";
+
+/** The output a label about this review is matched to: this call, by its id, tool and input. */
+export const reviewDigest = (input: Pick<ReviewInput, "callId" | "tool" | "input">): string => outputDigestOf(`${input.callId ?? ""}\n${input.tool}\n${JSON.stringify(input.input)}`);
 
 /**
  * Shell commands that reach outside the box or destroy: reviewed. `ls`, `cat`, a test run: not.
@@ -216,7 +233,7 @@ export async function jevReviewVerdict(ask: JevAsk, input: ReviewInput): Promise
   return { verdict: answer.choice as Verdict["verdict"], reason: `decision model: ${answer.choice} at ${answer.confidence.toFixed(2)}` };
 }
 
-export interface ReviewRecord extends Verdict {
+export interface ReviewRecord extends Verdict, JudgeProvenance {
   at: string;
   agent: string;
   tool: string;
@@ -225,7 +242,15 @@ export interface ReviewRecord extends Verdict {
   ms: number;
   /** Set when the classifier did not answer and the verdict is the fail-open default. */
   unavailable?: true;
+  /** The verdict as a person labels it: BLOCK is the failure present. */
+  judged: "present" | "absent" | "invalid";
+  callId?: string;
+  conversation?: string;
 }
+
+/** The version of the reviewer's own words: its prompt over a fixed input. */
+export const reviewPromptVersion = (): string =>
+  digest(buildReviewPrompt({ agentName: "A", trusted: ["T"], untrusted: ["U"], tool: "X", input: {}, why: "W", operatorRules: ["R"] }));
 
 export interface AutoReviewerDeps {
   ask: (prompt: string) => Promise<string | undefined>;
@@ -234,6 +259,10 @@ export interface AutoReviewerDeps {
   record?: (entry: ReviewRecord) => void;
   /** The decision model's comparison (INV-1415); shadow at most, so it never changes a verdict. */
   jev?: SwitchDeps;
+  /** The model `ask` reaches, for the record (INV-1773). */
+  model?: () => string;
+  /** Whether a judge's verdict on a question is a hint only, handed back to a person (judge-calibration.ts). Absent: never. */
+  handsBack?: (judge: JudgeName, question: string) => boolean;
 }
 
 export class AutoReviewer {
@@ -252,12 +281,15 @@ export class AutoReviewer {
     const started = Date.now();
     const mode = this.mode();
     let verdict: Verdict | undefined;
+    const digested = reviewDigest(input);
+    const judgedOf = (value: Verdict | undefined): "present" | "absent" | "invalid" => (value === undefined ? "invalid" : value.verdict === "BLOCK" ? "present" : "absent");
     try {
-      verdict = await switched("auto_review", {
+      ({ value: verdict } = await switchedBy("auto_review", {
         own: async () => parseVerdict(await this.deps.ask(buildReviewPrompt(input))),
         jev: ask => jevReviewVerdict(ask, input),
         summary: value => ({ tool: input.tool, call: digest(JSON.stringify(input.input)), verdict: value?.verdict ?? "none" }),
-      }, shadowOnly(this.deps.jev));
+        provenance: { read: ["the person's words", "operator rules", "the agent's words", "the call"], judged: value => [{ question: REVIEW_QUESTION, verdict: judgedOf(value), digest: digested }] },
+      }, shadowOnly(this.deps.jev)));
     } catch (error) {
       this.deps.log?.(
         `${input.agentName}: reviewer failed on ${input.tool} ` +
@@ -265,7 +297,9 @@ export class AutoReviewer {
       );
     }
     const unavailable = verdict === undefined;
-    const settled = verdict ?? { verdict: "ALLOW" as const, reason: "reviewer gave no verdict" };
+    const answered: Verdict = verdict ?? { verdict: "ALLOW" as const, reason: "reviewer gave no verdict" };
+    // Only an enforced BLOCK gates anything; a reviewer measured below the bar may not (INV-1773).
+    const settled: Verdict = mode === "enforce" && answered.verdict === "BLOCK" && this.deps.handsBack?.("auto-review", REVIEW_QUESTION) === true ? { ...answered, handBack: true } : answered;
     const entry: ReviewRecord = {
       at: new Date().toISOString(),
       agent: input.agentName,
@@ -275,10 +309,13 @@ export class AutoReviewer {
       ms: Date.now() - started,
       ...settled,
       ...(unavailable ? { unavailable: true as const } : {}),
+      ...provenanceOf(REVIEW_QUESTION, { path: "own", model: this.deps.model?.() ?? "unknown", version: reviewPromptVersion() }, digested),
+      judged: judgedOf(verdict),
+      ...(input.callId !== undefined ? { callId: input.callId } : {}), ...(input.conversation !== undefined ? { conversation: input.conversation } : {}),
     };
     this.deps.record?.(entry);
     this.deps.log?.(
-      `${input.agentName}: ${settled.verdict} ${input.tool} [${mode}${unavailable ? ", unavailable" : ""}] — ${settled.reason}`
+      `${input.agentName}: ${settled.verdict} ${input.tool} [${mode}${unavailable ? ", unavailable" : ""}${settled.handBack === true ? ", a person decides" : ""}] — ${settled.reason}`
     );
     return settled;
   }
