@@ -978,8 +978,12 @@ reasonable.
 
 Documented rather than discovered later: no WebAuthn bridging into the box, no
 per-step checkpointing of a turn's side effects (an interrupted turn is resumed with
-its last action marked *outcome unknown*, never replayed), and no cluster scheduling —
-one box per tenant, one machine. The full boundary lives in `docs/01-requirements.md` §5.
+its last action marked *outcome unknown*, never replayed). A local Docker installation
+runs boxes on one host. In a Kubernetes multi-tenant deployment, the control plane
+allocates a pod per tenant and the Kubernetes scheduler places pods on cluster nodes.
+See the [deployment guide](../deploy/kubernetes/README.md) and
+[onboarding walkthrough](../deploy/kubernetes/ONBOARDING.md) for that setup. The full
+boundary lives in `docs/01-requirements.md` §5.
 
 ## License
 

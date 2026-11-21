@@ -1474,15 +1474,15 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   // as three unrelated short turns. A goal continuation inherits the pursuit's id the same way a resumption
   // inherits its work's (INV-770): every turn of one objective is one piece of work in the ledgers.
   const goal = inbound.find(message => message.goal !== undefined)?.goal;
-  // A goal working in the background does not talk into the chat; a request the host is merely carrying
-  // across budgets answers the person like any turn (INV-1823).
+  // Background goals stay quiet; requests carried across budgets still answer the person (INV-1823).
   /** A colleague's errand taken beside the person's waiting work: it sees none of that work and may be interrupted for it. */
   const sideWork = inbound.some(message => message.side === true);
   const quietGoal = goal !== undefined && deps.tasks?.get(goal.taskId)?.pursuit?.completion !== "answer";
   let taskBinding = admittedTaskBinding({ agentId: agent.id, conversation, inbound, tasks: deps.tasks, goal, resume: deps.resumeOf });
   const workId = deps.resumeOf?.workId ?? goal?.workId ?? work?.id ?? (taskBinding?.role === "executor" ? taskBinding.progressAdmission?.rootWorkId : undefined) ?? randomUUID();
   const executionId = randomUUID(), attempt = deps.resumeOf?.attempt ?? 1;
-  if (deps.tasks && !taskBinding && hasAdmittedTask({ inbound, tasks: deps.tasks, goal, resume: deps.resumeOf })) throw new Error("The admitted task binding is no longer valid; no task tool was dispatched.");
+  if (deps.tasks && !taskBinding && hasAdmittedTask({ agentId: agent.id, conversation, inbound, tasks: deps.tasks, goal, resume: deps.resumeOf }))
+    throw new Error("The admitted task binding is no longer valid; no task tool was dispatched.");
   const progressAccess = { agent: (id: string) => registry.has(id) && registry.boxOf(id).id === registry.boxOf(agent.id).id, box: (id: string) => id === registry.boxOf(agent.id).id };
   let progressContext = openProgressContext(deps.tasks, taskBinding, { agentId: agent.id, conversation, turnId, executionId, boxId: registry.boxOf(agent.id).id, workId, access: progressAccess, resuming: !!deps.resumeOf });
   // Built once, here, because this is the only place that knows all four of the things an aside

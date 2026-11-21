@@ -51,6 +51,98 @@ import { parseSkillFile, skillFrom } from "./skills.ts";
 import { Vault } from "./vault.ts";
 import { auditConversation } from "./audit-context.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
+import { approvedCallNotice } from "./approval-notice.ts";
+import { ExceptionLedger, noteTurnEnd } from "./exceptions.ts";
+
+test("a host approval notice wakes a member to retry the unexecuted call without a second card (INV-1990)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-host-approval-"));
+  const policy = new PolicyGate({
+    path: join(dir, "policy.jsonl"),
+    limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" },
+  });
+  let cards = 0, retried = false;
+  policy.onApprovalRequested = () => { cards++; };
+  const command = "echo approved > /home/box/work/approved.txt";
+  const result = await runEpisode({
+    team: [{ name: "Ada", toolPermissions: { tools: { bash: "ask" } } }], says: [], policy,
+    script: ({ round, messages }) => {
+      if (round === 0) return { call: "bash", input: { command } };
+      const opened = messages.filter(message => message.role === "user" && typeof message.content === "string").map(message => message.content).join("\n");
+      if (opened.includes("from the host")) {
+        assert.doesNotMatch(opened, /teammate system|cannot approve anything/);
+        assert.match(opened, /NOT executed/);
+        assert.match(opened, /same call again now/);
+        assert.match(opened, /without asking again/);
+        if (!retried) { retried = true; return { call: "bash", input: { command } }; }
+        assert.doesNotMatch(JSON.stringify(messages.at(-1)), /is_error":true/);
+        return { say: "The approved call succeeded." };
+      }
+      return { say: "Waiting for the person to approve the call." };
+    },
+    drive: async ({ bus, frontId, files }) => {
+      bus.sendFromUser(frontId, "Write the approved file.");
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(files.has("/home/box/work/approved.txt"), false);
+      const [waiting] = policy.pending();
+      assert.ok(waiting);
+      assert.equal(policy.grant(waiting.id, "user", "once"), true);
+      assert.equal(files.has("/home/box/work/approved.txt"), false, "granting did not execute the call");
+      bus.deliverSystem(frontId, approvedCallNotice(waiting.description, "once"), waiting.returnTo?.conversation ?? "main", waiting.returnTo?.work);
+      await bus.idle();
+      assert.equal(files.get("/home/box/work/approved.txt"), "approved");
+      assert.equal(cards, 1, "the retry consumed the one-time grant without requesting approval again");
+      assert.deepEqual(policy.pending(), []);
+    },
+  });
+  try { assert.equal(retried, true); assert.equal(result.score.turns, 2); }
+  finally { result.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const expectResult of [true, false]) test(`web task SendToAgent runs the recipient and returns its result (expect_result=${expectResult}, INV-1993)`, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "peer-task-binding-"));
+  const exceptions = new ExceptionLedger(join(dir, "exceptions.jsonl"));
+  const tasks = new TaskStore(null);
+  let asked = false, rexCalls = 0, rexId = "";
+  let settleRex!: () => void;
+  const rexSettled = new Promise<void>(resolve => { settleRex = resolve; });
+  try {
+    const episode = await runEpisode({
+      team: [{ name: "Ada" }, { name: "Rex" }], says: [], tasks,
+      onBusEvent: event => {
+        if (event.type === "turn_failed") noteTurnEnd(exceptions, event.agentId, "main", [], new Error(event.error));
+        if ((event.type === "turn_failed" || event.type === "turn_finished") && event.agentId === rexId) settleRex();
+      },
+      script: async ({ agent }) => {
+        if (agent === "Rex") {
+          rexCalls++;
+          if (!expectResult && rexCalls === 1) return { call: "SendToAgent", input: { target_id: "Ada", message: "REX_RESULT: checked the requested facts", expect_result: false } };
+          return { say: "REX_RESULT: checked the requested facts" };
+        }
+        if (!asked) {
+          asked = true;
+          return { call: "SendToAgent", input: { target_id: "Rex", message: "Check the requested facts", expect_result: expectResult } };
+        }
+        if (!expectResult) await rexSettled;
+        return { say: "The request is recorded." };
+      },
+      drive: async ({ bus, frontId, registry }) => {
+        rexId = registry.resolve("Rex").id;
+        bus.sendFromUser(frontId, "Check the facts with Rex", { conversation: "main", messageId: "web-request" });
+        const task = tasks.list().find(task => task.sourceMessageId === "web-request");
+        assert.ok(task, "the web prompt admission automatically creates a task");
+        assert.equal(task.assigneeId, frontId);
+        await bus.runExclusive(frontId, { userDriven: true, conversation: "main" });
+        await bus.idle();
+      },
+    });
+    try {
+      assert.deepEqual(exceptions.list(), [], "no failed turns appear in exceptions");
+      assert.ok(rexCalls > 0, "Rex actually called the model");
+      assert.ok(episode.observations.some(o => o.kind === "message" && o.agent === "Rex" && o.to === "Ada" && o.text?.includes("REX_RESULT")));
+    } finally { episode.cleanup(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("user installation resumes to a verified artifact after failure; a hundred priority peers are answered beside it and never enter it (INV-1797, INV-1824)", async () => {
   const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
@@ -2343,23 +2435,27 @@ test("a fan-out names what did not finish — a fork that failed outright includ
       forkRounds.push(brief);
       if (/alpha/.test(brief)) return { say: 'alpha: found\nHANDOFF: {"status":"done"}' };
       if (/beta/.test(brief)) return { say: 'beta: site blocked\nHANDOFF: {"status":"blocked","reason":"site blocked"}' };
+      if (/delta/.test(brief)) return { say: 'delta: found the requested details.' };
       throw new Error("provider went away mid-fork");
     }
     parentCalls += 1;
     const last = JSON.stringify(messages.at(-1)?.content ?? "");
-    if (parentCalls === 1) return { call: "Fork", input: { briefs: ["look up alpha", "look up beta", "look up gamma"] } };
+    if (parentCalls === 1) return { call: "Fork", input: { briefs: ["look up alpha", "look up beta", "look up gamma", "look up delta"] } };
     parentSaw.push(last);
     if (parentCalls === 2) {
       // What wide-research says to do with that line: retry the unfinished ones, once.
       return { call: "Fork", input: { briefs: ["look up beta", "look up gamma"] } };
     }
-    return { say: "Covered 1 of 3; missing: beta (site blocked), gamma (failed twice)." };
+    return { say: "Covered 2 of 4 after reading delta's findings; missing: beta (site blocked), gamma (failed twice)." };
   };
-  const episode = await runEpisode({ team: [{ name: "Front" }], says: ["逐个调研 alpha、beta、gamma 三家"], script });
+  const episode = await runEpisode({ team: [{ name: "Front" }], says: ["逐个调研 alpha、beta、gamma、delta 四家"], script });
   try {
-    assert.match(parentSaw[0]!, /3 forks finished \(1 done, 1 blocked, 1 failed\)/, "a fork that threw is counted, not left out");
+    assert.match(parentSaw[0]!, /4 forks finished \(1 done, 1 blocked, 1 unstated, 1 failed\)/, "every fork is counted, including unstated and failed");
     assert.match(parentSaw[0]!, /Not finished: fork 2 \(blocked\), fork 3 \(failed\)/);
+    assert.doesNotMatch(parentSaw[0]!, /Not finished:[^.]*fork 4/);
+    assert.match(parentSaw[0]!, /Returned without a verdict line: fork 4 — read their findings below to judge whether each is done\./);
     assert.equal(forkRounds.filter(brief => /alpha/.test(brief)).length, 1, "what finished is not retried");
+    assert.equal(forkRounds.filter(brief => /delta/.test(brief)).length, 1, "a missing verdict alone does not call for a retry");
     assert.equal(forkRounds.filter(brief => /gamma/.test(brief)).length, 2, "the failure is retried once, and only once");
     assert.match(parentSaw[1]!, /2 forks finished \(1 blocked, 1 failed\)/);
   } finally {
