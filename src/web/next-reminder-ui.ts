@@ -30,6 +30,7 @@ function renderReminders(view) {
     var row = el("div", "row"), open = el("span", "open"), body = el("span", "body"), acts = el("span", "acts"), drop = el("button", "act", t("ui.next.remind.dismiss"));
     var facts = [reminder.agentName, t("ui.next.remind.due", { when: new Date(reminder.due).toLocaleString() })];
     if (reminder.chat) facts.push(t("ui.next.remind.chat", { chat: reminder.chat }));
+    if (reminder.missed) facts.push(t("ui.next.remind.missed", { chat: reminder.missed.chat }));
     body.appendChild(el("div", "title", reminder.text));
     body.appendChild(el("div", "why", facts.join(" · ")));
     open.appendChild(el("span", "who", initial(reminder.agentName)));
