@@ -318,9 +318,16 @@ test("a fork's handoff line is read, not guessed: status reaches the parent, a m
     const context = { agent, registry, bus, box: undefined } as unknown as Parameters<typeof dispatchTool>[2];
     const result = await dispatchTool("Fork", { briefs: ["one", "two BLOCK", "three QUIET"] }, context);
     assert.match(result.text, /3 forks finished \(1 done, 1 blocked, 1 unstated\)/);
+    assert.match(result.text, /Not finished: fork 2 \(blocked\) — retry those once if they matter, and say which are still missing\./);
+    assert.doesNotMatch(result.text, /Not finished:[^.]*unstated/);
+    assert.match(result.text, /Returned without a verdict line: fork 3 — read their findings below to judge whether each is done\./);
     assert.match(result.text, /--- fork 2 \(blocked: needs a person\) ---/);
     assert.match(result.text, /--- fork 3 \(unstated\) ---/);
     assert.doesNotMatch(result.text, /HANDOFF:/, "the line is consumed, not shown as prose");
+    const quiet = await dispatchTool("Fork", { briefs: ["one QUIET", "two QUIET"] }, context);
+    assert.match(quiet.text, /2 forks finished \(2 unstated\)/);
+    assert.doesNotMatch(quiet.text, /Not finished:|retry/);
+    assert.match(quiet.text, /Returned without a verdict line: fork 1, fork 2 — read their findings below to judge whether each is done\./);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
