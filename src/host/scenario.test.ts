@@ -2343,23 +2343,27 @@ test("a fan-out names what did not finish — a fork that failed outright includ
       forkRounds.push(brief);
       if (/alpha/.test(brief)) return { say: 'alpha: found\nHANDOFF: {"status":"done"}' };
       if (/beta/.test(brief)) return { say: 'beta: site blocked\nHANDOFF: {"status":"blocked","reason":"site blocked"}' };
+      if (/delta/.test(brief)) return { say: 'delta: found the requested details.' };
       throw new Error("provider went away mid-fork");
     }
     parentCalls += 1;
     const last = JSON.stringify(messages.at(-1)?.content ?? "");
-    if (parentCalls === 1) return { call: "Fork", input: { briefs: ["look up alpha", "look up beta", "look up gamma"] } };
+    if (parentCalls === 1) return { call: "Fork", input: { briefs: ["look up alpha", "look up beta", "look up gamma", "look up delta"] } };
     parentSaw.push(last);
     if (parentCalls === 2) {
       // What wide-research says to do with that line: retry the unfinished ones, once.
       return { call: "Fork", input: { briefs: ["look up beta", "look up gamma"] } };
     }
-    return { say: "Covered 1 of 3; missing: beta (site blocked), gamma (failed twice)." };
+    return { say: "Covered 2 of 4 after reading delta's findings; missing: beta (site blocked), gamma (failed twice)." };
   };
-  const episode = await runEpisode({ team: [{ name: "Front" }], says: ["逐个调研 alpha、beta、gamma 三家"], script });
+  const episode = await runEpisode({ team: [{ name: "Front" }], says: ["逐个调研 alpha、beta、gamma、delta 四家"], script });
   try {
-    assert.match(parentSaw[0]!, /3 forks finished \(1 done, 1 blocked, 1 failed\)/, "a fork that threw is counted, not left out");
+    assert.match(parentSaw[0]!, /4 forks finished \(1 done, 1 blocked, 1 unstated, 1 failed\)/, "every fork is counted, including unstated and failed");
     assert.match(parentSaw[0]!, /Not finished: fork 2 \(blocked\), fork 3 \(failed\)/);
+    assert.doesNotMatch(parentSaw[0]!, /Not finished:[^.]*fork 4/);
+    assert.match(parentSaw[0]!, /Returned without a verdict line: fork 4 — read their findings below to judge whether each is done\./);
     assert.equal(forkRounds.filter(brief => /alpha/.test(brief)).length, 1, "what finished is not retried");
+    assert.equal(forkRounds.filter(brief => /delta/.test(brief)).length, 1, "a missing verdict alone does not call for a retry");
     assert.equal(forkRounds.filter(brief => /gamma/.test(brief)).length, 2, "the failure is retried once, and only once");
     assert.match(parentSaw[1]!, /2 forks finished \(1 blocked, 1 failed\)/);
   } finally {
