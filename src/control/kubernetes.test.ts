@@ -152,11 +152,14 @@ test("tokens reach the box through the Secret, never the pod spec", async () => 
     assert.equal(decode("AGENTBOX_KEY_ENV"), "AGENTBOX_API_KEY");
     assert.equal(decode("AGENTBOX_PROVIDER"), "anthropic");
 
-    // The readiness probe is boxd's /health, which is unauthenticated by design — the probe gives
-    // away nothing, and a box whose desktop is still starting is not Ready to be handed out.
-    const probe = container.readinessProbe as { httpGet: { path: string; port: number } };
-    assert.equal(probe.httpGet.path, "/health");
-    assert.equal(probe.httpGet.port, 1337);
+    const probe = container.readinessProbe as { exec: { command: string[] }; failureThreshold: number };
+    const [shell, flag, script] = probe.exec.command;
+    assert.equal(shell, "sh");
+    assert.equal(flag, "-c");
+    const [boxdCheck, hostdCheck] = script!.split(" && ");
+    assert.match(boxdCheck!, /127\.0\.0\.1:1337\/health/);
+    assert.match(hostdCheck!, /127\.0\.0\.1:7777\/login/);
+    assert.equal(probe.failureThreshold, 1, "one failed daemon check takes the tenant pod out of service");
 
     // The three mounts are the same paths Docker gives a box — the image must not be able to
     // tell which allocator launched it.
@@ -534,8 +537,7 @@ test("controlUrl and spec env are plain env on the container, never in the Secre
     const acme = store.upsertTenant({ name: "acme" });
     const handle = await allocator.allocate(acme.id, {
       image: "agentbox/box:test",
-      // A spec may not turn the gateway's trust off (INV-1543): the key is dropped, not passed on.
-      env: { AGENTBOX_PROVIDER: "minimax", EXTRA_FLAG: "1", AGENTBOX_TRUST_GATEWAY_IDENTITY: "0" },
+      env: { AGENTBOX_PROVIDER: "minimax", EXTRA_FLAG: "1", AGENTBOX_TRUST_GATEWAY_IDENTITY: "0", AGENTBOX_INSECURE: "0" },
     });
 
     const container = (fake.pods.get(handle.externalId)!.spec.containers as Record<string, unknown>[])[0]!;
@@ -543,6 +545,7 @@ test("controlUrl and spec env are plain env on the container, never in the Secre
       // Always on: the gateway proxies to the box's UI, which only listens when the in-box
       // orchestrator is enabled.
       { name: "AGENTBOX_HOST_ENABLED", value: "1" },
+      { name: "AGENTBOX_INSECURE", value: "1" },
       // Always on too: the gateway in front is what makes its identity headers worth believing (INV-1543).
       { name: "AGENTBOX_TRUST_GATEWAY_IDENTITY", value: "1" },
       { name: "AGENTBOX_CONTROL_URL", value: "http://agentbox-control.agentbox.svc:8080" },
@@ -572,7 +575,10 @@ test("restart re-applies the secret and recreates the pod, keeping the service a
 
     await allocator.restart(handle);
 
-    assert.ok(fake.pods.has(name), "the pod is back");
+    const pod = fake.pods.get(name);
+    assert.ok(pod, "the pod is back");
+    const container = (pod.spec.containers as { env: { name: string; value: string }[] }[])[0]!;
+    assert.ok(container.env.some(({ name, value }) => name === "AGENTBOX_INSECURE" && value === "1"), "a recreated pod permits the same internal HTTP hop");
     const secret = fake.secrets.get(`${name}-tokens`);
     assert.ok(secret !== undefined, "the secret is back");
     assert.equal(
