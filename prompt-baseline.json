@@ -2,21 +2,21 @@
   "single": {
     "stable": 24132,
     "volatile": 16298,
-    "tools": 44152
+    "tools": 44167
   },
   "team-member": {
     "stable": 24132,
     "volatile": 17068,
-    "tools": 44152
+    "tools": 44167
   },
   "desktop": {
     "stable": 24132,
     "volatile": 16298,
-    "tools": 50009
+    "tools": 50024
   },
   "unattended": {
     "stable": 23632,
     "volatile": 17653,
-    "tools": 37155
+    "tools": 37170
   }
 }

@@ -21,7 +21,7 @@ export const READ_LOAD_SHARE = 0.6;
 const READ_TOOLS: ReadonlySet<string> = new Set([
   "read_file",
   "list_dir",
-  "ReadHistory",
+  "ReadHistory", "SearchHistory",
   "ReadKept",
   "Recall",
   "WebFetch",

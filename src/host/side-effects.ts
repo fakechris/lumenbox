@@ -52,7 +52,7 @@ const DECLARED: Record<string, SideEffect> = {
   list_dir: { tier: "observe" },
   Teammates: { tier: "observe" },
   Jobs: { tier: "observe" },
-  ReadHistory: { tier: "observe" },
+  ReadHistory: { tier: "observe" }, SearchHistory: { tier: "observe" }, // every conversation it may read (INV-1751)
   ReadKept: { tier: "observe" },
   OtherThreads: { tier: "observe" },
   Recall: { tier: "observe" },

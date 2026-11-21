@@ -85,6 +85,7 @@ const TEMPLATES: Record<string, Template> = {
   Checkpoint: { en: "saving a checkpoint", zh: "保存进度点" },
   SetTodos: { en: "updating the to-do list ({detail})", zh: "更新待办清单({detail})" },
   ReadHistory: { en: "reading earlier conversation", zh: "回看之前的对话" },
+  SearchHistory: { en: "searching earlier conversations", zh: "搜索之前的对话" },
   ReadKept: { en: "reading what it kept", zh: "查看保留的内容" },
   OtherThreads: { en: "checking other threads", zh: "查看其他会话" },
   Recall: { en: "recalling from memory", zh: "回忆记忆" },

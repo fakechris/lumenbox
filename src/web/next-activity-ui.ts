@@ -102,6 +102,7 @@ function activityBlock() {
       body.appendChild(item);
     });
   }));
+  box.appendChild(historySearchFold()); // next-history-search-ui.ts (INV-1751)
   return box;
 }
 `;

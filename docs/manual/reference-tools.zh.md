@@ -11,7 +11,7 @@
 [English](reference-tools.md) · 中文。本页由 `scripts/docs-reference.mjs` 生成，来源：`buildTools()`（src/host/tools.ts）、src/host/side-effects.ts 里的层级、src/host/tool-roster.ts 里的名单和 src/host/catalog.ts 里的目录工具组。
 本页与来源不一致时 `npm test` 会失败；改来源，然后运行 `node scripts/docs-reference.mjs --write`。
 
-65 个工具：`buildTools` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 github、feishu、dingtalk。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。
+66 个工具：`buildTools` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 github、feishu、dingtalk。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。
 
 - **层级**——一次调用对外界做了什么（side-effects.ts）：`observe` 只看，`self` 留在 box 里或只涉及提出请求的人，`reach` 越出 box 行事，`credential` 触及权限。
 - **询问**——闸门是否先问人，以及确认卡片上的说法。由主机写，从不由 agent 写。
@@ -71,6 +71,7 @@
 | `Reminder` | Set a one-off reminder for yourself: when it is due you are woken with your note. | self | 否 | 总是；分支里没有 | deferred | — | `action`, `message`, `due`, `chat`, `id` |
 | `RunOnHost` | Run a command on the person's own computer — the machine LumenBox runs on, outside your box. | credential | 是: “run a command on the person's own machine” | 需要主机执行器；分支里没有 | resident | — | `command`, `why`, `secrets` |
 | `RunOperation` | Run a taught operation: a skill whose folder holds operation.json replays its browser (and desktop) steps with no model, and returns its output as JSON. | reach | 是: “replay a taught browser operation” | 需要一台 box | deferred | — | `skill`, `input` |
+| `SearchHistory` | Search every recorded conversation of yours and your teammates' for exact words or a regex, newest first. | observe | 否 | 总是 | deferred | desk, web, code, team | `words`, `regex`, `since`, `agent`, `conversation`, `kinds` |
 | `SendToAgent` | By default, the current work awaits the result. | self | 否 | 总是；分支里没有 | resident | desk, web, code, team | `expect_result`, `target_id`, `message`, `priority` |
 | `SetPlan` | Write or replace your plan for the work you are doing. | self | 否 | 总是 | deferred | desk, web, code, team | `plan` |
 | `SetTodos` | Set out the steps you are about to take, and keep them current as you take them. | self | 否 | 总是 | resident | desk, web, code, team | `todos` |

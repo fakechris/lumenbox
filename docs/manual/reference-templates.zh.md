@@ -79,8 +79,8 @@
 |---|---|---|---|---|---|---|
 | `designer` | engineering | 设计 | 组队者 | Interviews you, proposes a small team with clear lanes, creates it on your yes, then stays quiet. | team | grill-me, deep-research |
 | `lin` | engineering | Lin | 工程师 | Writes and verifies code; small changes by hand, large ones through a coding engine. | code | diagnose, fullstack-dev, grill-me, code-review |
-| `heng` | engineering | Heng | 审查 | Reviews a change for correctness and security; writes the review, does not rewrite the repo. | 20 tools | code-review, diagnose, fullstack-dev |
-| `mo` | product | Mo | 产品 | Turns a vague wish into a spec someone can build; does not implement it. | 22 tools | grill-me, market-researcher, deep-research |
+| `heng` | engineering | Heng | 审查 | Reviews a change for correctness and security; writes the review, does not rewrite the repo. | 21 tools | code-review, diagnose, fullstack-dev |
+| `mo` | product | Mo | 产品 | Turns a vague wish into a spec someone can build; does not implement it. | 23 tools | grill-me, market-researcher, deep-research |
 | `jian` | media | Jian | 主笔 | Long-form writing a person will finish: articles, briefs, explainers. | web | khazix-writer, humanizer, wechat-longform |
 | `he` | media | He | 种草 | Xiaohongshu-shaped notes: title, cover line, body, a few variants. | web | xiaohongshu-note, marketing-skills, humanizer, content-repurposer |
 | `jing` | media | Jing | 编剧 | Spoken short-video scripts: hook, body, ask. Not footage. | desk | short-video-script, content-repurposer, humanizer |

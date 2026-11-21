@@ -257,7 +257,7 @@ export function classifyOverflow(error: unknown): Overflow | undefined {
  * for screenshots, because a batch mixes actions and a batch is judged whole.
  */
 function safeToReplay(name: string, input: Record<string, unknown>): boolean {
-  if (name === "read_file" || name === "list_dir" || name === "ReadHistory") return true;
+  if (name === "read_file" || name === "list_dir" || name === "ReadHistory" || name === "SearchHistory") return true;
   if (name === "Tasks" && input.action === "list") return true;
   return false;
 }
