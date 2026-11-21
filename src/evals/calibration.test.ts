@@ -61,16 +61,17 @@ test("per question: kappa and catch rate from the table, and under 0.6 — or to
   // The textbook table: agreement 0.7, chance 0.5.
   near(by.loose!.kappa, 0.4);
   near(by.loose!.catchRate, 20 / 25);
-  assert.deepEqual([by.loose!.mayGate, by.loose!.why], [false, "kappa 0.40 is under 0.6"]);
+  near(by.loose!.falseKillRate, 10 / 25);
+  assert.deepEqual([by.loose!.measured, by.loose!.mayGate, by.loose!.why], [true, false, "kappa 0.40 is under 0.6"], "measured, and measured low: a hint, not a gate");
   // 29 of 30 agree; chance = (13/30)(12/30) + (17/30)(18/30).
   near(by.sharp!.kappa, (29 / 30 - (13 * 12 + 17 * 18) / 900) / (1 - (13 * 12 + 17 * 18) / 900));
   near(by.sharp!.catchRate, 12 / 13);
-  assert.equal(by.sharp!.mayGate, true);
+  assert.deepEqual([by.sharp!.mayGate, by.sharp!.mayReleaseUnattended], [true, true], "kappa 0.93: may gate, and may release where nobody watches");
   assert.deepEqual([by.thin!.mayGate, by.thin!.why], [false, "5 labels on this question; 10 needed"], "perfect agreement on five outputs is still five outputs");
   assert.equal(by.flat!.kappa, undefined);
   assert.equal(by.flat!.catchRate, undefined, "the person found no failure, so nothing says whether the judge would catch one");
   assert.match(by.flat!.why, /one answer throughout/);
-  assert.equal(by.flat!.mayGate, false);
+  assert.deepEqual([by.flat!.measured, by.flat!.mayGate], [false, false], "one answer throughout is no measurement at all");
 });
 
 test("a verdict with no valid quote counts against the judge; two people disagreeing, or a label for another output, is left out and counted", () => {

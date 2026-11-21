@@ -37,6 +37,9 @@ change it could have seen. A number without those three reads as more than it is
 | golden trend | `src/evals/golden-trend.ts` | `agentbox golden` runs kept and read back |
 | command | `scripts/eval-report.mjs` (`npm run eval`) | the provider, the clock and the disk |
 | candidates | `src/host/eval-candidates.ts` (`agentbox eval candidates`) | replies the answer review judged not PASS, as cases a person may confirm into the corpus |
+| product judges | `src/host/judge-record.ts` | who judged a live verdict and what it read: the provenance every product judge writes |
+| product calibration | `src/host/judge-calibration.ts` | the product's labels, each judge's standing, and what that standing lets it decide |
+| labelling sheet | `src/host/judge-sheet.ts`, `src/web/calibration-routes.ts`, `src/web/next-calibration-ui.ts` | Settings → Supervision → calibration: what may be shown, and the yes or no |
 
 Each piece takes the others as arguments. A new way to run a task is one more subject; a new
 comparison is a function over two records. The judges run over a record, not inside the runner,
@@ -261,6 +264,63 @@ people labelling one output differently leaves it out.
   page says.
 - With 30 or more, a question **may gate** at kappa **0.6** or above on at least 10 of its own
   labels; otherwise it is marked **may not gate** with the reason.
+
+## The judges in the product, and when one may be believed (INV-1773)
+
+The same rule holds for the judges that run in the product, on live verdicts rather than corpus
+outputs: the auto-review of binding tool calls, the answer review of replies, the memory judge of
+candidate memories, and the decision model wherever its switch is on or in shadow.
+
+**Every verdict names its judge where it is written.** `auto-review.jsonl`, `answer-review.jsonl`,
+`memory-judge.jsonl` (new: one line a candidate and question) and `jev-shadow.jsonl` carry `judge`,
+`judgeModel`, `judgeVersion` (a digest of the words the judge is asked with), `question` and
+`evidence` — what it read, by name, and the digest of the judged output. Never the text: the
+ledgers keep the hashes they kept before. Each question is put so that yes is the failure the judge
+acts on (`auto-review:unauthorised`, `answer-review:not-answered`, `memory-judge:<question>`), and
+the normalised answer is `judged`: `present`, `absent` or `invalid`.
+
+**One label format, one kappa.** A person's labels are `HumanLabel`s, matched to verdicts by
+question and output digest and held against them by `calibrate()`, exactly as above. They differ
+from the corpus labels in two ways: they are kept in `~/.agentbox/judge-labels.jsonl`, written by
+the labelling page and never committed, because their outputs are people's conversations; and their
+question names the judge, because the product's questions are not the corpus's failure types.
+Because a label is about an output, the label a person gives under the point's own judge also
+checks the decision model's shadow answer on the same output. A judge's standing reads only the
+verdicts of its current model and question version.
+
+**What a standing changes.**
+
+- **Not calibrated** — under 30 matched labels for the judge or 10 on the question, or one answer
+  throughout: nothing. Every gate behaves exactly as it did before labels existed, which is every
+  judge on a fresh installation.
+- **Measured under 0.6** — the verdict is a hint, never a gate. An enforced auto-review BLOCK is
+  not refused by the reviewer: the policy gate asks a person, with the reviewer's reason among why
+  (no allow rule lifts it). A memory-judge verdict may still hold a candidate for a person, which is
+  asking one, but may not act on its own: a duplicate it finds is held instead of dropped, a
+  contradiction it is sure of is held instead of withdrawing the known line.
+- **Measured under 0.8** — it may not release anything on its own in a routine nobody watches. No
+  judge does today — the policy gate stands under every auto-review ALLOW — so this is the answer
+  `releasesUnattended` gives the work that would let a reviewer approve in a person's place.
+
+**The answer review measures satisfaction.** It reads the request and the reply and nothing the
+agent did, so it says whether a reply looks like it serves the person, not whether the work was
+done. Its records say `measures: "satisfaction"`, the page labels it so, and nothing that counts
+completed work may count it. The auto-review, which reads the call and what authorised it, is not
+that and stays as it is. A guest's answer is reviewed as before and leaves nothing outside the
+guest's own record, not even a digest, so it is never labelled and never calibrated.
+
+**The labelling page** (Settings → Supervision, an admin's) shows every judge's labels, kappa,
+catch rate and false-kill rate — of what the person called fine, the share the judge would have
+stopped — and what that lets it decide; then the latest unlabelled verdicts, spread over the
+questions and the judge's two answers (`spreadForLabelling`, shared with the corpus sheet), each as
+the judge's question with yes and no and without the judge's answer. It shows only text the
+installation already keeps readable, and only when its digest is the verdict's: the message and
+reply from the transcript and the door's ledger, found as `agentbox eval candidates` finds them; the
+call from the transcript by its tool_use id, with the person's latest words before it; the memory
+line from the agent's memory ledger. Everything shown is scrubbed of held values and credential
+shapes. The failing replies INV-1474 keeps are not read. Whether a memory duplicates or contradicts
+another needs the line it was compared with, which is not kept, so those two questions are recorded
+and never put to a person: they stay not calibrated and decide as before.
 
 ## The release scorecard and the golden tasks
 

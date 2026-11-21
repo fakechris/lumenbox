@@ -68,7 +68,7 @@ import { managesLocalDocker, resolveBoxProvisioner, type BoxProvisioner } from "
 import { classifyBox, auditNotice } from "../box/access.ts";
 import { configPath, envNumber } from "../config.ts";
 import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
-import { defaultSupervisionLog, supervisionRoute } from "./supervision-routes.ts";
+import { defaultSupervisionLog, supervisionRoute } from "./supervision-routes.ts"; import { calibrationRoute } from "./calibration-routes.ts"; // Settings → Supervision → calibration (INV-1773)
 import { SUPERVISION_JS } from "./supervision-ui.ts";
 import { SUPERVISION_WIZARD_JS } from "./supervision-wizard.ts";
 import { BOX_UPDATE_JS } from "./box-update-ui.ts";
@@ -3443,7 +3443,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
         // Settings → Supervision (INV-1528): its own script and routes, like the decision model's below.
         if (route === "GET /app/supervision.js") { res.writeHead(200, { "content-type": "application/javascript; charset=utf-8", "cache-control": "no-store" }); res.end(localizeScript(WORK_CONTROL_JS + ROW_ORDER_JS + BOARD_ORDER_JS + UI_STYLE_JS + INLINE_ASK_JS + AGENT_PAUSE_JS + EXCEPTIONS_JS + SUPERVISION_JS + SUPERVISION_WIZARD_JS + BOX_UPDATE_JS + DIAGNOSTICS_JS + CLAIM_ACCOUNT_JS + PUSH_BUDGET_JS + SPEND_LIMIT_JS + PROVIDER_REST_JS + TEAM_MEMORY_REVIEW_JS + OUTBOX_JS + ORG_KNOWLEDGE_JS + ORG_CORRECTION_JS + PROVIDER_FALLBACK_JS + PERSON_JS + ROUTINE_RUNS_JS + DELIVERABLES_JS + TOOL_PERMS_JS + CONFIG_HISTORY_JS + CREDENTIALS_JS + DIVISION_JS + TASK_GATE_JS + INSTALLATION_JS + MACHINE_JS + ORGANISATIONS_JS + GUEST_JS + INSTALLATIONS_JS + NODES_JS + TASK_DEPS_JS, localeOf(req, url))); return; } // + Apply update (INV-1538), askInline (INV-1540)
-        const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() });
+        const supervised = await supervisionRoute(route, { home: agentboxHome(), configPath: configPath(), agents: () => registry.list().map(agent => agent.profile.name), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: role => refusedRole(role), logFile: defaultSupervisionLog() }); const calibrated = await calibrationRoute(route, { home: agentboxHome(), registry, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), mayReadAgent, labeller: () => (caller.userId === undefined ? "operator" : principals.resolve(caller.userId).name) }); if (calibrated !== undefined) { if (calibrated.status !== 0) send(res, calibrated.status, calibrated.body); return; }
         if (supervised !== undefined) { if (supervised.status !== 0) send(res, supervised.status, supervised.body); return; }
         // Settings → Model → Decision model (INV-1412): its own script, its own two routes.
         if (route === "GET /app/jev-settings.js") {

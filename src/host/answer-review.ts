@@ -1,7 +1,9 @@
 /** Small-traffic, fail-open review of whether a final reply actually answers this request. */
 import { createHash } from "node:crypto";
 import { envNumber } from "../config.ts";
-import { choiceOf, type JevAsk, modeFor, type SwitchDeps, switched } from "./jev.ts";
+import { outputDigestOf } from "../evals/corpus.ts";
+import { choiceOf, digest, type JevAsk, modeFor, type SwitchDeps, switchedBy } from "./jev.ts";
+import { type JudgeProvenance, provenanceOf } from "./judge-record.ts";
 
 export type AnswerReviewMode = "off" | "shadow" | "suggest";
 /**
@@ -52,7 +54,7 @@ export function guestAnswerReview(input: { agentName: string; turnId: string; do
   };
 }
 
-export interface AnswerReviewRecord extends AnswerVerdict {
+export interface AnswerReviewRecord extends AnswerVerdict, JudgeProvenance {
   at: string;
   agent: string;
   messageId: string;
@@ -62,7 +64,28 @@ export interface AnswerReviewRecord extends AnswerVerdict {
   answerHash: string;
   ms: number;
   unavailable?: true;
+  /** The verdict as a person labels it (INV-1773): a reply that does not serve the request is the failure present; UNKNOWN is no answer. */
+  judged: "present" | "absent" | "invalid";
+  /**
+   * What this verdict measures: the review reads the request and the reply and nothing the agent
+   * did, so it says whether the reply looks like it serves the person — satisfaction — not whether
+   * the work was done. Nothing that counts completed work may count it (INV-1773).
+   */
+  measures: "satisfaction";
 }
+
+/** The one question the answer review answers as a person labels it. */
+export const ANSWER_QUESTION = "answer-review:not-answered";
+
+/** The output a label about this review is matched to: the request and the reply together. */
+export const answerDigest = (request: string, answer: string): string => outputDigestOf(`${request}\n---\n${answer}`);
+
+/** The version of the review's own words: its member prompt over a fixed input. */
+export const answerPromptVersion = (): string =>
+  digest(buildAnswerReviewPrompt({ source: "member", agentName: "A", messageId: "M", conversation: "C", request: "R", answer: "A" }));
+
+const judgedOf = (verdict: AnswerVerdict | undefined): AnswerReviewRecord["judged"] =>
+  verdict === undefined || verdict.category === "UNKNOWN" ? "invalid" : verdict.category === "PASS" ? "absent" : "present";
 
 export function answerReviewMode(): AnswerReviewMode {
   const value = (process.env.AGENTBOX_ANSWER_REVIEW ?? "shadow").trim().toLowerCase();
@@ -217,6 +240,8 @@ export class AnswerReviewer {
     keepCase?: (c: { at: string; agent: string; messageId: string; conversation?: string; request: string; answer: string } & AnswerVerdict) => void;
     now?: () => Date;
     jev?: SwitchDeps;
+    /** The model `ask` reaches, for the record (INV-1773). */
+    model?: () => string;
   }) {}
 
   mode(): AnswerReviewMode { return this.deps.mode?.() ?? answerReviewMode(); }
@@ -224,12 +249,16 @@ export class AnswerReviewer {
   async review(input: AnswerReviewInput): Promise<AnswerVerdict> {
     const started = Date.now();
     let verdict: AnswerVerdict | undefined;
+    let by: { path: "own" } | { path: "jev"; model: string; version: string } = { path: "own" };
+    const digested = answerDigest(input.request, input.answer);
     try {
-      verdict = await switched("answer_review", {
+      ({ value: verdict, by } = await switchedBy("answer_review", {
         own: async () => parseAnswerVerdict(await this.deps.ask(buildAnswerReviewPrompt(input))),
         jev: ask => jevAnswerVerdict(ask, input),
         summary: value => (value === undefined ? "none" : `${value.category}@${value.confidence.toFixed(2)}`),
-      }, this.deps.jev);
+        // A guest's answer leaves nothing outside the guest's own record (INV-1721), not even its digest.
+        ...(input.source === "member" ? { provenance: { read: ["the request", "the reply"], judged: (value: AnswerVerdict | undefined) => [{ question: ANSWER_QUESTION, verdict: judgedOf(value), digest: digested }] } } : {}),
+      }, this.deps.jev));
     }
     catch { /* Recorded as unavailable; the person's answer still goes out. */ }
     const unavailable = verdict === undefined;
@@ -248,6 +277,8 @@ export class AnswerReviewer {
       ms: Date.now() - started,
       ...settled,
       ...(unavailable ? { unavailable: true as const } : {}),
+      ...provenanceOf(ANSWER_QUESTION, by.path === "jev" ? by : { path: "own", model: this.deps.model?.() ?? "unknown", version: answerPromptVersion() }, digested),
+      judged: judgedOf(verdict), measures: "satisfaction",
     });
     if (!unavailable && settled.category !== "PASS" && settled.category !== "UNKNOWN") {
       this.deps.keepCase?.({ at: (this.deps.now?.() ?? new Date()).toISOString(), agent: input.agentName, messageId: input.messageId, ...(input.conversation !== undefined ? { conversation: input.conversation } : {}), request: input.request, answer: input.answer, ...settled });

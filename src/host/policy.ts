@@ -108,7 +108,7 @@ export type PolicyRequest =
       /** The agent lives on the person's own machine (INV-438): a write there asks unless an operator's allow rule lifts it (INV-1700). Set by dispatch, never by the model. */
       onHostBox?: true; returnTo?: WorkReturn; runLater?: RunLaterFinding; // runLater (INV-1861): a file that is run later, found by its contents (a package.json's scripts); set by dispatch — a path alone is judged here
       /** The turn this call belongs to, for the taint rule (INV-1309): set by dispatch, never by the model. */
-      turnId?: string;
+      turnId?: string; reviewAsks?: string; // reviewAsks (INV-1773): what an auto-review that may not refuse alone found; asks a person. Set by dispatch
       /** The model's tool_use id this check is for (INV-1664): ties the verdict to the step the chat draws. Set by dispatch. */
       callId?: string;
       /** Trusted box observation plus host execution identity, never model input (INV-955). */
@@ -642,9 +642,9 @@ export class PolicyGate {
     const tierWouldAsk = gate !== "off" && tierAsks(tier); const byLevel = request.taskLevel !== undefined ? levelAllows(request.taskLevel, tier) : "allow"; /* the task's own level (INV-1650): a refusal says where the task stops; an ask joins the card below */ if (byLevel === "deny") return { decision: { allow: false, reason: `This task is at L${request.taskLevel}: it stops before acting on the world — hand back what you have (a summary at L1, a plan at L2) and say what the next step would be.` } };
     const hostBoxAsk = request.onHostBox === true ? hostBoxWrite(request.tool, request.input) : undefined;
     const configuredAsk = this.needsApproval(request) || (gate === "enforce" && tierWouldAsk) || byLevel === "ask" || hostBoxAsk !== undefined || later !== undefined;
-    const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined || this.lastTaint !== undefined;
+    const mustAsk = request.tool === "RunOnHost" || request.irreversible !== undefined || this.lastTaint !== undefined || request.reviewAsks !== undefined;
     const asks = rule?.effect === "ask" || mustAsk || (configuredAsk && rule?.effect !== "allow");
-    this.lastAsks = askReasons({ ...(rule !== undefined ? { rule } : {}), hostCommand: request.tool === "RunOnHost", ...(request.irreversible !== undefined ? { irreversible: request.irreversible } : {}), tainted: this.lastTaint !== undefined,
+    this.lastAsks = askReasons({ ...(rule !== undefined ? { rule } : {}), hostCommand: request.tool === "RunOnHost", ...(request.irreversible !== undefined ? { irreversible: request.irreversible } : {}), tainted: this.lastTaint !== undefined, ...(request.reviewAsks !== undefined ? { reviewAsks: request.reviewAsks } : {}),
       approvalList: this.needsApproval({ ...request, irreversible: undefined }) && request.tool !== "RunOnHost", ...(gate === "enforce" && tierWouldAsk ? { tierEnforced: tier } : {}), ...(byLevel === "ask" && request.taskLevel !== undefined ? { levelAsks: request.taskLevel } : {}), ...(hostBoxAsk !== undefined ? { hostBoxWrite: hostBoxAsk } : {}), ...(later !== undefined ? { runLater: later.path } : {}) });
     if (!asks) {
       // Shadow: allowed as before, and the row says a person would have been asked.

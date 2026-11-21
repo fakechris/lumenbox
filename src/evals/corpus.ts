@@ -102,6 +102,9 @@ export function canonical(value: unknown): string {
 
 export const digest = (text: string): string => createHash("sha256").update(text).digest("hex");
 
+/** Which output was judged, as a person's label names it: the evaluation's judges and the product's (INV-1773) alike. */
+export const outputDigestOf = (output: string): string => digest(output).slice(0, 16);
+
 /** The version of one task: what the cache and a baseline comparison hold a result to. */
 export const taskVersion = (task: EvalTask): string => digest(canonical(task)).slice(0, 16);
 

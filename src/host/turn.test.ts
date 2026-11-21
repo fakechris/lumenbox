@@ -2888,21 +2888,22 @@ test("a continuation keeps the memory selection made for the request", async () 
   }
 });
 
-test("auto-review in shadow mode records a verdict and changes nothing; enforce hands BLOCK to the model", async () => {
+test("auto-review in shadow mode records a verdict and changes nothing; enforce hands BLOCK to the model; one measured under the bar hands it to a person", async () => {
   const { registry, cleanup } = fixture();
+  const policy = policyFixture();
   try {
     const ada = registry.create({ name: "Ada" });
     const bus = new AgentBus(registry, async () => {});
     const { box, calls } = stubBox();
     const reviewed: { tool: string; trusted: readonly string[]; untrusted: readonly string[] }[] = [];
-    const reviewer = (mode: "shadow" | "enforce") => ({
+    const reviewer = (mode: "shadow" | "enforce", handBack = false) => ({
       mode: () => mode,
       review: async (input: { tool: string; trusted: readonly string[]; untrusted: readonly string[] }) => {
         reviewed.push(input);
-        return { verdict: "BLOCK" as const, reason: "nobody asked for a push" };
+        return { verdict: "BLOCK" as const, reason: "nobody asked for a push", ...(handBack ? { handBack: true as const } : {}) };
       },
     });
-    const run = (mode: "shadow" | "enforce", capture: Capture) =>
+    const run = (mode: "shadow" | "enforce", capture: Capture, handBack = false) =>
       runTurn(
         ada,
         [{ id: `m-${mode}`, fromId: "user", fromName: "user", text: "tidy the repo", priority: false, receivedAt: "" }],
@@ -2922,7 +2923,8 @@ test("auto-review in shadow mode records a verdict and changes nothing; enforce 
           bus,
           box,
           resolution: undefined,
-          autoReview: reviewer(mode),
+          autoReview: reviewer(mode, handBack),
+          ...(handBack ? { policy: policy.gate } : {}),
         }
       );
 
@@ -2946,8 +2948,21 @@ test("auto-review in shadow mode records a verdict and changes nothing; enforce 
     const result = Array.isArray(second) ? (second[0] as { content?: string; is_error?: boolean }) : undefined;
     assert.equal(result?.is_error, true);
     assert.match(JSON.stringify(result?.content), /Auto-review refused this call: nobody asked for a push/);
+
+    // A person labelled the reviewer's verdicts and found it under kappa 0.6 (INV-1773): its BLOCK is a hint.
+    // The call is not refused by the reviewer; the gate asks a person, with the reviewer's reason as why.
+    const measured: Capture = { params: [] };
+    await run("enforce", measured, true);
+    assert.equal(calls.filter(call => call.kind === "exec" && String(call.detail).includes("git push")).length, 1, "nothing ran without the person");
+    const answer = measured.params[1]?.messages.at(-1)?.content;
+    const asked = Array.isArray(answer) ? JSON.stringify((answer[0] as { content?: unknown }).content) : "";
+    assert.doesNotMatch(asked, /Auto-review refused/, "the reviewer refused nothing on its own");
+    const waiting = policy.gate.pending();
+    assert.equal(waiting.length, 1, "a person is asked about the push");
+    assert.match(waiting[0]!.description, /git push origin main/);
   } finally {
     cleanup();
+    policy.cleanup();
   }
 });
 

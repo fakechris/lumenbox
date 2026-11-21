@@ -3251,7 +3251,7 @@ ${outcome.text}`;
             (deps.mcp?.isHostTool(toolUse.name) === true ? "calls a host-level MCP server" : undefined) ??
             // On the person's own machine (INV-438) every write is a host action.
             (deps.boxKind === "host" ? hostBoxWrite(toolUse.name, toolInput) : undefined));
-      let blocked: Verdict | undefined;
+      let blocked: Verdict | undefined; let reviewAsks: string | undefined; // a BLOCK the reviewer may not enforce alone goes to a person (INV-1773)
       if (!audit && !blockedCapability && canDispatch && reviewWhy !== undefined && deps.autoReview !== undefined && deps.autoReview.mode() !== "off") {
         const reviewInput = reviewInputFor({
           agentName: agent.profile.name,
@@ -3263,10 +3263,10 @@ ${outcome.text}`;
           why: reviewWhy,
         });
         const rulesText = deps.operatorRules?.() ?? [];
-        if (rulesText.length > 0) reviewInput.operatorRules = rulesText;
+        if (rulesText.length > 0) reviewInput.operatorRules = rulesText; reviewInput.callId = toolUse.id; reviewInput.conversation = conversation;
         if (deps.autoReview.mode() === "enforce") {
           const verdict = await deps.autoReview.review(reviewInput);
-          if (verdict.verdict === "BLOCK") blocked = verdict;
+          if (verdict.verdict === "BLOCK" && verdict.handBack === true && deps.policy !== undefined) reviewAsks = verdict.reason || "the person did not ask for it"; else if (verdict.verdict === "BLOCK") blocked = verdict;
         } else {
           void deps.autoReview.review(reviewInput);
         }
@@ -3333,7 +3333,7 @@ ${outcome.text}`;
             box: workBox(box, work, agent.id, conversation, bus, deps.pendingWork), signal,
             files: deps.files,
             claims: deps.claims,
-            policy: deps.policy,
+            policy: deps.policy, ...(reviewAsks !== undefined ? { reviewAsks } : {}),
             caller: deps.caller, ...(isolated || deps.orgKnowledge === undefined ? {} : { orgKnowledge: deps.orgKnowledge }), ...(isolated || deps.outbox === undefined ? {} : { outbox: deps.outbox }), // the Outbox (INV-1739)
           ...(deps.callerName !== undefined ? { callerName: deps.callerName } : {}),
           ...(deps.callerIdentities !== undefined ? { callerIdentities: deps.callerIdentities } : {}),

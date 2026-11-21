@@ -91,10 +91,10 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
     key: "supervision",
     title: "Supervision",
     titleZh: "监督",
-    about: "The watchdog that flags work which stops moving, and the supervisor you can give a goal to watch through to the end.",
-    aboutZh: "看门狗：工作停滞时提醒你；监督者：你给它一个目标，它一直盯到结束。",
+    about: "The watchdog that flags work which stops moving, the supervisor you can give a goal to watch through to the end, and the calibration of the model judges: how far each agrees with a person, and labelling their latest verdicts.",
+    aboutZh: "看门狗：工作停滞时提醒你；监督者：你给它一个目标，它一直盯到结束；以及模型评判的校准：每个评判和人的判断有多一致，并给它最近的判决做标注。",
     config: [],
-    apis: ["/api/supervision"],
+    apis: ["/api/supervision", "/api/calibration"],
     mounted: "script",
   },
   {
