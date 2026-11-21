@@ -1957,35 +1957,6 @@ ${outcome.text}`;
     meter,
   });
 
-  // The per-turn reminder rides the API copy of the person's message only (docs/31 layer
-  // 2b): the transcript keeps what the person said, and a later replay re-appends nothing.
-  const opener = inbound.some(message => message.fromId === "user")
-    ? turnReminderFor(provider.model, turnText, visibleSkillCount > 0)
-    : undefined;
-  // The API copy of the turn's message: what was said, the standing-file diff (INV-777, given once,
-  // never replayed), then — without breakpoints — the volatile tier, then the reminder last, beside
-  // the request, as docs/31 measured. The transcript keeps only what the person said.
-  const tail = volatileInTail ? hostContext(promptParts.volatile + forkLine) : undefined;
-  const messages: Anthropic.MessageParam[] = continuing
-    ? historyToMessages(requestHistory(history, provider))
-    : [
-        ...historyToMessages(requestHistory(history, provider)),
-        { role: "user", content: [turnText, endedNote, standingNotice, tail, opener].filter(part => part !== undefined).join("\n\n") },
-      ];
-  // A continued turn appends nothing new for the model to answer: the next observation is the
-  // result it was waiting on, already in the history. The one exception is a history that
-  // ends on the model's own words — a filed answer written before the call was — where the
-  // wire needs a user message; a one-line host note is the least that satisfies it.
-  if (continuing && messages[messages.length - 1]?.role !== "user") {
-    messages.push({ role: "user", content: "[The host restarted while you were working. Carry on.]" });
-  }
-  // A continued turn still needs its volatile tier somewhere: on the message the wire ends with.
-  if (continuing && tail !== undefined) {
-    const last = messages[messages.length - 1]!;
-    if (typeof last.content === "string") last.content = `${last.content}\n\n${tail}`;
-    else last.content = [...last.content, { type: "text", text: tail }];
-  }
-
   if (!continuing) registry.appendTranscript(agent.id, {
     role: "user",
     text: turnText,
@@ -2100,6 +2071,34 @@ ${outcome.text}`;
           !MCP_GATEWAY_TOOLS.has(tool.name) ||
           [...routineScope].some(name => name.includes("__") || deferred.some(d => d.name === name))
       ).filter(tool => !audit || AUDIT_READ_TOOLS.has(tool.name));
+
+  // The per-turn reminder rides the API copy of the person's message only (docs/31 layer
+  // 2b): the transcript keeps what the person said, and a later replay re-appends nothing.
+  const opener = inbound.some(message => message.fromId === "user") ? turnReminderFor(provider.model, turnText, visibleSkillCount > 0) : undefined;
+  // The API copy of the turn's message: what was said, the standing-file diff (INV-777, given once,
+  // never replayed), then — without breakpoints — the volatile tier, then the reminder last, beside
+  // the request, as docs/31 measured. The transcript keeps only what the person said.
+  const tail = volatileInTail ? hostContext(promptParts.volatile + forkLine) : undefined;
+  const readKept = [...tools, ...deferred].some(tool => tool.name === "ReadKept"); // old results clear only with the way back (INV-2008)
+  const messages: Anthropic.MessageParam[] = continuing
+    ? historyToMessages(requestHistory(history, provider, readKept))
+    : [
+        ...historyToMessages(requestHistory(history, provider, readKept)),
+        { role: "user", content: [turnText, endedNote, standingNotice, tail, opener].filter(part => part !== undefined).join("\n\n") },
+      ];
+  // A continued turn appends nothing new for the model to answer: the next observation is the
+  // result it was waiting on, already in the history. The one exception is a history that
+  // ends on the model's own words — a filed answer written before the call was — where the
+  // wire needs a user message; a one-line host note is the least that satisfies it.
+  if (continuing && messages[messages.length - 1]?.role !== "user") {
+    messages.push({ role: "user", content: "[The host restarted while you were working. Carry on.]" });
+  }
+  // A continued turn still needs its volatile tier somewhere: on the message the wire ends with.
+  if (continuing && tail !== undefined) {
+    const last = messages[messages.length - 1]!;
+    if (typeof last.content === "string") last.content = `${last.content}\n\n${tail}`;
+    else last.content = [...last.content, { type: "text", text: tail }];
+  }
 
   // The prompt in three digests (INV-782): stable prefix, volatile tail, tool definitions as sent — the tool set was never in
   // `promptHash`, and it moves with skills, MCP servers and the lane. Compared with the previous turn in this conversation
@@ -2270,7 +2269,7 @@ ${outcome.text}`;
     });
     // Completed tool pairs and their full-result pointers are on disk before this boundary.
     messages.length = 0;
-    messages.push(...historyToMessages(requestHistory(history, answering))); // cleared as the turn's first request was (cold-results.ts)
+    messages.push(...historyToMessages(requestHistory(history, answering, readKept))); // cleared as the turn's first request was (cold-results.ts)
     const rebuilt = buildParts(memoryRecall).volatile + forkLine;
     if (volatileInTail) {
       const last = messages.at(-1);

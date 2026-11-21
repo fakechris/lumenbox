@@ -86,7 +86,7 @@ test("a cold request clears old reading results and keeps the newest groups, the
   const history = shellHeavyTurn();
   const recordBefore = JSON.stringify(history);
   const now = lastAt(history) + 3 * 60 * MIN;
-  const result = clearColdResults(history as HistoryEntry[], { now, ttlMs: EPHEMERAL_CACHE_TTL_MS });
+  const result = clearColdResults(history as HistoryEntry[], { now, ttlMs: EPHEMERAL_CACHE_TTL_MS, readKept: true });
 
   assert.equal(JSON.stringify(history), recordBefore, "the record is not touched");
   assert.ok(result.cleared > 0);
@@ -114,6 +114,11 @@ test("a cold request clears old reading results and keeps the newest groups, the
   assert.match(textOf(bash), /ReadKept with call "toolu_005"/);
   assert.match(textOf(bash), new RegExp(textOf(original).length.toLocaleString("en-US")), "it says how long the original was");
 
+  // A member without ReadKept could not follow that line back (INV-2008): its request keeps every byte.
+  const withheld = clearColdResults(history as HistoryEntry[], { now, ttlMs: EPHEMERAL_CACHE_TTL_MS, readKept: false });
+  assert.equal(withheld.cleared, 0);
+  assert.equal(withheld.entries, history, "no way back, nothing left out");
+
   // Every call still has its result next to it, on the wire every adapter starts from.
   const messages = historyToMessages(result.entries as TranscriptEntry[]);
   for (let index = 0; index < messages.length; index++) {
@@ -130,7 +135,7 @@ test("a cold request clears old reading results and keeps the newest groups, the
 test("within the cache's lifetime the request is byte-identical to the one sent without this", () => {
   const history = shellHeavyTurn();
   const anthropic = resolveProvider("anthropic");
-  const warm = requestHistory(history, anthropic, lastAt(history) + 4 * MIN);
+  const warm = requestHistory(history, anthropic, true, lastAt(history) + 4 * MIN);
   assert.equal(JSON.stringify(historyToMessages(warm)), JSON.stringify(historyToMessages(history)));
 });
 
@@ -138,7 +143,7 @@ test("once cleared on a cold wake, the turn's later requests and the next warm t
   const anthropic = resolveProvider("anthropic");
   const history = shellHeavyTurn();
   const wake = lastAt(history) + 3 * 60 * MIN;
-  const cold = historyToMessages(requestHistory(history, anthropic, wake));
+  const cold = historyToMessages(requestHistory(history, anthropic, true, wake));
   assert.ok(JSON.stringify(cold).includes("left out of this request"));
 
   // The wake is recorded, the turn goes on, and a request a minute later rebuilds from the record.
@@ -147,7 +152,7 @@ test("once cleared on a cold wake, the turn's later requests and the next warm t
     { role: "user", text: "[agent] Ada: is the suite green?", at: iso(wake + 5) },
     { role: "assistant", text: "Yes.", at: iso(wake + 30_000) },
   ];
-  const warm = historyToMessages(requestHistory(later, anthropic, wake + MIN));
+  const warm = historyToMessages(requestHistory(later, anthropic, true, wake + MIN));
   assert.equal(JSON.stringify(warm.slice(0, cold.length)), JSON.stringify(cold), "the prefix the cold request cached is sent again unchanged");
 });
 
@@ -159,7 +164,7 @@ test("the idle threshold is the provider's cache lifetime", () => {
 
   const history = shellHeavyTurn();
   const sent = (provider: Parameters<typeof requestHistory>[1], idle: number) =>
-    JSON.stringify(historyToMessages(requestHistory(history, provider, lastAt(history) + idle)));
+    JSON.stringify(historyToMessages(requestHistory(history, provider, true, lastAt(history) + idle)));
   const verbatim = JSON.stringify(historyToMessages(history));
   assert.equal(sent(minimax, 10 * MIN), verbatim, "ten minutes idle on an implicit cache: untouched");
   assert.notEqual(sent(minimax, 61 * MIN), verbatim, "sixty-one: cleared");
@@ -172,7 +177,7 @@ test("a saving too small to matter leaves the request alone", () => {
       ? ({ ...entry, blocks: entry.blocks.map(block => ({ ...block, content: [{ type: "text" as const, text: "ok ".repeat(70) }] })) } as TranscriptEntry)
       : entry
   );
-  const result = clearColdResults(history as HistoryEntry[], { now: lastAt(history) + 60 * MIN, ttlMs: EPHEMERAL_CACHE_TTL_MS });
+  const result = clearColdResults(history as HistoryEntry[], { now: lastAt(history) + 60 * MIN, ttlMs: EPHEMERAL_CACHE_TTL_MS, readKept: true });
   assert.equal(result.cleared, 0);
   assert.equal(result.entries, history);
 });
@@ -180,8 +185,10 @@ test("a saving too small to matter leaves the request alone", () => {
 test("near the compaction trigger a warm request is cleared too", () => {
   const history = shellHeavyTurn(140);
   const anthropic = resolveProvider("anthropic");
-  const warm = requestHistory(history, anthropic, lastAt(history) + MIN);
+  const warm = requestHistory(history, anthropic, true, lastAt(history) + MIN);
   assert.ok(JSON.stringify(warm).includes("left out of this request"));
+  const withheld = requestHistory(history, anthropic, false, lastAt(history) + 3 * 60 * MIN);
+  assert.equal(JSON.stringify(withheld), JSON.stringify(history), "without ReadKept, neither pressure nor a cold cache clears (INV-2008)");
 });
 
 test("what a request may leave out, the record gives back by the call's id", () => {
@@ -195,7 +202,7 @@ test("what a request may leave out, the record gives back by the call's id", () 
 test("the saving on an idle wake after a long shell-heavy turn", () => {
   const history = shellHeavyTurn(40);
   const before = Buffer.byteLength(JSON.stringify(historyToMessages(history)));
-  const after = Buffer.byteLength(JSON.stringify(historyToMessages(requestHistory(history, resolveProvider("anthropic"), lastAt(history) + 3 * 60 * MIN))));
+  const after = Buffer.byteLength(JSON.stringify(historyToMessages(requestHistory(history, resolveProvider("anthropic"), true, lastAt(history) + 3 * 60 * MIN))));
   console.log(`# idle wake after a 40-round shell-heavy turn: ${before} bytes verbatim, ${after} cleared (${Math.round((1 - after / before) * 100)}% smaller)`);
   assert.ok(after < before / 2, "most of an old shell-heavy turn is output nobody needs re-sent");
 });

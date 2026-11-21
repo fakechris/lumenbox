@@ -26,6 +26,12 @@
  * - **Pairing is untouched.** A cleared result keeps its block, its `tool_use_id` and its call;
  *   only the text inside changes, so every adapter (the Messages wire, the OpenAI translation)
  *   sees the same shape it always did.
+ * - **No way back, nothing cleared (INV-2008).** A member whose profile, scope or turn withholds
+ *   ReadKept could not follow the placeholder, so its results are sent whole, cold or under
+ *   pressure alike: what the request would have dropped is gone for good from that member's view,
+ *   and the summary at the compaction trigger is the one way to shrink it that keeps the gist. The
+ *   answer is the turn's tool list, which is itself part of the cached prefix, so it cannot flip
+ *   between two requests that share a cache.
  */
 
 import type Anthropic from "@anthropic-ai/sdk";
@@ -147,9 +153,10 @@ function callNames(entries: readonly HistoryEntry[]): Map<string, string> {
  */
 export function clearColdResults(
   entries: readonly HistoryEntry[],
-  options: { now: number; ttlMs?: number; pressure?: boolean }
+  options: { now: number; ttlMs?: number; pressure?: boolean; readKept: boolean }
 ): ColdClearing {
   const untouched: ColdClearing = { entries, cleared: 0, savedChars: 0 };
+  if (!options.readKept) return untouched; // the placeholder would point at a tool this member lacks
   const cut = coldPoint(entries, options);
   if (cut <= 0) return untouched;
 
@@ -189,16 +196,18 @@ export function clearColdResults(
  *
  * Pressure is measured on the history as stored, not as cleared: that only grows until a summary
  * replaces it, so a request that was cleared for pressure is not followed by one that is not.
+ * `readKept` is whether this turn's tool list allows ReadKept; without it nothing is cleared.
  */
 export function requestHistory<T>(
   history: readonly T[],
   provider: Pick<ProviderProfile, "promptCaching" | "implicitCaching" | "model">,
+  readKept: boolean,
   now = Date.now()
 ): T[] {
   const entries = history as unknown as readonly HistoryEntry[];
   const pressure = estimateTokens(activeWindow(entries)) >= PRESSURE_SHARE * policyForModel(provider.model).triggerTokens;
   const ttlMs = promptCacheTtlMs(provider);
-  const result = clearColdResults(entries, { now, pressure, ...(ttlMs !== undefined ? { ttlMs } : {}) });
+  const result = clearColdResults(entries, { now, pressure, readKept, ...(ttlMs !== undefined ? { ttlMs } : {}) });
   if (result.cleared > 0) {
     console.error(`[compaction] left ${result.cleared} older tool result(s) out of the request (${result.savedChars} chars); the record is unchanged`);
   }
