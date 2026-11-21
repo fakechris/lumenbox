@@ -10,7 +10,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface BuildInfo {
@@ -19,10 +19,34 @@ export interface BuildInfo {
 }
 
 let cached: BuildInfo | undefined;
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+const UNKNOWN_VERSION = "0.0.0";
+
+function findPackage(start: string): { dir: string; version: string; buildCommit?: string } | undefined {
+  let dir = start;
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+      if (pkg?.name === "agentbox" && typeof pkg.version === "string" && pkg.version !== "") {
+        const buildCommit = typeof pkg.buildCommit === "string" && /^[a-f0-9]{7,40}$/i.test(pkg.buildCommit)
+          ? pkg.buildCommit : undefined;
+        return { dir, version: pkg.version, buildCommit };
+      }
+    } catch {
+      // The package may be beside the bundle or above an unbundled source file.
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+}
+
+export function packageVersion(): string {
+  return findPackage(moduleDir)?.version ?? UNKNOWN_VERSION;
+}
 
 export function buildInfo(): BuildInfo {
-  if (cached !== undefined) return cached;
-  cached = readBuildInfo(fileURLToPath(new URL("../..", import.meta.url)), process.env);
+  cached ??= readBuildInfo(moduleDir);
   return cached;
 }
 
@@ -30,33 +54,20 @@ export function buildInfo(): BuildInfo {
  * The resolution, apart from the cache, so the packaged-stamp path is testable.
  *
  * Order says where each source can exist: `AGENTBOX_BUILD` is a developer pinning it for
- * one run; `buildCommit` is what scripts/dist.mjs stamped into the packaged package.json,
- * and on a user's machine it is the only source that can answer — /Applications sits
- * nowhere near a .git directory, so the rev-parse below is the "unknown" that 0.3.1
- * shipped with (INV-876).
+ * one run; `buildCommit` is what the desktop and Docker builds stamp into package.json.
+ * A shipped artifact has no .git directory, so only source checkouts can fall back to git.
  */
 export function readBuildInfo(
-  root: string,
+  start: string,
   env: { AGENTBOX_BUILD?: string } = process.env
 ): BuildInfo {
-  let version = "0.0.0";
-  let packagedCommit = "";
-  try {
-    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
-      version?: unknown;
-      buildCommit?: unknown;
-    };
-    if (typeof pkg.version === "string") version = pkg.version;
-    if (typeof pkg.buildCommit === "string") packagedCommit = pkg.buildCommit;
-  } catch {
-    // The page shows 0.0.0, which reads as "could not tell" and is exactly true.
-  }
+  const pkg = findPackage(start);
   let commit = env.AGENTBOX_BUILD ?? "";
-  if (commit === "") commit = packagedCommit;
+  if (commit === "") commit = pkg?.buildCommit ?? "";
   if (commit === "") {
     try {
       commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-        cwd: root,
+        cwd: pkg?.dir ?? start,
         stdio: ["ignore", "pipe", "ignore"],
       })
         .toString()
@@ -65,5 +76,5 @@ export function readBuildInfo(
       commit = "unknown";
     }
   }
-  return { version, commit };
+  return { version: pkg?.version ?? UNKNOWN_VERSION, commit };
 }

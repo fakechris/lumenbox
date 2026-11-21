@@ -429,7 +429,7 @@ type ResourceKind = keyof typeof RESOURCES;
 const SERVER_ASSIGNED: Record<ResourceKind, readonly string[]> = {
   pods: [],
   services: ["clusterIP", "clusterIPs", "ipFamilies", "ipFamilyPolicy"],
-  persistentvolumeclaims: ["volumeName"],
+  persistentvolumeclaims: [],
   secrets: [],
   networkpolicies: [],
 };
@@ -568,10 +568,9 @@ export class HttpKubeApi implements KubeApi {
   }
 
   /**
-   * Services, PVCs and Secrets are replaced in place — but a PUT is a *full* replace of the
-   * object, and the apiserver assigned fields we never knew: a Service's clusterIP/clusterIPs/
-   * ipFamilies are immutable once assigned, a bound PVC's volumeName likewise. Those are carried
-   * over from the live object, or the PUT is a 422 for "changing" a field we never touched.
+   * A PUT fully replaces the object. Services retain assigned addresses; existing PVCs retain
+   * their entire spec: storage class defaults, binding and other immutable fields belong to
+   * the live claim. Re-adoption only reconciles its metadata, never its storage requirements.
    */
   private async replaceInPlace(kind: ResourceKind, name: string, manifest: Record<string, unknown>): Promise<void> {
     let lastError: unknown;
@@ -587,9 +586,11 @@ export class HttpKubeApi implements KubeApi {
         return;
       }
       const manifestMeta = (manifest.metadata ?? {}) as Record<string, unknown>;
-      const spec = { ...((manifest.spec ?? {}) as Record<string, unknown>) };
+      const spec = kind === "persistentvolumeclaims"
+        ? existing.spec
+        : { ...((manifest.spec ?? {}) as Record<string, unknown>) };
       for (const field of SERVER_ASSIGNED[kind]) {
-        if (spec[field] === undefined && existing.spec?.[field] !== undefined) {
+        if (spec !== undefined && spec[field] === undefined && existing.spec?.[field] !== undefined) {
           spec[field] = existing.spec[field];
         }
       }
