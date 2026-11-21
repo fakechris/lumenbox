@@ -5549,6 +5549,37 @@ test("a member woken after idle sends a smaller request, and reads a cleared res
   }
 });
 
+// INV-2008: the same wake for a member whose tool list withholds ReadKept. The placeholder would point
+// at a tool it does not have and the output would be gone from its view, so nothing is left out.
+test("a member without ReadKept woken after idle still sees its old shell output whole", async () => {
+  const start = Date.parse("2026-11-20T09:00:00.000Z");
+  const output = (round: number) => `round ${round}: ${"✔ suite passes — src/host/module.test.ts\n".repeat(45)}`;
+  const history: HistoryEntry[] = [{ role: "user", text: "Run the suite until it is green.", at: new Date(start).toISOString(), fromPerson: true }];
+  for (let round = 0; round < 12; round++) {
+    const id = `toolu_r${round}`;
+    history.push({ role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id, name: "bash", input: { command: "npm test" } }], at: new Date(start + round * 30_000 + 10_000).toISOString() });
+    history.push({ role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text: output(round) }] }], at: new Date(start + round * 30_000 + 25_000).toISOString() });
+  }
+  history.push({ role: "assistant", text: "Green.", at: new Date(start + 400_000).toISOString() });
+  let firstRequest = "";
+  let offered: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Nova", tools: ["bash", "read_file"] }], history,
+    says: ["What exactly did the suite print in round 2?"],
+    script: ({ messages, offered: tools }) => {
+      if (firstRequest === "") { firstRequest = JSON.stringify(messages); offered = tools; }
+      return { say: "Round 2 printed forty-five passing suites." };
+    },
+  });
+  try {
+    assert.ok(!offered.includes("ReadKept"), `the member's list withholds ReadKept: ${offered.join(", ")}`);
+    assert.doesNotMatch(firstRequest, /left out of this request|ReadKept/, "no placeholder points at a tool it lacks");
+    assert.ok(firstRequest.includes(JSON.stringify(output(2)).slice(1, -1)), "round 2's output is in the request, word for word");
+  } finally {
+    result.cleanup();
+  }
+});
+
 // ── 2026-11-20, INV-1751: what a teammate decided in another conversation was on disk and out of reach ──
 //
 // ReadHistory reads one conversation, so an agent asked "where is the offsite?" in a new chat could only
