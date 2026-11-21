@@ -28,7 +28,7 @@ import type { McpManager, ToolEffect } from "./mcp.ts";
 import { MCP_SEPARATOR } from "./mcp.ts";
 import type { OpenFork, PendingWork } from "./pending-work.ts";
 import type { PendingApproval } from "./policy.ts";
-import { MAX_REMINDER_MS, type Reminder, setReminder } from "./reminders.ts";
+import { MAX_REMINDER_MS, owedReminder, type Reminder, setReminder } from "./reminders.ts";
 
 /** Reads effects from a tool's raw result, keeping only well-formed members of the closed set. */
 export function parseEffects(raw: unknown): { effects: ToolEffect[]; problems: string[] } {
@@ -261,19 +261,27 @@ export class Effects {
       const at = new Date(String(reminder.data?.at ?? ""));
       if (Number.isNaN(at.getTime()) || at > now) continue;
       const body = String(reminder.data?.text ?? reminder.brief);
-      const text = reminder.data?.verbatim === true ? body : `[Reminder you set: ${body}]`;
+      const missed = typeof reminder.data?.missedChat === "string" ? ` [It was to be reported to ${reminder.data.missedChat}, but that turn could not run: ${String(reminder.data.why ?? "")}]` : "";
+      const text = reminder.data?.verbatim === true ? body : `[Reminder you set: ${body}]${missed}`;
       const chat = reminder.data?.chat, report = this.deps.report;
       if (typeof chat === "string" && report !== undefined) {
         // Closed before its turn starts, as a schedule's window is marked before its run: a restart in
         // the middle of the turn must not start it a second time. If the turn cannot start at all, the
-        // member still gets its note, so the reminder is late to the chat rather than lost.
+        // member is owed its note: written down as a reminder of its own with no chat, so it is late to
+        // the chat rather than lost, and retried until the inbox takes it rather than dropped (INV-2009).
         this.deps.pendingWork.commit([{ id: reminder.id, how: "done" }], now);
         count += 1;
+        const fired = { agentId: reminder.agentId, text: body, conversation: reminder.parent, chat, ...(reminder.workId !== undefined ? { workId: reminder.workId } : {}) };
         void report({ id: reminder.id, agentId: reminder.agentId, text: body, due: at.toISOString(), setAt: reminder.at, conversation: reminder.parent, chat }).catch(error => {
           const why = error instanceof Error ? error.message : String(error);
-          this.log(`reminder ${reminder.id}: its turn for ${chat} did not run (${why}); delivered to the member as a note instead`);
-          const note = `${text} [It was to be reported to ${chat}, but that turn could not run: ${why.slice(0, 200)}]`;
-          if (!this.deps.deliver(reminder.agentId, note, reminder.parent, reminder.workId)) this.log(`reminder ${reminder.id}: the note was not admitted either`);
+          try {
+            const owed = owedReminder(this.deps.pendingWork, fired, why, this.now());
+            this.log(`reminder ${reminder.id}: its turn for ${chat} did not run (${why}); owed to the member as a note (${owed})`);
+          } catch (failure) {
+            this.log(`reminder ${reminder.id}: its turn for ${chat} did not run (${why}), and the note owed for it could not be written: ${String(failure)}`);
+            return;
+          }
+          this.deliverDue();
         });
         continue;
       }

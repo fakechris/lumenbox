@@ -53,6 +53,8 @@ export interface Reminder {
   conversation: string;
   /** The chat its result is reported to, when the member named one. */
   chat?: string;
+  /** A reminder whose turn for a chat could not run (INV-2009): owed to the member as a note instead, and why. */
+  missed?: { chat: string; why: string };
 }
 
 type Ledger = Pick<PendingWork, "open" | "prepare" | "dropped">;
@@ -87,6 +89,7 @@ export function pendingReminders(ledger: Pick<PendingWork, "open">, agentId?: st
       setAt: work.at,
       conversation: work.parent,
       ...(typeof work.data?.chat === "string" ? { chat: work.data.chat } : {}),
+      ...(typeof work.data?.missedChat === "string" ? { missed: { chat: work.data.missedChat, why: String(work.data.why ?? "") } } : {}),
     }))
     .sort((a, b) => a.due.localeCompare(b.due));
 }
@@ -111,6 +114,26 @@ export function setReminder(
     now,
   });
   return { ok: true, reminder: { id, agentId: input.agentId, text, due, setAt: now.toISOString(), conversation: input.conversation, ...(input.chat !== undefined ? { chat: input.chat } : {}) } };
+}
+
+/**
+ * A reminder whose turn for a chat could not run is owed to the member as a note (INV-2009). The
+ * fired record stays closed — its turn must never start twice — and this writes a second one, due
+ * now and naming no chat, so `deliverDue` keeps offering the note until the inbox takes it, across a
+ * restart too, and it stays on the list until then. Not counted against the twenty: it is one the
+ * member already held. Durable before it returns, or it throws.
+ */
+export function owedReminder(ledger: Pick<PendingWork, "prepare">, fired: Pick<Reminder, "agentId" | "text" | "conversation"> & { chat: string; workId?: string }, why: string, now: Date): string {
+  return ledger.prepare({
+    agentId: fired.agentId,
+    kind: "reminder",
+    parent: fired.conversation,
+    child: SET_BY_SOMEONE,
+    brief: fired.text,
+    ...(fired.workId !== undefined ? { workId: fired.workId } : {}),
+    data: { text: fired.text, at: now.toISOString(), missedChat: fired.chat, why: why.slice(0, 200) },
+    now,
+  });
 }
 
 /** Drops a waiting reminder so it never fires; the member's own when `agentId` is given. Returns it, or undefined when none waits under that id. */
@@ -156,7 +179,8 @@ function refused(reason: string): ToolOutcome {
 }
 
 function line(reminder: Reminder): string {
-  return `${reminder.id} · due ${reminder.due}${reminder.chat !== undefined ? ` · reports to ${reminder.chat}` : ""} · ${reminder.text.replace(/\s+/g, " ").slice(0, 160)}`;
+  const where = reminder.chat !== undefined ? ` · reports to ${reminder.chat}` : reminder.missed !== undefined ? ` · could not report to ${reminder.missed.chat}; waiting to reach you` : "";
+  return `${reminder.id} · due ${reminder.due}${where} · ${reminder.text.replace(/\s+/g, " ").slice(0, 160)}`;
 }
 
 export function reminderTool(context: Pick<ToolContext, "agent" | "conversation" | "pendingWork">, input: unknown, now = new Date()): ToolOutcome {
