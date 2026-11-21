@@ -257,9 +257,9 @@ Deliberately, with the reason. Two things that used to be here have since been b
 now F9 — recorded because a requirements document that quietly absorbs its own exclusions is
 not one anybody can check against.
 
-- **Cluster scheduling.** One host, one container per tenant. Placement across machines,
-  admission and bin-packing belong to an orchestrator, and the allocator seam exists so that is
-  a substitution ([08-control-plane.md](08-control-plane.md) §4.2).
+- **A LumenBox cluster scheduler.** The Docker allocator runs boxes on one host. In Kubernetes,
+  the allocator creates box pods while Kubernetes handles admission and placement across nodes
+  ([08-control-plane.md](08-control-plane.md) §4.2).
 - **Anything on the person's own machine.** No shell, no filesystem, no keychain outside the
   box. Three capabilities genuinely need it — proxying a passkey ceremony, holding credentials
   in an OS keychain, reaching a real project directory — and each needs a local agent, which is
