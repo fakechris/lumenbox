@@ -1,7 +1,12 @@
 /** The tool roster (INV-1341): what rides in the list, what waits in the catalog, and that nothing is lost on the way. */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { PolicyGate } from "./policy.ts";
+import { Claims } from "./claims.ts";
 import { declaredTools } from "./side-effects.ts";
 import { describeDeferred, lookupPair, RESIDENT_TOOLS, splitRoster } from "./tool-roster.ts";
 import { buildTools, dispatchTool } from "./tools.ts";
@@ -81,9 +86,45 @@ test("a deferred built-in called through UseMcpTool is gated and dispatched as i
   const refused = await dispatchTool("UseMcpTool", { tool: "PackTemplate", arguments: {} }, context);
   assert.equal(refused.isError, true);
   assert.match(refused.text, /PackTemplate is refused by rule/);
-  assert.deepEqual(checked, ["UseMcpTool", "PackTemplate"], "the pair, then the tool itself");
+  assert.deepEqual(checked, ["PackTemplate"], "the target is gated exactly once");
   const found = await dispatchTool("FindMcpTool", { tool: "PackTemplate" }, context);
   assert.match(found.text, /^PackTemplate\n/, "found without any external service connected");
   const missing = await dispatchTool("UseMcpTool", { tool: "bash" }, context);
   assert.equal(missing.isError, true, "a resident tool is not reachable through the pair; it is in the list");
+});
+
+test("UseMcpTool keeps task autonomy on the target: L4 coordination and L2 observation need no approval; external calls still ask (INV-1992)", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "deferred-policy-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const gate = new PolicyGate({ path: join(dir, "policy.jsonl"), limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [] } });
+  let level: 2 | 4 = 4;
+  let externalCalls = 0;
+  const context = {
+    agent: { id: "a1", profile: { name: "Ada" } },
+    registry: { teammates: () => [], list: () => [] }, bus: {}, box: undefined,
+    deferredTools: everything.filter(tool => ["ClaimWork", "Fork", "Teammates"].includes(tool.name)),
+    claims: new Claims(null), policy: gate,
+    taskBinding: { taskId: "t1" }, tasks: { forAgent: () => [{ id: "t1", status: "doing", level }] },
+    mcp: { owns: (name: string) => name === "server__tool", callDetailed: async () => { externalCalls++; return { text: "sent" }; } },
+  } as unknown as Parameters<typeof dispatchTool>[2];
+  const call = (tool: string, args = {}) => dispatchTool("UseMcpTool", { tool, arguments: args }, context);
+  assert.match((await call("ClaimWork", { work: "Fix the parser" })).text, /Claimed/);
+  assert.match((await call("Fork")).text, /at least one brief/, "the call reaches Fork's own input validation");
+  assert.equal((await call("Teammates")).isError, undefined);
+  assert.equal(gate.pending().length, 0);
+  level = 2;
+  assert.equal((await call("Teammates")).isError, undefined);
+  assert.equal(gate.pending().length, 0);
+  level = 4;
+  const external = await call("server__tool", { text: "hello" });
+  assert.ok(external.approval);
+  assert.equal(externalCalls, 0);
+  assert.equal(gate.pending().length, 1);
+  assert.match(gate.pending()[0]!.description, /server__tool/);
+  assert.doesNotMatch(gate.pending()[0]!.description, /UseMcpTool/);
+  gate.grant(external.approval.id);
+  assert.equal((await call("server__tool", { text: "hello" })).text, "sent");
+  assert.equal(externalCalls, 1, "one approval permits the external target without a second gate");
+  assert.equal((await call("server__forged")).isError, true);
+  assert.equal((await call("")).isError, true);
 });
