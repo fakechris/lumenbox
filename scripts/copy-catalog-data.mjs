@@ -13,24 +13,15 @@
  * bundler that only knows about imports cannot know that, so the build has to say it.
  */
 
-import { cpSync, existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { cpSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const source = join(root, "src/host/catalog-data");
-
-if (!existsSync(source)) {
-  console.error(`[catalog-data] ${source} is missing; nothing to copy.`);
-  process.exit(1);
+export function copyCatalogData(outDir) {
+  mkdirSync(outDir, { recursive: true });
+  cpSync(join(root, "src/host/catalog-data"), join(outDir, "catalog-data"), { recursive: true });
+  console.log(`[catalog-data] -> ${join(outDir, "catalog-data")}`);
 }
 
-// One destination per bundle built from src/cli.ts: the published CLI, and the host
-// daemon that runs inside the box.
-const destinations = [join(root, "dist/catalog-data"), join(root, "docker/box/catalog-data")];
-
-for (const destination of destinations) {
-  mkdirSync(dirname(destination), { recursive: true });
-  cpSync(source, destination, { recursive: true });
-  console.log(`[catalog-data] -> ${destination.replace(root, "")}`);
-}
+if (import.meta.main) copyCatalogData(join(root, "dist"));

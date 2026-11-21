@@ -18,6 +18,7 @@ import { BOXD_PORT, UI_PORT } from "../protocol/index.ts";
 import { boxNetworkArguments, describeOutbound, gateNameFor, networkNameFor, outboundPlan, prepareBoxNetwork, removeGate, startGate, stopGate, type OutboundPlan } from "./box-network.ts";
 import { BoxClient } from "./client.ts"; import { ensureCpuLimit } from "./box-cpus.ts"; import { redactSecretAssignments, secretsOutOfArgs } from "./secret-env.ts"; import { runContainer } from "./run-container.ts";
 import { inspectImagePlatformProblem } from "./image-platform.ts";
+import { packageVersion } from "../host/build-info.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -61,27 +62,7 @@ export const BACKUP_CARRIES =
 export const BOX_IMAGE_REPO = "fakechris/lumenbox";
 export const DEFAULT_CONTAINER = "agentbox-box";
 
-/** package.json's version, walking up from this file so a bundle in dist/ still finds it. */
-export function packageVersion(): string {
-  let dir = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 6; i++) {
-    try {
-      const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as {
-        name?: unknown;
-        version?: unknown;
-      };
-      if (pkg.name === "agentbox" && typeof pkg.version === "string" && pkg.version !== "") {
-        return pkg.version;
-      }
-    } catch {
-      // Not this directory. The next parent might be the repo root.
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return "0.0.0";
-}
+export { packageVersion };
 
 /** `fakechris/lumenbox:0.3.0`. A release pins this; `:latest` is only the moving alias. */
 export function boxImageRef(version: string = packageVersion()): string {
