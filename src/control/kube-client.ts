@@ -353,20 +353,21 @@ export function parseMinimalYaml(text: string, source = "<yaml>"): unknown {
       let i = at;
       while (i < list.length && list[i]!.indent === indent && (list[i]!.text.startsWith("- ") || list[i]!.text === "-")) {
         const head = list[i]!;
-        const rest = head.text === "-" ? "" : head.text.slice(2);
+        const rest = head.text.slice(1).trimStart();
         if (rest === "") {
           const [value, next] = parseBlock(list, i + 1, list[i + 1]?.indent ?? indent);
           items.push(value);
           i = next;
         } else if (rest.includes(":")) {
           // `- name: x` — a map whose first key rides on the dash line.
-          const synthetic: Line[] = [{ indent: indent + 2, text: rest, line: head.line }];
+          const mapIndent = indent + head.text.length - rest.length;
+          const synthetic: Line[] = [{ indent: mapIndent, text: rest, line: head.line }];
           let j = i + 1;
           while (j < list.length && list[j]!.indent > indent) {
             synthetic.push(list[j]!);
             j++;
           }
-          const [value, after] = parseMap(synthetic, 0, indent + 2);
+          const [value, after] = parseMap(synthetic, 0, mapIndent);
           if (after !== synthetic.length) {
             throw new KubernetesError(`${source}:${head.line}: malformed sequence mapping`);
           }

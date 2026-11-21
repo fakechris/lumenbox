@@ -251,6 +251,11 @@ test("the parser refuses the YAML it does not understand, with a line number", (
   });
   assert.deepEqual(parseMinimalYaml(""), {});
   assert.deepEqual(parseMinimalYaml("map: {}\nlist: []"), { map: {}, list: [] });
+  for (const item of ["-   name: kind\n    context:\n      cluster: kind", "-\n    name: kind\n    context:\n      cluster: kind"]) {
+    assert.deepEqual(parseMinimalYaml(`contexts:\n${item}\n`), {
+      contexts: [{ name: "kind", context: { cluster: "kind" } }],
+    });
+  }
   assert.throws(() => parseMinimalYaml("key: |\n  multi\n  line\n"), /block scalars/);
   assert.throws(() => parseMinimalYaml("key:\n\tvalue: 1\n"), /tab/);
   assert.throws(() => parseMinimalYaml("just a scalar\n"), /expected 'key: value'/);
