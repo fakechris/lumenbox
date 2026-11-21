@@ -5,8 +5,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskStore } from "./tasks.ts";
 import { TurnLedger } from "./resume.ts";
-import { admittedTaskBinding } from "./execution-binding.ts";
+import { admittedTaskBinding, hasAdmittedTask } from "./execution-binding.ts";
 import type { InboundMessage } from "../agents/bus.ts";
+
+test("peer work only admits a task for its owner in its original conversation", () => {
+  const tasks = new TaskStore(null);
+  const task = tasks.create({ title: "Web request", requester: "p", assigneeId: "ada", conversation: "main" })!;
+  const inbound = [{ id: "peer", work: { id: "work", owner: "ada", conversation: "main", generation: 1, epoch: 0, taskId: task.id } }] as InboundMessage[];
+  const owner = { agentId: "ada", conversation: "main", inbound, tasks };
+  assert.equal(hasAdmittedTask(owner), true);
+  assert.equal(admittedTaskBinding(owner)?.taskId, task.id);
+  for (const context of [{ ...owner, agentId: "rex" }, { ...owner, conversation: "side" }, { ...owner, inbound: [] }]) {
+    assert.equal(hasAdmittedTask(context), false);
+    assert.equal(admittedTaskBinding(context), undefined);
+  }
+  tasks.relocate([task.id]);
+  assert.equal(hasAdmittedTask(owner), true, "a stale owner binding must still fail closed");
+  assert.equal(admittedTaskBinding(owner), undefined);
+});
 
 test("ordinary admission binds the exact source task, never another doing task in the conversation", () => {
   const dir = mkdtempSync(join(tmpdir(), "execution-binding-"));
