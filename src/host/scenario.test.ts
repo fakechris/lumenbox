@@ -5415,3 +5415,57 @@ test("a member woken after idle sends a smaller request, and reads a cleared res
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// ── 2026-11-20, INV-1751: what a teammate decided in another conversation was on disk and out of reach ──
+//
+// ReadHistory reads one conversation, so an agent asked "where is the offsite?" in a new chat could only
+// guess which teammate's which conversation held the answer. On the real stack: the person settles it
+// with Ada in the team room; Nova, asked in a Feishu topic, searches every conversation it may read,
+// reads the entry back from the record by the hit's anchor, and answers; Rex, in another box, finds nothing.
+test("an agent finds what a teammate decided in another conversation, reads it back by its anchor, and an agent in another box cannot (INV-1751)", async () => {
+  const { transcriptIndexFor } = await import("./transcript-index.ts");
+  const seen: Record<string, string[]> = { Nova: [], Rex: [] };
+  const offered: string[][] = [];
+  let anchor = "";
+  const episode = await runEpisode({
+    team: [{ name: "Ada" }, { name: "Nova" }], says: [],
+    script: ({ agent, messages, offered: tools }) => {
+      if (agent === "Ada") return { say: "Noted: the offsite moves to Harbour Hall on 12 March." };
+      const last = JSON.stringify(messages.at(-1)).replaceAll("\\n", "\n").replaceAll('\\"', '"');
+      const asked = typeof messages.at(-1)?.content === "string";
+      if (asked) { offered.push(tools); seen[agent]!.push(""); return { call: "UseMcpTool", input: { tool: "SearchHistory", arguments: { words: "offsite" } } }; }
+      seen[agent]!.push(last);
+      if (agent === "Rex") return { say: "I have nothing on the offsite." };
+      const hit = /Ada · main (#\d+) · [^\n]* · the person: [^\n]*Harbour Hall/.exec(last);
+      if (hit !== null && anchor === "") { anchor = hit[1]!; return { call: "ReadHistory", input: { agent: "Ada", conversation: "main", around: anchor } }; }
+      return { say: "The offsite is at Harbour Hall on 12 March." };
+    },
+    drive: async ({ bus, registry, frontId, say }) => {
+      await say("We decided: the offsite moves to Harbour Hall on 12 March.");
+      const nova = registry.list().find(agent => agent.profile.name === "Nova")!.id;
+      bus.sendFromUser(nova, "Where is the offsite this year?", { conversation: "feishu-oc_plan" });
+      await bus.wake(nova); await bus.idle();
+      const other = registry.attachBox({ id: "box-other", name: "other", kind: "attached", displayFloor: 10, workDir: "/home/box/work", members: "everyone", createdAt: new Date().toISOString() } as never);
+      const rex = registry.create({ name: "Rex", boxId: other.id }).id;
+      bus.sendFromUser(rex, "Where is the offsite this year?");
+      await bus.wake(rex); await bus.idle();
+      assert.match(JSON.stringify(registry.readTranscript(nova, "feishu-oc_plan")), /The offsite is at Harbour Hall on 12 March/);
+      assert.ok(registry.readTranscript(frontId).length > 0);
+      transcriptIndexFor(registry).close();
+    },
+  });
+  try {
+    assert.equal(offered[0]!.includes("SearchHistory"), false, "behind the lookup pair, not in the list");
+    const search = seen.Nova![1]!, read = seen.Nova![2]!;
+    assert.match(search, /Ada · main #0 · .* · the person: We decided: the offsite moves to Harbour Hall/, `the hit names agent, conversation and anchor: ${search}`);
+    assert.match(search, /Ada · main #1 · .* · Ada: Noted: the offsite moves/);
+    assert.doesNotMatch(search, /Where is the offsite this year/, "her own current conversation is left out");
+    assert.equal(anchor, "#0");
+    assert.match(read, /Around #0 in your recorded history/, `ReadHistory reads the anchor back: ${read}`);
+    assert.match(read, /#0 [^\n]* them: We decided: the offsite moves to Harbour Hall on 12 March\./);
+    assert.match(seen.Rex![1]!, /Nothing matched/, `another box's agent finds nothing: ${seen.Rex![1]}`);
+    assert.doesNotMatch(seen.Rex![1]!, /Harbour/);
+  } finally {
+    episode.cleanup();
+  }
+});

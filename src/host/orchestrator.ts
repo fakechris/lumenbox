@@ -2703,7 +2703,7 @@ export const ALL_TOOLS: readonly string[] = [
   "PackTemplate",
   "SetPlan",
   "SetTodos",
-  "ReadHistory",
+  "ReadHistory", "SearchHistory",
   "ReadKept",
   "ClaimWork",
   "RememberFact", "Promote", "CorrectOrgKnowledge", "Outbox", // proposing an organisation item, always reviewed (INV-1729); correcting one (INV-1730); a draft for the person (INV-1739)

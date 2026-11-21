@@ -25,7 +25,7 @@ import { NEXT_AGENT_TOOLS_JS } from "./next-agent-tools-ui.ts";
 import { NEXT_SHELF_JS } from "./next-shelf-ui.ts";
 import { NEXT_TEAMS_JS } from "./next-teams-ui.ts";
 import { NEXT_PANEL_MORE_JS } from "./next-panel-more-ui.ts";
-import { NEXT_ACTIVITY_JS } from "./next-activity-ui.ts";
+import { NEXT_ACTIVITY_JS } from "./next-activity-ui.ts"; import { NEXT_HISTORY_SEARCH_JS } from "./next-history-search-ui.ts";
 import { NEXT_MANAGE_JS } from "./next-manage-ui.ts";
 import { NEXT_TEACH_JS } from "./next-teach-ui.ts";
 import { NEXT_SET_MINE_JS } from "./next-set-mine-ui.ts";
@@ -497,6 +497,7 @@ ${NEXT_SHELF_JS}
 ${NEXT_TEAMS_JS}
 ${NEXT_PANEL_MORE_JS}
 ${NEXT_ACTIVITY_JS}
+${NEXT_HISTORY_SEARCH_JS}
 ${NEXT_MANAGE_JS}
 ${NEXT_TEACH_JS}
 ${NEXT_SET_MINE_JS}

@@ -23,9 +23,10 @@
  */
 
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { agentboxHome, envNumber } from "../config.ts";
+import { TRANSCRIPT_INDEX_FILENAME } from "./transcript-index.ts";
 
 /** Where snapshots go, unless told otherwise. Beside the state, not inside it. */
 export function backupRoot(): string {
@@ -100,7 +101,9 @@ export function backupNow(options: { stamp: string; from?: string; to?: string }
   // place only once the copy finished.
   const partial = `${path}.partial`;
   rmSync(partial, { recursive: true, force: true });
-  cpSync(from, partial, { recursive: true, dereference: false });
+  // The transcript index is derived and rebuilt when missing (transcript-index.ts): a copy of it would
+  // only double the backup, and a copy of a WAL database taken mid-write is not one anyway.
+  cpSync(from, partial, { recursive: true, dereference: false, filter: source => !basename(source).startsWith(TRANSCRIPT_INDEX_FILENAME) });
   chmodSync(partial, 0o700);
   rmSync(path, { recursive: true, force: true });
   // Rename, not a second copy: `partial` and the final name are both under `root`, so they are on
