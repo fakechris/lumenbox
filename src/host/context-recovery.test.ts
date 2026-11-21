@@ -123,10 +123,10 @@ test("an in-flight extraction cannot reintroduce the old context after new", asy
       provider: { model: "test", maxTokens: 1024 } as never,
       client: { messages: { create: async () => {
         entered(); await hold;
-        return { content: [{ type: "text", text: "Always write seventeen blind spots" }], usage: {} };
+        return { content: [{ type: "text", text: JSON.stringify({ op: "create", text: "Always write seventeen blind spots", quote: "always write seventeen blind spots" }) }], usage: {} };
       } } } as never,
     });
-    const learning = f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.flush(f.agent.id, f.input.conversation, [{ role: "user", text: "old conversation", at: new Date().toISOString() }]));
+    const learning = f.registry.withContext(f.agent.id, f.input.conversation, () => rememberer.flush(f.agent.id, f.input.conversation, [{ role: "user", text: "always write seventeen blind spots", at: new Date().toISOString(), fromPerson: true }]));
     await started;
     f.registry.contextStore(f.agent.id, f.input.conversation).advance("new", 0);
     release();

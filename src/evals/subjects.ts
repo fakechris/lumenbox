@@ -1,5 +1,5 @@
 /**
- * Subjects (INV-1772): the four ways a corpus task is put to the system under test.
+ * Subjects (INV-1772): the five ways a corpus task is put to the system under test.
  *
  * A subject turns a task into the request the product itself would make — the real prompt, the
  * real parser — and reads back an observation the graders can score. None of them holds a model:
@@ -11,6 +11,7 @@
  *   - `auto-review` — the tool-call reviewer's prompt and verdict (auto-review.ts).
  *   - `steward` — the context steward's decision over a conversation's ending (context-steward.ts).
  *   - `teach` — the teaching turn's cue for a recorded demonstration (teach-evals.ts).
+ *   - `memory` — the memory extractor's decisions, after the quote check (memory-extract.ts).
  *
  * `fake` is the same subject's deterministic reply: the gold answer, or its opposite. It exists
  * so the runner, graders, cache and report can be run end to end without a provider; a number it
@@ -20,6 +21,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { buildReviewPrompt, parseVerdict, type ReviewInput } from "../host/auto-review.ts";
 import { parseStewardDecision, STEWARD_SYSTEM } from "../host/context-steward.ts";
+import type { MemoryRecord } from "../host/memory.ts";
 import type { ProviderProfile } from "../host/provider.ts";
 import { runEpisode } from "../host/scenario.ts";
 import { filesRead } from "../host/skill-evals.ts";
@@ -132,6 +134,48 @@ const teach: Subject = {
   },
 };
 
+/**
+ * The extractor's prompt for the task's exchanges, with its remembered lines offered as K1… in
+ * order, and its reply read the way the product reads it: each decision a label (`create`,
+ * `confirm:<line>`, `correct:<line>`) and each item the quote check or the shape dropped
+ * (`dropped:<why>`). No ledger is written; what would be is the observation.
+ *
+ * Imported when run, not when this file loads: a frozen commit from before INV-733 has no
+ * `memory-extract.ts`, and the other subjects must still drive it (frozen.ts). There, these tasks
+ * are a harness failure, counted apart, rather than every task being unrunnable.
+ */
+const memory: Subject = {
+  name: "memory",
+  tier: "summary",
+  maxCalls: () => 1,
+  async run(task, context): Promise<Observation> {
+    let product: [typeof import("../host/memory-extract.ts"), typeof import("../host/remember.ts")];
+    try {
+      product = await Promise.all([import("../host/memory-extract.ts"), import("../host/remember.ts")]);
+    } catch {
+      return { output: "", labels: [], state: {}, infra: "this version of the product has no extraction decisions to run (INV-733)" };
+    }
+    const [{ buildExtractionPrompt, parseExtraction }, { personWordsOf }] = product;
+    if (typeof personWordsOf !== "function") return { output: "", labels: [], state: {}, infra: "this version of the product has no extraction decisions to run (INV-733)" };
+    const known = ((task.input.known as string[] | undefined) ?? []).map((text): MemoryRecord => ({ at: "2026-09-01T00:00:00.000Z", kind: "fact", text }));
+    const exchanges = (task.input.exchanges as string[] | undefined) ?? [];
+    const message = await context.model(
+      { model: context.profile.model, max_tokens: Math.min(1024, context.profile.maxTokens), messages: [{ role: "user", content: buildExtractionPrompt(exchanges.join("\n\n---\n\n"), known) }] },
+      "create"
+    );
+    const text = textOf(message);
+    const parsed = parseExtraction(text, { candidates: known, said: exchanges.map(personWordsOf), refs: exchanges.map((_, i) => `task@${i + 1}`), live: known });
+    const labels = [
+      ...parsed.items.map(item => (item.op === "create" ? "create" : `${item.op}:${item.target!.text}`)),
+      ...Object.entries(parsed.dropped).flatMap(([why, n]) => Array.from({ length: n ?? 0 }, () => `dropped:${why}`)),
+    ];
+    return { output: text, labels, state: { kept: parsed.items.length } };
+  },
+  fake(task, wrong) {
+    return async () => say(wrong ? String(task.input.wrong ?? "NOTHING") : (task.gold.answer ?? "NOTHING"), FAKE_TOKENS);
+  },
+};
+
 /** The starter skills as an episode is offered them: the index entries, and each SKILL.md at its box path. */
 function starterSkillSet() {
   const starters = starterSkillsWithEvals();
@@ -237,4 +281,4 @@ const episode: Subject = {
   },
 };
 
-export const SUBJECT_TABLE: Readonly<Record<SubjectName, Subject>> = { episode, "auto-review": autoReview, steward, teach };
+export const SUBJECT_TABLE: Readonly<Record<SubjectName, Subject>> = { episode, "auto-review": autoReview, steward, teach, memory };
