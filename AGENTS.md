@@ -32,7 +32,10 @@ acceptable piece of work), linked with `CONTAINS`.
    run, a file path in the box. "It works" is not evidence; a link is.
 6. **Agents propose, humans commit.** `work_propose` creates a **candidate**. Nothing an agent
    proposes enters the active queue until a person commits it in the Web UI. Never treat your own
-   proposal as agreed work.
+   proposal as agreed work. **Bugs are the exception:** `work_file_bug` (priority,
+   steps_to_reproduce, acceptance, parent) commits the bug on filing, so do not ask anyone to
+   commit it — fix it. A bug sent through `work_propose` without those fields becomes a candidate
+   and waits for a person for no reason.
 7. **Agents never mark work Done** — with one exception. A completed run moves the item to
    **In Review**; the person decides what Done means. The exception is research: an ISSUE
    labelled `research` (Type: Research), whose deliverable is the record itself. A new research
@@ -61,7 +64,11 @@ acceptable piece of work), linked with `CONTAINS`.
 ## Scope guards & Unplanned Work (即时热修自动闭环法则)
 
 Work you discover while doing other work is **not** licence to widen the job:
-- If it is a bugfix or unplanned modification touching product code: fix it locally, verify tests, and before responding to the user call `work_propose` with:
+- If it is a bug: call `work_file_bug` (priority 1–4, `steps_to_reproduce`, acceptance,
+  `related_work_id: <当前处理任务ID>`, 3-part Chinese description). It is committed on filing; fix it
+  without waiting for anyone. Fixed on the spot: pass `initial_state: 'REVIEW'` with `pr_number` or
+  `commit_sha` and a `summary`.
+- If it is any other unplanned modification touching product code: fix it locally, verify tests, and before responding to the user call `work_propose` with:
   - `kind: 'ISSUE'`
   - `related_work_id: <当前处理任务ID 或 所属父里程碑ID>`
   - `related_work_type: 'DISCOVERED_DURING'`
