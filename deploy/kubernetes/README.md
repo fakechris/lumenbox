@@ -8,23 +8,42 @@ the Pod spec.
 
 ## Apply order
 
-```sh
-# 1. Build and push the image somewhere the cluster can pull it. The box image doubles as the
-#    control-plane image (one build carries the CLI); AGENTBOX_IMAGE_REPO picks the prefix.
-npm run build:image
-docker tag fakechris/lumenbox:0.3.0 <your-registry>/lumenbox:0.3.0
-docker push <your-registry>/lumenbox:0.3.0
+The checked-in manifest uses the published image for this checkout's `package.json` version.
+Skip the build if your cluster can pull that image. For a private registry or a different tag,
+set both the Deployment's `image` and the ConfigMap's `AGENTBOX_IMAGE` in
+`control-plane.yaml` to the same pullable image before applying it.
 
+```sh
+# 1. Optional: build and push to your registry (replace the example hostname).
+image_repo=registry.example.com/lumenbox
+image_tag=$(node -p 'require("./package.json").version')
+AGENTBOX_IMAGE_REPO="$image_repo" npm run build:image
+docker push "$image_repo:$image_tag"
+```
+
+```sh
 # 2. Namespace, then the identity, then the workload. RBAC references the namespace, and the
 #    Deployment references the ServiceAccount, so this order is the one that applies cleanly.
 kubectl apply -f deploy/kubernetes/namespace.yaml
 kubectl apply -f deploy/kubernetes/rbac.yaml
+```
 
-# 3. Tenants and passwords, generated rather than committed: the Deployment reads them from this
-#    Secret. Save what it prints — the random part is the admin password.
+### 3. Create the gateway account
+
+Generate and save a random admin password in your password manager (use letters and digits;
+`:` and `,` separate fields in the account list). In a private Bash terminal with shell tracing
+off, paste it at the hidden prompt. `kubectl` prints only the Secret creation status, not the
+password. Use the saved password to sign in as `admin`.
+
+```bash
+read -rsp 'Paste the saved admin password: ' admin_password
+printf '\n'
 kubectl -n agentbox create secret generic agentbox-control-users \
-  --from-literal=AGENTBOX_CONTROL_USERS="admin:$(openssl rand -hex 8):default"
+  --from-literal=AGENTBOX_CONTROL_USERS="admin:${admin_password:?Admin password is required}:default"
+unset admin_password
+```
 
+```sh
 # 4. The key the stored box tokens are encrypted with, kept out of the PVC that holds the
 #    database. Without it the control plane mints a key onto /state and a snapshot of that
 #    volume carries both halves — so the Deployment requires this Secret rather than starting
@@ -33,13 +52,13 @@ kubectl -n agentbox create secret generic agentbox-control-users \
 kubectl -n agentbox create secret generic agentbox-control-key \
   --from-literal=AGENTBOX_CONTROL_KEY="$(openssl rand -hex 32)"
 
+# Set the upstream provider key and any image overrides in control-plane.yaml first.
 kubectl apply -f deploy/kubernetes/control-plane.yaml
 ```
 
-Then edit `control-plane.yaml` before real use: the `agentbox-control` Secret's provider key, and
-the image name if you pushed to your own registry. If you skipped step 3, the control plane logs a
-generated admin password on every start instead — fine for a look around, wrong for anything
-longer. There is no TLS on the gateway — put an Ingress with a terminator in front of the
+If you skipped step 3, the control plane logs a generated admin password on every start
+instead — fine for a look around, wrong for anything longer. There is no TLS on the gateway —
+put an Ingress with a terminator in front of the
 `agentbox-control` Service's `gateway` port before anyone signs in over a network.
 
 ## How it wires together
@@ -53,6 +72,8 @@ longer. There is no TLS on the gateway — put an Ingress with a terminator in f
 - Per-box resources come from the allocation policy: 4Gi memory and 10Gi per PVC by default,
   tunable with `AGENTBOX_K8S_MEMORY` / `AGENTBOX_K8S_STORAGE`; `AGENTBOX_K8S_STORAGE_CLASS` pins a
   StorageClass when the cluster default is not what boxes should get.
+- For an optional namespace quota and how to diagnose a rejected allocation, see
+  [Capacity](ONBOARDING.md#6-capacity).
 
 ## Smoke check
 
