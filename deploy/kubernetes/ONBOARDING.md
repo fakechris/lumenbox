@@ -141,9 +141,9 @@ Cluster-age failure modes seen in the wild, so they are not mysteries when you m
   validation of *unrelated* manifests. `--validate=false` is the workaround; it is a property of
   that cluster, not of these manifests.
 - **A first request that 502s with "Your box is not answering"** while the pod is still booting
-  is normal — retry once the pod is Ready. If it 502s with the pod Ready, the box's UI port is
-  not listening; the allocator sets `AGENTBOX_HOST_ENABLED=1` for exactly this, so a 502 then
-  means the box predates that and should be restarted through the admin API.
+  is normal — retry once the pod is Ready. The tenant pod checks both boxd and the hostd UI
+  before becoming Ready. Restart an existing box through the admin API to apply the current
+  allocator's startup configuration and readiness probe.
 
 ## 5. Wire-level validation without the box image
 
@@ -215,9 +215,12 @@ enough capacity, it can instead remain `Pending`: use `kubectl describe pod` and
 - **The `agentbox-control-state` PVC is the control plane.** Tenants, boxes, tokens (encrypted)
   and the audit log are one SQLite file there. Back up that directory and you have backed up
   everything; lose it and every tenant gets allocated a second box.
-- **No TLS anywhere in this file.** The relay token and the gateway session travel in plain HTTP
-  inside the cluster. Put a TLS-terminating Ingress in front of the gateway for real use, and
-  treat east-west encryption (service mesh) as a separate decision.
+- **Terminate TLS at the public gateway.** Put a TLS-terminating Ingress in front of the
+  gateway for real use. Only the tenant-pod allocator sets `AGENTBOX_INSECURE=1` for hostd's
+  internal HTTP listener. Its ClusterIP is not public: use a CNI that enforces the box
+  NetworkPolicy, which only admits control-plane pods. The gateway authenticates tenant
+  sessions and forwards requests with the per-box UI token. That internal hop and the relay
+  still travel in plain HTTP; treat east-west encryption (service mesh) as a separate decision.
 - **Box pods carry no API credential** (`automountServiceAccountToken: false`) and the control
   plane's Role cannot `list` secrets — see `rbac.yaml`'s header for the exact posture.
 - **Recovery**: a deleted or evicted box pod is recreated by the admin API's restart path; the

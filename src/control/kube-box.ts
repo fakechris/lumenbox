@@ -106,6 +106,8 @@ export interface KubeBoxesOptions {
   relayProvider?: string;
   /** Plain env the caller fixes for every box; a spec's env cannot override these names. */
   fixedEnv?: Record<string, string>;
+  /** This allocator serves the tenant UI from hostd as well as the desktop from boxd. */
+  requireHostdReady?: boolean;
   /** How long to wait for Ready. Pulling the image dominates; five minutes. */
   startTimeoutMs?: number;
   pollIntervalMs?: number;
@@ -296,8 +298,20 @@ export class KubeBoxes {
                 ...(decision.resources.cpuLimit !== undefined ? { cpu: decision.resources.cpuLimit } : {}),
               },
             },
-            // boxd's /health is unauthenticated by design, so a probe gives away nothing.
-            readinessProbe: {
+            // A tenant pod is not Ready until both daemons answer HTTP. The unauthenticated
+            // endpoints let the probe run without putting either token in the command.
+            readinessProbe: this.options.requireHostdReady ? {
+              exec: {
+                command: [
+                  "sh", "-c",
+                  `curl --noproxy '*' -fsS --max-time 1 http://127.0.0.1:${BOXD_PORT}/health >/dev/null && ` +
+                    `curl --noproxy '*' -fsS --max-time 1 http://127.0.0.1:${UI_PORT}/login >/dev/null`,
+                ],
+              },
+              periodSeconds: 5,
+              timeoutSeconds: 3,
+              failureThreshold: 1,
+            } : {
               httpGet: { path: "/health", port: BOXD_PORT },
               periodSeconds: 5,
               timeoutSeconds: 3,

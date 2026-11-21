@@ -151,11 +151,15 @@ export class KubernetesAllocator extends StoreBackedAllocator {
       ...(options.imagePullPolicy !== undefined ? { imagePullPolicy: options.imagePullPolicy } : {}),
       ...(options.relayUrl !== undefined ? { relayUrl: options.relayUrl } : {}),
       ...(options.relayProvider !== undefined ? { relayProvider: options.relayProvider } : {}),
+      requireHostdReady: true,
       fixedEnv: {
         // The gateway proxies to the box's UI, so the in-box orchestrator is not optional here the
         // way it is for a laptop box: without it nothing listens on the UI port and every proxied
         // request is a 502. Compose sets the same variable (box/docker.ts).
         AGENTBOX_HOST_ENABLED: "1",
+        // Only this ClusterIP hop uses plain HTTP. The gateway authenticates the request
+        // and sends the box's UI token; the NetworkPolicy admits only control-plane pods.
+        AGENTBOX_INSECURE: "1",
         // The gateway's identity headers are believed only where a gateway is in front; the trust
         // flag is the control plane's to set, never a spec's to unset (INV-1543).
         AGENTBOX_TRUST_GATEWAY_IDENTITY: "1",

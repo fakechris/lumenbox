@@ -43,6 +43,9 @@ test("each box is its own pod, volumes, secret and policy, reached at its own Se
     // One box, one pod: the pod is named by the box record, so two records never share objects.
     for (const record of [a, b]) {
       assert.ok(fake.pods.has(record.name));
+      const container = (fake.pods.get(record.name)!.spec.containers as Record<string, unknown>[])[0]!;
+      assert.deepEqual((container.readinessProbe as { httpGet: unknown }).httpGet, { path: "/health", port: 1337 });
+      assert.ok(!(container.env as { name: string }[]).some(({ name }) => name === "AGENTBOX_INSECURE"));
       assert.ok(fake.policies.has(record.name));
       assert.ok(fake.secrets.has(`${record.name}-tokens`));
       for (const volume of ["work", "config", "hostd"]) assert.ok(fake.pvcs.has(`${record.name}-${volume}`));
