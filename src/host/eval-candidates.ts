@@ -230,6 +230,25 @@ export function collectCandidates(options: CandidateOptions): CandidateRun {
   return run;
 }
 
+/**
+ * What a person asked and what the agent finally said for one reviewed message, found the way the
+ * candidates are found — for the labelling page (INV-1773, judge-sheet.ts), which scrubs it as these are.
+ * Undefined when the turn is gone, was not a person's, or has no reply. Reads only what the
+ * transcripts and the door's ledger already keep; the review's own line stays hashes.
+ */
+export function judgedExchange(home: string, registry: AgentRegistry, agentName: string, messageId: string, evidence: IngressEvidence = ingressEvidence(home)): { request: string; reply: string; agentId: string } | undefined {
+  const agent = registry.list().find(one => one.profile.name === agentName || one.id === agentName);
+  if (agent === undefined) return undefined;
+  const located = turnsByMessage(registry, agent.id).get(messageId);
+  if (located === undefined) return undefined;
+  const provenance = openingProvenance(agent.id, located.entries[located.index]!, evidence);
+  if (provenance.by !== "person") return undefined;
+  const request = evidence.door(messageId)?.text ?? provenance.text;
+  const reply = replyOf(located);
+  if (reply === undefined || request.trim() === "") return undefined;
+  return { request, reply, agentId: agent.id };
+}
+
 const isBuild = (value: unknown): value is { version: string; commit: string } =>
   typeof value === "object" && value !== null && typeof (value as { version?: unknown }).version === "string" && typeof (value as { commit?: unknown }).commit === "string";
 

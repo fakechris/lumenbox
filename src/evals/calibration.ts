@@ -30,6 +30,8 @@ export const MIN_LABELS = 30;
 export const MIN_LABELS_PER_QUESTION = 10;
 /** Agreement beyond chance a judge's question needs before its verdicts may gate anything. */
 export const KAPPA_TO_GATE = 0.6;
+/** Agreement beyond chance a judge's question needs before it may release anything on its own where nobody is watching (INV-1773). */
+export const KAPPA_TO_RELEASE_UNATTENDED = 0.8;
 
 export interface HumanLabel {
   /** The failure type asked about. */
@@ -42,6 +44,8 @@ export interface HumanLabel {
   task?: string;
   attempt?: number;
   note?: string;
+  /** When it was given: the product's labels carry it (INV-1773); a committed sheet need not. */
+  at?: string;
 }
 
 /** One row of the sheet a person fills in: `label` and `by` are empty until they do. */
@@ -85,7 +89,7 @@ export function parseLabels(text: string, where: string): HumanLabel[] {
     labels.push({
       question: parsed.question as string, outputDigest: parsed.outputDigest as string, label: parsed.label as HumanLabel["label"], by: (parsed.by as string).trim(),
       ...(typeof parsed.task === "string" ? { task: parsed.task } : {}), ...(typeof parsed.attempt === "number" ? { attempt: parsed.attempt } : {}),
-      ...(typeof parsed.note === "string" ? { note: parsed.note } : {}),
+      ...(typeof parsed.note === "string" ? { note: parsed.note } : {}), ...(typeof parsed.at === "string" ? { at: parsed.at } : {}),
     });
   });
   return labels;
@@ -109,34 +113,7 @@ export function selectForLabelling(run: EvalRun, tasks: readonly EvalTask[], opt
   if (run.split !== "test") throw new Error(`the calibration subset is drawn from the test split; this record is ${run.split}`);
   const count = options.count ?? MIN_LABELS;
   const order = (verdict: JudgeVerdict) => digest(`${options.seed ?? 1772}:${verdict.task}:${verdict.attempt}:${verdict.question}`);
-  const pools = new Map<string, JudgeVerdict[]>();
-  for (const question of [...new Set(run.judges.verdicts.map(verdict => verdict.question))].sort()) {
-    const mine = run.judges.verdicts.filter(verdict => verdict.question === question).sort((a, b) => (order(a) < order(b) ? -1 : 1));
-    const present = mine.filter(verdict => verdict.verdict === "present");
-    const rest = mine.filter(verdict => verdict.verdict !== "present");
-    const mixed: JudgeVerdict[] = [];
-    while (present.length > 0 || rest.length > 0) {
-      const a = present.shift();
-      if (a !== undefined) mixed.push(a);
-      const b = rest.shift();
-      if (b !== undefined) mixed.push(b);
-    }
-    pools.set(question, mixed);
-  }
-  // Round-robin over the questions, so a question with few outputs gives all it has and the others make up the number.
-  const chosen: JudgeVerdict[] = [];
-  const seen = new Set<string>();
-  while (chosen.length < count && [...pools.values()].some(pool => pool.length > 0)) {
-    for (const pool of pools.values()) {
-      const next = pool.shift();
-      if (next === undefined || chosen.length >= count) continue;
-      // The same text judged for the same question twice is one thing to label, not two.
-      const key = `${next.question}:${next.outputDigest}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      chosen.push(next);
-    }
-  }
+  const chosen = spreadForLabelling(run.judges.verdicts, order, count, verdict => verdict.outputDigest);
   const byId = new Map(tasks.map(task => [task.id, task]));
   const asks = new Map(JUDGE_QUESTIONS.map(one => [one.failureType, one.question]));
   return chosen.flatMap(verdict => {
@@ -148,6 +125,44 @@ export function selectForLabelling(run: EvalRun, tasks: readonly EvalTask[], opt
       context: judgeContext(task), output, outputDigest: verdict.outputDigest, label: null, by: null,
     }];
   });
+}
+
+/**
+ * The verdicts a person is asked about, `count` at most: spread evenly over the questions and,
+ * within a question, alternating between what the judge called present and absent — a subset the
+ * judge called all-absent could not show whether it catches anything. `order` ranks a question's
+ * verdicts (smallest first); `outputOf` names the output judged, and the same output judged for the
+ * same question twice is one thing to label. The offline sheet and the product's labelling page (INV-1773) both draw with this.
+ */
+export function spreadForLabelling<V extends Pick<JudgeVerdict, "question" | "verdict">>(verdicts: readonly V[], order: (verdict: V) => string, count: number, outputOf: (verdict: V) => string): V[] {
+  const pools = new Map<string, V[]>();
+  for (const question of [...new Set(verdicts.map(verdict => verdict.question))].sort()) {
+    const mine = verdicts.filter(verdict => verdict.question === question).sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
+    const present = mine.filter(verdict => verdict.verdict === "present");
+    const rest = mine.filter(verdict => verdict.verdict !== "present");
+    const mixed: V[] = [];
+    while (present.length > 0 || rest.length > 0) {
+      const a = present.shift();
+      if (a !== undefined) mixed.push(a);
+      const b = rest.shift();
+      if (b !== undefined) mixed.push(b);
+    }
+    pools.set(question, mixed);
+  }
+  // Round-robin over the questions, so a question with few outputs gives all it has and the others make up the number.
+  const chosen: V[] = [];
+  const seen = new Set<string>();
+  while (chosen.length < count && [...pools.values()].some(pool => pool.length > 0)) {
+    for (const pool of pools.values()) {
+      const next = pool.shift();
+      if (next === undefined || chosen.length >= count) continue;
+      const key = `${next.question}:${outputOf(next)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      chosen.push(next);
+    }
+  }
+  return chosen;
 }
 
 /** Two decimals, without the "-0.00" a rounding error prints for no agreement beyond chance. */
@@ -162,8 +177,15 @@ export interface QuestionCalibration {
   kappa?: number;
   /** Of the outputs a person said have the failure, the share the judge caught. Undefined when the person found none. */
   catchRate?: number;
+  /** Of the outputs a person said are fine, the share the judge called failed: what it would stop wrongly. Undefined when the person found none fine. */
+  falseKillRate?: number;
   humanPresent: number;
+  humanAbsent: number;
+  /** Enough labels, on this question too, and both answers seen: the kappa is a measurement, not a guess. */
+  measured: boolean;
   mayGate: boolean;
+  /** Measured at KAPPA_TO_RELEASE_UNATTENDED or above: may release something on its own where nobody is watching. */
+  mayReleaseUnattended: boolean;
   why: string;
 }
 
@@ -185,7 +207,7 @@ export interface Calibration {
  * to answer, and counts as disagreeing with whatever the person said: a judge may not improve
  * its agreement by declining the hard ones.
  */
-export function calibrate(judges: JudgeSection, labels: readonly HumanLabel[]): Calibration {
+export function calibrate(judges: Pick<JudgeSection, "verdicts">, labels: readonly HumanLabel[]): Calibration {
   const said = new Map<string, HumanLabel["label"] | "conflict">();
   for (const label of labels) {
     const key = `${label.question}:${label.outputDigest}`;
@@ -214,18 +236,23 @@ export function calibrate(judges: JudgeSection, labels: readonly HumanLabel[]): 
     const kappa = cohenKappa(mine);
     const humanPresent = mine.filter(([human]) => human).length;
     const caught = mine.filter(([human, judge]) => human && judge).length;
+    const humanAbsent = mine.length - humanPresent;
+    const killed = mine.filter(([human, judge]) => !human && judge).length;
     let why: string;
     if (!calibrated) why = `${matched} of ${MIN_LABELS} labels`;
     else if (mine.length < MIN_LABELS_PER_QUESTION) why = `${mine.length} labels on this question; ${MIN_LABELS_PER_QUESTION} needed`;
     else if (kappa?.kappa === undefined) why = "the person or the judge gave one answer throughout: agreement beyond chance cannot be told";
     else if (kappa.kappa < KAPPA_TO_GATE) why = `kappa ${twoPlaces(kappa.kappa)} is under ${KAPPA_TO_GATE}`;
     else why = `kappa ${twoPlaces(kappa.kappa)} on ${mine.length} labels`;
-    const mayGate = calibrated && mine.length >= MIN_LABELS_PER_QUESTION && kappa?.kappa !== undefined && kappa.kappa >= KAPPA_TO_GATE;
+    const measured = calibrated && mine.length >= MIN_LABELS_PER_QUESTION && kappa?.kappa !== undefined;
+    const mayGate = measured && kappa!.kappa! >= KAPPA_TO_GATE;
+    const mayReleaseUnattended = measured && kappa!.kappa! >= KAPPA_TO_RELEASE_UNATTENDED;
     return {
-      question, labels: mine.length, humanPresent, mayGate, why,
+      question, labels: mine.length, humanPresent, humanAbsent, measured, mayGate, mayReleaseUnattended, why,
       ...(kappa !== undefined ? { agreement: kappa.agreement } : {}),
       ...(kappa?.kappa !== undefined ? { kappa: kappa.kappa } : {}),
       ...(humanPresent > 0 ? { catchRate: caught / humanPresent } : {}),
+      ...(humanAbsent > 0 ? { falseKillRate: killed / humanAbsent } : {}),
     };
   });
   return { calibrated, matched, unmatched, conflicting, labellers: [...new Set(labels.map(label => label.by))].sort(), questions };

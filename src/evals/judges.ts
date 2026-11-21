@@ -23,7 +23,7 @@ import type { ReviewInput } from "../host/auto-review.ts";
 import type { ProviderProfile } from "../host/provider.ts";
 import { teachingCueFor } from "../host/teach-evals.ts";
 import { type CacheStore, type CallCounters, cachedModel, type ModelCall } from "./cache.ts";
-import { digest, type EvalTask, taskVersion } from "./corpus.ts";
+import { digest, type EvalTask, outputDigestOf, taskVersion } from "./corpus.ts";
 import { teachFixtureOf } from "./graders.ts";
 import { type EvalRun, emptyUse, metered, type TokenUse } from "./runner.ts";
 
@@ -166,7 +166,7 @@ export interface JudgeSection {
   use: TokenUse;
 }
 
-export const outputDigestOf = (output: string): string => digest(output).slice(0, 16);
+export { outputDigestOf } from "./corpus.ts";
 
 export interface JudgeOptions {
   model: ModelCall;

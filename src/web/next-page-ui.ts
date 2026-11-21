@@ -36,7 +36,7 @@ import { NEXT_SET_LIMITS_JS } from "./next-set-limits-ui.ts";
 import { NEXT_SET_BOXES_JS } from "./next-set-boxes-ui.ts";
 import { NEXT_SET_BOXES_MORE_JS } from "./next-set-boxes-more-ui.ts";
 import { NEXT_SET_MEMORY_JS } from "./next-set-memory-ui.ts";
-import { NEXT_SET_SUPERVISION_JS } from "./next-set-supervision-ui.ts";
+import { NEXT_SET_SUPERVISION_JS } from "./next-set-supervision-ui.ts"; import { NEXT_CALIBRATION_JS } from "./next-calibration-ui.ts";
 import { NEXT_SET_GUESTS_JS } from "./next-set-guests-ui.ts";
 import { NEXT_SET_SHELL_JS } from "./next-set-shell-ui.ts";
 import { INSTALLATIONS_JS } from "./installations-ui.ts";
@@ -311,6 +311,9 @@ body.electron-mac .side { padding-top: 40px; }
 .fold-body textarea { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
 .fold-body .fact { align-items: center; }
 .fact { display: flex; justify-content: space-between; gap: 16px; padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.setting p.note, .setting div.note { color: var(--muted); font-size: 13px; margin: 2px 0 8px; }
+.setting .note.bad, .calib-row .bad { color: var(--bad); } .calib-row .warn { color: var(--warn); }
+.calib-item { border-top: 1px solid var(--border); padding: 10px 0; } .calib-row .calib-left { text-align: left; flex: 1; min-width: 0; white-space: normal; }
 .fact:first-of-type { border-top: 0; } .fact span:last-child { text-align: right; overflow-wrap: anywhere; }
 .scrim { position: fixed; inset: 0; background: rgba(31,26,23,.18); }
 .panel { position: fixed; top: 12px; right: 12px; bottom: 12px; width: min(600px, calc(100vw - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 18px 50px rgba(31,26,23,.16); display: flex; flex-direction: column; }
@@ -505,6 +508,7 @@ ${NEXT_SET_BOXES_JS}
 ${NEXT_SET_BOXES_MORE_JS}
 ${NEXT_SET_MEMORY_JS}
 ${NEXT_SET_SUPERVISION_JS}
+${NEXT_CALIBRATION_JS}
 ${NEXT_SET_GUESTS_JS}
 ${NEXT_SET_SHELL_JS}
 ${NEXT_SPEND_JS}

@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { agentboxHome, jevSwitch, typesafeToken } from "../config.ts";
 import { appendLine } from "./jsonl.ts";
+import type { Judged } from "./judge-record.ts";
 
 /** The places that can use it. One switch each; the name is the variable's suffix. */
 export type JevPoint =
@@ -285,6 +286,14 @@ export interface ShadowEntry {
   jev?: unknown;
   error?: string;
   ms?: number;
+  /** Who judged (INV-1773): the decision model as it named itself, and the version of the questions it was asked. */
+  judgeModel?: string;
+  judgeVersion?: string;
+  /** The point, or the questions it answered as a person labels them: `<judge>:<question>`. */
+  question?: string;
+  /** What it read and the digest of the output it judged, per question, when the point says (judge-record.ts). */
+  evidence?: { read: readonly string[]; digest?: string };
+  judged?: readonly Judged[];
 }
 
 export interface SwitchDeps {
@@ -316,6 +325,30 @@ export function modeFor(point: JevPoint, deps: SwitchDeps = defaultSwitchDeps): 
 }
 
 /**
+ * The version of what the decision model was asked: its questions' types, instructions and fixed
+ * options, with numbers (a candidate's index) and listed known lines left out. A reworded question
+ * is another judge, whose old calibration does not carry over (INV-1773).
+ */
+export function jevVersionOf(request: JevRequest): string {
+  const parts = new Set<string>();
+  for (const question of Object.values(request.questions)) {
+    const options = "criteria" in question && question.criteria !== undefined && !Array.isArray(question.criteria)
+      ? Object.entries(question.criteria).filter(([key]) => !/^K\d+$/.test(key)).map(([key, text]) => `${key}=${text}`).join("|") : "";
+    parts.add(`${question.type}:${question.instructions.replace(/\d+/g, "#")}:${options}`);
+  }
+  return digest([...parts].sort().join("\n"));
+}
+
+/** Which path gave the answer a point acted on: its own, or the decision model, by name and question version. */
+export type AnsweredBy = { path: "own" } | { path: "jev"; model: string; version: string };
+
+/** What a point says about its verdicts so the shadow log can name them (INV-1773): what was read, and each verdict as a person labels it. */
+export interface ShadowProvenance<T> {
+  read: readonly string[];
+  judged?: (value: T) => readonly Judged[];
+}
+
+/**
  * Runs one judgement the way its switch says.
  *
  * `own` is the point's existing path and is always available; `jev` asks the decision model. The
@@ -323,27 +356,49 @@ export function modeFor(point: JevPoint, deps: SwitchDeps = defaultSwitchDeps): 
  */
 export async function switched<T>(
   point: JevPoint,
-  paths: { own: () => Promise<T>; jev: (ask: JevAsk) => Promise<T>; summary: (value: T) => unknown },
+  paths: { own: () => Promise<T>; jev: (ask: JevAsk) => Promise<T>; summary: (value: T) => unknown; provenance?: ShadowProvenance<T> },
   deps: SwitchDeps = defaultSwitchDeps
 ): Promise<T> {
+  return (await switchedBy(point, paths, deps)).value;
+}
+
+/** The same, saying which path answered: what a verdict's record names as its judge (INV-1773). */
+export async function switchedBy<T>(
+  point: JevPoint,
+  paths: { own: () => Promise<T>; jev: (ask: JevAsk) => Promise<T>; summary: (value: T) => unknown; provenance?: ShadowProvenance<T> },
+  deps: SwitchDeps = defaultSwitchDeps
+): Promise<{ value: T; by: AnsweredBy }> {
   const { mode, ask } = modeFor(point, deps);
-  if (mode === "off" || ask === undefined) return paths.own();
+  if (mode === "off" || ask === undefined) return { value: await paths.own(), by: { path: "own" } };
+  const seen: { model?: string; version?: string } = {};
+  const watched: JevAsk = async request => {
+    seen.version = jevVersionOf(request);
+    const result = await ask(request);
+    seen.model = result.model;
+    return result;
+  };
   if (mode === "on") {
     try {
-      return await paths.jev(ask);
+      const value = await paths.jev(watched);
+      return { value, by: { path: "jev", model: seen.model ?? "unknown", version: seen.version ?? "unknown" } };
     } catch (error) {
       deps.log(`${point}: the decision model failed (${error instanceof Error ? error.message : String(error)}); using the default path`);
-      return paths.own();
+      return { value: await paths.own(), by: { path: "own" } };
     }
   }
   const own = await paths.own();
   const started = Date.now();
+  const named = (value?: T): Partial<ShadowEntry> => ({
+    ...(seen.model !== undefined ? { judgeModel: seen.model } : {}), ...(seen.version !== undefined ? { judgeVersion: seen.version } : {}), question: point,
+    ...(paths.provenance !== undefined ? { evidence: { read: paths.provenance.read } } : {}),
+    ...(value !== undefined && paths.provenance?.judged !== undefined ? { judged: paths.provenance.judged(value) } : {}),
+  });
   void paths
-    .jev(ask)
-    .then(value => deps.record({ at: new Date().toISOString(), point, own: paths.summary(own), jev: paths.summary(value), ms: Date.now() - started }))
-    .catch(error => deps.record({ at: new Date().toISOString(), point, own: paths.summary(own), error: error instanceof Error ? error.message : String(error), ms: Date.now() - started }))
+    .jev(watched)
+    .then(value => deps.record({ at: new Date().toISOString(), point, own: paths.summary(own), jev: paths.summary(value), ms: Date.now() - started, ...named(value) }))
+    .catch(error => deps.record({ at: new Date().toISOString(), point, own: paths.summary(own), error: error instanceof Error ? error.message : String(error), ms: Date.now() - started, ...named() }))
     .catch(() => {
       // A shadow log that cannot be written is not worth failing a judgement over.
     });
-  return own;
+  return { value: own, by: { path: "own" } };
 }

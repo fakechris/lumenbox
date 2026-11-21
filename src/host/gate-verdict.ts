@@ -49,12 +49,16 @@ export function askReasons(facts: {
   hostBoxWrite?: string;
   /** The file a call writes that is run later (INV-1861). */
   runLater?: string;
+  /** What an auto-review that may not refuse on its own found (INV-1773). */
+  reviewAsks?: string;
 }): string[] {
   const out: string[] = [];
   if (facts.rule?.effect === "ask") out.push(ruleWords(facts.rule));
   if (facts.hostCommand) out.push("a command on the person's own machine always asks");
   if (facts.irreversible !== undefined) out.push(`the box found it cannot be undone (${facts.irreversible})`);
   if (facts.tainted) out.push("this turn read a secret or outside content first");
+  // Like the three above, no allow rule lifts it: it is a person's question because a judge could not be trusted to answer it.
+  if (facts.reviewAsks !== undefined) out.push(`the auto-review, which may not refuse on its own, found: ${facts.reviewAsks}`);
   // An operator's allow rule lifts the configured lists; it never lifts the three above.
   if (facts.rule?.effect !== "allow") {
     if (facts.approvalList) out.push("the installation's approval list");
