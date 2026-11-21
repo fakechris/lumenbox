@@ -351,6 +351,7 @@ COPY boxd.cjs /opt/boxd/boxd.cjs
 # The orchestrator, bundled with its dependencies because there is no node_modules in
 # here, plus the browser build the web UI serves for the same reason.
 COPY hostd.mjs /opt/hostd/hostd.mjs
+COPY package.json /opt/hostd/package.json
 COPY markdown-it.js /opt/hostd/vendor/markdown-it.js
 COPY a2ui.js /opt/hostd/vendor/a2ui.js
 # Data the bundle reads at runtime, beside the bundle that reads it: the catalog resolves

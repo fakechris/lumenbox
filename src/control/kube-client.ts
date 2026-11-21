@@ -252,12 +252,12 @@ export function kubeconfigCredentials(
   const baseDir = dirname(path);
   const ca = inlineOrFile(cluster, "certificate-authority", readFile, baseDir);
   const user = byName(root.users, userName)?.user as Record<string, unknown> | undefined;
-  if (user !== undefined && user.exec !== undefined) {
+  if (user !== undefined && [user.exec, user["auth-provider"]].some(plugin => plugin !== undefined && plugin !== null)) {
     // gke/eks/SSO helpers. Refused rather than executed: shelling out to a credential plugin from
     // inside an allocator is a supply chain and a hang nobody asked for, and pretending it worked
     // is worse.
     throw new KubernetesError(
-      `${path}: user ${userName} authenticates with an exec plugin, which this client does not ` +
+      `${path}: user ${userName} authenticates with an exec plugin or auth-provider plugin, which this client does not ` +
         `run. Either run the control plane in-cluster (ServiceAccount auth), or mint a token: ` +
         `kubectl create token <serviceaccount> and put it in this kubeconfig's user.token.`
     );
@@ -296,6 +296,13 @@ function inlineOrFile(
  * day the dependency question gets reopened, not the day a half-parser grows a third mode.
  */
 export function parseMinimalYaml(text: string, source = "<yaml>"): unknown {
+  if (/^[\s]*[\[{]/.test(text)) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new KubernetesError(`${source}: malformed JSON kubeconfig`);
+    }
+  }
   interface Line {
     indent: number;
     text: string;
@@ -315,8 +322,10 @@ export function parseMinimalYaml(text: string, source = "<yaml>"): unknown {
     lines.push({ indent, text: stripped.trimStart(), line: i + 1 });
   });
 
-  const scalar = (raw: string, line: number): string => {
+  const scalar = (raw: string, line: number): unknown => {
     if (raw === "" ) return "";
+    if (/^\{\s*\}$/.test(raw)) return {};
+    if (/^\[\s*\]$/.test(raw)) return [];
     if (raw.startsWith("|") || raw.startsWith(">")) {
       throw new KubernetesError(`${source}:${line}: block scalars are not understood by this parser`);
     }
@@ -344,20 +353,24 @@ export function parseMinimalYaml(text: string, source = "<yaml>"): unknown {
       let i = at;
       while (i < list.length && list[i]!.indent === indent && (list[i]!.text.startsWith("- ") || list[i]!.text === "-")) {
         const head = list[i]!;
-        const rest = head.text === "-" ? "" : head.text.slice(2);
+        const rest = head.text.slice(1).trimStart();
         if (rest === "") {
           const [value, next] = parseBlock(list, i + 1, list[i + 1]?.indent ?? indent);
           items.push(value);
           i = next;
         } else if (rest.includes(":")) {
           // `- name: x` — a map whose first key rides on the dash line.
-          const synthetic: Line[] = [{ indent: indent + 2, text: rest, line: head.line }];
+          const mapIndent = indent + head.text.length - rest.length;
+          const synthetic: Line[] = [{ indent: mapIndent, text: rest, line: head.line }];
           let j = i + 1;
           while (j < list.length && list[j]!.indent > indent) {
             synthetic.push(list[j]!);
             j++;
           }
-          const [value] = parseMap(synthetic, 0, indent + 2);
+          const [value, after] = parseMap(synthetic, 0, mapIndent);
+          if (after !== synthetic.length) {
+            throw new KubernetesError(`${source}:${head.line}: malformed sequence mapping`);
+          }
           items.push(value);
           i = j;
         } else {
@@ -375,12 +388,17 @@ export function parseMinimalYaml(text: string, source = "<yaml>"): unknown {
     let i = at;
     while (i < list.length && list[i]!.indent >= indent && !list[i]!.text.startsWith("- ")) {
       const line = list[i]!;
-      if (line.indent < indent) break;
+      if (line.indent !== indent) {
+        throw new KubernetesError(`${source}:${line.line}: unexpected indentation`);
+      }
       const colon = line.text.indexOf(":");
       if (colon <= 0) {
         throw new KubernetesError(`${source}:${line.line}: expected 'key: value', got '${line.text}'`);
       }
       const key = scalar(line.text.slice(0, colon), line.line);
+      if (typeof key !== "string" || Object.hasOwn(map, key) || key === "__proto__") {
+        throw new KubernetesError(`${source}:${line.line}: invalid or duplicate mapping key`);
+      }
       const rest = line.text.slice(colon + 1).trim();
       if (rest !== "") {
         map[key] = scalar(rest, line.line);
@@ -407,7 +425,10 @@ export function parseMinimalYaml(text: string, source = "<yaml>"): unknown {
   }
 
   if (lines.length === 0) return {};
-  const [value] = parseBlock(lines, 0, lines[0]!.indent);
+  const [value, after] = parseBlock(lines, 0, lines[0]!.indent);
+  if (after !== lines.length) {
+    throw new KubernetesError(`${source}:${lines[after]!.line}: unexpected trailing content`);
+  }
   return value;
 }
 
@@ -429,7 +450,7 @@ type ResourceKind = keyof typeof RESOURCES;
 const SERVER_ASSIGNED: Record<ResourceKind, readonly string[]> = {
   pods: [],
   services: ["clusterIP", "clusterIPs", "ipFamilies", "ipFamilyPolicy"],
-  persistentvolumeclaims: ["volumeName"],
+  persistentvolumeclaims: [],
   secrets: [],
   networkpolicies: [],
 };
@@ -568,10 +589,9 @@ export class HttpKubeApi implements KubeApi {
   }
 
   /**
-   * Services, PVCs and Secrets are replaced in place — but a PUT is a *full* replace of the
-   * object, and the apiserver assigned fields we never knew: a Service's clusterIP/clusterIPs/
-   * ipFamilies are immutable once assigned, a bound PVC's volumeName likewise. Those are carried
-   * over from the live object, or the PUT is a 422 for "changing" a field we never touched.
+   * A PUT fully replaces the object. Services retain assigned addresses; existing PVCs retain
+   * their entire spec: storage class defaults, binding and other immutable fields belong to
+   * the live claim. Re-adoption only reconciles its metadata, never its storage requirements.
    */
   private async replaceInPlace(kind: ResourceKind, name: string, manifest: Record<string, unknown>): Promise<void> {
     let lastError: unknown;
@@ -587,9 +607,11 @@ export class HttpKubeApi implements KubeApi {
         return;
       }
       const manifestMeta = (manifest.metadata ?? {}) as Record<string, unknown>;
-      const spec = { ...((manifest.spec ?? {}) as Record<string, unknown>) };
+      const spec = kind === "persistentvolumeclaims"
+        ? existing.spec
+        : { ...((manifest.spec ?? {}) as Record<string, unknown>) };
       for (const field of SERVER_ASSIGNED[kind]) {
-        if (spec[field] === undefined && existing.spec?.[field] !== undefined) {
+        if (spec !== undefined && spec[field] === undefined && existing.spec?.[field] !== undefined) {
           spec[field] = existing.spec[field];
         }
       }

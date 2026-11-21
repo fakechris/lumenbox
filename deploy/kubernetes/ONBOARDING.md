@@ -35,16 +35,26 @@ image runs the control plane (it is one build; the control plane is the CLI invo
 2. `docker save` / `docker load` onto each node (needs node shell access).
 3. A public registry — possible, but you are publishing the image; decide that on purpose.
 
-## 2. Build and push the image
+## 2. Choose the image
+
+The checked-in `control-plane.yaml` pins the published image for this checkout's
+`package.json` version. If the cluster can pull it, skip the build. Otherwise, build
+and push to a registry the cluster can pull from (replace the example hostname):
 
 ```sh
-AGENTBOX_IMAGE_REPO=<registry>/lumenbox npm run build:image
-docker push <registry>/lumenbox:0.3.0    # and the content-hash tag it printed
+image_repo=registry.example.com/lumenbox
+image_tag=$(node -p 'require("./package.json").version')
+AGENTBOX_IMAGE_REPO="$image_repo" npm run build:image
+docker push "$image_repo:$image_tag"
 ```
 
-Prefer the content-hash tag over `:latest` when you edit `control-plane.yaml`: nodes cache
-`:latest`, and `imagePullPolicy: IfNotPresent` plus a warm cache is how a control plane and its
-boxes silently run different builds.
+If you deploy a different image, edit both the Deployment's `image` and the ConfigMap's
+`AGENTBOX_IMAGE` in `control-plane.yaml`. If you use the content-hash tag printed by the build
+instead of the release tag, push that tag too. Do not use `:latest`: nodes may keep a cached
+build with `imagePullPolicy: IfNotPresent`.
+
+When cutting a release, update both manifest pins to the new `package.json` version;
+`npm test` checks that they stay in sync.
 
 Two cross-architecture facts this step is where you find out about:
 
@@ -63,20 +73,20 @@ Two cross-architecture facts this step is where you find out about:
 kubectl apply -f deploy/kubernetes/namespace.yaml
 kubectl apply -f deploy/kubernetes/rbac.yaml
 
-# The gateway's accounts. There is no default password; a forgotten Secret degrades to a
-# generated one printed in the pod log.
 # The key the stored box tokens are encrypted with. Required: unset, the control plane writes a
 # key onto the same PVC as the database, which makes a snapshot of that volume a token dump.
 # Mint it now — changing it later makes the tokens already stored unreadable.
 kubectl -n agentbox create secret generic agentbox-control-key \
   --from-literal=AGENTBOX_CONTROL_KEY="$(openssl rand -hex 32)"
-
-kubectl -n agentbox create secret generic agentbox-control-users \
-  --from-literal=AGENTBOX_CONTROL_USERS="admin:$(openssl rand -hex 8):default"
 ```
 
-Then edit `control-plane.yaml`: the image (step 2's tag) and the upstream model key in the
-`agentbox-control` Secret (the relay holds it so no provider key ever enters a box). Optionally
+Follow [Create the gateway account](README.md#3-create-the-gateway-account) to save a random
+admin password before creating the users Secret. There is no default password; if the Secret is
+omitted, the control plane generates a password and logs it on each start.
+
+Then edit `control-plane.yaml`: set both image fields if you chose a different image in step 2
+and set the upstream model key in the `agentbox-control` Secret (the relay holds it so no
+provider key ever enters a box). Optionally
 uncomment the `AGENTBOX_K8S_*` knobs in the ConfigMap. Then:
 
 ```sh
@@ -94,7 +104,8 @@ kubectl -n agentbox get pods -w          # the tenant's pod reaches Ready
 kubectl -n agentbox get pvc              # <box>-work, <box>-config, <box>-hostd
 ```
 
-`Pending` that does not clear is almost always the image pull or an unsatisfiable PVC —
+If the pod exists but stays `Pending`, check its Events for scheduling, volume binding, or
+image pull problems. If no pod was created, see [Capacity](#6-capacity) for admission errors.
 
 ```sh
 kubectl -n agentbox describe pod <box-pod>   # the Events section says which
@@ -103,19 +114,20 @@ kubectl -n agentbox describe pod <box-pod>   # the Events section says which
 ### Updating to a new image
 
 The Deployment's strategy is Recreate (the SQLite store tolerates no second writer), so a
-rollout is downtime for exactly as long as the new image takes to pull. Pull first, roll second:
+rollout is downtime for exactly as long as the new image takes to pull. Pull first, then update
+both the Deployment's `image` and the ConfigMap's `AGENTBOX_IMAGE` in `control-plane.yaml` and apply:
 
 ```sh
 node --experimental-transform-types scripts/k8s-prewarm.ts --image <registry>/<project>/agentbox:<tag>
-kubectl -n agentbox set image deploy/agentbox-control control=<registry>/<project>/agentbox:<tag>
+kubectl apply -f deploy/kubernetes/control-plane.yaml
 kubectl -n agentbox rollout status deploy/agentbox-control
 ```
 
 `k8s-prewarm.ts` runs a throwaway pod per node and waits for it — a node whose pull wedges is
 named *before* the old control plane is stopped, not after. A node it reports UNSCHEDULABLE is
 one the scheduler could not place a box on today either; that is a warning about capacity, not
-a prewarm failure. The ConfigMap's `AGENTBOX_IMAGE` decides what *new* boxes run and is
-independent of what the control plane itself runs.
+a prewarm failure. The ConfigMap's `AGENTBOX_IMAGE` decides what *new* boxes run; applying the
+manifest does not update existing box pods.
 
 Cluster-age failure modes seen in the wild, so they are not mysteries when you meet them:
 
@@ -155,9 +167,9 @@ Three layers, independent:
    reserves it) and `AGENTBOX_K8S_STORAGE` (default 10Gi per PVC, three PVCs per box). Values must
    be Kubernetes quantities (`4Gi`, not `4g`); the policy validates before the apiserver is asked.
 2. **Fleet total** — `quota.yaml` (not applied by default): a ResourceQuota caps the namespace's
-   total memory / PVC count / storage, and its LimitRange keeps hand-created pods schedulable
-   under that quota. `requests.memory ÷ per-box memory = tenant cap`, and one tenant too many
-   becomes a clean `Pending` instead of a node outage.
+   total memory / PVC count / storage, and a LimitRange supplies defaults and limits individual
+   containers. Apply with `kubectl apply -f deploy/kubernetes/quota.yaml`. All workloads in the
+   namespace count toward the quota, including the control plane.
 3. **Per tenant** — replace `staticPolicy()` (`src/control/policy.ts`). The decision lands in the
    pod manifest and the audit log:
 
@@ -174,6 +186,29 @@ policy: {
       : { resources: { memoryRequest: "4Gi", memoryLimit: "4Gi" }, storageSize: "10Gi" },
 }
 ```
+
+**Admission `Forbidden` vs. scheduling `Pending`.** If a new Pod or PVC exceeds ResourceQuota
+or violates LimitRange, the API rejects the create request with HTTP 403 (`Forbidden`).
+There is no rejected object to describe. For a direct `kubectl` create/apply, read its API
+error; for a tenant box, look for the allocation error in the control-plane log. If a
+Kubernetes controller was creating the object, check that controller's Events for
+`FailedCreate`.
+
+```sh
+kubectl -n agentbox logs deploy/agentbox-control
+kubectl -n agentbox describe resourcequota agentbox-boxes
+kubectl -n agentbox describe limitrange agentbox-boxes
+kubectl -n agentbox get events --sort-by=.metadata.creationTimestamp
+```
+
+For `exceeded quota`, compare Used and Hard for the resource named in the error. Free
+unused resources (only delete PVCs once their data is no longer needed), reduce the new
+workload's request, or have the cluster operator raise the quota. For a LimitRange error
+such as `maximum memory usage per Container`, bring the container's request/limit within
+the range or have the operator change that policy. Retry the allocation after making room
+or correcting the settings. If the pod was admitted but there is no eligible node with
+enough capacity, it can instead remain `Pending`: use `kubectl describe pod` and look for
+`FailedScheduling` in its Events.
 
 ## 7. Operations notes
 

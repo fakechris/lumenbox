@@ -338,6 +338,7 @@ export interface EpisodeOptions {
   boxKind?: "docker" | "attached" | "host";
   /** What the turns emit — tool_start, tool_end with the gate's verdict (INV-1664) — as the page would receive it. */
   onEvent?: (event: TurnEvent) => void;
+  onBusEvent?: (event: import("../agents/bus.ts").BusEvent) => void;
   turns?: import("./resume.ts").TurnLedger;
   /** Where each model call's usage is recorded, as the orchestrator's ledger would be. */
   usage?: import("./usage.ts").UsageLog;
@@ -566,6 +567,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(goalGate !== undefined ? { goalGate } : {}),
     } as never);
   }, event => {
+    options.onBusEvent?.(event);
     if (event.type === "turn_finished") goalLoop?.onTurnFinished(event.agentId);
   }, undefined, false, (agentId, message) => admitProgressMessage(options.tasks, agentId, message), focus, options.tasks?.workRoots.admission(focus));
   // Explicit history fixtures represent an already-admitted interrupted work, as a real resume does.
