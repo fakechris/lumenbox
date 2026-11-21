@@ -20,16 +20,16 @@ export type Split = "dev" | "test";
 export const SPLITS: readonly Split[] = ["dev", "test"];
 
 /** How a task is run. Each has one implementation in subjects.ts. */
-export type SubjectName = "episode" | "auto-review" | "steward" | "teach";
-export const SUBJECTS: readonly SubjectName[] = ["episode", "auto-review", "steward", "teach"];
+export type SubjectName = "episode" | "auto-review" | "steward" | "teach" | "memory";
+export const SUBJECTS: readonly SubjectName[] = ["episode", "auto-review", "steward", "teach", "memory"];
 
 /**
  * Where a task came from. The last two are a person's own material — replies a review judged and
  * a person corrected, and tasks an evaluation run already scored — and are empty until a person
  * adds lines; nothing in the repository holds them.
  */
-export type SourceKind = "skill-eval" | "teach-fixture" | "auto-review-trajectory" | "steward-tail" | "scenario" | "review-ledger" | "learning-material";
-export const SOURCE_KINDS: readonly SourceKind[] = ["skill-eval", "teach-fixture", "auto-review-trajectory", "steward-tail", "scenario", "review-ledger", "learning-material"];
+export type SourceKind = "skill-eval" | "teach-fixture" | "auto-review-trajectory" | "steward-tail" | "memory-extraction" | "scenario" | "review-ledger" | "learning-material";
+export const SOURCE_KINDS: readonly SourceKind[] = ["skill-eval", "teach-fixture", "auto-review-trajectory", "steward-tail", "memory-extraction", "scenario", "review-ledger", "learning-material"];
 
 /** A bound on one number or flag of the state a run ends in. */
 export interface StateBound {

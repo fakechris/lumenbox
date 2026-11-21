@@ -25,15 +25,9 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentRegistry } from "../agents/registry.ts";
 import { envNumber } from "../config.ts";
 import { effortConfig } from "./provider.ts";
-import { type HistoryEntry, personAuthoredText } from "./compaction.ts";
-import {
-  buildEpisodePrompt,
-  buildExtractionPrompt,
-  type MemoryRecord,memoryRef, 
-  parseEpisode,
-  parseExtraction,
-  selectRelevant
-} from "./memory.ts";
+import { beforeWake, type HistoryEntry, personAuthoredText } from "./compaction.ts";
+import { buildEpisodePrompt, dedupe, dedupeKey, type MemoryRecord, memoryRef, parseEpisode, scoreOf, selectRelevant } from "./memory.ts";
+import { buildExtractionPrompt, describeDrops, parseExtraction, recordsOfExtraction } from "./memory-extract.ts";
 import { guardMemoryCandidate } from "./memory-guard.ts";
 import { dispose, jevJudge, type MemoryJudge, modelJudge, verdictsSummary } from "./memory-judge.ts";
 import { type SwitchDeps, switched } from "./jev.ts";
@@ -89,7 +83,7 @@ export const MAINTAIN_EVERY = envNumber("AGENTBOX_MAINTAIN_EVERY", 2);
  */
 export const MAINTAIN_DRY_RUN = (process.env.AGENTBOX_MAINTAIN_DRY_RUN ?? "") !== "" && process.env.AGENTBOX_MAINTAIN_DRY_RUN !== "0";
 
-/** How many existing memories the extractor is shown, so it can avoid repeating them. */
+/** How many remembered lines the extractor is offered to confirm or correct. */
 const RELEVANT_LIMIT = 12;
 
 /**
@@ -499,30 +493,33 @@ export class Rememberer {
     } = {}
   ): Promise<void> {
     if (!guard()) return;
-    // Citable only when every exchange has a place: a numbering with holes would let the
-    // extractor cite a number that means nothing, and a wrong source is worse than none.
+    // Citable only when every exchange has a place: a numbering with holes would cite a place
+    // that means nothing, and a wrong source is worse than none.
     const citable = refs.length === exchanges.length && refs.every(ref => ref !== undefined)
       ? (refs as string[])
       : [];
-    const combined =
-      citable.length > 1
-        ? exchanges.map((exchange, index) => `[${index + 1}]\n${exchange}`).join("\n\n---\n\n")
-        : exchanges.join("\n\n---\n\n");
+    const combined = exchanges.join("\n\n---\n\n");
     const known = this.deps.registry.readMemoryRecords(agentId);
-    // Only the memories this conversation could plausibly restate, so the extractor is not shown
-    // hundreds of lines to check against — and so the prompt stays a sensible size.
-    const relevant = selectRelevant(combined, known, RELEVANT_LIMIT);
+    const live = dedupe(known);
+    // The remembered lines this conversation could plausibly confirm or correct, numbered for the
+    // extractor; a target outside them is not accepted (INV-733). The live view, not the ledger:
+    // a withdrawn or held line is nothing to confirm. Relevance is lexical, and "我住在上海" shares
+    // no word with "they live in Beijing" — so the slots relevance leaves are filled with the
+    // strongest lines, and a small memory is offered whole.
+    const related = selectRelevant(combined, live, RELEVANT_LIMIT);
+    const now = Date.now();
+    const strongest = live.filter(record => !related.includes(record)).sort((a, b) => scoreOf(b, now) - scoreOf(a, now));
+    const candidates = [...related, ...strongest].slice(0, RELEVANT_LIMIT);
 
-    let records: MemoryRecord[];
+    let items: ReturnType<typeof parseExtraction>["items"];
     try {
-      const reply = await this.ask(
-        agentId,
-        buildExtractionPrompt(combined, relevant, citable.length > 1 ? citable.length : 1, options),
-        principal
-      );
-      records = parseExtraction(reply, known, new Date(), citable);
-      // parseExtraction drops what validateRecord refuses; a credential is the one worth saying so,
-      // and only by kind — the line itself is what must not be written anywhere (INV-740).
+      const reply = await this.ask(agentId, buildExtractionPrompt(combined, candidates, options), principal);
+      const parsed = parseExtraction(reply, { candidates, said: exchanges.map(personWordsOf), refs: citable, live });
+      items = parsed.items;
+      const lost = describeDrops(parsed.dropped);
+      if (lost !== undefined) this.log(`extraction dropped ${lost}`);
+      // A credential is refused by kind, and only by kind — the line itself is what must not be
+      // written anywhere (INV-740).
       const leaked = reply.split("\n").map(line => credentialIn(line)).filter((kind): kind is string => kind !== undefined);
       if (leaked.length > 0) this.log(`dropped ${leaked.length} extracted line(s) that looked like a credential (${[...new Set(leaked)].join(", ")})`);
     } catch (error) {
@@ -536,28 +533,43 @@ export class Rememberer {
 
     if (!guard()) return;
     if (options.keep !== undefined) {
-      const kept = records.filter(options.keep);
-      if (kept.length < records.length) {
-        this.log(`dropped ${records.length - kept.length} extracted memor${records.length - kept.length === 1 ? "y" : "ies"} from a conversation that moved to a new context mid-extraction`);
+      const keep = options.keep;
+      const kept = items.filter(item => keep({ at: "", kind: "note", text: item.text, ...(item.from !== undefined ? { from: item.from } : {}) }));
+      if (kept.length < items.length) {
+        this.log(`dropped ${items.length - kept.length} extracted memor${items.length - kept.length === 1 ? "y" : "ies"} from a conversation that moved to a new context mid-extraction`);
       }
-      records = kept;
+      items = kept;
     }
-    // The guard, then the judge (INV-1333): a candidate is refused for what it carries, held for
-    // what it is. Refused ones are gone; held ones wait in the ledger for a person.
+    const { creates, confirms, corrections } = recordsOfExtraction(items, new Date());
+    // The guard, then the judge (INV-1333), for every new line — a correction's too: a candidate is
+    // refused for what it carries, held for what it is. A confirm writes no new words.
     const held = this.deps.heldValues?.();
-    records = records.filter(record => {
+    const fresh = [...creates, ...corrections.map(correction => correction.record)].filter(record => {
       const refused = guardMemoryCandidate(record.text, { ...(held !== undefined ? { held } : {}), spoken: combined });
       if (refused !== undefined) this.log(`refused an extracted memory: ${refused.reason}`);
       return refused === undefined;
     });
-    if (records.length > 0) {
-      const judged = await this.judge(agentId, combined, records, known, principal);
+    if (fresh.length > 0 || confirms.length > 0) {
+      const judged = fresh.length > 0 ? await this.judge(agentId, combined, fresh, known, principal) : dispose([], [], known);
       if (!guard()) return;
       for (const line of judged.log) this.log(`memory judge: ${line}`);
-      const writes = [...judged.retractions, ...judged.keep, ...judged.refreshed, ...judged.held];
+      // A correction withdraws its line only when its replacement was kept: a held replacement
+      // waits for a person, and the old line stands until then.
+      const keptTexts = new Set(judged.keep.map(record => record.text));
+      const withdrawn = new Set(judged.retractions.map(record => dedupeKey(record.text)));
+      const retractions = corrections.filter(correction => keptTexts.has(correction.record.text) && !withdrawn.has(dedupeKey(correction.retraction.text))).map(correction => correction.retraction);
+      for (const retraction of retractions) withdrawn.add(dedupeKey(retraction.text));
+      // A line withdrawn in this batch is not brought back by a confirm in the same batch.
+      const confirmed = confirms.filter(record => !withdrawn.has(dedupeKey(record.text)));
+      const writes = [...retractions, ...judged.retractions, ...judged.keep, ...judged.refreshed, ...confirmed, ...judged.held];
       if (writes.length > 0) this.deps.registry.appendMemoryRecords(agentId, writes);
       if (judged.keep.length > 0) this.deps.onKept?.(agentId, judged.keep, principal);
-      this.log(`kept ${judged.keep.length} memor${judged.keep.length === 1 ? "y" : "ies"} from ${exchanges.length} exchanges${judged.held.length > 0 ? `, held ${judged.held.length} for a person` : ""}`);
+      const also = [
+        ...(judged.held.length > 0 ? [`held ${judged.held.length} for a person`] : []),
+        ...(confirmed.length > 0 ? [`confirmed ${confirmed.length}`] : []),
+        ...(retractions.length > 0 ? [`corrected ${retractions.length}`] : []),
+      ];
+      this.log(`kept ${judged.keep.length} memor${judged.keep.length === 1 ? "y" : "ies"} from ${exchanges.length} exchanges${also.map(part => `, ${part}`).join("")}`);
     }
 
     // Whether or not anything was extracted, the exchanges count toward an episode: a stretch of
@@ -739,6 +751,24 @@ export function summariseExchange(inbound: string, outbound: string, by: "person
     return clean.length > limit ? `${clean.slice(0, limit)}…` : clean;
   };
   return [`${by === "person" ? THEY_SAID : NOT_THE_PERSON}: ${trim(inbound)}`, `You replied: ${trim(outbound)}`].join("\n\n");
+}
+
+/**
+ * The person's own words in one exchange as the extractor is shown it, or undefined when none of
+ * it is theirs (INV-733). A quote is checked against this and nothing else.
+ *
+ * Only an exchange that *opens* with `They said` has any: both shapes above put what opened the
+ * turn first, and only the opening is the person's. A `They said` further down was written by the
+ * agent, which is not the person however it is headed. The words end where the reply begins, and
+ * a wake the host appended to the message is not theirs either.
+ */
+export function personWordsOf(exchange: string): string | undefined {
+  const head = `${THEY_SAID}: `;
+  if (!exchange.startsWith(head)) return undefined;
+  const body = exchange.slice(head.length);
+  const end = body.indexOf("\n\nYou replied: ");
+  const theirs = beforeWake(end < 0 ? body : body.slice(0, end)).trim();
+  return theirs === "" ? undefined : theirs;
 }
 
 function watermarkKey(agentId: string, conversation: string): string {

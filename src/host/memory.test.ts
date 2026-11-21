@@ -15,13 +15,11 @@ import {
   chooseRelevant,
   parseSelection,
   buildEpisodePrompt,
-  buildExtractionPrompt,
   dedupe,
   dedupeKey,
   importMarkdown,
   MAX_RECORD_CHARS,
   parseEpisode,
-  parseExtraction,
   MEMORY_CHAR_BUDGET,
   recall,
   renderSharedMemory,
@@ -177,51 +175,7 @@ test("a memory too long to keep is refused with the alternative named", () => {
 
 // ── extraction ────────────────────────────────────────────────────────────────────────
 
-test("an extractor is allowed to find nothing", () => {
-  // The most important test here. An extractor that must produce output invents something, and a
-  // memory of the obvious is worse than no memory: it is read on every future turn.
-  assert.deepEqual(parseExtraction("NOTHING", []), []);
-  assert.deepEqual(parseExtraction("  nothing  ", []), []);
-  assert.deepEqual(parseExtraction("NOTHING to keep here", []), []);
-  assert.deepEqual(parseExtraction("", []), []);
-
-  // And the prompt asks for that outcome first, rather than as an afterthought.
-  const prompt = buildExtractionPrompt("some conversation", []);
-  assert.match(prompt, /Reply with NOTHING and nothing else unless/);
-  assert.match(prompt, /Most exchanges teach nothing durable/);
-  assert.match(prompt, /crowds out what matters/);
-});
-
-test("extraction is lenient about shape and strict about content", () => {
-  const known = [record("fact", "they use pnpm")];
-  const parsed = parseExtraction(
-    ["- they deploy on Fridays", "* 2. they use pnpm", "3) staging is at stg.example.com", ""].join("\n"),
-    known
-  );
-  // Bullets and numbering are stripped — models add them whatever the instruction says.
-  assert.deepEqual(
-    parsed.map(entry => entry.text),
-    ["they deploy on Fridays", "staging is at stg.example.com"]
-  );
-  // The one repeating what is already known was dropped rather than stored again.
-  assert.ok(parsed.every(entry => entry.kind === "note"));
-  assert.ok(parsed.every(entry => entry.source === "extracted"));
-});
-
-test("extraction honours its own limit rather than trusting the instruction", () => {
-  const parsed = parseExtraction(
-    ["one thing", "two thing", "three thing", "four thing", "five thing"].join("\n"),
-    []
-  );
-  assert.equal(parsed.length, 3, "the prompt says three; this enforces it");
-});
-
-test("an over-long extracted line is dropped, not truncated", () => {
-  // Truncating would store half a sentence as a fact, which is worse than losing it: a half fact
-  // reads as a whole one.
-  const parsed = parseExtraction(["fine line", "x".repeat(MAX_RECORD_CHARS + 1)].join("\n"), []);
-  assert.deepEqual(parsed.map(entry => entry.text), ["fine line"]);
-});
+// The extractor's prompt and parser are memory-extract.ts's, and tested there (INV-733).
 
 test("an episode is one paragraph, or nothing", () => {
   assert.equal(parseEpisode("NOTHING"), undefined);
@@ -515,23 +469,9 @@ test("the selection prompt says that choosing nothing is allowed", () => {
 
 test("the sentinel is the sentinel however the model dresses it", () => {
   // A model wrote "(NOTHING)" and the exact-match guards let it through: the extractor's
-  // own way of saying nothing-learned was stored as a thing it learned, and only a person
-  // reading the file could have found it (docs/14). Punctuation and casing must not
-  // smuggle it past; a sentence that merely contains the word must still be kept.
-  assert.deepEqual(parseExtraction("(NOTHING)", []), []);
-  assert.deepEqual(parseExtraction("**Nothing**", []), []);
-  assert.deepEqual(parseExtraction("- nothing.", []), []);
+  // own way of saying nothing-learned was stored as a thing it learned (docs/14). The
+  // extractor's side of this is in memory-extract.test.ts.
   assert.equal(parseEpisode("( nothing )"), undefined);
-  // Line-level: a dressed sentinel among real notes is dropped, the notes are kept —
-  // including one that merely contains the word.
-  const kept = parseExtraction(
-    "User prefers tabs over spaces\n(nothing)\nNothing gets past their reviewer without a test",
-    []
-  );
-  assert.deepEqual(
-    kept.map(record => record.text),
-    ["User prefers tabs over spaces", "Nothing gets past their reviewer without a test"]
-  );
 });
 
 test("recalled memory says it describes and does not instruct", () => {
@@ -540,30 +480,7 @@ test("recalled memory says it describes and does not instruct", () => {
   assert.match(rendered, /record of something that was said/);
 });
 
-test("an extracted note cites the exchange it came from, or nothing", () => {
-  const refs = ["main@2026-09-06T10:00", "main@2026-09-06T10:20", "feishu:oc_1@2026-09-06T10:30"];
-  const parsed = parseExtraction(
-    ["- they deploy on Fridays [2]", "- staging is at stg.example.com [1, 3]", "- they prefer pnpm", "- nonsense [9]"].join("\n"),
-    [],
-    new Date("2026-09-06T11:00:00Z"),
-    refs
-  );
-  assert.deepEqual(parsed.map(entry => entry.text), [
-    "they deploy on Fridays",
-    "staging is at stg.example.com",
-    "they prefer pnpm",
-  ]);
-  assert.deepEqual(parsed[0]!.from, [refs[1]]);
-  assert.deepEqual(parsed[1]!.from, [refs[0], refs[2]]);
-  // No citation stays uncited: a guessed source is worse than none.
-  assert.equal(parsed[2]!.from, undefined);
-});
-
-test("a single exchange is cited without being asked, and the prompt only numbers when there are several", () => {
-  const parsed = parseExtraction("they use pnpm", [], new Date(), ["main@2026-09-06T10:00"]);
-  assert.deepEqual(parsed[0]!.from, ["main@2026-09-06T10:00"]);
-  assert.doesNotMatch(buildExtractionPrompt("one", [], 1), /headed \[n\]/);
-  assert.match(buildExtractionPrompt("[1]\none\n---\n[2]\ntwo", [], 2), /2 exchanges, each headed \[n\]/);
+test("a record's places read as a person reads them", () => {
   assert.equal(describeFrom(["main@2026-09-06T10:00"]), " — from main at 2026-09-06 10:00");
   assert.equal(describeFrom(undefined), "");
 });
@@ -603,9 +520,6 @@ test("a memory that carries a credential is refused, by kind and without quoting
   assert.match(refused?.reason ?? "", /looks like it holds a credential \(github-pat\)/);
   assert.ok(!(refused?.reason ?? "").includes(github.slice(0, 12)), "the refusal quotes no part of the token");
   assert.equal(validateRecord("Chris wants the digest on Mondays."), undefined);
-  // The extractor drops the line; the rest of the batch is kept.
-  const parsed = parseExtraction(["Chris wants the digest on Mondays.", `the token is ${github}`].join("\n"), []);
-  assert.deepEqual(parsed.map(record => record.text), ["Chris wants the digest on Mondays."]);
   assert.deepEqual(importMarkdown(`- password: ${"p".repeat(16)}\n- the region is eu-west-1`).map(record => record.text), ["the region is eu-west-1"]);
 });
 
