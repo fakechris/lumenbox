@@ -1,9 +1,9 @@
 # The fleet-level ceiling, stated once for the cluster to enforce.
 #
 # The allocator limits each box (AGENTBOX_K8S_MEMORY is request *and* limit, so every box pod
-# reserves its share at schedule time). This file limits the *sum*: without it, "one tenant too
-# many" is a node outage rather than a clean Pending. Numbers below assume the 4Gi / 10Gi
-# per-box defaults — divide requests.memory by the per-box memory and you have the tenant cap.
+# reserves its share at schedule time). This file limits the *sum*: the API rejects a Pod or PVC
+# that would exceed the quota with Forbidden, before scheduling. Numbers below assume the
+# 4Gi / 10Gi per-box defaults; the control plane and other workloads in the namespace also count.
 #
 # Not applied by default: whether the agentbox namespace should share a quota with anything else
 # is a cluster-policy question, not ours. Apply with:
