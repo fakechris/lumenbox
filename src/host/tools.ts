@@ -2581,7 +2581,7 @@ export async function dispatchTool(
   // Before the switch, so no tool added later can bypass it. A refusal comes back as a tool error:
   // the model sees why, and can stop or ask, rather than retrying into a wall.
   // Who is calling, for whom, on which task and machine: one request (run-later-gate.ts), asked again by a file tool whose write runs later (INV-1861).
-  const decision = context.policy?.check(toolGateRequest(executionTarget(name, input), name === "UseMcpTool" ? (input.arguments ?? {}) as Record<string, unknown> : input, context));
+  const decision = context.policy?.check(toolGateRequest(name, input, context));
   if (decision !== undefined && !decision.allow) {
     return { text: decision.reason, isError: true, ...(decision.approval !== undefined ? { approval: { id: decision.approval.id } } : {}) };
   }
@@ -5363,6 +5363,15 @@ export async function dispatchTool(
           isError: true,
         };
       }
+      // The gate judged `UseMcpTool`; the inner tool is a separate decision, or this is a way around every rule.
+      const inner = context.policy?.check({
+        kind: "tool", ...(context.work ? {returnTo:{work:context.work,conversation:context.conversation ?? MAIN_CONVERSATION}} : {}),
+        agentId: context.agent.id,
+        agentName: context.agent.profile.name,
+        tool: target,
+        input: (input.arguments ?? {}) as Record<string, unknown>, ...(context.toolUseId !== undefined ? { callId: context.toolUseId } : {}), ...(context.turnId !== undefined ? { turnId: context.turnId } : {}), // the turn, so its own setting holds (INV-1669)
+      });
+      if (inner !== undefined && !inner.allow) return { text: inner.reason, isError: true };
       try {
         const result = await context.mcp.callDetailed(target, input.arguments ?? {});
         return { text: result.text, ...(result.effects !== undefined ? { effects: result.effects, effectsFrom: target } : {}) };

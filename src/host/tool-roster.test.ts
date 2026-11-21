@@ -116,15 +116,21 @@ test("UseMcpTool keeps task autonomy on the target: L4 coordination and L2 obser
   assert.equal((await call("Teammates")).isError, undefined);
   assert.equal(gate.pending().length, 0);
   level = 4;
-  const external = await call("server__tool", { text: "hello" });
+  const args = { command: "send", recipient: "Ada", why: "first payload" };
+  const external = await call("server__tool", args);
   assert.ok(external.approval);
   assert.equal(externalCalls, 0);
   assert.equal(gate.pending().length, 1);
   assert.match(gate.pending()[0]!.description, /server__tool/);
-  assert.doesNotMatch(gate.pending()[0]!.description, /UseMcpTool/);
   gate.grant(external.approval.id);
-  assert.equal((await call("server__tool", { text: "hello" })).text, "sent");
-  assert.equal(externalCalls, 1, "one approval permits the external target without a second gate");
+  for (const changed of [{ ...args, recipient: "Rex" }, { ...args, why: "different payload" }]) {
+    const refused = await call("server__tool", changed);
+    assert.ok(refused.approval, "the grant cannot authorize changed non-command arguments, including why");
+    assert.notEqual(refused.approval.id, external.approval.id);
+    assert.equal(externalCalls, 0);
+  }
+  assert.equal((await call("server__tool", args)).text, "sent");
+  assert.equal(externalCalls, 1, "the full original arguments remain approved");
   assert.equal((await call("server__forged")).isError, true);
   assert.equal((await call("")).isError, true);
 });
