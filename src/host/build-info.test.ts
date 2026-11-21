@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readBuildInfo } from "./build-info.ts";
@@ -16,7 +16,7 @@ test("the packaged buildCommit stamps the answer on a machine with no git", () =
   try {
     writeFileSync(
       join(dir, "package.json"),
-      JSON.stringify({ version: "0.3.1", buildCommit: "1b5152c" })
+      JSON.stringify({ name: "agentbox", version: "0.3.1", buildCommit: "1b5152c" })
     );
     const info = readBuildInfo(dir, {});
     assert.deepEqual(info, { version: "0.3.1", commit: "1b5152c" });
@@ -28,7 +28,7 @@ test("the packaged buildCommit stamps the answer on a machine with no git", () =
 test("AGENTBOX_BUILD pins it over the packaged stamp", () => {
   const dir = mkdtempSync(join(tmpdir(), "agentbox-buildinfo-"));
   try {
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ version: "0.3.1", buildCommit: "1b5152c" }));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "agentbox", version: "0.3.1", buildCommit: "1b5152c" }));
     assert.equal(readBuildInfo(dir, { AGENTBOX_BUILD: "deadbee" }).commit, "deadbee");
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -41,6 +41,19 @@ test("no stamp and no git is said plainly, not invented", () => {
     const info = readBuildInfo(dir, {});
     assert.equal(info.version, "0.0.0");
     assert.equal(info.commit, "unknown");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("build info skips an unrelated nested package and ignores a malformed commit", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-buildinfo-"));
+  try {
+    const nested = join(dir, "dist");
+    mkdirSync(nested);
+    writeFileSync(join(nested, "package.json"), JSON.stringify({ name: "other", version: "9.9.9" }));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "agentbox", version: "0.3.1", buildCommit: "invalid" }));
+    assert.deepEqual(readBuildInfo(nested, {}), { version: "0.3.1", commit: "unknown" });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

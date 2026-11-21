@@ -10,7 +10,7 @@
   "scripts": {
     "build": "npm run build:cli && npm run build:boxd && npm run build:vendor",
     "build:vendor": "node scripts/build-vendor.mjs",
-    "build:hostd": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --outfile=docker/box/hostd.mjs && node scripts/copy-catalog-data.mjs",
+    "build:hostd": "node scripts/build-hostd.mjs",
     "build:cli": "esbuild src/cli.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=dist/cli.js && node scripts/copy-catalog-data.mjs",
     "build:boxd": "esbuild src/boxd/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/boxd.cjs && esbuild src/boxd/check-documents.ts --bundle --platform=node --target=node22 --format=cjs --outfile=docker/box/check-documents.cjs",
     "build:xwatchdog": "node scripts/build-xwatchdog.mjs",
