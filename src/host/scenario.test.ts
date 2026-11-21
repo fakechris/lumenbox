@@ -51,6 +51,52 @@ import { parseSkillFile, skillFrom } from "./skills.ts";
 import { Vault } from "./vault.ts";
 import { auditConversation } from "./audit-context.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
+import { ExceptionLedger, noteTurnEnd } from "./exceptions.ts";
+
+for (const expectResult of [true, false]) test(`web task SendToAgent runs the recipient and returns its result (expect_result=${expectResult}, INV-1993)`, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "peer-task-binding-"));
+  const exceptions = new ExceptionLedger(join(dir, "exceptions.jsonl"));
+  const tasks = new TaskStore(null);
+  let asked = false, rexCalls = 0, rexId = "";
+  let settleRex!: () => void;
+  const rexSettled = new Promise<void>(resolve => { settleRex = resolve; });
+  try {
+    const episode = await runEpisode({
+      team: [{ name: "Ada" }, { name: "Rex" }], says: [], tasks,
+      onBusEvent: event => {
+        if (event.type === "turn_failed") noteTurnEnd(exceptions, event.agentId, "main", [], new Error(event.error));
+        if ((event.type === "turn_failed" || event.type === "turn_finished") && event.agentId === rexId) settleRex();
+      },
+      script: async ({ agent }) => {
+        if (agent === "Rex") {
+          rexCalls++;
+          if (!expectResult && rexCalls === 1) return { call: "SendToAgent", input: { target_id: "Ada", message: "REX_RESULT: checked the requested facts", expect_result: false } };
+          return { say: "REX_RESULT: checked the requested facts" };
+        }
+        if (!asked) {
+          asked = true;
+          return { call: "SendToAgent", input: { target_id: "Rex", message: "Check the requested facts", expect_result: expectResult } };
+        }
+        if (!expectResult) await rexSettled;
+        return { say: "The request is recorded." };
+      },
+      drive: async ({ bus, frontId, registry }) => {
+        rexId = registry.resolve("Rex").id;
+        bus.sendFromUser(frontId, "Check the facts with Rex", { conversation: "main", messageId: "web-request" });
+        const task = tasks.list().find(task => task.sourceMessageId === "web-request");
+        assert.ok(task, "the web prompt admission automatically creates a task");
+        assert.equal(task.assigneeId, frontId);
+        await bus.runExclusive(frontId, { userDriven: true, conversation: "main" });
+        await bus.idle();
+      },
+    });
+    try {
+      assert.deepEqual(exceptions.list(), [], "no failed turns appear in exceptions");
+      assert.ok(rexCalls > 0, "Rex actually called the model");
+      assert.ok(episode.observations.some(o => o.kind === "message" && o.agent === "Rex" && o.to === "Ada" && o.text?.includes("REX_RESULT")));
+    } finally { episode.cleanup(); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("user installation resumes to a verified artifact after failure; a hundred priority peers are answered beside it and never enter it (INV-1797, INV-1824)", async () => {
   const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");

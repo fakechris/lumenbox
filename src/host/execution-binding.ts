@@ -13,6 +13,10 @@ export interface TaskBinding {
   selection?: { turnId: string; toolUseId: string };
 }
 
+function ownsMessageTask(message: InboundMessage, input: { agentId: string; conversation: string }): boolean {
+  return !!message.work?.taskId && message.work.owner === input.agentId && message.work.conversation === input.conversation;
+}
+
 export function admittedTaskBinding(input: {
   agentId: string; conversation: string; inbound: readonly InboundMessage[];
   tasks?: TaskStore; goal?: GoalMarker; resume?: ResumeMarker;
@@ -24,7 +28,7 @@ export function admittedTaskBinding(input: {
   if (goal) candidates.push({ taskId: goal.taskId, role: goal.verify ? "verifier" : "executor" });
   for (const message of input.inbound) {
     if (message.taskBinding) candidates.push(message.taskBinding);
-    else if(message.work?.taskId && message.work.owner===input.agentId && message.work.conversation===input.conversation) candidates.push({taskId:message.work.taskId,role:"executor"});
+    else if (ownsMessageTask(message, input)) candidates.push({ taskId: message.work!.taskId!, role: "executor" });
     // An admitted message's exact immutable id also proves its original task.
     for (const task of tasks.list()) if (task.sourceMessageId === message.id) candidates.push({ taskId: task.id, role: "executor" });
   }
@@ -48,8 +52,8 @@ export function admittedTaskBinding(input: {
   return binding;
 }
 
-export function hasAdmittedTask(input: { inbound: readonly InboundMessage[]; tasks?: TaskStore; goal?: GoalMarker; resume?: ResumeMarker }): boolean {
-  return !!input.goal || !!input.resume?.taskBinding || input.inbound.some(message => !!message.taskBinding || !!message.work?.taskId || input.tasks?.list().some(task => task.sourceMessageId === message.id));
+export function hasAdmittedTask(input: { agentId: string; conversation: string; inbound: readonly InboundMessage[]; tasks?: TaskStore; goal?: GoalMarker; resume?: ResumeMarker }): boolean {
+  return !!input.goal || !!input.resume?.taskBinding || input.inbound.some(message => !!message.taskBinding || ownsMessageTask(message, input) || input.tasks?.list().some(task => task.sourceMessageId === message.id));
 }
 
 /** A successful board take is an explicit boundary; earlier calls keep their original selection. */
