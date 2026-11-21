@@ -252,7 +252,7 @@ export function kubeconfigCredentials(
   const baseDir = dirname(path);
   const ca = inlineOrFile(cluster, "certificate-authority", readFile, baseDir);
   const user = byName(root.users, userName)?.user as Record<string, unknown> | undefined;
-  if (user !== undefined && (user.exec !== undefined || user["auth-provider"] !== undefined)) {
+  if (user !== undefined && [user.exec, user["auth-provider"]].some(plugin => plugin !== undefined && plugin !== null)) {
     // gke/eks/SSO helpers. Refused rather than executed: shelling out to a credential plugin from
     // inside an allocator is a supply chain and a hang nobody asked for, and pretending it worked
     // is worse.

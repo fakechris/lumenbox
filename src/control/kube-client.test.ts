@@ -111,6 +111,15 @@ test("an exec-plugin credential is refused loudly, with the way out", () => {
   // gke/eks/SSO kubeconfigs. Silently producing unauthenticated 401s against a real cluster is
   // the worst version of this failure, so the error names the plugin and the two fixes.
   for (const plugin of ["exec", "auth-provider"]) {
+    const config = JSON.parse(JSON.stringify(parseMinimalYaml(KIND_CONFIG)));
+    config.users[0].user[plugin] = null;
+    withKubeconfig(JSON.stringify(config), path => {
+      assert.equal(kubeconfigCredentials({ KUBECONFIG: path }).token, "s3cr3t-token");
+    });
+    config.users[0].user[plugin] = { command: "credential-plugin" };
+    withKubeconfig(JSON.stringify(config), path => {
+      assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /exec plugin|auth-provider plugin/);
+    });
     withKubeconfig(
       `
 current-context: gke
