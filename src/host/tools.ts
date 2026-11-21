@@ -2575,6 +2575,9 @@ export async function dispatchTool(
   input: Record<string, unknown>,
   context: ToolContext
 ): Promise<ToolOutcome> {
+  if (name === "UseMcpTool" && context.deferredTools?.some(tool => tool.name === executionTarget(name, input))) {
+    return dispatchTool(executionTarget(name, input), (input.arguments ?? {}) as Record<string, unknown>, context);
+  }
   // Before the switch, so no tool added later can bypass it. A refusal comes back as a tool error:
   // the model sees why, and can stop or ask, rather than retrying into a wall.
   // Who is calling, for whom, on which task and machine: one request (run-later-gate.ts), asked again by a file tool whose write runs later (INV-1861).
@@ -2984,17 +2987,18 @@ export async function dispatchTool(
         indices.filter(index => ids[index] !== undefined).map(index => ({ id: ids[index]!, how: hows[index]! }));
 
       if (outcome === "done") {
-        // The count by outcome, up front, so a parent with twelve findings below knows
-        // before reading whether any slice is blocked or unfinished.
-        // A fork that threw has no handoff at all; it is counted as failed rather than left out,
-        // which is how a coverage report used to read 11 of 12 as the whole (INV-755).
+        // Count thrown forks as failed too, so the tally covers every brief (INV-755).
         const outcomes = briefs.map((_, index) => (hows[index] === "failed" ? "failed" : handoffs[index] ?? "unstated"));
         const tally = (["done", "partial", "blocked", "unstated", "failed"] as const)
           .map(status => [status, outcomes.filter(h => h === status).length] as const)
           .filter(([, n]) => n > 0)
           .map(([status, n]) => `${n} ${status}`)
           .join(", ");
-        const unfinished = outcomes.map((status, index) => [status, index + 1] as const).filter(([status]) => status !== "done");
+        const unfinished = outcomes.map((status, index) => [status, index + 1] as const)
+          .filter(([status]) => status !== "done" && status !== "unstated");
+        const unstated = outcomes.flatMap((status, index) => status === "unstated" ? [`fork ${index + 1}`] : []);
+        const verdict = unstated.length === 0 ? "" : ` Returned without a verdict line: ${unstated.join(", ")} — ` +
+          "read their findings below to judge whether each is done.";
         const retry =
           unfinished.length === 0
             ? ""
@@ -3002,7 +3006,7 @@ export async function dispatchTool(
               `retry those once if they matter, and say which are still missing.`;
         return {
           text:
-            `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished (${tally}).${retry} Their findings ` +
+            `${briefs.length} fork${briefs.length === 1 ? "" : "s"} finished (${tally}).${retry}${verdict} Their findings ` +
             `are below; combining them is yours to do.\n\n${landed.join("\n\n")}`,
           commit: commitFor(briefs.map((_, index) => index)),
         };
@@ -5350,11 +5354,6 @@ export async function dispatchTool(
 
     case "UseMcpTool": {
       const target = executionTarget(name, input);
-      // A deferred built-in (INV-1341): dispatched by its own name, so the gate, the tier and the
-      // record all see the tool itself, not the pair.
-      if (context.deferredTools?.some(tool => tool.name === target) === true) {
-        return dispatchTool(target, (input.arguments ?? {}) as Record<string, unknown>, context);
-      }
       if (context.mcp === undefined) return { text: "No external services are connected.", isError: true };
       if (context.allowedMcpTools !== undefined && !context.allowedMcpTools.includes(target)) {
         return { text: "This external tool is unavailable in the current execution context.", isError: true };

@@ -13,16 +13,76 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { inClusterCredentials, kubeconfigCredentials, parseMinimalYaml } from "./kube-client.ts";
+import { HttpKubeApi, inClusterCredentials, kubeconfigCredentials, KubernetesError, parseMinimalYaml } from "./kube-client.ts";
+
+test("PVC adoption preserves the bound spec across repeated allocations, while creation honors the requested class", async t => {
+  for (const storageClassName of [undefined, "fast"]) {
+    const api = new HttpKubeApi({ server: "https://kube.example", token: "test" }, "boxes");
+    const desired = {
+      metadata: { name: "alice-work", labels: { owner: "alice" } },
+      spec: {
+        accessModes: ["ReadWriteOnce"], resources: { requests: { storage: "10Gi" } },
+        ...(storageClassName === undefined ? {} : { storageClassName }),
+      },
+    };
+    let live: Record<string, unknown> | undefined;
+    let updates = 0;
+    const boundSpec = {
+      ...desired.spec, storageClassName: storageClassName ?? "standard", volumeName: "pv-alice",
+      volumeMode: "Filesystem", resources: { requests: { storage: "20Gi" } },
+    };
+    t.mock.method(api as unknown as { request: (method: string, path: string, body?: unknown) => Promise<unknown> },
+      "request", async (method: string, _path: string, body?: unknown) => {
+        const object = body as Record<string, unknown>;
+        if (method === "POST") {
+          if (live !== undefined) throw new KubernetesError("already exists", 409);
+          assert.deepEqual(object.spec, desired.spec, "creation sends the requested class, or leaves defaulting to the server");
+          live = { ...object, metadata: { ...desired.metadata, resourceVersion: "1", annotations: { bound: "yes" } }, spec: boundSpec };
+          return live;
+        }
+        if (method === "GET") return live;
+        assert.equal(method, "PUT", "adoption must never delete a volume");
+        assert.deepEqual(object.spec, boundSpec, "adoption must not clear defaults, binding, or shrink storage");
+        const metadata = object.metadata as Record<string, unknown>;
+        assert.deepEqual(metadata.labels, desired.metadata.labels);
+        assert.deepEqual(metadata.annotations, { bound: "yes" });
+        assert.equal(metadata.resourceVersion, "1");
+        live = object;
+        updates++;
+        return live;
+      });
+    await api.applyPvc(desired);
+    await api.applyPvc(desired);
+    await api.applyPvc(desired);
+    assert.equal(updates, 2);
+  }
+});
+
+test("PVC creation and adoption propagate API failures without deleting the claim", async t => {
+  for (const failureAt of ["POST", "GET", "PUT"]) {
+    const api = new HttpKubeApi({ server: "https://kube.example", token: "test" }, "boxes");
+    const failure = new KubernetesError("API unavailable", 503);
+    t.mock.method(api as unknown as { request: (method: string) => Promise<unknown> }, "request", async (method: string) => {
+      assert.notEqual(method, "DELETE");
+      if (method === failureAt) throw failure;
+      if (method === "POST") throw new KubernetesError("already exists", 409);
+      return { metadata: { resourceVersion: "1" }, spec: { storageClassName: "standard" } };
+    });
+    await assert.rejects(api.applyPvc({ metadata: { name: "alice-work" }, spec: {} }), error => error === failure);
+  }
+});
 
 const KIND_CONFIG = `
 apiVersion: v1
 kind: Config
+preferences: {}
+extensions: []
 clusters:
-- name: kind-kind
-  cluster:
+- cluster:
+    extensions: []
     certificate-authority-data: ${Buffer.from("FAKE-CA").toString("base64")}
     server: https://127.0.0.1:6443
+  name: kind-kind
 contexts:
 - context:
     cluster: kind-kind
@@ -67,6 +127,7 @@ contexts:
   context:
     cluster: prod-eu
     user: deploy-bot
+    extensions: []
 clusters:
 - name: dev
   cluster:
@@ -87,39 +148,37 @@ users:
   );
 });
 
-test("client-certificate auth is understood, inline or by path", () => {
-  withKubeconfig(
-    `
-current-context: c
-contexts:
-- name: c
-  context:
-    cluster: c
-    user: c
-clusters:
-- name: c
-  cluster:
-    server: https://c.example.com
-users:
-- name: c
-  user:
-    client-certificate-data: ${Buffer.from("CERT").toString("base64")}
+test("kind's standard client-certificate kubeconfig is understood as YAML or JSON", () => {
+  const config = KIND_CONFIG.replace("token: s3cr3t-token", `client-certificate-data: ${Buffer.from("CERT").toString("base64")}
     client-key-data: ${Buffer.from("KEY").toString("base64")}
-`,
-    path => {
+    extensions: []`);
+  for (const text of [config, JSON.stringify(parseMinimalYaml(config))]) {
+    withKubeconfig(text, path => {
       const credentials = kubeconfigCredentials({ KUBECONFIG: path });
       assert.equal(credentials.clientCert?.toString("utf8"), "CERT");
       assert.equal(credentials.clientKey?.toString("utf8"), "KEY");
       assert.equal(credentials.token, undefined);
-    }
-  );
+      assert.equal(credentials.server, "https://127.0.0.1:6443");
+      assert.equal(credentials.ca?.toString(), "FAKE-CA");
+    });
+  }
 });
 
 test("an exec-plugin credential is refused loudly, with the way out", () => {
   // gke/eks/SSO kubeconfigs. Silently producing unauthenticated 401s against a real cluster is
   // the worst version of this failure, so the error names the plugin and the two fixes.
-  withKubeconfig(
-    `
+  for (const plugin of ["exec", "auth-provider"]) {
+    const config = JSON.parse(JSON.stringify(parseMinimalYaml(KIND_CONFIG)));
+    config.users[0].user[plugin] = null;
+    withKubeconfig(JSON.stringify(config), path => {
+      assert.equal(kubeconfigCredentials({ KUBECONFIG: path }).token, "s3cr3t-token");
+    });
+    config.users[0].user[plugin] = { command: "credential-plugin" };
+    withKubeconfig(JSON.stringify(config), path => {
+      assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /exec plugin|auth-provider plugin/);
+    });
+    withKubeconfig(
+      `
 current-context: gke
 contexts:
 - name: gke
@@ -133,14 +192,15 @@ clusters:
 users:
 - name: gke
   user:
-    exec:
+    ${plugin}:
       command: gke-gcloud-auth-plugin
 `,
-    path => {
-      assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /exec plugin/);
-      assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /kubectl create token/);
-    }
-  );
+      path => {
+        assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /exec plugin/);
+        assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /kubectl create token/);
+      }
+    );
+  }
 });
 
 test("a config with no current-context, or no usable credential, says so", () => {
@@ -249,6 +309,19 @@ users:
 });
 
 test("the parser refuses the YAML it does not understand, with a line number", () => {
+  for (const text of ["{broken", "key: {}\n  stray: value", "key: value\n- stray", "key: a\nkey: b"]) {
+    assert.throws(() => parseMinimalYaml(text), /malformed JSON|indentation|trailing content|duplicate/);
+  }
+  withKubeconfig("garbage", path => {
+    assert.throws(() => kubeconfigCredentials({ KUBECONFIG: path }), /expected 'key: value'/);
+  });
+  assert.deepEqual(parseMinimalYaml(""), {});
+  assert.deepEqual(parseMinimalYaml("map: {}\nlist: []"), { map: {}, list: [] });
+  for (const item of ["-   name: kind\n    context:\n      cluster: kind", "-\n    name: kind\n    context:\n      cluster: kind"]) {
+    assert.deepEqual(parseMinimalYaml(`contexts:\n${item}\n`), {
+      contexts: [{ name: "kind", context: { cluster: "kind" } }],
+    });
+  }
   assert.throws(() => parseMinimalYaml("key: |\n  multi\n  line\n"), /block scalars/);
   assert.throws(() => parseMinimalYaml("key:\n\tvalue: 1\n"), /tab/);
   assert.throws(() => parseMinimalYaml("just a scalar\n"), /expected 'key: value'/);
