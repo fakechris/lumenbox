@@ -51,6 +51,52 @@ import { parseSkillFile, skillFrom } from "./skills.ts";
 import { Vault } from "./vault.ts";
 import { auditConversation } from "./audit-context.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
+import { approvedCallNotice } from "./approval-notice.ts";
+
+test("a host approval notice wakes a member to retry the unexecuted call without a second card (INV-1990)", async () => {
+  const { PolicyGate } = await import("./policy.ts");
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-host-approval-"));
+  const policy = new PolicyGate({
+    path: join(dir, "policy.jsonl"),
+    limits: { budgetWindowHours: 24, wakesPerWindow: 30, wakeWindowMinutes: 10, approvalRequiredTools: [], approvalRequiredCommands: [], tierGate: "off" },
+  });
+  let cards = 0, retried = false;
+  policy.onApprovalRequested = () => { cards++; };
+  const command = "echo approved > /home/box/work/approved.txt";
+  const result = await runEpisode({
+    team: [{ name: "Ada", toolPermissions: { tools: { bash: "ask" } } }], says: [], policy,
+    script: ({ round, messages }) => {
+      if (round === 0) return { call: "bash", input: { command } };
+      const opened = messages.filter(message => message.role === "user" && typeof message.content === "string").map(message => message.content).join("\n");
+      if (opened.includes("from the host")) {
+        assert.doesNotMatch(opened, /teammate system|cannot approve anything/);
+        assert.match(opened, /NOT executed/);
+        assert.match(opened, /same call again now/);
+        assert.match(opened, /without asking again/);
+        if (!retried) { retried = true; return { call: "bash", input: { command } }; }
+        assert.doesNotMatch(JSON.stringify(messages.at(-1)), /is_error":true/);
+        return { say: "The approved call succeeded." };
+      }
+      return { say: "Waiting for the person to approve the call." };
+    },
+    drive: async ({ bus, frontId, files }) => {
+      bus.sendFromUser(frontId, "Write the approved file.");
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(files.has("/home/box/work/approved.txt"), false);
+      const [waiting] = policy.pending();
+      assert.ok(waiting);
+      assert.equal(policy.grant(waiting.id, "user", "once"), true);
+      assert.equal(files.has("/home/box/work/approved.txt"), false, "granting did not execute the call");
+      bus.deliverSystem(frontId, approvedCallNotice(waiting.description, "once"), waiting.returnTo?.conversation ?? "main", waiting.returnTo?.work);
+      await bus.idle();
+      assert.equal(files.get("/home/box/work/approved.txt"), "approved");
+      assert.equal(cards, 1, "the retry consumed the one-time grant without requesting approval again");
+      assert.deepEqual(policy.pending(), []);
+    },
+  });
+  try { assert.equal(retried, true); assert.equal(result.score.turns, 2); }
+  finally { result.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("user installation resumes to a verified artifact after failure; a hundred priority peers are answered beside it and never enter it (INV-1797, INV-1824)", async () => {
   const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
