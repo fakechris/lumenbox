@@ -88,10 +88,10 @@ for (const recovers of [true, false]) {
           return undefined;
         }
         assert.equal(round, 3, "only one recovery request");
-        const last = messages.at(-1);
-        assert.equal(last?.role, "user");
-        assert.ok(Array.isArray(last.content));
-        const [result, nudge] = last.content;
+        const tail = messages.slice(messages.findLastIndex(message => message.role === "assistant") + 1);
+        const blocks = tail.flatMap(message => typeof message.content === "string" ? [] : message.content);
+        const result = blocks.find(block => block.type === "tool_result");
+        const nudge = blocks.find(block => block.type === "text" && /answer them now/.test(block.text));
         assert.ok(result?.type === "tool_result" && !result.is_error, "the successful tool result remains paired");
         assert.ok(nudge?.type === "text" && /answer them now/.test(nudge.text), "the retry asks for a reply");
         assert.deepEqual(offered, [], "the recovery request can only reply");

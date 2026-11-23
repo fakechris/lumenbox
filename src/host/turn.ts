@@ -2336,8 +2336,7 @@ ${outcome.text}`;
       return;
     }
 
-    // Steering: what the user said while this turn was running, consumed at the round boundary instead of
-    // waiting for the whole turn to end. "Actually, also change the title" lands in the next request, mid-task,
+    // Steering arrives at the round boundary instead of waiting for the whole turn to end,
     // with all the work so far intact — the alternative was minutes of latency or an interrupt that threw the
     // work away. Only the user's own messages steer: a teammate's message is new work that deserves its own
     // turn and its own causal record, and that behaviour is pinned by the race catalog. Appended at the tail,
@@ -3045,9 +3044,10 @@ ${outcome.text}`;
       }
 
       if (!finalText.trim() && personOpened && !closingNudged) {
-        const prior = messages.at(-2)?.content;
-        const toolsSucceeded = !confirmationPending && typeof prior !== "string" && prior?.some(block => block.type === "tool_result")
-          && prior.every(block => block.type !== "tool_result" || block.is_error !== true);
+        const prior = messages.slice(0, -1).findLast(message => message.role === "assistant" ||
+          (Array.isArray(message.content) && message.content.some(block => block.type === "tool_result")));
+        const toolsSucceeded = !confirmationPending && prior?.role === "user" && Array.isArray(prior.content)
+          && prior.content.every(block => block.type !== "tool_result" || block.is_error !== true);
         if (toolsSucceeded || (interimDelivered && guardsEnabled() && tools.length > 0)) {
           closingNudged = closingReply = true;
           console.error(`[conduct] ${agent.profile.name}: closing nudge (ran tools, ended without a reply)`);
