@@ -97,7 +97,8 @@ function recallPlace() {
   var place = null; try { place = JSON.parse(localStorage.getItem(PLACE_KEY) || "null"); } catch (error) {}
   if (!place || typeof place !== "object") return;
   if (typeof place.box === "string") chat.box = place.box;
-  if (typeof place.agent === "string" && place.agent) { chat.agentId = place.agent; document.body.dataset.open = "1"; }
+  // Chosen, not opened: on a narrow screen a new visit still lands on the list, with that agent marked.
+  if (typeof place.agent === "string" && place.agent) chat.agentId = place.agent;
 }
 
 /** What a person does with something that was said: shown on hover, never by default. */
