@@ -2836,8 +2836,7 @@ ${outcome.text}`;
     }
 
     closingReply = false;
-    // Echo tool_use and thinking blocks unchanged for the next round.
-    messages.push({ role: "assistant", content: response.content });
+    messages.push({ role: "assistant", content: response.content }); // Echo tool_use and thinking unchanged.
 
     // The newer-message look is a no-tools round (INV-1189). tool_choice "none" is a request a
     // model can ignore, so here it is enforced: calls are dropped, never run, and an empty
