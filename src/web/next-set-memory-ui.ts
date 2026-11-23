@@ -5,12 +5,17 @@
  * unverified, withdrawn or replaced. Nothing here is deleted without a second press.
  */
 export const NEXT_SET_MEMORY_JS = `
-var memory = { agents: null, error: "", open: "", lines: null, review: null, items: null, editing: "" };
+var memory = { agents: null, boxes: {}, error: "", open: "", lines: null, review: null, items: null, editing: "" };
 
 function loadMemory() {
-  getJson("/api/memory").then(function (got) { memory.agents = got.agents || []; memory.error = ""; }, function (error) { memory.agents = []; memory.error = error.message; })
+  getJson("/api/memory").then(function (got) {
+    memory.agents = got.agents || []; memory.error = ""; memory.boxes = {};
+    (got.boxes || []).forEach(function (box) { memory.boxes[box.id] = box; });
+  }, function (error) { memory.agents = []; memory.error = error.message; })
     .then(function () { if (next.view === "settings") render(); });
-  getJson("/api/org-knowledge/review").then(function (got) { memory.review = got.pending || []; if (next.view === "settings") render(); }, function () { memory.review = null; });
+  if (canOperateInstallation()) getJson("/api/org-knowledge/review").then(function (got) {
+    memory.review = got.pending || []; if (next.view === "settings") render();
+  }, function () { memory.review = null; });
   getJson("/api/memory/org/items").then(function (got) { memory.items = got.items || []; if (next.view === "settings") render(); }, function () { memory.items = null; });
 }
 function loadMemoryOf(agentId) {
@@ -64,7 +69,9 @@ function agentMemoryBlock() {
   if (!memory.agents.length) box.appendChild(el("p", "why", t("ui.next.memory.none")));
   memory.agents.forEach(function (row) {
     var head = el("button", "fact");
-    head.appendChild(el("span", "", row.agentName));
+    var label = el("span", "", row.agentName), home = memory.boxes[row.boxId];
+    if (home) label.appendChild(el("span", "why", " · " + [home.name, home.owner].filter(Boolean).join(" · ")));
+    head.appendChild(label);
     head.appendChild(el("span", "why", t("ui.next.memory.counts", { live: row.live || 0, withdrawn: row.retracted || 0, held: row.held || 0 })));
     head.addEventListener("click", function () {
       memory.open = memory.open === row.agentId ? "" : row.agentId; memory.lines = null; memory.editing = "";

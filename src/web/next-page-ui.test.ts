@@ -183,9 +183,12 @@ test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an o
 });
 
 test("welcome setup uses the latest box result even when setup is the last response", async () => {
-  const settings = { setup: { installationId: "fresh", box: false } };
+  const settings = { setup: { installationId: "fresh", box: false }, me: { identity: null } };
   const boxes = { list: [], own: "", state: null };
-  const setupCard = pageFunction("setupCard", { settings, next: { agents: {} }, localStorage: { getItem: () => null }, t: String, el: fakeEl });
+  const setupCard = pageFunction("setupCard", {
+    settings, chat: { box: "b1" }, agentsHere: () => [], canOperateInstallation: () => true, canDriveAgents: () => true,
+    localStorage: { getItem: () => null }, t: String, el: fakeEl,
+  });
   const boxStep = () => (setupCard() as Fake).kids[2]!;
   let finishSetup!: (setup: typeof settings.setup) => void;
   const delayedSetup = new Promise<typeof settings.setup>(resolve => { finishSetup = resolve; });
@@ -202,6 +205,56 @@ test("welcome setup uses the latest box result even when setup is the last respo
   finishSetup({ installationId: "fresh", box: true });
   await pending;
   assert.deepEqual(drawn, [["✓", "ui.next.setup.box", "ui.next.box.on"]], "the refresh redraws the card from the new setup response");
+});
+
+test("member Settings has only personal panes; an installation pane cannot be opened by a deep link", () => {
+  const settings = { pane: "model", me: { role: "driver" } };
+  const fail = () => assert.fail("an installation setting was rendered for a member");
+  const settingPanes = pageFunction("settingsPanes", {
+    canOperateInstallation: () => settings.me.role === "admin", canDriveAgents: () => settings.me.role !== "viewer",
+  });
+  const renderSettings = pageFunction("renderSettings", {
+    settings, settingsPanes: settingPanes, canOperateInstallation: () => false, NATIVE_PANES: { model: fail }, renderLongWork: fail, el: fakeEl, t: String,
+  });
+  const view = fakeEl("div");
+  renderSettings(view);
+  assert.deepEqual(view.kids[0]!.kids.map(row => row.kids[0]!.kids[0]!.text), ["ui.pane.mine", "ui.pane.memory"]);
+  settings.me.role = "viewer";
+  const viewer = fakeEl("div");
+  renderSettings(viewer);
+  assert.equal(viewer.kids.length, 0);
+});
+
+test("the member setup checklist counts only the selected box; a viewer gets no operator tasks", () => {
+  const chat = { box: "empty" }, settings = { setup: { installationId: "test", hasPersonalBox: true }, me: { identity: "person", role: "driver" } };
+  const setupCard = pageFunction("setupCard", {
+    settings, chat, canDriveAgents: () => settings.me.role === "driver", canOperateInstallation: () => false,
+    agentsHere: () => chat.box === "shared" ? [{ id: "ada" }] : [], createSetupBox: () => {},
+    localStorage: { getItem: () => null }, t: String, el: fakeEl,
+  }) as () => Fake | null;
+  assert.deepEqual(setupCard()!.kids.slice(1, 3).map(step => step.kids.map(part => part.text)), [
+    ["✓", "ui.next.setup.personalBox"], ["○", "ui.next.setup.agent", "ui.next.setup.go"],
+  ]);
+  chat.box = "shared";
+  assert.equal(setupCard(), null, "the completed steps are no longer in the way");
+  settings.me.role = "viewer";
+  chat.box = "empty";
+  assert.equal(setupCard(), null);
+});
+
+test("new agent box picker shows the selected box and remembers a changed target", () => {
+  const member = { boxId: "personal" };
+  const pickBox = pageFunction("memberBoxField", {
+    member, el: fakeEl, t: String, boxesKnown: () => [{ id: "shared", name: "Shared" }, { id: "personal", name: "Personal" }],
+  }) as () => Fake;
+  const field = pickBox(), select = field.kids[0]!;
+  assert.equal(field.text, "ui.next.member.box");
+  assert.deepEqual(select.kids.map(option => option.text), ["Shared", "Personal"]);
+  assert.equal(select.value, "personal");
+  select.value = "shared";
+  select.press!();
+  assert.equal(member.boxId, "shared");
+  assert.equal(pickBox().kids[0]!.value, "shared");
 });
 
 test("\"@Bob …\" typed to Ada is said to Bob; a name mid-sentence, an unknown name and the agent's own are not", () => {

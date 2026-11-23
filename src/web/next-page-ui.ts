@@ -383,14 +383,14 @@ export const NEXT_HTML = `<!doctype html>
   <div class="boxes" id="boxes" aria-label="{{ui.next.side.boxes}}"></div>
   <div class="box-notice" id="box-notice" hidden></div>
   <button class="needs" id="needs" data-nav="inbox" hidden></button>
-  <h2 class="group">{{ui.next.side.label}}<button id="agent-new" aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
+  <h2 class="group">{{ui.next.side.label}}<button id="agent-new" hidden aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
   <div class="teams" id="teams" hidden></div>
   <div class="agents" id="agents"></div>
   <div class="side-links">
     <button data-nav="work">{{ui.next.side.work}}</button>
     <button data-nav="auto">{{ui.next.side.auto}}</button>
     <button data-nav="boxes">{{ui.next.side.boxes2}}</button>
-    <button data-nav="settings">{{ui.next.side.settings}}</button>
+    <button data-nav="settings" hidden>{{ui.next.side.settings}}</button>
     <div class="side-foot">
       <button id="theme" aria-label="{{ui.next.theme}}" title="{{ui.next.theme}}">◐</button>
       <button id="lang">{{ui.next.lang}}</button>
