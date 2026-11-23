@@ -4983,8 +4983,8 @@ export async function dispatchTool(
       const action = String(input.action ?? "");
       const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
       const cited = (task: Task) => { const policy = context.resultChecks?.snapshot(task).policy; const line = context.verifications !== undefined ? citationFor(task, context.verifications, policy?.mode === "model" ? policy.reviewers : policy?.mode === "files" ? 1 : context.reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, nameOf) : undefined; return line === undefined ? "" : `\n  · ${line}`; }; // the record stands in for a re-check (INV-1614)
-      const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id; // an id or a name; teammates say names, the board stores ids
-      const resolveAssignee = (raw: string): string | undefined => raw.replace(/^@/, "").toLowerCase() === context.agent.profile.name.toLowerCase() ? context.registry.tryGet(raw)?.id ?? context.agent.id : resolveAgent(raw);
+      const resolveAssignee = (raw: string): string | undefined => teammateNamed(context, raw)?.id ??
+        (raw.replace(/^@/, "").toLowerCase() === context.agent.profile.name.toLowerCase() ? context.agent.id : undefined);
       const mayAssign = (taskId: string): boolean => {
         const task = board.get(taskId);
         return task === undefined || task.assigneeId === undefined ||
@@ -5017,7 +5017,7 @@ export async function dispatchTool(
         const assigneeRaw = String(input.assignee ?? "").trim();
         const reviewerRaw = String(input.reviewer ?? "").trim();
         const assigneeId = assigneeRaw === "" ? undefined : resolveAssignee(assigneeRaw);
-        const reviewerId = reviewerRaw === "" ? undefined : resolveAgent(reviewerRaw);
+        const reviewerId = reviewerRaw === "" ? undefined : teammateNamed(context, reviewerRaw)?.id;
         if (assigneeRaw !== "" && assigneeId === undefined) {
           return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
         }
