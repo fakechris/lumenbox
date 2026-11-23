@@ -21,7 +21,7 @@ const ROOT = mkdtempSync(join(tmpdir(), "agentbox-work-"));
 const OUTSIDE = mkdtempSync(join(tmpdir(), "agentbox-outside-"));
 process.env.AGENTBOX_WORK_DIR = ROOT;
 
-const { uploadFile } = await import("./fs-service.ts");
+const { uploadFile, listDir } = await import("./fs-service.ts");
 
 const base64 = (text: string) => Buffer.from(text).toString("base64");
 
@@ -29,6 +29,19 @@ test("an upload lands where it says it does", async () => {
   const result = await uploadFile({ path: join(ROOT, "notes.txt"), base64: base64("hello") });
   assert.equal(result.size, 5);
   assert.equal(readFileSync(join(ROOT, "notes.txt"), "utf8"), "hello");
+});
+
+test("work-folder listings cannot follow a directory link outside the work folder", async () => {
+  const reports = join(ROOT, "reports");
+  mkdirSync(reports);
+  writeFileSync(join(reports, "brief.md"), "brief");
+  const outside = join(ROOT, "linked-directory");
+  symlinkSync(OUTSIDE, outside);
+  const listed = await listDir({ path: reports, work_only: true });
+  assert.equal(listed.work_only, true);
+  assert.deepEqual(listed.entries.map(entry => entry.name), ["brief.md"]);
+  await assert.rejects(listDir({ path: outside, work_only: true }), /outside/);
+  assert.equal((await listDir({ path: outside })).path, outside, "the agent tool still follows its own filesystem policy");
 });
 
 test("an upload will not write through a link that leaves the work directory", async () => {

@@ -496,8 +496,8 @@ export class BoxClient {
     return this.post<BrowserResponse>("/browser", request, 120_000);
   }
 
-  listDir(path: string): Promise<ListDirResult> {
-    return this.post<ListDirResult>("/fs/list", { path });
+  listDir(path: string, workOnly = false): Promise<ListDirResult> {
+    return this.post<ListDirResult>("/fs/list", { path, ...(workOnly ? { work_only: true } : {}) });
   }
 
   /**

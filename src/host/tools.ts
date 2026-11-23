@@ -96,6 +96,7 @@ import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { clampContract, describeTask, isLive, isTaskStatus, TASK_STATUSES, type Task, type TaskStore } from "./tasks.ts"; import { BlockerError, notReady, parseBlockers } from "./task-deps.ts"; import { citationFor, DEFAULT_REVIEWERS_PER_CLAIM, type VerificationLedger } from "./review-dispatch.ts";
+import { createdTaskVisibility } from "./task-audience.ts";
 import {
   type BotTemplate,
   describeTemplate,
@@ -1698,8 +1699,8 @@ evidence: {
     {
       name: "Tasks",
       description:
-        "The team's task board — work as an object everyone can see, not a message that " +
-        "scrolls away. Use it when work outlives one reply: create a task before starting " +
+        "The team's task ledger. Creation reports who can see it in All work. " +
+        "Use it when work outlives one reply: create a task before starting " +
         "something a teammate or the user will want to track, take a task before working " +
         "it so nobody duplicates you, move it as it progresses, and put a note on it when " +
         "something a successor needs to know happens. Statuses: open (nobody on it), " +
@@ -5052,7 +5053,7 @@ export async function dispatchTool(
         if (created === undefined) return { text: "A task needs a title.", isError: true };
         const told = context.unrequested === true ? ` ${PROPOSED_INSTEAD}` : tellAssignee(context, created.id, created.title, assigneeId);
         const waits = parent !== undefined && isLive(parent.status) && !(blockedBy ?? []).includes(parent.id) && board.update(parent.id, { blockedBy: [...new Set([...(parent.blockedBy ?? []), created.id])] }, context.agent.id, context.turnId) !== undefined ? ` ${parent.id} now waits on it; it stays open until its pieces are finished, and its assignee is woken then.` : "";
-        return { text: `Created ${describeTask(created, nameOf, board)}.${told}${waits}` };
+        return { text: `Created ${describeTask(created, nameOf, board)}.${told}${waits} ${createdTaskVisibility(created, context.agent.id)}` };
       }
 
       if (action === "propose_close") {

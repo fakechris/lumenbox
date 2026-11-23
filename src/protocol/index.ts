@@ -495,7 +495,7 @@ export interface WriteFileResult {
 }
 
 export interface ListDirRequest {
-  path: string;
+  path: string; work_only?: boolean;
 }
 
 export interface DirEntry {
@@ -513,7 +513,7 @@ export interface DirEntry {
 
 export interface ListDirResult {
   path: string;
-  entries: DirEntry[];
+  entries: DirEntry[]; work_only?: true;
 }
 
 export interface HealthResult {

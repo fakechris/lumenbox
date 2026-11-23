@@ -4575,6 +4575,26 @@ test("agent suggestions during a user request remain internal until a person com
  } finally {episode.cleanup();}
 });
 
+test("an agent asked to create team work learns when it is actually visible in All work", async () => {
+  const tasks = new TaskStore(null), visibility: string[] = [];
+  const episode = await runEpisode({
+    team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Runner" }], tasks, says: ["Create a shared task Bob can see."],
+    script: ({ agent, round, messages }) => {
+      if (agent !== "Ada") return undefined;
+      if (round) visibility.push(JSON.stringify(messages.at(-1)?.content));
+      if (round === 0) return { call: "Tasks", input: { action: "create", title: "Unassigned draft" } };
+      if (round === 1) return { call: "Tasks", input: { action: "create", title: "Internal step", assignee: "Runner" } };
+      if (round === 2) return { call: "Tasks", input: { action: "create", title: "Shared team task", parent: "none", assignee: "Runner" } };
+      return { say: "The shared team task is listed for members of this box." };
+    },
+  });
+  try {
+    assert.match(visibility[0] ?? "", /Unassigned: other signed-in box members cannot see/);
+    assert.match(visibility[1] ?? "", /not a standalone card in All work/);
+    assert.match(visibility[2] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
+  } finally { episode.cleanup(); }
+});
+
 test("a refused self-acceptance cannot create a review cascade; explicit submission leaves one check request (INV-1810)", async () => {
   const { requestsResultCheck } = await import("./task-delivery.ts");
   const tasks = new TaskStore(null); let target = "", round = 0, checkRequests = 0;

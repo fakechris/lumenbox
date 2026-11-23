@@ -17,8 +17,8 @@ function fixture(count = 1) {
     agentId: "agent", boxId: "original-box", conversation: "chat", contextEpoch: 1,
     taskBinding: { taskId: "task-A", role: "executor" as const } };
   turns.begin({ ...scope, about: "synthetic work" });
-  function start(index: number, overrides: Partial<ExecutionStepRecord> = {}) {
-    const call = { type: "tool_use", id: `c${index}`, name: "read_file", input: { path: `object-${index}.md` } };
+  function start(index: number, overrides: Partial<ExecutionStepRecord> = {}, input: unknown = { path: `object-${index}.md` }) {
+    const call = { type: "tool_use", id: `c${index}`, name: overrides.tool ?? "read_file", input };
     entries.push({ role: "assistant", kind: "blocks", turnId: scope.id, executionId: scope.executionId, blocks: [call] });
     turns.observeExecution({ ...scope, event: "step", recordId: `start-${index}`, phase: "start", toolUseId: call.id, tool: call.name, at: new Date(1_000 + index).toISOString(), ...overrides });
   }
@@ -32,6 +32,17 @@ function fixture(count = 1) {
   const service = () => new TaskExecutions({ namespace: "installation", turns: new TurnLedger(path), registry });
   return { dir, path, turns, entries, scope, start, end, registry, service, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
+
+test("execution projection identifies task updates from their action, not the first argument shown", () => {
+  const f = fixture(0);
+  try {
+    f.start(0, { tool: "Tasks" }, { id: "example", action: "update" });
+    f.start(1, { tool: "Tasks" }, { action: "submit" });
+    f.start(2, { tool: "other" }, { action: "update" });
+    const steps = f.service().open("task-A", access).steps;
+    assert.deepEqual(steps.map(step => [step.detail, step.metadataUpdate]), [["example", true], ["submit", undefined], ["update", undefined]]);
+  } finally { f.cleanup(); }
+});
 
 test("2000 retained steps paginate exactly once after archive/live duplication and service restart", () => {
   const f = fixture(2000);

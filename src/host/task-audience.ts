@@ -9,6 +9,13 @@ export function taskAudience(task: Task, agentIds: ReadonlySet<string>, people?:
   return agentIds.has(task.requester) ? "internal" : task.requester === "web" ? "user" : people && !people.has(task.requester) && !task.sourceMessageId ? "internal" : "user";
 }
 
+export function createdTaskVisibility(task: Task, creator: string): string {
+  if (!task.assigneeId) return "Unassigned: other signed-in box members cannot see this agent-created task. For an All work card, create standalone requested work (parent: none) and assign it to an agent in their box or take it yourself.";
+  const audience = taskAudience(task, new Set([creator]));
+  if (audience !== "user") return "This is not a standalone card in All work or its board. Members of the assignee’s box can find it by searching All work.";
+  return "All work and its board show this card to members of the assignee’s box, not to people outside that box.";
+}
+
 /**
  * A request the agent answered in its own turn (INV-1822): the record of a chat exchange, kept so the
  * request can be found again, and never a card somebody has to look at. Anything that left a result to

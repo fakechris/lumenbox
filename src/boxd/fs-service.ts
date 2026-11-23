@@ -280,12 +280,13 @@ export async function writeFile(
 
 export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
   const path = requireInside(requirePath(request.path), "ro");
-  const names = await readdir(path);
+  const directory = request.work_only ? await requireDownloadable(path) : path;
+  const names = await readdir(directory);
 
   const entries: DirEntry[] = [];
   for (const name of names) {
     try {
-      const info = await lstat(resolve(path, name));
+      const info = await lstat(resolve(directory, name));
       entries.push({
         name,
         type: info.isDirectory()
@@ -309,5 +310,5 @@ export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
     return a.name.localeCompare(b.name);
   });
 
-  return { path, entries };
+  return { path, entries, ...(request.work_only ? { work_only: true } : {}) };
 }

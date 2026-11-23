@@ -20,6 +20,7 @@ import { taskProgressSurface } from "../host/task-progress-surface.ts";
 import { lastReport, taskBoardRecord } from "./task-board-record.ts";
 import { taskCostRoute } from "./task-cost-routes.ts";
 import { taskListRoute, TaskListPages } from "./task-list-routes.ts";
+import { withinWork, workFileRoute } from "./work-file-routes.ts";
 import { SseReplay } from "./sse-replay.ts";
 import { taskRecord } from "./mcp-record.ts";
 import { TaskExecutions } from "./task-execution.ts";
@@ -51,7 +52,7 @@ import {
 } from "node:http";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
-import { join, posix } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
@@ -140,19 +141,6 @@ function readToolList(value: unknown): readonly string[] | null | undefined | Er
  * stop or a crash and is treated as one.
  */
 export const RESTART_EXIT_CODE = 75;
-
-/**
- * Whether a path is inside the work directory, textually.
- *
- * A prefix check on a normalised path, which stops `..` and a bare `/etc/passwd`. It does *not* stop
- * a symlink pointing out of the tree — that is checked in the daemon with `realpath`, where the
- * filesystem actually is. Both, because this one is reachable by anyone with a UI token.
- */
-function withinWork(path: string, work: string): boolean {
-  if (path.includes("\0")) return false;
-  const normalised = posix.normalize(path);
-  return normalised === work || normalised.startsWith(`${work}/`);
-}
 
 import { agentboxHome, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
@@ -4918,71 +4906,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        // What a long task's progress actually looks like: the plan and the list, which survive
-        // summarisation and so are the only state that is still true after an hour.
-        // ── handing work over ──────────────────────────────────────────────────────
-        //
-        // The gap this closes: an agent would write a report to /home/box/work and say so, and that
-        // was the end of it. A person had to open the VNC desktop, find a file manager, and read it
-        // there — with no way to get it onto their own machine. The reference product solves this two
-        // ways: pushing the file onto the user's actual disk through an agent running on their
-        // machine, or attaching it to the message. We have no agent on their machine, so the browser
-        // is the delivery mechanism, and these two routes are it.
-        if (route === "GET /api/files") {
-          const work = workRootOf(registry.defaultBox()), dir = url.searchParams.get("dir") ?? work; // the box boxClient() is (INV-1736)
-          // Confined here as well as in the daemon. Two checks rather than one because this is the
-          // one reachable by anyone holding a UI token, including a viewer.
-          if (!withinWork(dir, work)) {
-            send(res, 403, apiError("browse-outside-work", { dir: work }));
-            return;
-          }
-          const client = orchestrator.boxClient();
-          if (!client) {
-            send(res, 503, { ...apiError("box-not-running"), root: work }); // the page's chat links need the root with or without a box (INV-1737)
-            return;
-          }
-          try {
-            const listing = await client.listDir(dir);
-            send(res, 200, { ...listing, root: work }); // where the page starts and stops going up
-          } catch (error) {
-            send(res, 404, { error: error instanceof Error ? error.message : String(error), root: work });
-          }
-          return;
-        }
-
-        if (route === "GET /api/file") {
-          const path = url.searchParams.get("path") ?? "", work = workRootOf(registry.defaultBox());
-          if (!withinWork(path, work)) {
-            send(res, 403, apiError("handover-outside-work", { dir: work }));
-            return;
-          }
-          const client = orchestrator.boxClient();
-          if (!client) {
-            send(res, 503, apiError("box-not-running"));
-            return;
-          }
-          try {
-            const file = await client.downloadFile(path);
-            const bytes = Buffer.from(file.base64, "base64");
-            // `inline` so a browser shows what it can and downloads what it cannot; the filename is
-            // still given, so "save as" produces the right name either way.
-            const name = file.path.split("/").pop() ?? "file";
-            res.writeHead(200, {
-              "content-type": file.media_type,
-              "content-length": bytes.length,
-              "content-disposition": `${
-                url.searchParams.get("download") === "1" ? "attachment" : "inline"
-              }; filename="${name.replace(/["\\]/g, "")}"`,
-              // Never cached: an agent rewrites its own output, and a stale copy would be read as
-              // the current one.
-              "cache-control": "no-store",
-            });
-            res.end(bytes);
-          } catch (error) {
-            send(res, 404, { error: error instanceof Error ? error.message : String(error) });
-          }
-          return;
-        }
+        if (await workFileRoute(route, url, res, { send, box: id => {
+          const own = registry.defaultBox(), entry = id === null ? own : registry.boxById(id);
+          if (!entry || !mayReadBox(entry.id)) return undefined;
+          return entry.id === own.id ? { work: workRootOf(own), client: orchestrator.boxClient() }
+            : { work: workDir(entry), client: orchestrator.boxClientById(entry.id) };
+        } })) return;
 
         if (route === "POST /api/file") {
           // The other direction: a person hands the agent a document. Driving is required — a viewer

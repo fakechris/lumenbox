@@ -102,7 +102,9 @@ function progressBlock(task) {
   }
   var main = sources.filter(function (row) { return row.source !== "independent-verifier"; })[0];
   if (main) {
-    box.appendChild(el("div", "why", (main.stage || "") + (typeof main.total === "number" ? " · " + main.processed + " / " + main.total + " " + (main.unit || "") : "")));
+    var stage = processText(main.stage), unit = processText(main.unit);
+    var tally = typeof main.total === "number" ? main.processed + " / " + main.total + (unit ? " " + unit : "") : "";
+    box.appendChild(el("div", "why", [stage, tally].filter(Boolean).join(" · ")));
     count(main.processed, "processed", main.source); count(main.succeeded, "succeeded", main.source);
     if (main.failed) count(main.failed, "failed", main.source);
     if (main.unknown) count(main.unknown, "unknown", main.source);
@@ -119,15 +121,25 @@ function progressBlock(task) {
   return box;
 }
 
-function processBlock() {
+function processText(value) {
+  return typeof value === "string" && value !== "[object Object]" ? value : "";
+}
+
+function processBlock(task) {
   if (panel.steps.length === 0) return null; // nothing ran on record: no heading over an empty space
   var box = section(t("ui.next.panel.process"));
   var list = el("ul", "steps");
+  var hasFiles = (task.deliverables || []).length > 0, submitted = task.delivery && task.delivery.submitted;
+  if (hasFiles || submitted) box.appendChild(el("p", "why", t(hasFiles ? "ui.next.step.filesDelivered" : "ui.next.step.resultSubmitted")));
   panel.steps.slice(-12).forEach(function (step) {
     var line = el("li"), flagged = step.outcome !== "succeeded" && MSG["ui.next.step." + step.outcome];
+    var updateFailed = step.metadataUpdate && (step.outcome === "failed" || step.outcome === "refused");
+    var label = updateFailed
+      ? t("ui.next.step.metadataFailed") + " " + t(hasFiles || submitted ? "ui.next.step.metadataDeliveryIntact" : "ui.next.step.metadataRetry")
+      : [processText(step.name), processText(step.detail)].filter(Boolean).join(" ");
     line.appendChild(el("b", "", agentName(step.agentId)));
-    line.appendChild(el("span", "what", step.name + (step.detail ? " " + step.detail : "")));
-    if (flagged) line.appendChild(el("span", "flag" + (step.outcome === "failed" || step.outcome === "refused" ? " bad" : ""), t("ui.next.step." + step.outcome)));
+    line.appendChild(el("span", "what", label));
+    if (flagged && !updateFailed) line.appendChild(el("span", "flag" + (step.outcome === "failed" || step.outcome === "refused" ? " bad" : ""), t("ui.next.step." + step.outcome)));
     line.appendChild(el("time", "", clock(step.endedAt || step.startedAt)));
     list.appendChild(line);
   });
@@ -204,7 +216,7 @@ function renderPanel() {
     if (task.description.length > 600) { var fold = el("details", "fold"); fold.appendChild(el("summary", "", t("ui.next.panel.askedFold"))); fold.appendChild(asked); inner.appendChild(fold); }
     else inner.appendChild(asked);
   }
-  [needBlock(task), resultBlock(task), progressBlock(task), processBlock(), dependsBlock(task), manageBlock(task), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
+  [needBlock(task), resultBlock(task), progressBlock(task), processBlock(task), dependsBlock(task), manageBlock(task), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
 }
 
 function loadPanel() {
