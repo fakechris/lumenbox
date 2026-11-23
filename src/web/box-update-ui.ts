@@ -46,8 +46,7 @@ export const BOX_UPDATE_JS = `(function () {
     var modal = document.querySelector("#settingswrap .modal");
     var tabs = document.getElementById("settabs");
     if (!modal || !tabs || document.getElementById("boxupdate")) return false;
-    var fields = modal.querySelectorAll('.field[data-settab="boxes"]');
-    var anchor = fields.length ? fields[fields.length - 1] : null;
+    var anchor = modal.querySelector('.field[data-settab="boxes"]');
     var wrap = el("div", { class: "field settab-off", "data-settab": "boxes", id: "boxupdate" });
     wrap.appendChild(el("label", {}, "{{ui.box-update.box-image}}"));
     ui.line = el("div", { class: "fieldnote", id: "boxupdateline" }, "…");
@@ -85,7 +84,7 @@ export const BOX_UPDATE_JS = `(function () {
       var v = ui.cpus.value.trim();
       call("POST", "/api/box/limits", { cpus: v === "" ? null : v }).then(function (d) { showLimits(d, "{{ui.box-update.saved}}"); }).catch(function (e) { ui.cpusNote.textContent = e.message; });
     };
-    modal.insertBefore(wrap, anchor ? anchor.nextSibling : null);
+    modal.insertBefore(wrap, anchor);
     ui.apply.onclick = function () {
       ui.apply.disabled = true;
       call("POST", "/api/box/image/update", { whenIdle: true, backup: ui.backup.checked }).then(load).catch(function (e) { ui.line.textContent = e.message; ui.apply.disabled = false; });

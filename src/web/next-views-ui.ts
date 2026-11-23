@@ -248,7 +248,7 @@ function refresh() {
   if (next.loading) { next.refreshAgain = true; return Promise.resolve(); }
   next.loading = true;
   // A refused optional read must not prevent the rest of the page from drawing.
-  var machines = getJson("/api/boxes").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
+  var machines = getJson("/api/boxes?lang={{@locale}}").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
   var setup = getJson("/api/setup").catch(function () { return settings.setup; });
   return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines, setup]).then(function (got) {
     boxes.list = got[3].boxes || []; boxes.own = got[3].own || ""; boxes.state = got[0].box || null;
