@@ -234,6 +234,16 @@ test("a goal continuation turn: the pursuit's workId, a host inbound entry, unde
     assert.deepEqual(last.tool_choice, { type: "none" }, "no tools on a finish-only turn");
     assert.match(JSON.stringify(last.messages.at(-1)?.content), /\[last round\] You have one response left/);
     assert.equal(reports.at(-1)?.finalText, "做完了 1 和 2；3 还差数据。", "the report carries the words the loop will deliver");
+
+    registry.appendTranscript(ada.id, { role: "user", text: "Keep working on this request.", at: new Date().toISOString(), fromPerson: true });
+    const waiting = stubClient([message([toolUseBlock("AskUser", { question: "Which data should I use?" })], "tool_use"), message([])], { params: [] });
+    let asked = false;
+    await runTurn(ada, inbound({ ...marker, seq: 3 }, "continue"), new AbortController().signal, {
+      client: waiting.client, registry, bus, box: undefined, resolution: undefined, turns,
+      askUser: async () => { asked = true; return "in the app"; }, onGoalTurn: report => reports.push(report),
+    });
+    assert.ok(asked, "the continuation delivered its question");
+    assert.equal(reports.at(-1)?.how, "empty_output", "a silent continuation must not complete a Goal");
   } finally {
     cleanup();
     rmSync(home, { recursive: true, force: true });
