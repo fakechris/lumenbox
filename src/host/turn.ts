@@ -2829,9 +2829,7 @@ ${outcome.text}`;
           );
         }
         malformedRetries += 1;
-        // Nothing of the discarded reply is appended, so the request still ends on the
-        // person's side; the nudge joins that message, because the Anthropic wire rejects
-        // two user messages in a row.
+        // The discarded reply is not appended. Join the nudge to the last user message to keep the wire's alternating roles.
         appendUserNudge(messages, malformedNudge(malformed.kind, tools.length > 0, chinese));
         round -= 1; // retry this round rather than consuming one
         continue;
