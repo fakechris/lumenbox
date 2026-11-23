@@ -16,6 +16,7 @@ function loadPeople() {
   team.timer = setTimeout(function () { if (next.view === "settings" && settings.pane === "team" && !removing.id) loadPeople(); }, 15000);
   return getJson("/api/people").then(function (got) {
     team.people = got.people || []; team.installation = got.installation || {}; team.invites = got.invites || []; team.error = "";
+    if (team.invite && !team.invites.some(function (invite) { return invite.code === team.invite.code; })) team.invite = null; // used or expired
   }, function (error) {
     team.people = team.people || []; team.error = error.message;
   }).then(function () { if (next.view === "settings") render(); });
@@ -104,7 +105,8 @@ function personLine(person, personal) {
   else {
     var role = selectOf(ROLES.map(function (name) { return [name, t("ui.next.team.role." + name)]; }), person.role);
     role.addEventListener("change", function () {
-      postJson("/api/principals", { principals: rosterWith(team.people, person.id, role.value) }).then(function (got) { toast(t("ui.next.settings.saved2")); loadPeople(); }, function (error) {
+      delete role.dataset.edited; // the next redraw shows the role the server kept, refused or not
+      postJson("/api/principals", { principals: rosterWith(team.people, person.id, role.value) }).then(function () { toast(t("ui.next.settings.saved2")); loadPeople(); }, function (error) {
         failed(error); loadPeople();
       });
     });
