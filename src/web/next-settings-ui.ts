@@ -92,14 +92,19 @@ var NATIVE_PANES = {
  */
 function setupCard() {
   var state = settings.setup;
-  if (!state || state.established || localStorage.getItem("lumen-setup-closed:" + state.installationId) === "1") return null;
+  if (!state) return null;
+  var card = el("div", "card-plain"), close = el("button", "act", t("ui.next.act.close"));
+  if (state.bootstrapPending) {
+    var link = el("a", "act", t("ui.channels.bootstrap-pending"));
+    link.href = "/bootstrap"; card.appendChild(link);
+  }
+  if (state.established || localStorage.getItem("lumen-setup-closed:" + state.installationId) === "1") return state.bootstrapPending ? card : null;
   var steps = [
     { key: "key", done: state.key, open: function () { openSettingsPane("model"); } },
     { key: "box", done: state.box, open: function () { openSettingsPane("boxes"); } },
     { key: "agent", done: state.agentTurn || Object.keys(next.agents).length > 0, open: function () { openMember(""); } },
     { key: "door", done: state.door, optional: true, open: function () { openSettingsPane("doors"); } },
   ];
-  var card = el("div", "card-plain"), close = el("button", "act", t("ui.next.act.close"));
   card.appendChild(el("div", "card-head", t("ui.next.setup.title")));
   steps.forEach(function (step) {
     var row = el("div", "setup-step"), go = el("button", "act", t("ui.next.setup.go"));

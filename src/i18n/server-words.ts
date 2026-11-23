@@ -26,7 +26,12 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "quota.window-resets": ["窗口重置时", "the window resets"],
   // The first Admin's sign-in page (GET /bootstrap).
   "page.bootstrap.title": ["首位管理员", "First administrator"],
-  "page.bootstrap.lead": ["从这个安装本地的 bootstrap-code 文件里取出一次性验证码，用飞书登录，成为它的第一位管理员。", "Retrieve the one-use code from the installation's local bootstrap-code file. Sign in with Feishu to become its first administrator."],
+  "page.bootstrap.operator": ["打开操作员的渠道设置。", "Open the operator's channel settings."],
+  "page.bootstrap.operator-how": ["首次打开时，将 ?token= 加上操作员凭据放在安装首页地址后。凭据来自 AGENTBOX_UI_TOKEN，或启动日志中指明的 ui-token 文件。", "On first access, append ?token= and the operator credential to the installation's home URL. Use AGENTBOX_UI_TOKEN or the ui-token file named in the startup log."],
+  "page.bootstrap.configure": ["在设置 → 渠道中打开添加渠道，输入飞书应用的 ID、密钥与渠道 ID，再保存。", "In Settings → Channels, open Add channel, enter the Feishu app ID, app secret and a channel ID, then save."],
+  "page.bootstrap.register": ["将表单显示的 OAuth 回调地址登记到飞书应用中（用你的渠道 ID 替代 CHANNEL_ID）。", "Register the OAuth callback URL shown in the form in your Feishu app (replace CHANNEL_ID with your channel ID)."],
+  "page.bootstrap.public-url": ["在服务器上将 AGENTBOX_PUBLIC_URL 设置为安装的公网 HTTPS 地址。", "Set AGENTBOX_PUBLIC_URL to the installation's public HTTPS address on the server."],
+  "page.bootstrap.scan": ["回到此页，选择渠道、输入服务器文件中的一次性验证码，再扫码登录：", "Return here, select the channel, enter the one-use code from the server file, and scan the QR code:"],
   "page.bootstrap.code": ["验证码", "Code"],
   "page.bootstrap.channel": ["渠道", "Channel"],
   "page.bootstrap.sign-in": ["用飞书登录", "Sign in with Feishu"],
@@ -35,6 +40,12 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   // The sign-in page's channel buttons (GET /login, INV-1701): one button per Feishu channel, above the invite code.
   "page.login.with-channel": ["用 {channel} 登录", "Sign in with {channel}"],
   "page.login.or-code": ["或者，用管理员给你的邀请码：", "Or with an invite code from an admin:"],
+  "page.recovery.sign-in-required": ["请登录 LumenBox", "Sign in to LumenBox"],
+  "page.recovery.access-removed": ["你的访问权限已被移除", "Your access was removed"],
+  "page.recovery.session-expired": ["你的会话已过期", "Your session expired"],
+  "page.recovery.sign-in-expired": ["登录二维码已过期", "Your sign-in QR code expired"],
+  "page.recovery.contact": ["如果无法重新登录，请联系本安装的管理员。", "If you can't sign in again, contact this installation's administrator."],
+  "page.recovery.login": ["前往登录", "Go to sign-in"],
   // A sign-in this installation does not know yet.
   "page.not-linked.title": ["这个飞书账号还没有链接到本安装", "This Feishu account is not linked to this installation yet"],
   "page.not-linked.your-id": ["你的 id：", "Your id: "],

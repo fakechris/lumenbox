@@ -273,6 +273,11 @@ var refreshTimer = 0;
 function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 400); }
 
 function nextStart() {
+  var address = new URL(location.href);
+  if (address.searchParams.has("token")) {
+    address.searchParams.delete("token");
+    history.replaceState(null, "", address.pathname + address.search + address.hash);
+  }
   document.querySelectorAll("[data-nav]").forEach(function (button) {
     button.addEventListener("click", function () { next.view = button.dataset.nav; settings.pane = ""; document.body.dataset.open = "1"; history.replaceState(null, "", "?view=" + next.view); render(); });
   });

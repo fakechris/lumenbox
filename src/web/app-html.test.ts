@@ -22,6 +22,24 @@ import { APP_PAGE } from "./page-locale.ts";
 /** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
 const APP_HTML = APP_PAGE("en");
 
+test("both channel forms show the Feishu callback for the ID being entered (INV-2058)", async () => {
+  const { NEXT_PAGE } = await import("./page-locale.ts");
+  for (const page of [APP_HTML, NEXT_PAGE("en")]) {
+    const source = /function channelCallbackHint\([\s\S]*?\n}/.exec(page)?.[0];
+    assert.ok(source);
+    const node = { hidden: false, textContent: "" };
+    const hint = runInNewContext(source + "\nchannelCallbackHint") as (node: object, template: string | undefined, type: string, id: string) => void;
+    const template = "https://org.example/auth/CHANNEL_ID/callback";
+    hint(node, template, "feishu", "work");
+    assert.match(node.textContent, /https:\/\/org\.example\/auth\/work\/callback$/);
+    hint(node, template, "dingtalk", "work");
+    assert.equal(node.hidden, true);
+    hint(node, undefined, "feishu", "");
+    assert.equal(node.hidden, false);
+    assert.match(node.textContent, /AGENTBOX_PUBLIC_URL/);
+  }
+});
+
 test("Mine offers first-admin setup only to an uninitialized operator, and explains unavailable setup", () => {
   const source = APP_HTML.slice(APP_HTML.indexOf("var mcpSetup, myIdentity;"), APP_HTML.indexOf("function renderMcpTokens(tokens)"));
   const notice = {

@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { startWebServer } from "./server.ts";
+import { SESSION_COOKIE } from "./session.ts";
 import { invitationLink, loginPageWithDoors, SIGN_IN_DOORS_MARKER, webSignInDoors } from "./sign-in.ts";
 
 const orgs = createRequire(import.meta.url)("../../electron/organisations.cjs") as {
@@ -77,6 +78,35 @@ test("an organisation's /login offers its Feishu door; the door's sign-in gives 
   const token = orgs.sessionTokenIn(cookies);
   assert.ok(token, "the door's sign-in sets the session cookie the app's join window waits for");
   assert.deepEqual(await orgs.readOrganisation(base, token), { identity: "fixture:ou_ana", name: "Ana", role: "admin" }, "and /api/me says who, and as what");
+
+  const html = { accept: "text/html", "accept-language": "en" };
+  const checkRecovery = async (path: string, cookie: string, title: RegExp) => {
+    const response = await fetch(base + path, { headers: { ...html, cookie } });
+    assert.equal(response.status, 401);
+    assert.match(response.headers.get("content-type")!, /^text\/html/);
+    const page = await response.text();
+    assert.match(page, title);
+    assert.match(page, /href="\/login"/);
+    assert.doesNotMatch(page, /\?token=/);
+  };
+  await checkRecovery("/", "", /Sign in to LumenBox/);
+  await checkRecovery("/?view=settings", `${SESSION_COOKIE}=stale`, /Your session expired/);
+  const expiredTarget = "/auth/fixture/callback?state=stale&code=stale";
+  const expired = await fetch(base + expiredTarget, { headers: html });
+  assert.equal(expired.status, 400);
+  assert.match(await expired.text(), /Your sign-in QR code expired[\s\S]*href="\/login"/);
+  const expiredApi = await fetch(base + expiredTarget);
+  assert.equal(expiredApi.status, 400);
+  assert.equal((await expiredApi.json()).code, "sign-in-expired");
+  const removed = await fetch(base + "/api/principals", {
+    method: "POST", headers: { authorization: "Bearer fixture", "content-type": "application/json" }, body: JSON.stringify({ principals: [] }),
+  });
+  assert.equal(removed.status, 200);
+  const cookie = known.headers.getSetCookie()[0]!.split(";")[0]!;
+  await checkRecovery("/", cookie, /Your access was removed/);
+  const deniedApi = await fetch(base + "/api/me", { headers: { ...html, cookie } });
+  assert.equal(deniedApi.status, 401);
+  assert.match(deniedApi.headers.get("content-type")!, /^application\/json/);
 
   const stranger = await signIn("ou_stranger");
   assert.equal(stranger.status, 403, "somebody nobody linked is told how to knock");
