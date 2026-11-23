@@ -90,6 +90,29 @@ Two rules hold in every cell:
   Owner's VMs join the personal installation. The organisation's machines and VMs, and its
   cluster, join the organisation. Nobody else's machine joins either.
 
+### Run the organisation server in its cluster
+
+Use a dedicated namespace for the organisation server and its personal boxes. The example uses
+`agentbox`. Apply the namespace and permissions, then provision the `agentbox-organisation-env`
+Secret there with a stable `AGENTBOX_UI_TOKEN` and any provider settings using your usual secret
+management tooling. Don't put credentials in the manifest.
+
+```sh
+kubectl apply -f deploy/kubernetes/namespace.yaml -f deploy/kubernetes/rbac.yaml
+kubectl apply -f deploy/kubernetes/organisation.yaml
+kubectl -n agentbox rollout status deployment/agentbox-organisation
+kubectl -n agentbox port-forward service/agentbox-organisation 7777:7777
+```
+
+Open `http://localhost:7777` and follow the organisation admin bootstrap. To use a different image
+tag or registry, set both `image` and `AGENTBOX_IMAGE` in the deployment. Use a TLS-enabled ingress
+for access beyond the port forward.
+
+The manifest labels the **web server's pod template** `agentbox/role: control`. If you use your
+own deployment, apply that label to its pod template, not just the Deployment or Service. A
+personal box's NetworkPolicy admits only pods with that label **in the box's namespace**. Pod
+readiness does not guarantee that the server can reach it.
+
 ## 3. The first run: three answers, and what each puts on this machine
 
 INV-1696 asks on the first run, before anything is created. Each answer is one sentence of what

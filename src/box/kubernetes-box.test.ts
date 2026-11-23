@@ -6,22 +6,23 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BoxEntry } from "./boxes.ts";
 import { KubernetesBoxDriver, provisionedBoxDriver } from "./kubernetes-box.ts";
 import { PersonalDocker } from "./personal.ts";
 import { KubeBoxes } from "../control/kube-box.ts";
+import { KubernetesError, parseMinimalYaml } from "../control/kube-client.ts";
 import { staticDecision } from "../control/policy.ts";
 import { fakeKubeApi } from "../control/testing/fake-kube.ts";
 import { PersonalBoxes } from "../host/personal-boxes.ts";
 
-function fixture(fake = fakeKubeApi(), image = "fakechris/lumenbox:0.3.28") {
+function fixture(fake = fakeKubeApi(), image = "fakechris/lumenbox:0.3.28", log?: (line: string) => void) {
   const home = mkdtempSync(join(tmpdir(), "kube-org-boxes-"));
   const entries: BoxEntry[] = [];
   const kube = new KubeBoxes({ api: fake.api, namespace: "org", defaultImage: () => image, pollIntervalMs: 1, startTimeoutMs: 50 });
-  const driver = new KubernetesBoxDriver({ boxes: kube, image, decision: staticDecision({ memory: "2Gi", storage: "1Gi" }) });
+  const driver = new KubernetesBoxDriver({ boxes: kube, image, decision: staticDecision({ memory: "2Gi", storage: "1Gi" }), log });
   const open = (with_ = driver) =>
     new PersonalBoxes({
       home, entries: () => entries, quota: () => undefined, authorize: () => true,
@@ -64,6 +65,13 @@ test("each box is its own pod, volumes, secret and policy, reached at its own Se
     assert.match(labels["agentbox/box"] ?? "", /^[0-9a-f]{12}$/);
     assert.notEqual(labels["agentbox/owner"], fake.pods.get(b.name)!.metadata.labels!["agentbox/owner"]);
     assert.deepEqual((fake.policies.get(a.name)!.spec.ingress as unknown[])[0], { from: [{ podSelector: { matchLabels: { "agentbox/role": "control" } } }] });
+    // INV-2040: the documented organisation server matches the box policy's pod selector.
+    const deployment = readFileSync(new URL("../../deploy/kubernetes/organisation.yaml", import.meta.url), "utf8")
+      .split(/^---$/m).find(doc => /^kind: Deployment$/m.test(doc));
+    assert.ok(deployment);
+    const manifest = parseMinimalYaml(deployment) as { metadata: { namespace: string }; spec: { template: { metadata: { labels: Record<string, string> } } } };
+    assert.equal(manifest.metadata.namespace, "agentbox");
+    assert.equal(manifest.spec.template.metadata.labels["agentbox/role"], "control");
     // The order a reader can hold the code to, per box: nothing references what does not exist yet.
     const order = fake.calls.filter(c => c.verb === "apply" && c.name.startsWith(a.name)).map(c => c.kind);
     assert.deepEqual(order, ["secret", "pvc", "pvc", "pvc", "service", "networkpolicy", "pod"]);
@@ -85,6 +93,33 @@ test("a box that cannot start says why, removes its secret and keeps its volumes
     assert.ok(fake.pvcs.has(`${record.name}-work`), "volumes are data and stay");
   } finally {
     cleanup();
+  }
+});
+
+test("INV-2052: namespace quota, admission, RBAC, and Pending give the member and operator distinct diagnostics", async () => {
+  const cases = [
+    ["ResourceQuota", "exceeded quota: pods=3", "namespace capacity"],
+    ["AdmissionDenied", "admission webhook denied the request", "admission policy"],
+    ["RBAC", "serviceaccount cannot create resource pods", "ServiceAccount"],
+    ["ContainerCreating", undefined, "scheduling and container status"],
+  ] as const;
+  for (const [reason, message, nextStep] of cases) {
+    const fake = fakeKubeApi({ waitingReason: message === undefined ? "ContainerCreating" : undefined });
+    if (message) fake.api.applyPod = async () => { throw new KubernetesError(message, 403); };
+    const lines: string[] = [];
+    const { open, cleanup } = fixture(fake, undefined, line => lines.push(line));
+    try {
+      const record = await open().create("alice", "r1");
+      assert.equal(record.status, "failed");
+      assert.equal(record.stateReason, reason);
+      assert.ok(record.error?.includes(message ?? "phase: Pending"));
+      assert.ok(record.error?.includes(nextStep));
+      assert.equal(lines.length, 1);
+      assert.ok(lines[0]?.includes(record.name));
+      assert.ok(lines[0]?.includes(message ?? "phase: Pending"));
+    } finally {
+      cleanup();
+    }
   }
 });
 

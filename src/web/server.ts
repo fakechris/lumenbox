@@ -66,7 +66,7 @@ import type { BusEvent } from "../agents/bus.ts";
 import { BoxManager, defaultBoxConfig, dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "../box/docker.ts";
 import { managesLocalDocker, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts"; import { boxHeldDown, releaseBoxDown } from "../box/held-down.ts";
 import { classifyBox, auditNotice } from "../box/access.ts";
-import { configPath, envNumber } from "../config.ts";
+import { boxBackendFromEnvironment, configPath, envNumber } from "../config.ts"; import { SharedBoxStart } from "./shared-box-start.ts"; import { DEFAULT_NAMESPACE } from "../control/kubernetes.ts";
 import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
 import { defaultSupervisionLog, supervisionRoute } from "./supervision-routes.ts"; import { calibrationRoute } from "./calibration-routes.ts"; // Settings → Supervision → calibration (INV-1773)
 import { SUPERVISION_JS } from "./supervision-ui.ts";
@@ -414,8 +414,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const fontCache = new Map<string, Buffer>();
   /** Asked once: the answer cannot change while this process runs. */
   const build = buildInfo();
-  /** One docker bring-up at a time; a second click joins the first via the events. */
-  let boxUpInFlight = false;
+  const backend = boxBackendFromEnvironment(), kubernetes = backend.backend === "kubernetes";
   const events = new SseReplay<OutboundEvent>();
 
   /**
@@ -463,6 +462,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const provisioner = (() => {
     try {
+      if (kubernetes) return { kind: "kubernetes", label: "Kubernetes", boxName: registry.box.name,
+        endpoint: async () => undefined, connect: async () => { throw new Error(tr("err.shared-box-kubernetes", "en")); } } satisfies BoxProvisioner;
       return options.boxProvisioner ?? resolveBoxProvisioner();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -793,7 +794,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); },
     detach: id => { orchestrator.detachBox(id); }, residents: id => registry.agentsIn(id).length,
-    driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true),
+    driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
   }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
 
   {
@@ -2398,13 +2399,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   providerRests.on(event => { const text = restNotice(event); log(text); broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); }); // once when a plan runs out, once when it is back (INV-1577)
   const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), wake: id => { void orchestrator.bus.wake(id); }, interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: id => orchestrator.boxFor(id), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "user", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); const spendLimits = new SpendLimits({ ledger: () => todaysRows(orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), new Date()), rates: () => configuredRates(), pause: (id, why) => agentPauses.pause(id, "LumenBox (spend limit)", why), resume: (id, by) => agentPauses.resume(id, by), isPaused: id => agentPauses.pauseOf(id) !== undefined, nameOf: id => registry.tryGet(id)?.profile.name ?? id, log, notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } }, join(agentboxHome(), "spend-limits.jsonl")); orchestrator.spendLimits = spendLimits; setInterval(() => { void spendLimits.sweep().catch(error => log(`spend limits: ${error instanceof Error ? error.message : String(error)}`)); }, 60_000).unref(); // INV-1554 // model-text: pause-resume // INV-1615 orchestrator.questionsOpen = () => questions.list(); orchestrator.pausedForSpend = () => spendLimits.pausedForSpend(); orchestrator.personName = id => (principals.byId(id) ?? principals.resolve(id)).name; orchestrator.orgKnowledge.mode = () => boxRegistrationModeAt(principalsPath(), options.desktop === true); // the desktop app with no installation field is personal: it never writes L1 (INV-1726)
   orchestrator.orgKnowledge.isAdmin = id => id === undefined || principals.roleOf(id) === "admin"; orchestrator.orgKnowledge.notify = (owner, notice) => { const text = tr("org.unverified-notice", resolveLocale({}), { ...notice, by: principals.byId(notice.by)?.name ?? notice.by }); log(`organisation knowledge: told ${owner} that ${notice.id} was marked unverified`); for (const identity of principals.byId(owner)?.identities ?? []) { const adapter = identity.split(":")[0] ?? ""; if (adapter !== "" && adapter !== "web") void channels.push(adapter, identity, text); } }; // the roster says who is an Admin; an owner is told on their own channels (INV-1730) // the row's "waiting on you" readers (INV-1625); the person's name for the record (INV-1653)
-  void boxUpdate.check();
+  if (!kubernetes) void boxUpdate.check();
   // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
   // image, in their chats and on the attention page; the update itself is Settings → Boxes → Apply update, or "upgrade" in reply —
   // both run the one shared sequence in box-update.ts (wait for work in flight, recreate keeping the volumes, verify, go back).
   let upgradeToldAbout: string | undefined;
   const upgradeTimer = setInterval(() => {
     void (async () => {
+      if (kubernetes) return;
       const state = await boxUpdate.check();
       if (state?.available !== true) { upgradeWaiting = undefined; return; } // updated since: "upgrade" has nothing to start
       if (upgradeToldAbout === state.expectedRef) return;
@@ -2442,7 +2444,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   teachWatch.unref();
 
   // The local box's half of the watch (INV-1550): reconnect, tell admins, stop turns that can only fail, start a box nobody meant to stop.
-  const ownDocker = options.useBox !== false && managesLocalDocker(), ownManager = () => new BoxManager(defaultBoxConfig());
+  const ownDocker = !kubernetes && options.useBox !== false && managesLocalDocker(), ownManager = () => new BoxManager(defaultBoxConfig());
   const keeper = new BoxKeeper({ client: () => orchestrator.boxClient(), connect: () => orchestrator.connectBox(), log, recreating: () => boxUpdate.view().running === true, observe: (state, detail) => { if (state === "down") orchestrator.exceptions.failed({ kind: "box", subject: registry.box.id, reason: detail }); else orchestrator.exceptions.succeeded({ kind: "box", subject: registry.box.id }); }, // INV-1741
     ...(ownDocker ? { container: { name: defaultBoxConfig().containerName, status: () => ownManager().status(), start: async () => { await ownManager().up({ onOutput: () => {} }); } } } : {}),
     heldDown: () => boxHeldDown(defaultBoxConfig().containerName), agentsOnBox: () => registry.list().filter(agent => registry.boxOf(agent.id).id === registry.box.id).map(agent => agent.id),
@@ -2454,10 +2456,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     void orchestrator.checkAttachedBoxes().then(transitions => {
       for (const change of transitions) {
         log(change.connected ? `box ${change.name} is back: ${change.detail}` : `box ${change.name} stopped answering: ${change.detail}`);
-        broadcast({ type: "error", boxId: registry.boxByName(change.name)?.id ?? "", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
+        const boxId = registry.boxByName(change.name)?.id ?? "";
+        broadcast({ type: "error", boxId, message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
+        if (kubernetes && boxId) broadcast({ type: "box_status", boxId });
       }
     }).catch(() => {});
-    void keeper.tick().then(state => {
+    if (!kubernetes) void keeper.tick().then(state => {
       const changed = state.connected !== box.connected; box = state;
       if (changed) broadcast({ type: "box_status", boxId: registry.box.id });
     }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
@@ -2483,6 +2487,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Mutable: the UI can bring the box up after this server started without one.
   for (const id of connectCodes.revokedBoxIds()) orchestrator.revokeBox(id); // revoked stays revoked across a restart: nothing redials it (INV-1697)
   let box = await orchestrator.connectBox();
+  const sharedStart = new SharedBoxStart({ kubernetes, current: () => box, broadcast, up: async onOutput => {
+    releaseBoxDown(defaultBoxConfig().containerName);
+    await ownManager().up({ onOutput });
+    box = await orchestrator.connectBox();
+    return box;
+  } });
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 
   // What the settings page says about Docker while no box is connected (INV-855). Without
@@ -3745,10 +3755,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           principals.reload();
           const identity = caller.userId;
           if (!identity || !principals.isKnown(identity)) { send(res, 403, apiError("personal-box-sign-in")); return; }
-          const view = (owner: string) => ({ boxes: personalBoxes.list(owner),
+          const view = async (owner: string) => ({ boxes: (await personalBoxes.listWithPodStatus(owner)).map(row => {
+              const box = kubernetes && row.status === "ready" ? orchestrator.boxStatus().find(box => box.id === row.id) : undefined;
+              return kubernetes && row.status === "ready" && !box?.connected ? { ...row, status: "unreachable", connectionError: box?.detail } : row;
+            }),
             quota: personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)) ?? null,
             held: personalBoxesOf(personalBoxes.quotaEntries(), owner).length });
-          if (route === "GET /api/personal-boxes") { send(res, 200, view(principals.resolve(identity).id)); return; }
+          if (route === "GET /api/personal-boxes") { send(res, 200, await view(principals.resolve(identity).id)); return; }
           if (!["POST /api/personal-boxes/create", "POST /api/personal-boxes/retry", "POST /api/personal-boxes/remove"].includes(route)) { send(res, 404, apiError("personal-box-action-unknown")); return; }
           const body = await readJson(req);
           principals.reload();
@@ -3767,7 +3780,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               const entry = registry.boxById(record.id);
               if (entry) await orchestrator.reconnectBox(entry);
             }
-            send(res, 200, { ...view(owner), boxId: record.id });
+            send(res, 200, { ...await view(owner), boxId: record.id });
           } catch (error) { send(res, 409, { error: error instanceof Error ? error.message : "Personal box operation failed." }); }
           return;
         }
@@ -5603,7 +5616,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // to go find a terminal is the product giving up. The docker output streams to
         // every connected page as events, because an image pull is minutes long and a
         // silent minutes-long button is indistinguishable from a broken one.
-        const boxUpdated = await boxUpdateRoute(route, boxUpdate, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); // Apply update / reset (INV-1538)
+        const boxUpdated = kubernetes ? undefined : await boxUpdateRoute(route, boxUpdate, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); // Apply update / reset (INV-1538)
         if (boxUpdated !== undefined) { if (boxUpdated.status !== 0) send(res, boxUpdated.status, boxUpdated.body); return; }
         const pushRoute = await pushBudgetRoute(route, pushBudget, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (pushRoute !== undefined) { if (pushRoute.status !== 0) send(res, pushRoute.status, pushRoute.body); return; } // INV-1576
         const teamReview = await teamMemoryReviewRoute(route, { registry, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (teamReview !== undefined) { if (teamReview.status !== 0) send(res, teamReview.status, teamReview.body); return; } // INV-1581
@@ -5619,36 +5632,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const fallbacks = await fallbackRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, names: () => loadConfig().fallbackProviders ?? [], save: names => { saveConfig({ fallbackProviders: names }); }, presets: () => providerNames().map(name => { const profile = resolveProvider(name); return { name, label: profile.label, model: profile.model, hasKey: hasCredential(profile) }; }), usage: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER) }); if (fallbacks !== undefined) { if (fallbacks.status !== 0) send(res, fallbacks.status, fallbacks.body); return; } // INV-1578
         if (route === "POST /api/box/up") {
           if (refused()) return;
-          if (boxUpInFlight) {
-            send(res, 409, apiError("box-starting"));
-            return;
-          }
-          if (box.connected) {
-            send(res, 200, { ok: true, detail: box.detail });
-            return;
-          }
-          boxUpInFlight = true; releaseBoxDown(defaultBoxConfig().containerName); // a person asked for it up (INV-1550)
-          send(res, 202, { starting: true });
-          void (async () => {
-            try {
-              const manager = new BoxManager(defaultBoxConfig());
-              await manager.up({
-                onOutput: line => broadcast({ type: "box_setup", line }),
-              });
-              box = await orchestrator.connectBox();
-              broadcast({
-                type: "box_setup",
-                line: box.connected ? `ready — ${box.detail}` : `failed — ${box.detail}`,
-                done: true,
-                ok: box.connected,
-              });
-            } catch (error) {
-              const detail = error instanceof Error ? error.message : String(error);
-              broadcast({ type: "box_setup", line: `failed — ${detail}`, done: true, ok: false });
-            } finally {
-              boxUpInFlight = false;
-            }
-          })();
+          const start = sharedStart.request();
+          send(res, start.status, start.body);
           return;
         }
 
@@ -5818,6 +5803,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             box: {
               ...box,
               ok: box.connected,
+              own: registry.box.id,
+              starting: sharedStart.starting,
+              backend: backend.backend,
+              ...(kubernetes ? { namespace: backend.namespace ?? DEFAULT_NAMESPACE } : {}),
               ...auditedClass(classifyBox(provisioner.boxName, loadConfig(), registry.box.name)),
               // Only while there is no box to describe, and only for a Docker box: an
               // attached box's health is a network question, not a Docker question.
@@ -6032,10 +6021,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 : { members: entry.members, membersLabel: membersLabel(entry, nameOfPrincipal) };
             const registration = connectCodes.registrationOf(box.id);
             return registration === undefined
-              ? { ...box, ...membership }
+              ? { ...box, ...membership, ...(kubernetes && personalBoxes.manages(box.id) ? { kind: "kubernetes" } : {}) }
               : { ...box, ...membership, ...nodeOfBox(connectCodes, box.id), state: connectCodes.stateOf(box.id, box.connected), ...(registration.version !== undefined ? { version: registration.version } : {}), lastSeenAt: registration.lastSeenAt };
           });
-          send(res, 200, { boxes, own: registry.box.id });
+          send(res, 200, { boxes, own: registry.box.id, backend: backend.backend, ...(kubernetes ? { namespace: backend.namespace ?? DEFAULT_NAMESPACE } : {}) });
           return;
         }
 

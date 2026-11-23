@@ -19,6 +19,7 @@ function numberField(labelText, value, min, max) {
 /** One settings pane, opened in the settings view. */
 function openSettingsPane(key) {
   next.view = "settings"; document.body.dataset.open = "1";
+  if (key === "boxes" && boxSet.config !== null) loadBoxSet();
   settings.pane = NATIVE_PANES[key] ? key : ""; render();
 }
 

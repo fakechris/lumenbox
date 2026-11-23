@@ -260,7 +260,7 @@ ${AGENT_ROW_STYLE}
   #shell { flex: 1; min-height: 0; display: flex; }
   /* The box bar: one tab per box, above everything, because switching a box switches the
      whole page (docs/39 §1). Hidden with one box — a bar of one tab says nothing. */
-  .settab-off { display: none !important; }
+  .settab-off, [data-docker-box][hidden] { display: none !important; }
   #boxbar { display: none; align-items: center; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
   #boxbar.many { display: flex; }
   #boxbar .tab { display: inline-flex; align-items: center; gap: 6px; }
@@ -2225,7 +2225,7 @@ function renderBoxes() {
   return fetch("/api/boxes")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      var boxes = data.boxes || [];
+      var boxes = (data.boxes || []).filter(function (b) { return data.backend !== "kubernetes" || (b.id !== data.own && b.kind !== "kubernetes"); });
       $("setboxes").innerHTML = boxes.map(function (b, i) {
         var where = b.kind === "docker" ? "{{ui.app.docker-on-this-machine}}" : esc(b.endpoint || "{{ui.app.attached}}");
         return '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">' +
@@ -2311,7 +2311,15 @@ $("setboxes").addEventListener("click", function (e) {
 
 function renderBoxSection() {
   renderBoxes();
-  if (boxState.ok) {
+  var cluster = boxState.backend === "kubernetes";
+  document.querySelectorAll("[data-docker-box], #setboximage, #setboximagenote").forEach(function (node) { node.hidden = cluster; });
+  $("setboxup").disabled = !!boxState.starting;
+  if (cluster) {
+    $("setboxstate").textContent = t("ui.next.boxset.backend") + ": Kubernetes · " + t("ui.next.boxset.namespace") + ": " + boxState.namespace + ". " + t("ui.next.box.sharedKubernetes");
+    fetch("/api/personal-boxes").then(function (r) { return r.json(); }).then(function (data) {
+      $("setclusterpods").textContent = (data.boxes || []).map(function (b) { return b.name + " · " + (b.podStatus || b.status) + (b.status === "unreachable" ? " · " + personalBoxError(b) : ""); }).join(" | ");
+    }).catch(function () {});
+  } else if (boxState.ok) {
     $("setboxstate").textContent = "{{ui.app.running-2}} " + boxState.detail;
   } else if (dockerState && dockerState.state === "no-binary") {
     // The machine has no docker command at all. Say what a box is, name the two things to install, and link them — the old error told the reader to run docker version, which
@@ -2324,7 +2332,7 @@ function renderBoxSection() {
   } else {
     $("setboxstate").textContent = "{{ui.app.not-running-agents-have-no}}";
   }
-  $("setboxactions").style.display = boxState.ok ? "none" : "";
+  $("setboxactions").style.display = boxState.ok || cluster ? "none" : "";
 }
 
 /**
@@ -2339,7 +2347,7 @@ function maybeOnboard() {
     .then(function (data) {
       var configured = !!(data.config && data.config.provider);
       var anyKey = (data.presets || []).some(function (p) { return p.keyPresent; });
-      if ((!configured && !anyKey) || !boxState.ok) {
+      if ((!configured && !anyKey) || (!boxState.ok && boxState.backend !== "kubernetes")) {
         openSettings();
         $("setwelcome").style.display = "";
         // First run has one sensible ending: save and restart, so what was typed is what runs. A second, weaker button beside it invites the save that does not take effect, and
@@ -2367,7 +2375,7 @@ $("setboxup").onclick = function () {
       if (d.error) $("setboxlog").textContent += d.error + "\n";
     })
     .catch(function (error) { $("setboxlog").textContent += error.message + "\n"; })
-    .then(function () { $("setboxup").disabled = false; });
+    .then(function () { refresh().then(renderBoxSection); });
 };
 
 /** The approvals that hold until revoked, with the one action that ends each. */
@@ -2887,6 +2895,7 @@ function selectBox(boxId) {
   if (boxId === currentBox) return;
   currentBox = boxId;
   renderBoxBar();
+  if (boxState.backend === "kubernetes") renderClusterBoxStatus();
   renderAgents();
   var selected = agentById(current);
   if (!selected || selected.boxId !== currentBox) {
@@ -4547,6 +4556,13 @@ function updateComposerTarget() {
       " {{ui.app.reaches-that-chat-not-the}}";
 }
 
+function renderClusterBoxStatus() {
+  var selected = boxesSeen.find(function (b) { return b.id === currentBox; });
+  $("boxinfo").textContent = !selected ? "" : selected.connected ? "{{ui.app.box-online}}" :
+    selected.id === boxState.own ? t("ui.next.box.sharedKubernetes") : personalBoxError({ status: "unreachable", connectionError: selected.detail });
+  $("boxdot").className = "dot " + (selected && selected.connected ? "ok" : "bad");
+}
+
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
     boxesSeen = state.boxes || [];
@@ -4561,11 +4577,15 @@ function refresh() {
     renderBoxBar();
     allTools = state.allTools || allTools;
     $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
-    boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
+    boxState = state.box;
+    var cluster = state.box.backend === "kubernetes";
     dockerState = state.box.docker || null;
-    $("boxinfo").textContent = (state.box.ok ? (state.box.detail === "answering" ? "{{ui.app.box-online}}" : state.box.detail) : "{{ui.app.box-unavailable}}") + // the probe's word, said plainly: nothing for the person to do
-      (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " {{ui.app.up}}" : "");
-    $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
+    if (cluster) renderClusterBoxStatus();
+    else {
+      $("boxinfo").textContent = (state.box.ok ? (state.box.detail === "answering" ? "{{ui.app.box-online}}" : state.box.detail) : "{{ui.app.box-unavailable}}") +
+        (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " {{ui.app.up}}" : "");
+      $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
+    }
     showBoxClass(state.box);
     if (!onboardChecked) {
       onboardChecked = true;
@@ -6081,7 +6101,9 @@ stream.onmessage = function (raw) {
     return;
   }
 
+  if (e.type === "box_status") { refresh(); return; }
   if (e.type === "box_setup") {
+    $("setboxup").disabled = !e.done;
     // Docker output while the box comes up, into the settings dialog's log — not the
     // activity feed, which an image pull would flood with a hundred lines.
     var boxLog = $("setboxlog");
@@ -7031,14 +7053,17 @@ function shelfCard(head, sub, action, dataAttr, preview) {
 
 var personalRequestId = null;
 var personalPoll = null;
+function personalBoxError(b) {
+  return b.error || (b.status === "unreachable" ? t("ui.next.box.podUnreachable", { why: b.connectionError || t("ui.next.box.healthPending") }) : "");
+}
 function renderPersonalBoxes(d) {
   $("personalstatus").textContent = d.held + " {{ui.app.allocated}} " + (d.quota === null ? "{{ui.app.unlimited}}" : d.quota) + " {{ui.app.quota}}";
   $("personalcreate").disabled = d.quota !== null && d.held >= d.quota;
   $("personalboxes").innerHTML = (d.boxes || []).map(function (b) {
     return '<div style="padding:6px 0"><span>' + esc(b.name) + ' — ' + esc(b.status) + '</span>' +
-      (b.error ? '<div class="fieldnote">' + esc(b.error) + '</div>' : '') +
-      (['failed', 'interrupted', 'detached', 'deleting'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">{{ui.app.retry-recover}}</button>' : '') +
-      (['ready', 'failed', 'detached'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">{{ui.app.remove-keep-data}}</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">{{ui.app.delete-box-and-data}}</button>' : '') + '</div>';
+      (personalBoxError(b) ? '<div class="fieldnote">' + esc(personalBoxError(b)) + '</div>' : '') +
+      (['failed', 'interrupted', 'detached', 'deleting', 'unreachable'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">{{ui.app.retry-recover}}</button>' : '') +
+      (['ready', 'failed', 'detached', 'unreachable'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">{{ui.app.remove-keep-data}}</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">{{ui.app.delete-box-and-data}}</button>' : '') + '</div>';
   }).join('');
   clearTimeout(personalPoll);
   if ((d.boxes || []).some(function (b) { return b.status === 'provisioning' || b.status === 'deleting'; })) personalPoll = setTimeout(loadPersonalBoxes, 2000);

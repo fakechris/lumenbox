@@ -11,6 +11,68 @@ import { AgentRegistry } from "../agents/registry.ts";
 // These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
 process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
 
+test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docker provisioner", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "kube-personal-http-"));
+  t.mock.method(console, "error", () => {});
+  const env = { AGENTBOX_HOME: home, AGENTBOX_BOX_BACKEND: "kubernetes", AGENTBOX_K8S_NAMESPACE: "org-test" };
+  const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  let stop: (() => void) | undefined;
+  t.after(() => {
+    stop?.();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(home, { recursive: true, force: true });
+  });
+  new Principals().save([
+    { id: "alice", name: "Alice", role: "driver", identities: ["web:alice"] },
+    { id: "bob", name: "Bob", role: "driver", identities: ["web:bob"] },
+  ]);
+  const logs: string[] = [];
+  let base = "", sharedDials = 0;
+  const dial = async () => { sharedDials++; throw new Error("unexpected Docker lookup"); };
+  stop = await startWebServer({
+    port: 0, host: "127.0.0.1", token: "personal-test",
+    onReady: url => { base = url; }, onLog: line => logs.push(line),
+    boxProvisioner: { kind: "docker", boxName: "agentbox-box", label: "Docker", connect: dial, endpoint: dial },
+    personalBoxDriver: {
+      start: async () => "http://127.0.0.1:1", remove: async () => {}, podStatus: async () => "Running",
+    },
+  });
+  async function request(path: string, identity: string, body?: unknown) {
+    const response = await fetch(base + path, {
+      method: body === undefined ? "GET" : "POST",
+      headers: { authorization: "Bearer personal-test", "x-agentbox-user": identity, "x-agentbox-role": "member", "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: response.status, data: await response.json() };
+  }
+  for (const member of ["web:alice", "web:bob"]) {
+    const start = await request("/api/box/up", member, {});
+    assert.equal(start.status, 409);
+    assert.equal(start.data.code, "shared-box-kubernetes");
+    const state = await request("/api/state", member);
+    assert.equal(state.data.box.starting, false);
+    assert.equal(state.data.box.backend, "kubernetes");
+    assert.equal(state.data.box.docker, undefined);
+  }
+  const personal = await request("/api/personal-boxes/create", "web:alice", { requestId: "first" });
+  assert.equal(personal.status, 200);
+  assert.equal(personal.data.boxes[0].podStatus, "Running");
+  assert.equal(personal.data.boxes[0].status, "unreachable", "pod phase and server reachability are different");
+  const computers = await request("/api/boxes", "web:alice");
+  assert.equal(computers.data.namespace, "org-test");
+  const box = computers.data.boxes.find((box: { id: string }) => box.id === personal.data.boxId);
+  assert.equal(box.kind, "kubernetes");
+  assert.equal(box.connected, false);
+  assert.ok(box.detail);
+  assert.equal(personal.data.boxes[0].connectionError, box.detail);
+  assert.equal(sharedDials, 0);
+  assert.ok(!logs.some(line => /Docker lookup|docker inspect|box update:/.test(line)));
+});
+
 test("member provisioning uses canonical owner, rejects injected host options, enforces quota and hides other members' boxes", async () => {
   const home = mkdtempSync(join(tmpdir(), "personal-http-"));
   const previous = process.env.AGENTBOX_HOME;

@@ -252,6 +252,7 @@ function refresh() {
   var setup = getJson("/api/setup").catch(function () { return settings.setup; });
   return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines, setup]).then(function (got) {
     boxes.list = got[3].boxes || []; boxes.own = got[3].own || ""; boxes.state = got[0].box || null;
+    boxes.starting = !!(boxes.state && boxes.state.starting);
     settings.setup = got[4];
     var first = Object.keys(next.agents).length === 0;
     next.agents = {}; member.allTools = got[0].allTools || [];
