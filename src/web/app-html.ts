@@ -2222,7 +2222,7 @@ document.addEventListener("click", function (event) {
 
 /** The box list in Settings, with attach and detach. */
 function renderBoxes() {
-  return fetch("/api/boxes")
+  return fetch("/api/boxes?lang={{@locale}}")
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var boxes = data.boxes || [];
@@ -2237,7 +2237,8 @@ function renderBoxes() {
           "</div>" +
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
-          '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>" + renderDesktopResources(b);
+          (b.members === "everyone" ? '<details class="dim"><summary>' + esc(t("ui.access.shared")) + "</summary>" + esc(b.membersLabel || "") + "</details>" :
+            '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>") + renderDesktopResources(b);
       }).join("") ||
         '<div class="dim" style="font-size:12.5px">' + esc(t("ui.boxes.none")) + "</div>";
     })

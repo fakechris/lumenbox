@@ -185,9 +185,9 @@ header.bar { position: relative; }
 .picker { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.1); max-height: 280px; overflow: auto; }
 .picker button { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 7px 10px; border-radius: 6px; font-size: 13px; }
 .picker button.on, .picker button:hover { background: var(--bg); }
-.picker > .why { padding: 8px 10px; }
+.picker > .why { padding: 8px 10px; } .box-members { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .desk { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
-.desk .acts { flex-wrap: wrap; } .desk p { margin: 0; }
+.desk .acts { flex-wrap: wrap; } .desk p { margin: 0; white-space: normal; overflow-wrap: anywhere; }
 .desk input { flex: 1; min-width: 120px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; font-size: 13px; }
 .menu button { text-align: left; padding: 8px 10px; border-radius: 6px; font-size: 13px; }
 .menu button:hover { background: var(--bg); }
@@ -381,6 +381,7 @@ export const NEXT_HTML = `<!doctype html>
 <nav class="side" aria-label="{{ui.next.nav.label}}">
   <div class="brand"><span class="logo" aria-hidden="true">L</span>{{ui.next.title}}</div>
   <div class="boxes" id="boxes" aria-label="{{ui.next.side.boxes}}"></div>
+  <div id="box-members" hidden></div>
   <div class="box-notice" id="box-notice" hidden></div>
   <button class="needs" id="needs" data-nav="inbox" hidden></button>
   <h2 class="group">{{ui.next.side.label}}<button id="agent-new" aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>

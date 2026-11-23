@@ -37,6 +37,13 @@ try {
     const inside = (inner, outer, what) => assert.ok(inner.x >= outer.x - 1 && inner.x + inner.width <= outer.x + outer.width + 1, `${where}: ${what} leaves its column`);
     await page.goto(`${meta.base}/?ui=next&lang=${lang}`);
     await page.waitForSelector(".agent"); await fits("the landing");
+    const membership = page.locator("#box-members details");
+    await membership.locator("summary").click();
+    const description = membership.locator("div");
+    await description.waitFor();
+    assert.match(await description.textContent(), lang === "en" ? /^Shared box: .* or the web UI\.$/ : /^共享 box：.*访问它。$/);
+    assert.equal(await description.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, `${where}: the shared box description is clipped`);
+    await membership.locator("summary").click();
     await page.locator(".agent").first().click();
     await page.waitForSelector("[data-result]"); await fits("the conversation");
     // The conversation: the result card and the box you type in sit in the same column, on screen.
@@ -60,11 +67,45 @@ try {
     await page.waitForSelector("#panel-inner h3"); await page.waitForTimeout(350);
     inside(await box("#panel"), { x: 0, width }, "the work panel"); await fits("the work panel");
     await page.locator("#panel-close").click();
+    if (width === 480) {
+      await page.route("**/desktop/**", route => route.fulfill({ contentType: "text/html", body: "<p>Desktop fixture</p>" }));
+      await page.route("**/api/desktop/control", route => route.fulfill({ json: { ok: true } }));
+      for (const deskWidth of [390, 400]) {
+        await page.setViewportSize({ width: deskWidth, height: 679 });
+        if (deskWidth === 390) await page.locator("#screen-toggle").click();
+        await page.locator(".desk .acts button").first().click();
+        const note = page.locator(".desk p");
+        await note.waitFor();
+        assert.equal(await note.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, `${lang} ${deskWidth}: the driving instructions are clipped`);
+        inside(await box(".desk .act-primary"), { x: 0, width: deskWidth }, "the hand-back button");
+        await page.locator(".desk .act-primary").click();
+        await note.waitFor({ state: "detached" });
+      }
+      await page.locator("#screen-close").click();
+      await page.setViewportSize({ width, height: 900 });
+    }
     if (width < 1000) await page.locator("#back").click();
     for (const nav of ["work", "boxes", "settings"]) {
       await page.locator(`[data-nav="${nav}"]`).click(); await page.waitForTimeout(350); await fits(`the ${nav} view`);
       if (width < 1000) await page.locator("#back").click();
     }
+    await page.route("**/api/boxes?*", async route => {
+      const response = await route.fetch(), result = await response.json();
+      const shared = result.boxes.find(machine => machine.members === "everyone");
+      result.boxes.push({ ...shared, id: "layout-shared", name: "Second shared box", agents: 0 });
+      await route.fulfill({ response, json: result });
+    });
+    const checkMembershipRedraw = async what => {
+      const folds = page.locator("#view details.box-members");
+      await folds.nth(1).locator("summary").click();
+      await page.evaluate(() => render());
+      assert.deepEqual(await folds.evaluateAll(nodes => nodes.map(node => node.open)), [false, true], `${where}: ${what} should keep only the second box open after a redraw`);
+    };
+    await page.locator('[data-nav="boxes"]').click();
+    await page.evaluate(() => refresh());
+    await checkMembershipRedraw("Boxes");
+    await page.locator("#view section.setting button").click();
+    await checkMembershipRedraw("Settings → Boxes");
     // The way to the other language and the other page: on screen, side by side.
     if (width < 1000) { await page.goto(`${meta.base}/?ui=next&lang=${lang}`); await page.waitForSelector(".agent"); }
     const foot = [await box("#theme"), await box("#lang"), await box("#classic")];
