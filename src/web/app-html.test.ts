@@ -66,6 +66,45 @@ test("Mine offers first-admin setup only to an uninitialized operator, and expla
   assert.equal(render('myIdentity = null; mcpSetup = undefined; renderMcpSetup();'), "", "missing setup data does not invent a bootstrap path");
 });
 
+test("the classic Guide offers personal-box creation to a driver without a visible box", async () => {
+  const card = { style: { display: "none" }, innerHTML: "", onclick: (_event: object) => {} };
+  let opened = false, focused = false;
+  const source = APP_HTML.slice(APP_HTML.indexOf("var guideForced"), APP_HTML.indexOf('setInterval(refreshSetup,'));
+  const refresh = runInNewContext(source + "; refreshSetup", {
+    $: (id: string) => id === "personalcreate" ? { focus: () => { focused = true; } } : card,
+    myRole: "driver", currentBox: null, myIdentity: "driver:alice", t: String, esc: String,
+    fetch: async () => ({ json: async () => ({ installationId: "test", hasPersonalBox: false }) }),
+    openShelf: () => { opened = true; },
+  });
+  await refresh();
+  assert.equal(card.style.display, "");
+  assert.match(card.innerHTML, /ui.next.setup.personalBox/);
+  assert.doesNotMatch(card.innerHTML, /ui.next.setup.agent/);
+  card.onclick({ target: { closest: (selector: string) => selector === "button[data-setup]" ? { getAttribute: () => "0" } : null }, preventDefault() {} });
+  assert.ok(opened && focused);
+});
+
+test("classic Settings loads the driver's own token list without reading installation config", async () => {
+  const settings = APP_HTML.slice(APP_HTML.indexOf("function openSettings("), APP_HTML.indexOf("/** Scopes:"));
+  const mcp = APP_HTML.slice(APP_HTML.indexOf("function renderMcp()"), APP_HTML.indexOf("function renderChannels()"));
+  const wrap = { style: { display: "none" } };
+  const servers = { style: { display: "" } };
+  const tokens = [{ label: "my editor", mine: true, createdAt: "2026-01-01" }], paths: string[] = [];
+  let listed: unknown;
+  const open = runInNewContext(settings + mcp + "; openSettings", {
+    myRole: "driver", $: () => wrap, document: { getElementById: () => servers },
+    showSettingsTab() {}, applyRole() {}, renderStandingGrants() {}, renderMemorySummary() {}, renderMcpSetup() {},
+    fetch: async (path: string) => { paths.push(path); return { json: async () => ({ tokens }) }; },
+    renderMcpTokens: (value: unknown) => { listed = value; },
+  });
+  open("mine");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(wrap.style.display, "flex");
+  assert.equal(servers.style.display, "none");
+  assert.deepEqual(paths, ["/api/mcp"]);
+  assert.equal(listed, tokens);
+});
+
 test("classic Automations shows where a message routine replies (INV-1969)", () => {
   const source = APP_HTML.slice(APP_HTML.indexOf("function automationRow("), APP_HTML.indexOf("// The URLs and secrets, by slug."));
   const row = runInNewContext(`${source}; automationRow`, { esc: String }) as (entry: object, hooks: object) => string;

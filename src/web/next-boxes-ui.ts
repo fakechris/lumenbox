@@ -17,6 +17,7 @@ function boxById(id) { return boxes.list.filter(function (box) { return box.id =
  * or the line it failed on — is what replaces "starting".
  */
 function startBox() {
+  if (!canOperateInstallation()) return;
   if (boxes.starting) return;
   if (boxes.state && boxes.state.backend === "kubernetes") {
     boxes.failed = t("ui.next.box.sharedKubernetes"); render(); return;
@@ -62,22 +63,26 @@ function boxNotice() {
   members.hidden = !members.firstChild;
   strip.hidden = !box || box.connected !== false;
   if (strip.hidden) return;
+  var admin = canOperateInstallation();
   if (box.kind === "kubernetes" && box.id !== boxes.own) {
-    var settingsLink = el("button", "act", t("ui.next.box.podSettings"));
-    settingsLink.addEventListener("click", function () { openSettingsPane("boxes"); });
-    strip.replaceChildren(el("span", "", podUnreachable(box.detail)), settingsLink);
+    strip.replaceChildren(el("span", "", podUnreachable(box.detail)));
+    if (admin) {
+      var settingsLink = el("button", "act", t("ui.next.box.podSettings"));
+      settingsLink.addEventListener("click", function () { openSettingsPane("boxes"); });
+      strip.appendChild(settingsLink);
+    }
     return;
   }
-  var why = boxWhy(box);
+  var why = admin ? boxWhy(box) : "offline";
   var sharedKubernetes = box.id === boxes.own && boxes.state && boxes.state.backend === "kubernetes";
-  strip.replaceChildren(el("span", "", sharedKubernetes ? (box.kind === "kubernetes" ? t("ui.next.box.sharedKubernetes") : boxes.state.detail) :
+  strip.replaceChildren(el("span", "", sharedKubernetes ? (box.kind === "kubernetes" ? t("ui.next.box.sharedKubernetes") : admin ? boxes.state.detail : t("ui.next.box.offline", { name: box.name })) :
     why === "missing" ? t("ui.box.dockerMissing") : why === "stopped" ? t("ui.box.dockerStopped") : t("ui.next.box.offline", { name: box.name })));
   if (why === "missing") {
     [["Docker Desktop", "https://www.docker.com/products/docker-desktop/"], ["OrbStack", "https://orbstack.dev/"]].forEach(function (pair) {
       var link = el("a", "", pair[0]); link.href = pair[1]; link.target = "_blank"; link.rel = "noopener noreferrer"; strip.appendChild(link);
     });
   }
-  if (box.id !== boxes.own || sharedKubernetes) return;
+  if (!admin || box.id !== boxes.own || sharedKubernetes) return;
   var start = el("button", "act", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
   start.id = "box-start"; start.disabled = boxes.starting;
   start.addEventListener("click", startBox);
@@ -99,7 +104,7 @@ function boxMembers(box) {
 }
 
 function renderBoxes(view) {
-  var list = el("div", "list");
+  var list = el("div", "list"), admin = canOperateInstallation();
   boxes.list.forEach(function (box) {
     var row = el("div", "row"), body = el("div", "body");
     body.appendChild(el("div", "title", box.name));
@@ -108,14 +113,16 @@ function renderBoxes(view) {
     row.appendChild(el("span", "who", initial(box.name)));
     row.appendChild(body);
     row.appendChild(el("span", box.connected ? "chip-run" : "chip", t(box.connected ? "ui.next.box.on" : "ui.next.box.off")));
-    if (!box.connected && box.id === boxes.own) {
+    if (!admin && !box.connected && box.id === boxes.own && box.kind === "kubernetes") {
+      body.appendChild(el("div", "why", t("ui.next.box.sharedKubernetes")));
+    } else if (admin && !box.connected && box.id === boxes.own) {
       var start = el("button", "act", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
       start.disabled = boxes.starting; start.addEventListener("click", startBox);
       row.appendChild(start);
       if (boxes.failed) body.appendChild(el("div", "why", boxes.failed));
     }
     if (!box.connected && box.kind === "kubernetes" && box.id !== boxes.own) body.appendChild(el("div", "why", podUnreachable(box.detail)));
-    if (box.id !== boxes.own && box.kind !== "kubernetes" && !(box.agents > 0)) {
+    if (admin && box.id !== boxes.own && box.kind !== "kubernetes" && !(box.agents > 0)) {
       var remove = el("button", "act", t("ui.next.box.remove"));
       remove.addEventListener("click", function () {
         var confirm = el("button", "act-danger", t("ui.next.box.removeConfirm"));
@@ -127,6 +134,7 @@ function renderBoxes(view) {
     list.appendChild(row);
   });
   view.appendChild(list);
+  if (!admin) return;
   var more = el("section", "setting"), link = el("button", "act", t("ui.next.box.addOpen"));
   link.addEventListener("click", function () { openSettingsPane("boxes"); });
   more.appendChild(el("h2", "group", t("ui.next.box.add")));

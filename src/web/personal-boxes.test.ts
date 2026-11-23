@@ -32,6 +32,7 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   new Principals().save([
     { id: "alice", name: "Alice", role: "driver", identities: ["web:alice"] },
     { id: "bob", name: "Bob", role: "driver", identities: ["web:bob"] },
+    { id: "operator", name: "Operator", role: "admin", identities: ["web:operator"] },
   ]);
   const logs: string[] = [];
   let base = "", sharedDials = 0;
@@ -44,23 +45,26 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
       start: async () => "http://127.0.0.1:1", remove: async () => {}, podStatus: async () => "Running",
     },
   });
-  async function request(path: string, identity: string, body?: unknown) {
+  async function request(path: string, identity: string, body?: unknown, role = "member") {
     const response = await fetch(base + path, {
       method: body === undefined ? "GET" : "POST",
-      headers: { authorization: "Bearer personal-test", "x-agentbox-user": identity, "x-agentbox-role": "member", "content-type": "application/json" },
+      headers: { authorization: "Bearer personal-test", "x-agentbox-user": identity, "x-agentbox-role": role, "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     return { status: response.status, data: await response.json() };
   }
   for (const member of ["web:alice", "web:bob"]) {
     const start = await request("/api/box/up", member, {});
-    assert.equal(start.status, 409);
-    assert.equal(start.data.code, "shared-box-kubernetes");
+    assert.equal(start.status, 403);
+    assert.equal(start.data.code, "role-needed");
     const state = await request("/api/state", member);
     assert.equal(state.data.box.starting, false);
     assert.equal(state.data.box.backend, "kubernetes");
     assert.equal(state.data.box.docker, undefined);
   }
+  const adminStart = await request("/api/box/up", "web:operator", {}, "owner");
+  assert.equal(adminStart.status, 409);
+  assert.equal(adminStart.data.code, "shared-box-kubernetes");
   const personal = await request("/api/personal-boxes/create", "web:alice", { requestId: "first" });
   assert.equal(personal.status, 200);
   assert.equal(personal.data.boxes[0].podStatus, "Running");
@@ -86,6 +90,12 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   });
   assert.match(bar.innerHTML, /title="kubernetes"[^>]*>.*<span class="kind">kubernetes<\/span>/);
   assert.doesNotMatch(bar.innerHTML, /docker|the box on this machine/i);
+  const footer = { textContent: "" };
+  const footerSource = page.slice(page.indexOf("function renderClusterBoxStatus()"), page.indexOf("function refresh()"));
+  runInNewContext(`${footerSource}; renderClusterBoxStatus();`, {
+    $: () => footer, boxesSeen: state.data.boxes, boxState: state.data.box, currentBox: state.data.box.own, t: String,
+  });
+  assert.equal(footer.textContent, "ui.next.box.sharedKubernetes");
 
   const settings = { innerHTML: "" };
   const listStart = page.indexOf("function renderBoxes()");
@@ -101,17 +111,25 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.match(settings.innerHTML, /data-detach-box="Remote VM">/, "the first visible attached box can be detached");
 
   const subtitles: string[] = [];
-  const node = { appendChild() {}, addEventListener() {} };
-  runInNewContext(NEXT_BOXES_JS + "\nObject.assign(boxes, input); renderBoxes(view);", {
+  const buttons: string[] = [];
+  const notice: string[] = [];
+  const node = { appendChild() {}, addEventListener() {}, dataset: {}, replaceChildren() {} };
+  const strip = { ...node, replaceChildren: (...children: { value: string }[]) => notice.push(...children.map(child => child.value)) };
+  runInNewContext(NEXT_BOXES_JS + "\nObject.assign(boxes, input); renderBoxes(view); boxNotice();", {
     input: { list: computers.data.boxes, own: computers.data.own, state: state.data.box },
-    view: node, initial: String, t: String,
-    el: (_tag: string, style: string, value: string) => {
+    view: node, initial: String, t: String, canOperateInstallation: () => false, chat: { box: computers.data.own },
+    $: (id: string) => id === "box-notice" ? strip : node,
+    el: (tag: string, style: string, value: string) => {
       if (style === "why") subtitles.push(value);
-      return { ...node, dataset: {} };
+      if (tag === "button") buttons.push(value);
+      return { ...node, dataset: {}, value };
     },
   });
   assert.match(subtitles[computers.data.boxes.findIndex((row: { id: string }) => row.id === computers.data.own)] ?? "", /^kubernetes · /);
   assert.ok(subtitles.every(value => !/docker/i.test(value)));
+  assert.ok(subtitles.includes("ui.next.box.sharedKubernetes"));
+  assert.deepEqual(notice, ["ui.next.box.sharedKubernetes"]);
+  assert.ok(!buttons.includes("ui.next.box.start"));
 
   const shelf = await request("/api/templates/shelf", "web:alice");
   const shelfPage = page.slice(page.indexOf("function openShelf("), page.indexOf('$("shelfopen").onclick'));

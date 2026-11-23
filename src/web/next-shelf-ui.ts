@@ -53,12 +53,12 @@ function landSharedTemplate() {
 
 function sharedBlock() {
   var shared = shelf.shared, box = el("div", "needbox"), go = el("button", "act-primary", t("ui.next.shelf.import")), no = el("button", "act", t("ui.next.auto.cancel")), acts = el("div", "acts");
-  var where = chat.box || ((shelf.data && shelf.data.boxes || [])[0] || {}).id || "";
   box.appendChild(el("div", "card-head", t("ui.next.shelf.shared", { name: shared.name, by: shared.by || t("ui.next.shelf.someone") })));
   if (shared.about) box.appendChild(el("div", "", shared.about));
+  go.disabled = !member.boxId;
   go.addEventListener("click", function () {
     go.disabled = true;
-    var body = Object.assign({ template: shared.document, shareId: shared.shareId }, shared.name ? { name: shared.name } : {}, where ? { boxId: where } : {});
+    var body = Object.assign({ template: shared.document, shareId: shared.shareId, boxId: member.boxId }, shared.name ? { name: shared.name } : {});
     postJson("/api/templates/import", body).then(function (got) { shelf.shared = null; shelfMade([{ id: got.id, name: got.name }]); }, function (error) { go.disabled = false; failed(error); });
   });
   no.addEventListener("click", function () { shelf.shared = null; renderMember(); });
@@ -80,7 +80,7 @@ function shelfBlock() {
       .then(function () { if (member.creating && !$("member").hidden) renderMember(); });
     return outer;
   }
-  var where = chat.box || ((shelf.data.boxes || [])[0] || {}).id || "", find = el("input"), rows = shelfRows(shelf.data);
+  var find = el("input"), rows = shelfRows(shelf.data);
   find.placeholder = t("ui.next.shelf.find"); find.value = shelf.find;
   var draw = function () {
     var last = "";
@@ -89,9 +89,10 @@ function shelfBlock() {
       if (row.group !== last) { list.appendChild(el("h2", "group", t("ui.next.shelf.group." + row.group))); last = row.group; }
       var line = el("div", "fact"), text = el("span", ""), use = el("button", "act", t("ui.next.shelf.use"));
       text.appendChild(el("b", "", row.name)); text.appendChild(el("span", "why", " " + clip(row.note, 90)));
+      use.disabled = !member.boxId;
       use.addEventListener("click", function () {
         use.disabled = true;
-        postJson("/api/templates/stamp", Object.assign({ boxId: where }, row.send)).then(function (got) { shelfMade(got.created); }, function (error) {
+        postJson("/api/templates/stamp", Object.assign({ boxId: member.boxId }, row.send)).then(function (got) { shelfMade(got.created); }, function (error) {
           use.disabled = false; failed(error);
         });
       });
@@ -106,6 +107,7 @@ function shelfBlock() {
   // A template somebody sent: a file, or its text pasted.
   var sent = el("details", "fold"), text2 = el("textarea"), file = el("input"), bring = el("button", "act", t("ui.next.shelf.import"));
   sent.appendChild(el("summary", "", t("ui.next.shelf.sent")));
+  bring.disabled = !member.boxId;
   text2.rows = 5; text2.placeholder = t("ui.next.shelf.paste"); file.type = "file"; file.accept = ".json,application/json";
   file.addEventListener("change", function () {
     var reader = new FileReader();
@@ -115,7 +117,7 @@ function shelfBlock() {
   bring.addEventListener("click", function () {
     if (!text2.value.trim()) { text2.focus(); return; }
     bring.disabled = true;
-    postJson("/api/templates/import", Object.assign({ template: text2.value }, where ? { boxId: where } : {})).then(function (got) {
+    postJson("/api/templates/import", { template: text2.value, boxId: member.boxId }).then(function (got) {
       shelfMade([{ id: got.id, name: got.name }]);
     }, function (error) { bring.disabled = false; failed(error); });
   });

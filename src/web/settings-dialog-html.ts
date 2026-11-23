@@ -67,7 +67,7 @@ ${renderSettingsTabs()}
       <div class="fieldnote">{{ui.settings.the-prompt-parts-every-agent}}</div>
       <div id="setparts"></div>
     </div>
-    <div class="field" data-tier="installation" data-settab="memory">
+    <div class="field" data-tier="personal" data-settab="memory">
       <label>{{ui.settings.memory}}</label>
       <div class="fieldnote" style="margin:0">{{ui.settings.what-each-agent-has-kept}}</div>
       <div id="setmemstate" class="fieldnote" style="margin:4px 0 0"></div>
@@ -80,7 +80,7 @@ ${renderSettingsTabs()}
     <div class="field" data-tier="installation" id="setboxwrap" data-settab="boxes">
       <label>{{ui.settings.box}}</label>
       <div class="fieldnote" id="setboxstate" style="margin:0"></div>
-      <div id="setboxactions" style="display:none">
+      <div id="setboxactions" data-operator style="display:none">
         <button class="btn sm" id="setboxup">{{ui.settings.start-the-box}}</button>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
@@ -256,9 +256,9 @@ ${renderSettingsTabs()}
     </div>
     <div class="fieldnote" id="setstatus"></div>
     <div class="actions">
-      <button class="btn" id="settest">{{ui.settings.test-connection}}</button>
-      <button class="btn accent" id="setsaverestart">{{ui.settings.save-restart}}</button>
-      <button class="btn" id="setsave">{{ui.settings.save}}</button>
+      <button class="btn" id="settest" data-operator>{{ui.settings.test-connection}}</button>
+      <button class="btn accent" id="setsaverestart" data-operator>{{ui.settings.save-restart}}</button>
+      <button class="btn" id="setsave" data-operator>{{ui.settings.save}}</button>
       <button class="btn ghost" id="setcancel">{{ui.settings.cancel}}</button>
     </div>
   </div>
