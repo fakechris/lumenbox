@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
 import { agentboxHome } from "../config.ts";
-import { accountFor, createClient, resolveProvider, type ProviderProfile } from "./provider.ts";
+import { accountFor, createClient, resolveProviderPreset, type ProviderProfile } from "./provider.ts";
 import { providerRests, type ProviderRests } from "./provider-rest.ts";
 import type { Rates } from "./spend.ts";
 
@@ -32,7 +32,7 @@ export interface Runtime {
 /** The names to fall back to: the agent's own list, else the installation's; at most three, never the primary. */
 export function fallbackNames(agentList: readonly string[] | undefined, installationList: readonly string[] | undefined, primary: ProviderProfile): string[] {
   const names = (agentList !== undefined && agentList.length > 0 ? agentList : installationList ?? []).map(name => name.trim()).filter(Boolean);
-  return [...new Set(names)].filter(name => resolveProvider(name).label !== primary.label || resolveProvider(name).model !== primary.model).slice(0, MAX_FALLBACKS);
+  return [...new Set(names)].filter(name => resolveProviderPreset(name.toLowerCase())?.label !== primary.label).slice(0, MAX_FALLBACKS);
 }
 
 /** Clients for fallback providers, built once each. A preset with no key is left out and said once. */
@@ -45,7 +45,8 @@ export class FallbackRuntimes {
     for (const name of names) {
       if (!this.cache.has(name)) {
         try {
-          const provider = resolveProvider(name);
+          const provider = resolveProviderPreset(name.toLowerCase());
+          if (!provider) throw new Error(`Unknown provider "${name}".`);
           this.cache.set(name, { client: this.build(provider), provider });
         } catch (error) {
           this.log(`[fallback] ${name} is not usable as a fallback: ${error instanceof Error ? error.message : String(error)}`);

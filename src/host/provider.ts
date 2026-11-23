@@ -207,6 +207,7 @@ const MINIMAX_GLOBAL: ProviderProfile = {
   ...MINIMAX,
   label: "MiniMax (global)",
   baseUrl: "https://api.minimax.io/anthropic",
+  keyEnv: "MINIMAX_CODE_GLOBAL_API_KEY",
 };
 
 const GLM_GLOBAL: ProviderProfile = {
@@ -323,7 +324,7 @@ function compatible(): ProviderProfile {
   return {
     label: process.env.AGENTBOX_PROVIDER_LABEL ?? "custom",
     baseUrl: process.env.AGENTBOX_BASE_URL,
-    model: process.env.AGENTBOX_MODEL ?? "unknown",
+    model: "unknown",
     maxTokens: envNumber("AGENTBOX_MAX_TOKENS", 32_000),
     // Zero as the fallback means "not stated", which is what an absent variable means here — and
     // now also what an unreadable one means, instead of NaN.
@@ -377,6 +378,10 @@ export function providerNames(): string[] {
   ];
 }
 
+export function resolveProviderPreset(name: string): ProviderProfile | undefined {
+  return Object.hasOwn(PRESETS, name) ? PRESETS[name]!() : undefined;
+}
+
 /**
  * Resolves the provider from a name, the environment, or a configured default.
  *
@@ -391,17 +396,17 @@ export function resolveProvider(name?: string, configuredDefault?: string): Prov
   const requested = (name ?? process.env.AGENTBOX_PROVIDER ?? configuredDefault ?? "").toLowerCase();
 
   // A bare base URL with no provider named is unambiguous enough to act on.
-  const chosen =
-    requested || (process.env.AGENTBOX_BASE_URL ? "custom" : "anthropic");
+  const chosen = requested || (process.env.AGENTBOX_BASE_URL
+    ? "custom"
+    : providerNames().find(name => name !== "custom" && hasCredential(PRESETS[name]!())) ?? "anthropic");
 
-  const build = PRESETS[chosen];
-  if (!build) {
+  const profile = resolveProviderPreset(chosen);
+  if (!profile) {
     throw new Error(
       `Unknown provider "${chosen}". Known: ${providerNames().join(", ")}.`
     );
   }
 
-  const profile = build();
   if (process.env.AGENTBOX_MODEL) profile.model = process.env.AGENTBOX_MODEL;
   if (process.env.AGENTBOX_BASE_URL) profile.baseUrl = process.env.AGENTBOX_BASE_URL;
   /**
@@ -452,32 +457,15 @@ export function effectiveProviderFor(
   }
   const profile =
     override.provider !== undefined && override.provider !== ""
-      ? resolveProvider(override.provider)
+      ? { ...providerForChoice(override.provider, fallback) }
       : { ...fallback };
   if (override.model !== undefined && override.model !== "") profile.model = override.model;
   return profile;
 }
 
-/**
- * Whether this installation has a way to answer its first message.
- *
- * The welcome note promises "a model provider with a key" as one of the two things to set
- * up, and the setup card grades that promise — so "no provider saved and no credential
- * anywhere in the environment" is the one state it has to call out (INV-857). A saved
- * provider alone counts: the key may arrive on the next save or restart, and nagging
- * about it again buys nothing. Pure in the environment, so a test can say so.
- */
-export function providerConfigured(
-  savedProvider: string | undefined,
-  presets: readonly { keyEnv: string }[],
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  if (savedProvider !== undefined && savedProvider.trim() !== "") return true;
-  return presets.some(
-    preset =>
-      env[preset.keyEnv] !== undefined ||
-      (preset.keyEnv === "ANTHROPIC_API_KEY" && env.ANTHROPIC_AUTH_TOKEN !== undefined)
-  );
+export function providerForChoice(name: string, active: ProviderProfile): ProviderProfile {
+  const preset = resolveProviderPreset(name.toLowerCase()) ?? resolveProvider(name);
+  return preset.label === active.label ? active : preset;
 }
 
 export class MissingCredentialError extends Error {
@@ -507,10 +495,7 @@ export function keylessStart(
   profile: ProviderProfile,
   warn: (line: string) => void
 ): ProviderProfile {
-  const credentialPresent =
-    process.env[profile.keyEnv] !== undefined ||
-    (profile.keyEnv === "ANTHROPIC_API_KEY" && process.env.ANTHROPIC_AUTH_TOKEN !== undefined);
-  if (credentialPresent) return profile;
+  if (hasCredential(profile)) return profile;
   warn(
     `no ${profile.keyEnv} for ${profile.label} — starting without a model; paste a key in Settings → Model`
   );
@@ -625,7 +610,7 @@ export function createClient(profile: ProviderProfile): Anthropic {
 
 /** Whether a preset has a key to call it with (INV-1578): a fallback without one is no fallback. */
 export function hasCredential(profile: ProviderProfile): boolean {
-  return Boolean(process.env[profile.keyEnv]) || (profile.keyEnv === "ANTHROPIC_API_KEY" && Boolean(process.env.ANTHROPIC_AUTH_TOKEN));
+  return credentialSet(profile.keyEnv);
 }
 
 /** The account a profile's client speaks for (INV-1577), for asking whether it rests. */
