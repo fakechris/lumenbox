@@ -3100,7 +3100,7 @@ ${outcome.text}`;
         relayProseToPeer(answer);
         return;
       }
-      if (questionDelivered && goal === undefined) return;
+      if (questionDelivered) { if (goal !== undefined) finish("waiting_confirmation"); return; }
       // A turn that ends with nothing to say used to end silently: nothing appended, nothing
       // emitted. From the person's side that is "I asked and nothing happened", which is the
       // worst-feeling failure there is — indistinguishable from a hang, a crash, or being ignored.

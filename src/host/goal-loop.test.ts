@@ -79,7 +79,7 @@ test("an idle conversation with an active goal gets one continuation after the d
   } finally { h.cleanup(); }
 });
 
-test("busy conversations, queued messages, questions and approvals hold the loop; a paused goal is never woken", () => {
+test("busy conversations, queued messages, questions and approvals hold the loop; a paused goal is never woken", async () => {
   const h = harness();
   try {
     h.setBusy(true); h.loop.onTurnFinished("nova"); assert.equal(h.timers.length, 0, "a running turn");
@@ -92,6 +92,20 @@ test("busy conversations, queued messages, questions and approvals hold the loop
     h.tasks.setPursuit(h.task.id, p => ({ ...p, status: "paused", pausedReason: "person" }), "paused", "principal-user");
     h.loop.onTurnFinished("nova");
     assert.equal(h.timers.length, 0, "a paused goal is not the loop's");
+    h.tasks.setPursuit(h.task.id, p => ({ ...p, status: "active", pausedReason: undefined, completion: "answer" }), "resumed");
+    h.loop.onTurnFinished("nova"); h.fire();
+    const wake = h.wakes.at(-1)!;
+    assert.equal(h.loop.turnStarting("nova", CONV, [{ id: "g1", fromId: "user", fromName: "user", text: wake.text, priority: false, receivedAt: "", synthetic: true, goal: wake.goal }]), true);
+    h.setBlocked("a question waiting on the person");
+    await h.loop.turnEnded({ marker: wake.goal!, how: "waiting_confirmation", worked: true, cost: 12 });
+    h.loop.onTurnFinished("nova");
+    assert.equal(h.pursuit().status, "active", "the question is not the answer to the request");
+    assert.equal(h.pursuit().spent.errorStreak ?? 0, 0);
+    assert.equal(h.pursuit().spent.cost, 12);
+    assert.equal(h.timers.length, 0, "no failure retry while waiting for the answer");
+    h.setBlocked();
+    h.loop.onTurnFinished("nova");
+    assert.equal(h.timers.length, 1, "the goal can resume once the answer is in");
   } finally { h.cleanup(); }
 });
 

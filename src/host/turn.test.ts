@@ -244,7 +244,7 @@ test("a goal continuation turn: the pursuit's workId, a host inbound entry, unde
       askUser: async () => { asked = true; return "in the app"; }, onGoalTurn: report => reports.push(report),
     });
     assert.ok(asked, "the continuation delivered its question");
-    assert.equal(reports.at(-1)?.how, "empty_output", "a silent continuation must not complete a Goal");
+    assert.equal(reports.at(-1)?.how, "waiting_confirmation", "a delivered question is neither completion nor empty output");
   } finally {
     cleanup();
     rmSync(home, { recursive: true, force: true });
