@@ -333,11 +333,22 @@ export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
   if (!request.work_only) return { path, entries: await listEntries(path) };
 
   const workRoot = await realpath(DOWNLOAD_ROOT);
-  const handle = await open(await requireDownloadable(path, workRoot), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const resolved = await requireDownloadable(path, workRoot);
+  const handle = await open(resolved, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
-    const directory = `/proc/self/fd/${handle.fd}`;
-    await requireDownloadable(directory, workRoot);
-    return { path, entries: await listEntries(directory, workRoot), work_only: true };
+    if (process.platform === "linux") {
+      const directory = `/proc/self/fd/${handle.fd}`;
+      await requireDownloadable(directory, workRoot);
+      return { path, entries: await listEntries(directory, workRoot), work_only: true };
+    }
+
+    const entries = await listEntries(resolved, workRoot);
+    const opened = await handle.stat({ bigint: true });
+    const current = await stat(await requireDownloadable(resolved, workRoot), { bigint: true });
+    if (opened.dev !== current.dev || opened.ino !== current.ino) {
+      throw new Error(`${path} changed during listing`);
+    }
+    return { path, entries, work_only: true };
   } finally {
     await handle.close();
   }
