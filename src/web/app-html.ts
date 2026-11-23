@@ -1474,7 +1474,7 @@ function openSettings(tab) {
   // Applied on open as well as on load: the dialog is built once and reopened, and whoever is at the browser may have signed in since the page did.
   applyRole();
   if (myRole !== "admin") {
-    renderStandingGrants(); renderMemorySummary();
+    renderStandingGrants(); renderMemorySummary(); renderMcp();
     $("settingswrap").style.display = "flex";
     return;
   }
@@ -1892,12 +1892,13 @@ function renderMcp() {
   fetch("/api/mcp")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      var servers = data.servers || [];
       renderMcpTokens(data.tokens);
       mcpSetup = data.setup; renderMcpSetup();
       // An installation matter, so admins only — and admins with none see the empty state
       // and the reload, because "add one to config.json, then reload" is the way in.
       document.getElementById("setmcpwrap").style.display = myRole === "admin" ? "" : "none";
+      if (myRole !== "admin") return;
+      var servers = data.servers || [];
       var ext = data.extensions;
       $("setext").textContent = ext
         ? "{{ui.app.extensions-agentbox-extensions}} " + (ext.loaded.length ? ext.loaded.join(", ") : "{{ui.app.none}}") +
