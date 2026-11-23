@@ -583,6 +583,9 @@ export class Scheduler {
       const deliver = message.threadKey ?? message.chatKey;
       if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a message in ${deliver} matching ${skill.match}`); fired.push(skill.slug); continue; }
       if (await this.refusal(skill, agent) !== undefined || this.deps.allowed?.(skill) === false) continue;
+      // Skipped like a due window, never a failure: a chat held by an earlier request must not pause the listener.
+      const busy = this.deps.busy?.({ slug: skill.slug, name: skill.name, deliver }, agent);
+      if (busy !== undefined) { this.skip(skill, busy, agent); continue; }
       this.log(`${skill.name}: fired by a message in ${deliver}`);
       fired.push(skill.slug);
       void this.launch(skill, agent, () => this.deps.run(
