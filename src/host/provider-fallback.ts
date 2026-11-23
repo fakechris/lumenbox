@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
 import { agentboxHome } from "../config.ts";
-import { accountFor, createClient, resolveProviderPreset, type ProviderProfile } from "./provider.ts";
+import { accountFor, createClient, resolveProvider, resolveProviderPreset, type ProviderProfile } from "./provider.ts";
 import { providerRests, type ProviderRests } from "./provider-rest.ts";
 import type { Rates } from "./spend.ts";
 
@@ -45,7 +45,8 @@ export class FallbackRuntimes {
     for (const name of names) {
       if (!this.cache.has(name)) {
         try {
-          const provider = resolveProviderPreset(name.toLowerCase());
+          const preset = name.toLowerCase();
+          const provider = preset === "custom" || preset === "compatible" ? resolveProvider(preset) : resolveProviderPreset(preset);
           if (!provider) throw new Error(`Unknown provider "${name}".`);
           this.cache.set(name, { client: this.build(provider), provider });
         } catch (error) {
