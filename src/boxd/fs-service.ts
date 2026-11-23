@@ -105,13 +105,17 @@ function requirePath(path: string | undefined, field = "path"): string {
   return resolve(path);
 }
 
+function withinDownloadRoot(real: string, root: string): boolean {
+  return real === root || real.startsWith(`${root}/`);
+}
+
 /**
  * Resolves a path and refuses anything outside the download root.
  *
  * `realpath` rather than `resolve`, because a symlink inside the root pointing out of it is the
  * obvious way past a prefix check — and an agent can create one with a single command.
  */
-async function requireDownloadable(path: string | undefined): Promise<string> {
+async function requireDownloadable(path: string | undefined, workRoot?: string): Promise<string> {
   const requested = requirePath(path);
   let real: string;
   try {
@@ -121,8 +125,8 @@ async function requireDownloadable(path: string | undefined): Promise<string> {
     // never typed is a confusing answer to a typo.
     throw new Error(`${requested} does not exist`);
   }
-  const root = await realpath(DOWNLOAD_ROOT).catch(() => DOWNLOAD_ROOT);
-  if (real !== root && !real.startsWith(`${root}/`)) {
+  const root = workRoot ?? await realpath(DOWNLOAD_ROOT).catch(() => DOWNLOAD_ROOT);
+  if (!withinDownloadRoot(real, root)) {
     throw new Error(
       `${requested} is outside ${DOWNLOAD_ROOT}. Only files under that directory can be handed ` +
         `over, because it is the one a person is allowed to browse and the one that survives a rebuild.`
@@ -280,13 +284,17 @@ export async function writeFile(
   return { path, bytes_written: Buffer.byteLength(request.content) };
 }
 
-async function listEntries(directory: string): Promise<DirEntry[]> {
+async function listEntries(directory: string, workRoot?: string): Promise<DirEntry[]> {
   const names = await readdir(directory);
 
   const entries: DirEntry[] = [];
   for (const name of names) {
     try {
-      const info = await lstat(resolve(directory, name));
+      const path = resolve(directory, name);
+      const info = await lstat(path);
+      const targetInWork = workRoot !== undefined && info.isSymbolicLink()
+        ? await realpath(path).then(target => withinDownloadRoot(target, workRoot), () => false)
+        : undefined;
       entries.push({
         name,
         type: info.isDirectory()
@@ -298,6 +306,7 @@ async function listEntries(directory: string): Promise<DirEntry[]> {
               : "other",
         size: info.size,
         modified: info.mtime.toISOString(),
+        ...(targetInWork === undefined ? {} : { target_in_work: targetInWork }),
       });
     } catch {
       // A entry that vanished between readdir and lstat is not worth failing over.
@@ -317,11 +326,12 @@ export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
   const path = requireInside(requirePath(request.path), "ro");
   if (!request.work_only) return { path, entries: await listEntries(path) };
 
-  const handle = await open(await requireDownloadable(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const workRoot = await realpath(DOWNLOAD_ROOT);
+  const handle = await open(await requireDownloadable(path, workRoot), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
     const directory = `/proc/self/fd/${handle.fd}`;
-    await requireDownloadable(directory);
-    return { path, entries: await listEntries(directory), work_only: true };
+    await requireDownloadable(directory, workRoot);
+    return { path, entries: await listEntries(directory, workRoot), work_only: true };
   } finally {
     await handle.close();
   }

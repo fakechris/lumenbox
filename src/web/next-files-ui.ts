@@ -49,7 +49,7 @@ function renderFiles(view) {
     list.appendChild(el("p", "why", workFiles.loading ? t("ui.next.auto.reading") : workFiles.error));
   } else {
     var entries = workFiles.entries.filter(function (entry) {
-      return entry.type === "directory" || entry.type === "file";
+      return entry.type === "directory" || entry.type === "file" || (entry.type === "symlink" && entry.target_in_work === true);
     });
     if (!entries.length) list.appendChild(el("p", "why", t("ui.next.screen.empty")));
     entries.forEach(function (entry) {
@@ -59,7 +59,7 @@ function renderFiles(view) {
         open.addEventListener("click", function () { readWorkFiles(active.id, path); render(); });
         list.appendChild(open);
       } else {
-        var row = el("div", "file"), name = el("span", "", entry.name + " · " + bytes(entry.size));
+        var row = el("div", "file"), name = el("span", "", entry.name + (entry.type === "file" ? " · " + bytes(entry.size) : ""));
         var keep = el("a", "act", t("ui.next.template.download"));
         keep.href = "/api/file?boxId=" + encodeURIComponent(active.id) + "&path=" + encodeURIComponent(path);
         keep.setAttribute("aria-label", t("ui.next.files.download", { name: entry.name }));

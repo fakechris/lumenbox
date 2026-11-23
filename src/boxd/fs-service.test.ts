@@ -59,6 +59,14 @@ test("work-folder listings cannot follow an outside link or a swapped directory"
     swap.mock.restore();
     syncBuiltinESMExports();
   }
+  const aliases = join(ROOT, "previous-reports");
+  symlinkSync("brief.md", join(aliases, "latest.md"));
+  symlinkSync(join(OUTSIDE, "private-listing.txt"), join(aliases, "outside.md"));
+  symlinkSync("missing.md", join(aliases, "broken.md"));
+  const scoped = await listDir({ path: aliases, work_only: true });
+  assert.deepEqual(scoped.entries.filter(entry => entry.type === "symlink").map(entry => [entry.name, entry.target_in_work]), [
+    ["broken.md", false], ["latest.md", true], ["outside.md", false],
+  ]);
 });
 
 test("an upload will not write through a link that leaves the work directory", async () => {

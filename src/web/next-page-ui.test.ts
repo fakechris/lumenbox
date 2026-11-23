@@ -59,10 +59,18 @@ test("Files opens in the main view and downloads from the selected box", async (
   vm.runInContext("readWorkFiles('shared', ''); render()", context);
   assert.equal(pending[1]!.path, "/api/files?boxId=shared");
   pending[0]!.resolve({ root: "/work", path: "/work", entries: [{ name: "private.md", type: "file", size: 1 }] });
-  pending[1]!.resolve({ root: "/work", path: "/work", entries: [{ name: "one turn.md", type: "file", size: 47 }] });
+  pending[1]!.resolve({ root: "/work", path: "/work", entries: [
+    { name: "one turn.md", type: "file", size: 47 },
+    { name: "latest.md", type: "symlink", target_in_work: true },
+    { name: "outside.md", type: "symlink", target_in_work: false },
+    { name: "broken.md", type: "symlink", target_in_work: false },
+    { name: "unverified.md", type: "symlink" },
+  ] });
   await Promise.resolve();
   assert.doesNotMatch(JSON.stringify(view), /private\.md/);
   assert.match(JSON.stringify(view), /one turn.md.*\/api\/file\?boxId=shared&path=%2Fwork%2Fone%20turn.md/);
+  assert.match(JSON.stringify(view), /latest\.md.*\/api\/file\?boxId=shared&path=%2Fwork%2Flatest\.md/);
+  assert.doesNotMatch(JSON.stringify(view), /(?:outside|broken|unverified)\.md/);
 });
 
 test("automation refresh shows discovery, ignores an old response and renders the new paused routine", async () => {
