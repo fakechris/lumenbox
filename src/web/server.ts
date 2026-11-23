@@ -799,10 +799,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const person = principals.byId(owner);
     return !personalBoxesStopping && person?.id === owner && person.identities.length > 0 && roleAtLeast(person.role, "driver") && directoryQuotaContext(owner).eligible;
   };
-  const checkBoxResidents = (id: string, deleting: boolean) => {
-    const residents = registry.agentsIn(id), busy = new Set(orchestrator.bus.activeAgentIds());
+  const checkBoxResidents = (target: string | string[], deleting: boolean) => {
+    const ids = new Set(typeof target === "string" ? [target] : target), agents = registry.list();
+    const residents = agents.filter(agent => ids.has(agent.boxId)), busy = new Set(orchestrator.bus.activeAgentIds());
     if (residents.some(agent => busy.has(agent.id))) throw new Error("Wait for the agents on this computer to finish before stopping it.");
-    if (deleting && residents.length > 0 && residents.length === registry.list().length) throw new Error("Keep at least one agent on another computer before deleting this computer.");
+    if (deleting && residents.length > 0 && residents.length === agents.length) throw new Error("Keep at least one agent on another computer before deleting.");
   };
   const personalBoxes = new PersonalBoxes({
     home: join(agentboxHome(), "personal-boxes"), entries: () => registry.listBoxes(),

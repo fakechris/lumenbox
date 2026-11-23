@@ -136,7 +136,7 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
 
 export function planBoxDispositions(
   boxes: PersonalBoxes, previous: Principal[], roster: Principal[], choices: unknown,
-  quota: Deps["quota"], authorize: Deps["authorize"], checkResidents: (id: string, deleting: boolean) => void,
+  quota: Deps["quota"], authorize: Deps["authorize"], checkResidents: (ids: string[], deleting: boolean) => void,
 ): () => Promise<void> {
   const removed = new Map(previous.filter(person => !roster.some(next => next.id === person.id)).map(person => [person.id, person]));
   const rows = boxes.inventory().filter(box => removed.has(box.owner) && !box.retained);
@@ -144,6 +144,7 @@ export function planBoxDispositions(
   if (!choices || typeof choices !== "object" || Array.isArray(choices))
     throw new Error("Choose what to do with the member’s personal computers before removing them.");
   const entries = boxes.quotaEntries(), assigned = new Map<string, number>();
+  const stopping: string[] = [], deleting: string[] = [];
   const ops = rows.map(box => {
     const choice = (choices as Record<string, { action?: unknown; recipient?: unknown }>)[box.owner];
     if (!choice || !["keep", "transfer", "delete"].includes(String(choice.action))) throw new Error("Choose what to do with the member’s personal computers.");
@@ -159,12 +160,14 @@ export function planBoxDispositions(
       return async () => { boxes.transfer(box.id, recipient.id, recipient.name); };
     }
     const deleteData = choice.action === "delete";
-    checkResidents(box.id, deleteData);
+    (deleteData ? deleting : stopping).push(box.id);
     return async () => {
       const result = await boxes.remove(box.owner, box.id, deleteData, { ownerName: owner.name, deleteAgents: deleteData });
       if (result.error) throw new Error(result.error);
     };
   });
+  if (stopping.length) checkResidents(stopping, false);
+  if (deleting.length) checkResidents(deleting, true);
   return async () => {
     const results = await Promise.allSettled(ops.map(operation => operation()));
     if (results.some(result => result.status === "rejected"))
