@@ -128,6 +128,7 @@ and bind the web server where the gate can reach it.
 | `AGENTBOX_BOXD_URL` | — | Attach to a box instead of using Docker |
 | `AGENTBOX_PROVIDER` / `_MODEL` / `_BASE_URL` / `_KEY_ENV` / `_AUTH` | anthropic | Which endpoint |
 | `ANTHROPIC_API_KEY`, `MINIMAX_CODE_CN_API_KEY`, `AGENTBOX_API_KEY` | — | Model credential |
+| `MINIMAX_CODE_GLOBAL_API_KEY` | — | MiniMax (global) credential. If you previously used the China-named variable for a global account, move the key to this variable or save it again under MiniMax (global) in Settings → Model. |
 | `AGENTBOX_WIDTH` / `_HEIGHT` | 1280×800 | Desktop size |
 | `AGENTBOX_MEMORY` / `_CPUS` | 4g / half the engine's cores (at least 2) | Container limits; the CPU one is also in Settings → Boxes |
 | `AGENTBOX_EGRESS_RELAY` / `_TOKEN` | — | Egress |

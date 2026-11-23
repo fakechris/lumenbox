@@ -11,14 +11,23 @@ import { AgentBus } from "../agents/bus.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 import { runTurn, type TurnEvent } from "./turn.ts";
 import { gateClient, ProviderRests } from "./provider-rest.ts";
-import { fallbackNames, nextFallback, switchLine, type Runtime } from "./provider-fallback.ts";
-import { resolveProvider, type ProviderProfile } from "./provider.ts";
+import { FallbackRuntimes, fallbackNames, nextFallback, switchLine, type Runtime } from "./provider-fallback.ts";
+import { resolveProvider, resolveProviderPreset, type ProviderProfile } from "./provider.ts";
 
 const TOKEN_PLAN_2056 = Object.assign(new Error('429 {"type":"error","error":{"type":"rate_limit_error","message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)"}}'), { status: 429 });
 const reply = (text: string): Anthropic.Message => ({ id: "m", type: "message", role: "assistant", model: "x", stop_reason: "end_turn", stop_sequence: null, content: [{ type: "text", text, citations: null }], usage: { input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }) as unknown as Anthropic.Message;
 const primary: ProviderProfile = { ...resolveProvider("anthropic"), label: "MiniMax (China)", model: "MiniMax-M3.1-Flash", baseUrl: "https://api.minimaxi.com/anthropic" };
 const backup: ProviderProfile = { ...resolveProvider("anthropic"), label: "Backup", model: "backup-model", baseUrl: "https://backup.example" };
 const ask = (text: string) => [{ id: `m-${text}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }];
+
+test("a custom fallback uses its configured model while named presets keep their defaults", t => {
+  const previous = process.env.AGENTBOX_MODEL;
+  process.env.AGENTBOX_MODEL = "custom-model";
+  t.after(() => { if (previous === undefined) delete process.env.AGENTBOX_MODEL; else process.env.AGENTBOX_MODEL = previous; });
+  const names = fallbackNames(["custom", "compatible", "openai"], undefined, primary);
+  const runtimes = new FallbackRuntimes(assert.fail, () => fakeModel(() => reply("ok"))).for(names);
+  assert.deepEqual(runtimes.map(runtime => runtime.provider.model), ["custom-model", "custom-model", resolveProviderPreset("openai")!.model]);
+});
 
 test("scenario: the plan runs out mid-work; the round finishes on the fallback, the chat says so, spend is the fallback's; after the reset the agent is back on its own", async () => {
   const root = mkdtempSync(join(tmpdir(), "agentbox-fallback-"));

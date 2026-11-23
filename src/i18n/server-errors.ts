@@ -227,6 +227,8 @@ export const SERVER_ERRORS = {
   // ── models and providers ─────────────────────────────────────────────────────────────────────
   "err.provider-unknown-known": ["没有 provider \"{provider}\"。可选：{known}。", "Unknown provider \"{provider}\". Known: {known}."],
   "err.provider-unknown": ["没有 provider \"{provider}\"。", "Unknown provider \"{provider}\"."],
+  "err.model-test-parameter": ["此模型不接受请求中的参数。请更新 LumenBox 或在设置 → 模型中选择其他模型后重试。", "This model does not accept a request parameter. Update LumenBox or choose another model in Settings → Model, then test again."],
+  "err.model-test-region": ["供应商拒绝了密钥。请核对密钥；如果密钥来自另一区域，请选择 {provider} 后重新测试。", "The provider rejected the key. Check the key, or if it came from the other region, select {provider} and test again."],
   "err.host-exec-needs-dir": ["开启本机执行命令需要一个工作目录。", "Turning host execution on needs a working directory for its commands."],
   "err.search-needs-provider": ["请为这个 key 选一个搜索 provider，或选 none 清除它。", "Pick a search provider for the key, or clear it with none."],
   "err.search-provider-unknown": ["没有搜索 provider \"{provider}\"。可选：{known}，或 none。", "Unknown search provider \"{provider}\". Known: {known}, or none."],

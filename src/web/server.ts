@@ -81,8 +81,10 @@ import { IdempotencyStore } from "./idempotency.ts";
 import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
-import { describeProvider, hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
+import { describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
+import { modelConfigured } from "../host/model-readiness.ts";
 import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
+import { modelPresets, modelTestError } from "./model-settings.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
@@ -5188,13 +5190,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const agentTurn = registry.list().some(agent => registry.readTranscript(agent.id).length > 0);
           const door = channelRecords.some(record => channelCredentialsSet(record));
           const review = (orchestrator.tasks?.list() ?? []).some(task => task.status === "review" || task.status === "done");
-          // The key is the other thing the welcome note promises, so it grades on the card
-          // too (INV-857): a saved provider or any credential in the environment means the
-          // first message will not die on "no key".
-          const key = providerConfigured(
-            loadConfig().provider,
-            providerNames().map(name => resolveProvider(name))
-          );
+          const key = await modelConfigured(orchestrator.provider);
           // Optional, so it is a fact and not a gate: without a search key the WebSearch
           // tool is withheld entirely and web questions degrade to the box's browser —
           // a state the card names rather than leaves to be discovered mid-task.
@@ -5399,11 +5395,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/config") {
           const config = loadConfig();
           const live = orchestrator.provider;
+          const presets = modelPresets(live);
           send(res, 200, {
             current: describeProvider(live),
             // What is in force right now, and which of the file's variables the shell overrides
             // (INV-1268): a saved model that the page cannot make effective says so.
             effective: {
+              provider: presets.find(preset => preset.label === live.label)?.name ?? null,
+              configured: await modelConfigured(live),
               label: live.label,
               model: live.model,
               vision: live.vision,
@@ -5428,20 +5427,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               unavailableReason: hostRunner.unavailableReason() ?? null, // from the live runner, what an agent would reach
             },
             // Whether a credential is present is worth showing; the credential is not.
-            presets: providerNames().map(name => {
-              const profile = resolveProvider(name);
-              return {
-                name,
-                label: profile.label,
-                model: profile.model,
-                models: PRESET_MODELS[name] ?? [],
-                keyEnv: profile.keyEnv,
-                keyPresent:
-                  process.env[profile.keyEnv] !== undefined ||
-                  (profile.keyEnv === "ANTHROPIC_API_KEY" &&
-                    process.env.ANTHROPIC_AUTH_TOKEN !== undefined),
-              };
-            }),
+            presets,
             // The search providers in the same shape as the model presets: which key each
             // reads, and whether this installation has one. A capability that degrades
             // silently reads as covered (absences.ts), and the page is where a person
@@ -5478,10 +5464,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
           // The key is stored under the variable the chosen provider reads, and only
           // there: the UI cannot write arbitrary environment variables.
-          const chosenName =
-            (typeof providerValue === "string" ? providerValue.toLowerCase() : undefined) ??
-            loadConfig().provider ??
-            "anthropic";
           const key = field(body.key);
           // Host execution: a whole object or nothing. Enabling without a working
           // directory is refused here rather than saved and failed later.
@@ -5518,7 +5500,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           else if (body.vision === "off") envChange.AGENTBOX_VISION = "0";
           else if (body.vision === "auto") envChange.AGENTBOX_VISION = null;
           if (body.summaryModel !== undefined) envChange.AGENTBOX_SUMMARY_MODEL = field(body.summaryModel) ?? null;
-          if (key !== undefined && key !== null) envChange[resolveProvider(chosenName).keyEnv] = key;
+          if (key !== undefined && key !== null) {
+            const name = typeof providerValue === "string" ? providerValue : loadConfig().provider;
+            const profile = name ? providerForChoice(name, orchestrator.provider) : orchestrator.provider;
+            envChange[profile.keyEnv] = key;
+          }
           // The search key, under the chosen provider's variable — the same one-variable
           // rule as the model key, so the page still cannot write arbitrary variables.
           // An empty choice ("none") clears whichever of the three is set, because a key
@@ -5616,7 +5602,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const byName = () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"); const issues = await exceptionRoute(route, { ledger: orchestrator.exceptions, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayRead: id => id === undefined || mayReadAgent(id), refused: id => (id === undefined ? refusedRole("admin") : refused(id)), by: byName, titleOf: id => orchestrator.tasks?.get(id)?.title, retry: exceptionRetryDeps({ ledger: orchestrator.exceptions, prompt: (id, text, conversation) => orchestrator.prompt(id, text, undefined, { conversation, lane: "user", origin: "host:retry", steerable: false }), boxFor: id => orchestrator.boxFor(id), ownerOf: id => registry.boxOwnerTokenFor(id), watch: job => orchestrator.jobWatch.watch(job), by: byName, redeliver: async chatKey => { const door = channels.adapterFor(chatKey); if (door?.sendToChat === undefined) throw new Error(`no door can send to ${chatKey}`); return outboxSender.retry(chatKey, { sendToChat: (key, text) => door.sendToChat!(key, text) }); }, runRoutine: slug => orchestrator.scheduler.runNow(slug), reconnectBox: () => keeper.tick().then(state => { box = state; return state; }), notReady: id => { const task = orchestrator.tasks?.get(id); return task === undefined || orchestrator.tasks === undefined ? undefined : notReady(task, orchestrator.tasks); } }) }); if (issues !== undefined) { if (issues.status !== 0) send(res, issues.status, issues.body); return; } /* the Issues view (INV-1741) */ const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } const guestsRoute = await guestRoute(route, guestDesk, { query: () => url.searchParams, send: (chatKey, text) => channels.tryPushToChat(chatKey, text, { kind: "notice", about: "a guest answer an Admin approved" }), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), installationMode: () => principals.installation().mode, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (guestsRoute !== undefined) { if (guestsRoute.status !== 0) send(res, guestsRoute.status, guestsRoute.body); return; } /* INV-1708 */ const installed = installationRoute(route, { principals }); if (installed !== undefined) { send(res, installed.status, installed.body); return; } const merging = await mergeRoute(route, { paths: mergePaths, desktop: options.desktop === true, doorType: door => channelRecords.find(record => record.id === door)?.type, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name : "the operator"), log }); if (merging !== undefined) { if (merging.status !== 0) send(res, merging.status, merging.body); return; } // "these are all me" (INV-1698) // INV-1554, INV-1615, INV-1664, INV-1669
         const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => events.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
         const rest = await providerRestRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, rests: providerRests, quotaLine: locale => quotaStatusLine(Date.now(), locale), locale: localeOf(req, url) }); if (rest !== undefined) { if (rest.status !== 0) send(res, rest.status, rest.body); return; } // INV-1577
-        const fallbacks = await fallbackRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, names: () => loadConfig().fallbackProviders ?? [], save: names => { saveConfig({ fallbackProviders: names }); }, presets: () => providerNames().map(name => { const profile = resolveProvider(name); return { name, label: profile.label, model: profile.model, hasKey: hasCredential(profile) }; }), usage: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER) }); if (fallbacks !== undefined) { if (fallbacks.status !== 0) send(res, fallbacks.status, fallbacks.body); return; } // INV-1578
+        const fallbacks = await fallbackRoute(route, {
+          refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>,
+          names: () => loadConfig().fallbackProviders ?? [], save: names => { saveConfig({ fallbackProviders: names }); },
+          presets: () => modelPresets(orchestrator.provider).map(({ name, label, model, keyPresent, keySource }) => ({ name, label, model, hasKey: keyPresent, keySource })),
+          usage: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER),
+        }); if (fallbacks !== undefined) { if (fallbacks.status !== 0) send(res, fallbacks.status, fallbacks.body); return; } // INV-1578
         if (route === "POST /api/box/up") {
           if (refused()) return;
           if (boxUpInFlight) {
@@ -5663,7 +5654,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
-            const profile = resolveProvider(name);
+            const profile = { ...providerForChoice(name, orchestrator.provider) };
             if (typeof body.model === "string" && body.model.trim() !== "") {
               profile.model = body.model.trim();
             }
@@ -5677,10 +5668,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const result = await testProvider(profile, key);
             send(res, 200, result);
           } catch (error) {
-            send(res, 200, {
-              ok: false,
-              error: error instanceof Error ? error.message : String(error),
-            });
+            send(res, 200, { ok: false, ...modelTestError(name, error) });
           }
           return;
         }

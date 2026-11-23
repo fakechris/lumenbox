@@ -30,12 +30,14 @@ test("a saved model is in force without a restart; a file that cannot be applied
     summary: process.env.AGENTBOX_SUMMARY_MODEL,
     key: process.env.ANTHROPIC_API_KEY,
     minimax: process.env[MINIMAX_KEY],
+    openai: process.env.OPENAI_API_KEY,
   };
   process.env.AGENTBOX_HOME = home;
   delete process.env.AGENTBOX_MODEL;
   delete process.env.AGENTBOX_VISION;
   delete process.env.AGENTBOX_SUMMARY_MODEL;
   delete process.env[MINIMAX_KEY];
+  delete process.env.OPENAI_API_KEY;
   // A credential the client constructor accepts; nothing here makes a request.
   process.env.ANTHROPIC_API_KEY = "test-key-not-real";
   resetConfigEnvForTests();
@@ -56,8 +58,9 @@ test("a saved model is in force without a restart; a file that cannot be applied
     };
     const state = async () => ((await (await fetch(`${BASE}/api/state`, { headers })).json()) as { provider: string }).provider;
     const config = async () => (await (await fetch(`${BASE}/api/config`, { headers })).json()) as {
-      current: string; effective: { model: string; vision: boolean; summaryModel: string | null; locked: string[] };
+      current: string; effective: { provider: string; configured: boolean; model: string; vision: boolean; summaryModel: string | null; locked: string[] };
       settings: { vision: string; summaryModel: string | null };
+      presets: { name: string; model: string; keyPresent: boolean; keySource: string | null }[];
     };
 
     assert.match(await state(), /model-old/);
@@ -108,11 +111,35 @@ test("a saved model is in force without a restart; a file that cannot be applied
     // Only the restart-bound settings ask for one.
     const fifth = await post({ startupItem: true });
     assert.equal(fifth.body.restartNeeded, true);
+
+    // Only the selected provider owns a saved model; sources are independent of model names.
+    process.env[MINIMAX_KEY] = "fixture-china";
+    const openai = await post({ provider: "openai", model: "gpt-4.1", key: "fixture-openai" });
+    assert.equal(openai.status, 200);
+    const { effective, presets } = await config();
+    assert.equal(effective.provider, "openai");
+    assert.equal(effective.configured, true);
+    const setup = await (await fetch(`${BASE}/api/setup`, { headers })).json();
+    assert.equal(setup.key, effective.configured);
+    const primary = presets.find(p => p.name === "openai")!;
+    assert.equal(primary.model, "gpt-4.1");
+    assert.equal(primary.keySource, "saved");
+    const china = presets.find(p => p.name === "minimax")!;
+    assert.equal(china.model, "MiniMax-M3");
+    assert.equal(china.keySource, "environment");
+    const global = presets.find(p => p.name === "minimax-global")!;
+    assert.equal(global.keySource, null);
+    assert.equal(global.keyPresent, false);
+    assert.notEqual(presets.find(p => p.name === "custom")!.model, "gpt-4.1");
+    const fallbacks = await (await fetch(`${BASE}/api/provider/fallbacks`, { headers })).json();
+    assert.equal(fallbacks.presets.find((p: { name: string }) => p.name === "anthropic").model, "claude-opus-5");
+    assert.equal(fallbacks.presets.find((p: { name: string }) => p.name === "minimax-global").hasKey, false);
   } finally {
     stop?.();
     for (const [key, value] of [
       ["AGENTBOX_HOME", saved.home], ["AGENTBOX_MODEL", saved.model], ["AGENTBOX_VISION", saved.vision],
       ["AGENTBOX_SUMMARY_MODEL", saved.summary], ["ANTHROPIC_API_KEY", saved.key], [MINIMAX_KEY, saved.minimax],
+      ["OPENAI_API_KEY", saved.openai],
     ] as const) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
