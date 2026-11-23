@@ -4561,7 +4561,8 @@ function updateComposerTarget() {
 function renderClusterBoxStatus() {
   var selected = boxesSeen.find(function (b) { return b.id === currentBox; });
   $("boxinfo").textContent = !selected ? "" : selected.connected ? "{{ui.app.box-online}}" :
-    selected.id === boxState.own ? t("ui.next.box.sharedKubernetes") : personalBoxError({ status: "unreachable", connectionError: selected.detail });
+    selected.id === boxState.own ? (selected.kind === "kubernetes" ? t("ui.next.box.sharedKubernetes") : boxState.detail) :
+    personalBoxError({ status: "unreachable", connectionError: selected.detail });
   $("boxdot").className = "dot " + (selected && selected.connected ? "ok" : "bad");
 }
 

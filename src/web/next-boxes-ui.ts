@@ -66,7 +66,7 @@ function boxNotice() {
   }
   var why = boxWhy(box);
   var sharedKubernetes = box.id === boxes.own && boxes.state && boxes.state.backend === "kubernetes";
-  strip.replaceChildren(el("span", "", sharedKubernetes ? t("ui.next.box.sharedKubernetes") :
+  strip.replaceChildren(el("span", "", sharedKubernetes ? (box.kind === "kubernetes" ? t("ui.next.box.sharedKubernetes") : boxes.state.detail) :
     why === "missing" ? t("ui.box.dockerMissing") : why === "stopped" ? t("ui.box.dockerStopped") : t("ui.next.box.offline", { name: box.name })));
   if (why === "missing") {
     [["Docker Desktop", "https://www.docker.com/products/docker-desktop/"], ["OrbStack", "https://orbstack.dev/"]].forEach(function (pair) {

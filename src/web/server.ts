@@ -415,8 +415,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Asked once: the answer cannot change while this process runs. */
   const build = buildInfo();
   const backend = boxBackendFromEnvironment(), kubernetes = backend.backend === "kubernetes";
-  const withBoxBackend = (box: ReturnType<Orchestrator["boxStatus"]>[number]) =>
-    kubernetes && box.id === registry.box.id ? { ...box, kind: backend.backend } : box;
   const events = new SseReplay<OutboundEvent>();
 
   /**
@@ -464,8 +462,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const provisioner = (() => {
     try {
-      if (kubernetes) return { kind: "kubernetes", label: "Kubernetes", boxName: registry.box.name,
-        endpoint: async () => undefined, connect: async () => { throw new Error(tr("err.shared-box-kubernetes", "en")); } } satisfies BoxProvisioner;
+      if (kubernetes) return options.boxProvisioner?.kind === "attached" ? options.boxProvisioner : resolveBoxProvisioner(() => ({
+        kind: "kubernetes", label: "Kubernetes", boxName: registry.box.name, endpoint: async () => undefined,
+        connect: async () => { throw new Error(tr("err.shared-box-kubernetes", "en")); },
+      }));
       return options.boxProvisioner ?? resolveBoxProvisioner();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -479,6 +479,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } satisfies BoxProvisioner;
     }
   })();
+  const withBoxBackend = (box: ReturnType<Orchestrator["boxStatus"]>[number]) =>
+    kubernetes && box.id === registry.box.id ? { ...box, kind: provisioner.kind } : box;
 
   /**
    * Answers owed to a chat, so one that was earned while the process died still arrives.
@@ -2463,7 +2465,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (kubernetes && boxId) broadcast({ type: "box_status", boxId });
       }
     }).catch(() => {});
-    if (!kubernetes) void keeper.tick().then(state => {
+    if (!kubernetes || provisioner.kind === "attached") void keeper.tick().then(state => {
       const changed = state.connected !== box.connected; box = state;
       if (changed) broadcast({ type: "box_status", boxId: registry.box.id });
     }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
