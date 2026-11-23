@@ -1458,7 +1458,7 @@ function openSettings(tab) {
       sel.innerHTML = settingsPresets.map(function (p) {
         return '<option value="' + esc(p.name) + '">' + esc(p.label) + " &middot; " + esc(p.model) + "</option>";
       }).join("");
-      var chosen = (data.config && data.config.provider) || "";
+      var chosen = (data.config && data.config.provider) || (data.effective && data.effective.provider) || "";
       if (chosen) sel.value = chosen;
       $("setmodel").value = (data.config && data.config.model) || "";
       $("setbase").value = (data.config && data.config.baseUrl) || "";
@@ -2332,9 +2332,7 @@ function maybeOnboard() {
   fetch("/api/config")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      var configured = !!(data.config && data.config.provider);
-      var anyKey = (data.presets || []).some(function (p) { return p.keyPresent; });
-      if ((!configured && !anyKey) || (!boxState.ok && boxState.backend !== "kubernetes")) {
+      if (!(data.effective && data.effective.configured) || (!boxState.ok && boxState.backend !== "kubernetes")) {
         openSettings();
         $("setwelcome").style.display = "";
         // First run has one sensible ending: save and restart, so what was typed is what runs. A second, weaker button beside it invites the save that does not take effect, and
@@ -2404,7 +2402,7 @@ document.getElementById("setgrants").addEventListener("click", function (event) 
 
 // What is in force right now, and which saved values the server's own environment overrides.
 function renderEffective(effective, current) {
-  var line = "{{ui.app.now-running}} " + (current || "");
+  var line = effective && effective.configured === false ? "{{ui.next.model.notConfigured}}" : "{{ui.app.now-running}} " + (current || "");
   if (effective && effective.summaryModel) line += " {{ui.app.summaries-on}} " + effective.summaryModel;
   if (effective && effective.locked && effective.locked.length) {
     line += " {{ui.app.locked-by-the-servers-environment}} " + effective.locked.join(", ") +
@@ -2430,7 +2428,8 @@ function settingsProviderChanged() {
   $("setkeynote").textContent = preset.keyPresent
     ? "{{ui.app.a-key-for}} " + preset.keyEnv + " {{ui.app.is-already-provided-leave-blank}}"
     : "{{ui.app.no}} " + preset.keyEnv + " {{ui.app.found-paste-a-key-here}}";
-  $("setkey").placeholder = preset.keyPresent ? "{{ui.app.provided-by-environment}}" : "{{ui.app.paste-api-key}}";
+  $("setkey").placeholder = preset.keySource === "saved" ? "{{ui.next.config.keySaved}}" :
+    preset.keyPresent ? "{{ui.app.provided-by-environment}}" : "{{ui.app.paste-api-key}}";
 }
 
 function saveSettings(thenRestart) {

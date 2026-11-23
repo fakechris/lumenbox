@@ -14,6 +14,9 @@
 # outside it is a browser.
 set -euo pipefail
 
+# Only hostd needs this key; don't pass it to the desktop or boxd.
+export -n MINIMAX_CODE_GLOBAL_API_KEY
+
 log() { printf '[box] %s\n' "$*"; }
 
 # docker stop sends SIGTERM here; without this the supervise loops would restart the
@@ -46,6 +49,15 @@ as_user() {
   local user="$1"
   shift
   setpriv --reuid="${user}" --regid="${user}" --init-groups "$@"
+}
+
+as_hostd() {
+  if [[ -n "${MINIMAX_CODE_GLOBAL_API_KEY:-}" ]]; then
+    export MINIMAX_CODE_GLOBAL_API_KEY
+  else
+    unset MINIMAX_CODE_GLOBAL_API_KEY
+  fi
+  as_user hostd "$@"
 }
 
 # Volumes arrive owned by whoever the image left the mount point owned by, and a bind
@@ -239,7 +251,7 @@ chmod 700 /home/hostd "${AGENTBOX_HOME}" 2>/dev/null || true
 log "starting the orchestrator as hostd (web UI on 7777)"
 # Over loopback: the orchestrator and the daemon are in the same container now, so this
 # is the same HTTP contract with the network hop removed.
-supervise hostd as_user hostd env \
+supervise hostd as_hostd env \
   HOME=/home/hostd \
   AGENTBOX_HOME="${AGENTBOX_HOME}" \
   AGENTBOX_BOXD_URL="http://127.0.0.1:1337" \
