@@ -155,7 +155,7 @@ function peopleBlock() {
   (team.people || []).forEach(function (person) { box.appendChild(personLine(person, personal)); });
   box.appendChild(inviteForm(personal));
   if (team.invite) box.appendChild(inviteCard(team.invite));
-  var waiting = (team.invites || []).filter(function (invite) { return !team.invite || invite.code !== team.invite.code; });
+  var waiting = team.invites || [];
   if (waiting.length > 0) {
     box.appendChild(el("h3", "group", t("ui.next.team.pending")));
     waiting.forEach(function (invite) {

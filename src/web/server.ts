@@ -1374,7 +1374,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const invite = invites.get(code);
       if (invite === undefined || invite.expiresAt < Date.now()) {
         invites.delete(code);
-        return "That code is not live — codes last 15 minutes and work once. Ask for a fresh one.";
+        return "That code is not live — a code works once, until it expires (15 minutes unless the admin chose longer). Ask for a fresh one.";
       }
       // An identity that already belongs to somebody is not re-linkable by code —
       // the save layer would drop the duplicate claim silently, and this reply
