@@ -140,8 +140,11 @@ export function nudgeFor(reason: GuardReason, chinese: boolean, text = ""): stri
   }
 }
 
-/** What Grok Bot calls a closing send: the person saw an acknowledgement and then nothing. */
-export function closingNudge(chinese: boolean): string {
+/** What Grok Bot calls a closing send: the tools ran, but the person is still waiting for the result. */
+export function closingNudge(chinese: boolean, acknowledged: boolean): string {
+  if (!acknowledged) return chinese
+    ? "[harness] 工具已运行，但你还没有回复对方。请根据已有的工具结果直接回复，不要重复已完成的调用。"
+    : "[harness] The tools ran, but you have not replied to the person. Use the results already provided to answer them now without repeating completed calls.";
   return chinese
     ? "[harness] 你开头向对方打了招呼，然后跑了工具，最后什么都没说。对方最后看到的只有那句招呼。现在把结果告诉他们——短一点也行，但必须是结果。"
     : "[harness] You acknowledged the person, ran tools, and ended without a word. The last thing they saw is the acknowledgement. Deliver the result now — short is fine, but it must be the result.";
