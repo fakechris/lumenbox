@@ -65,7 +65,7 @@ function autoRuns(routine) {
     line.appendChild(el("span", "", (known ? t("ui.next.auto.outcome." + run.outcome) : run.outcome) + (run.reason ? " · " + run.reason : "")));
     // What the run cost and where it is (INV-2036): a run that did nothing shows it, not just "Done".
     if (run.ms != null) line.appendChild(el("span", "why", t("ui.next.auto.took", { s: Math.round(run.ms / 1000), tokens: (run.tokens || 0).toLocaleString() })));
-    if (run.agentId && run.outcome !== "skipped" && run.outcome !== "observed") {
+    if (run.agentId && (run.outcome === "running" || run.tokens > 0)) { // a run that never started has no chat to open
       var go = el("button", "act", t("ui.next.auto.openRun", { name: run.agentName || "" }));
       go.addEventListener("click", function () { openChat(run.agentId); });
       line.appendChild(go);
