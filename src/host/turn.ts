@@ -1364,6 +1364,13 @@ export function historyToMessages(
   return mergeAdjacent(repairPairs(messages));
 }
 
+function appendUserNudge(messages: Anthropic.MessageParam[], text: string): void {
+  const nudge: Anthropic.TextBlockParam = { type: "text", text };
+  const last = messages.at(-1);
+  if (last?.role !== "user") messages.push({ role: "user", content: [nudge] });
+  else last.content = typeof last.content === "string" ? [{ type: "text", text: last.content }, nudge] : [...last.content, nudge];
+}
+
 /**
  * Builds the tool_result content block for one tool call.
  *
@@ -1430,7 +1437,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     ? inbound.map(message => message.work).find(stamp => stamp && bus.workAttention!.valid(stamp, agent.id)) ??
       (inbound[0]?.goal ? bus.workAttention.existing(agent.id, conversation, inbound[0].goal.workId, inbound[0].goal.taskId) : deps.resumeOf?.workId ? bus.workAttention.existing(agent.id, conversation, deps.resumeOf.workId) : undefined) : undefined;
   const historyConversation = workHistoryConversation(work, agent.id, conversation);
-  let blockedCapability: string | undefined; let confirmationPending = false;
+  let blockedCapability: string | undefined; let confirmationPending = false, questionDelivered = false;
   const registry = workRegistry(deps.registry, agent.id, conversation, historyConversation, work, entry => personAuthoredText(entry as HistoryEntry) ?? (givesTasks(entryChannel(entry as HistoryEntry)) ? entry.text : undefined));
   const audit = admittedAudit(inbound);
   const auditValid = () => !audit || !!audit.planId && !!deps.tasks?.get(audit.taskId) && auditCurrent(audit, agent.id, conversation, deps.tasks) && deps.resultChecks?.active(deps.tasks.get(audit.taskId)!, audit.planId, agent.id) === true;
@@ -2159,9 +2166,7 @@ ${outcome.text}`;
   let toolCallsInTurn = 0;
   // Their names, for the claim guard (INV-779): "已发送" with no reach-tier call this turn.
   const toolNamesInTurn: string[] = [];
-  // Guard bookkeeping: how many times the model was sent back, whether a send-back is
-  // awaiting its answer (so the answer can be logged as complied or not), and whether the
-  // closing nudge has been spent.
+  // Guard bookkeeping: bounded send-backs, a pending compliance check, and a one-time closing nudge.
   let guardNudges = 0;
   let guardPending: GuardReason | undefined;
   let closingNudged = false;
@@ -2245,7 +2250,7 @@ ${outcome.text}`;
         marker: goal,
         turnId,
         conversation,
-        how: endedHow ?? "failed", ...(stoppedBy !== undefined ? { stopReason: stoppedBy } : {}),
+        how: endedHow === "waiting_confirmation" && !questionDelivered ? "empty_output" : endedHow ?? "failed", ...(stoppedBy !== undefined ? { stopReason: stoppedBy } : {}),
         worked: [...toolsUsedThisTurn].some(isWorkingTool),
         cost: weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS) + asideCost,
         ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),
@@ -2302,9 +2307,9 @@ ${outcome.text}`;
   let newerChecked = false;
   // Set while the newer-message look is the round in flight: the reply it is about.
   let newerLook: string | undefined;
-  // A one-round demand that the next response contain a tool call (docs/31 layer 1d/1e):
-  // set by a guard, spent by the next request, never carried further.
+  // A guard's tool choice is spent by the next request (docs/31 layer 1d/1e).
   let forceTools: Anthropic.MessageCreateParams["tool_choice"] | undefined;
+  let closingReply = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -2331,8 +2336,7 @@ ${outcome.text}`;
       return;
     }
 
-    // Steering: what the user said while this turn was running, consumed at the round boundary instead of
-    // waiting for the whole turn to end. "Actually, also change the title" lands in the next request, mid-task,
+    // Steering arrives at the round boundary instead of waiting for the whole turn to end,
     // with all the work so far intact — the alternative was minutes of latency or an interrupt that threw the
     // work away. Only the user's own messages steer: a teammate's message is new work that deserves its own
     // turn and its own causal record, and that behaviour is pinned by the race catalog. Appended at the tail,
@@ -2415,6 +2419,7 @@ ${outcome.text}`;
     let estimated = calibratedTokens(wire, requestEstimate.total);
     if (round > 0 && estimated - calibratedTokens(wire, requestEstimate.floor) > policyForModel(answering.model).triggerTokens) {
       await refreshContext();
+      if (closingReply && !audit) appendUserNudge(messages, closingNudge(chinese, interimDelivered));
       if (deps.policy?.isStopped(agent.id)) return;
       requestEstimate = estimateRequestTokens({ messages, system, tools });
       estimated = calibratedTokens(wire, requestEstimate.total);
@@ -2513,9 +2518,9 @@ ${outcome.text}`;
           : {}),
         ...effortConfig(answering, "turn", deps.effort),
         system,
-        tools,
+        tools: closingReply ? [] : tools,
         messages,
-        ...(forceTools !== undefined ? { tool_choice: forceTools } : {}),
+        ...(!closingReply && forceTools !== undefined ? { tool_choice: forceTools } : {}),
       },
       { signal: attemptControl.signal }
     );
@@ -2785,6 +2790,7 @@ ${outcome.text}`;
       return;
     }
 
+    if (closingReply) response.content = response.content.filter(block => block.type !== "tool_use");
     // The output gate (INV-761): a response with no structured call whose text is a call written out, or a loop
     // that ran to the cap, is not an answer. Discarded before it reaches the transcript — which is what the
     // channels deliver from — and before any guard reads it; asked for once more; a second one fails the turn
@@ -2822,26 +2828,15 @@ ${outcome.text}`;
           );
         }
         malformedRetries += 1;
-        // Nothing of the discarded reply is appended, so the request still ends on the
-        // person's side; the nudge joins that message, because the Anthropic wire rejects
-        // two user messages in a row.
-        const nudge: Anthropic.TextBlockParam = { type: "text", text: malformedNudge(malformed.kind, tools.length > 0, chinese) };
-        const last = messages[messages.length - 1];
-        if (last !== undefined && last.role === "user") {
-          last.content = typeof last.content === "string"
-            ? [{ type: "text", text: last.content }, nudge]
-            : [...last.content, nudge];
-        } else {
-          messages.push({ role: "user", content: [nudge] });
-        }
+        // The discarded reply is not appended. Join the nudge to the last user message to keep the wire's alternating roles.
+        appendUserNudge(messages, malformedNudge(malformed.kind, closingReply ? "closing" : tools.length > 0, chinese));
         round -= 1; // retry this round rather than consuming one
         continue;
       }
     }
 
-    // Append the whole content array, not just text: tool_use blocks and thinking
-    // blocks have to be echoed back unchanged for the next round to be valid.
-    messages.push({ role: "assistant", content: response.content });
+    closingReply = false;
+    messages.push({ role: "assistant", content: response.content }); // Echo tool_use and thinking unchanged.
 
     // The newer-message look is a no-tools round (INV-1189). tool_choice "none" is a request a
     // model can ignore, so here it is enforced: calls are dropped, never run, and an empty
@@ -3047,14 +3042,20 @@ ${outcome.text}`;
         }
       }
 
-      // The closing send (Grok Bot's `turnEndedOnSilentToolCalls`, docs/31 layer 1b): the
-      // person saw the opening line, then tools ran, then nothing. Once.
-      if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled() && tools.length > 0) {
-        closingNudged = true;
-        console.error(`[conduct] ${agent.profile.name}: closing nudge (acknowledged, ran tools, ended silent)`);
-        messages.push({ role: "user", content: closingNudge(chinese) });
-        finishing = false;
-        continue;
+      if (!finalText.trim() && personOpened && !closingNudged && !questionDelivered) {
+        const prior = messages.slice(0, -1).findLast(message => message.role === "assistant" ||
+          (Array.isArray(message.content) && message.content.some(block => block.type === "tool_result")));
+        const toolsSucceeded = !confirmationPending && prior?.role === "user" && Array.isArray(prior.content)
+          && prior.content.every(block => block.type !== "tool_result" || block.is_error !== true);
+        if (toolsSucceeded || (interimDelivered && guardsEnabled() && tools.length > 0)) {
+          closingNudged = closingReply = true;
+          console.error(`[conduct] ${agent.profile.name}: closing nudge (ran tools, ended without a reply)`);
+          messages.pop();
+          appendUserNudge(messages, closingNudge(chinese, interimDelivered));
+          if (round === MAX_ROUNDS - 1) round -= 1;
+          finishing = false;
+          continue;
+        }
       }
 
       if (finalText.trim()) {
@@ -3099,7 +3100,7 @@ ${outcome.text}`;
         relayProseToPeer(answer);
         return;
       }
-
+      if (confirmationPending) { finish("waiting_confirmation"); return; }
       // A turn that ends with nothing to say used to end silently: nothing appended, nothing
       // emitted. From the person's side that is "I asked and nothing happened", which is the
       // worst-feeling failure there is — indistinguishable from a hang, a crash, or being ignored.
@@ -3385,7 +3386,7 @@ ${outcome.text}`;
       }
       if (work && outcome.unavailable) { blockedCapability = outcome.unavailable; bus.workAttention?.capability(work, agent.id, outcome.unavailable, false); }
       if (work && requiredComputerTool && !outcome.isError) bus.workAttention?.capability(work, agent.id, calledTool, true);
-      if (!outcome.isError && ["AskUser", "AskSecret", "HandOverDesktop"].includes(toolUse.name)) confirmationPending = true;
+      if (!outcome.isError && ["AskUser", "AskSecret", "HandOverDesktop"].includes(toolUse.name)) { confirmationPending = true; questionDelivered ||= toolUse.name === "AskUser"; }
       if (outcome.approval !== undefined) {
         confirmationPending = true;
         deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);

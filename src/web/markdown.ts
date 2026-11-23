@@ -47,15 +47,17 @@ export const VENDOR_MARKDOWN_IT = "markdown-it/browser";
  *
  * AGENTBOX_VENDOR_DIR first, because the box has no node_modules: when the host runs
  * inside the box image it is a single bundled file, and the browser build is copied in
- * beside it. On a developer's machine the module resolution is the right answer.
+ * beside it. Source and npm builds resolve the package instead.
  */
-export function vendorPath(spec: string = VENDOR_MARKDOWN_IT): string {
+export function vendorPath(): string {
   const dir = process.env.AGENTBOX_VENDOR_DIR;
   if (dir) {
     const copied = join(dir, "markdown-it.js");
     if (existsSync(copied)) return copied;
   }
-  return createRequire(import.meta.url).resolve(spec);
+  const bundled = fileURLToPath(new URL("./markdown-it.js", import.meta.url));
+  if (existsSync(bundled)) return bundled;
+  return createRequire(import.meta.url).resolve(VENDOR_MARKDOWN_IT);
 }
 
 /**

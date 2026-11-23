@@ -6017,7 +6017,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const membership =
               entry === undefined
                 ? {}
-                : { members: entry.members, membersLabel: membersLabel(entry, nameOfPrincipal) };
+                : { members: entry.members, membersLabel: membersLabel(entry, nameOfPrincipal, localeOf(req, url)) };
             const registration = connectCodes.registrationOf(box.id);
             return registration === undefined
               ? { ...box, ...membership }
