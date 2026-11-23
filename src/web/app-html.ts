@@ -7111,7 +7111,8 @@ function openShelf(preferredBox) {
   fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
     var boxes = d.boxes || [];
     $("shelfbox").innerHTML = boxes.map(function (b) {
-      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " {{ui.app.docker}}" : " {{ui.app.attached-2}}") + "</option>";
+      var kind = b.kind === "kubernetes" ? " (" + b.kind + ")" : b.kind === "docker" ? " {{ui.app.docker}}" : " {{ui.app.attached-2}}";
+      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + kind + "</option>";
     }).join("");
     var html = "";
     var market = d.marketplace || [];

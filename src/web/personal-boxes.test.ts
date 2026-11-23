@@ -99,6 +99,22 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   });
   assert.match(subtitles[computers.data.boxes.findIndex((row: { id: string }) => row.id === computers.data.own)] ?? "", /^kubernetes · /);
   assert.ok(subtitles.every(value => !/docker/i.test(value)));
+
+  const shelf = await request("/api/templates/shelf", "web:alice");
+  const shelfPage = page.slice(page.indexOf("function openShelf("), page.indexOf('$("shelfopen").onclick'));
+  const select = { innerHTML: "" };
+  const panel = { innerHTML: "", style: {}, textContent: "" };
+  runInNewContext(shelfPage + "openShelf(currentBox);", {
+    currentBox: state.data.box.own, esc: String, $: (id: string) => id === "shelfbox" ? select : panel,
+    loadPersonalBoxes() {}, shelfCard: () => "", document: { getElementById: () => null },
+    fetch: async (path: string) => {
+      assert.equal(path, "/api/templates/shelf");
+      return { json: async () => shelf.data };
+    },
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(select.innerHTML, / selected>[^<]+ \(kubernetes\)<\/option>/, "INV-2069: Stamp into names the shared backend");
+  assert.doesNotMatch(select.innerHTML, /docker/i);
   assert.equal(sharedDials, 0);
   assert.ok(!logs.some(line => /Docker lookup|docker inspect|box update:/.test(line)));
 });
