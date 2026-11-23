@@ -2829,7 +2829,7 @@ ${outcome.text}`;
         }
         malformedRetries += 1;
         // The discarded reply is not appended. Join the nudge to the last user message to keep the wire's alternating roles.
-        appendUserNudge(messages, malformedNudge(malformed.kind, tools.length > 0, chinese));
+        appendUserNudge(messages, malformedNudge(malformed.kind, closingReply ? "closing" : tools.length > 0, chinese));
         round -= 1; // retry this round rather than consuming one
         continue;
       }

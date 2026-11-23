@@ -87,7 +87,12 @@ for (const recovers of [true, false]) {
           }
           return undefined;
         }
-        assert.equal(round, 3, "only one recovery request");
+        if (recovers && round === 4) {
+          assert.deepEqual(offered, [], "the malformed-reply retry is still text-only");
+          assert.match(JSON.stringify(messages), /Do not call tools\. Reply in plain text/);
+          return { say: greeting };
+        }
+        assert.equal(round, 3, "only one closing nudge");
         const tail = messages.slice(messages.findLastIndex(message => message.role === "assistant") + 1);
         const blocks = tail.flatMap(message => typeof message.content === "string" ? [] : message.content);
         const result = blocks.find(block => block.type === "tool_result");
@@ -95,11 +100,11 @@ for (const recovers of [true, false]) {
         assert.ok(result?.type === "tool_result" && !result.is_error, "the successful tool result remains paired");
         assert.ok(nudge?.type === "text" && /answer them now/.test(nudge.text), "the retry asks for a reply");
         assert.deepEqual(offered, [], "the recovery request can only reply");
-        return recovers ? { call: "list_dir", input: { path: "/home/box/work" }, saying: greeting } : undefined;
+        return recovers ? { call: "list_dir", input: { path: "/home/box/work" }, saying: '<tool_call>\n{"name":"list_dir","arguments":{}}\n</tool_call>' } : undefined;
       },
     });
     try {
-      assert.equal(episode.score.rounds, 4);
+      assert.equal(episode.score.rounds, recovers ? 5 : 4);
       assert.deepEqual(episode.score.trail, recovers ? ["Ada:read_file", "Ada:list_dir", "Ada:list_dir"] : ["Ada:read_file", "Ada:list_dir"]);
       assert.deepEqual(episode.score.refusals, []);
       const transcript = episode.registry.readTranscript(episode.registry.resolve("Ada").id) as TranscriptEntry[];
