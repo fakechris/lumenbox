@@ -65,7 +65,7 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.equal(personal.status, 200);
   assert.equal(personal.data.boxes[0].podStatus, "Running");
   assert.equal(personal.data.boxes[0].status, "unreachable", "pod phase and server reachability are different");
-  const computers = await request("/api/boxes", "web:alice");
+  const computers = await request("/api/boxes?lang=en", "web:alice");
   assert.equal(computers.data.namespace, "org-test");
   const box = computers.data.boxes.find((box: { id: string }) => box.id === personal.data.boxId);
   assert.equal(box.kind, "kubernetes");
@@ -93,7 +93,10 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   const external = { id: "external", kind: "attached", name: "Remote VM", displayFloor: 1, agents: 0 };
   await runInNewContext(listScript + "renderBoxes();", {
     $: () => settings, esc: String, t: String, myRole: "admin", renderDesktopResources: () => "",
-    fetch: async () => ({ json: async () => ({ ...computers.data, boxes: [...computers.data.boxes, external] }) }),
+    fetch: async (path: string) => {
+      assert.equal(path, "/api/boxes?lang=en");
+      return { json: async () => ({ ...computers.data, boxes: [...computers.data.boxes, external] }) };
+    },
   });
   assert.match(settings.innerHTML, /data-detach-box="Remote VM">/, "the first visible attached box can be detached");
 
@@ -104,7 +107,7 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
     view: node, initial: String, t: String,
     el: (_tag: string, style: string, value: string) => {
       if (style === "why") subtitles.push(value);
-      return { ...node };
+      return { ...node, dataset: {} };
     },
   });
   assert.match(subtitles[computers.data.boxes.findIndex((row: { id: string }) => row.id === computers.data.own)] ?? "", /^kubernetes · /);

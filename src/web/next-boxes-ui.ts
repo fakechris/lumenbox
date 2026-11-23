@@ -55,7 +55,11 @@ function boxWhy(box) {
 
 /** Said beside the agents when the computer they are on is not reachable: it explains every silence below it. */
 function boxNotice() {
-  var box = boxById(chat.box), strip = $("box-notice");
+  var box = boxById(chat.box), strip = $("box-notice"), members = $("box-members");
+  if (box && box.members === "everyone" && box.membersLabel) {
+    if (members.dataset.label !== box.membersLabel) { members.replaceChildren(boxMembers(box)); members.dataset.label = box.membersLabel; }
+  } else { members.replaceChildren(); delete members.dataset.label; }
+  members.hidden = !members.firstChild;
   strip.hidden = !box || box.connected !== false;
   if (strip.hidden) return;
   if (box.kind === "kubernetes" && box.id !== boxes.own) {
@@ -85,12 +89,22 @@ function boxNotice() {
   }
 }
 
+function boxMembers(box) {
+  if (box.members !== "everyone") return el("div", "why", box.membersLabel);
+  var details = el("details", "box-members");
+  details.dataset.boxId = box.id;
+  details.appendChild(el("summary", "", t("ui.access.shared")));
+  details.appendChild(el("div", "", box.membersLabel));
+  return details;
+}
+
 function renderBoxes(view) {
   var list = el("div", "list");
   boxes.list.forEach(function (box) {
-    var row = el("div", "row"), body = el("span", "body");
+    var row = el("div", "row"), body = el("div", "body");
     body.appendChild(el("div", "title", box.name));
-    body.appendChild(el("div", "why", [box.kind, t("ui.next.box.agents", { n: box.agents || 0 }), box.version || "", box.membersLabel || ""].filter(Boolean).join(" · ")));
+    body.appendChild(el("div", "why", [box.kind, t("ui.next.box.agents", { n: box.agents || 0 }), box.version || ""].filter(Boolean).join(" · ")));
+    if (box.membersLabel) body.appendChild(boxMembers(box));
     row.appendChild(el("span", "who", initial(box.name)));
     row.appendChild(body);
     row.appendChild(el("span", box.connected ? "chip-run" : "chip", t(box.connected ? "ui.next.box.on" : "ui.next.box.off")));
