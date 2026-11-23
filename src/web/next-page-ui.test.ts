@@ -42,9 +42,12 @@ test("Files opens in the main view and downloads from the selected box", async (
   assert.match(NEXT_PAGE("en"), /data-nav="files">Files<\/button>/);
   const boxes = [{ id: "private", name: "Personal box" }, { id: "shared", name: "Shared box" }];
   const pending: { path: string; resolve: (listing: unknown) => void }[] = [];
+  const clicks = new Map<string, () => void>();
   const node = (tag: string, cls = "", text = "") => ({
     tag, cls, text, kids: [] as unknown[], classList: { add() {} },
-    appendChild(child: unknown) { this.kids.push(child); }, addEventListener() {}, setAttribute() {},
+    appendChild(child: unknown) { this.kids.push(child); },
+    addEventListener(event: string, run: () => void) { if (event === "click") clicks.set(text, run); },
+    setAttribute() {},
   });
   let view = node("main");
   const context = vm.createContext({
@@ -61,7 +64,8 @@ test("Files opens in the main view and downloads from the selected box", async (
   pending[0]!.resolve({ root: "/work", path: "/work", entries: [{ name: "private.md", type: "file", size: 1 }] });
   pending[1]!.resolve({ root: "/work", path: "/work", entries: [
     { name: "one turn.md", type: "file", size: 47 },
-    { name: "latest.md", type: "symlink", target_in_work: true },
+    { name: "latest.md", type: "symlink", target_in_work: true, target_type: "file" },
+    { name: "archive-link", type: "symlink", target_in_work: true, target_type: "directory" },
     { name: "outside.md", type: "symlink", target_in_work: false },
     { name: "broken.md", type: "symlink", target_in_work: false },
     { name: "unverified.md", type: "symlink" },
@@ -71,6 +75,10 @@ test("Files opens in the main view and downloads from the selected box", async (
   assert.match(JSON.stringify(view), /one turn.md.*\/api\/file\?boxId=shared&path=%2Fwork%2Fone%20turn.md/);
   assert.match(JSON.stringify(view), /latest\.md.*\/api\/file\?boxId=shared&path=%2Fwork%2Flatest\.md/);
   assert.doesNotMatch(JSON.stringify(view), /(?:outside|broken|unverified)\.md/);
+  assert.doesNotMatch(JSON.stringify(view), /\/api\/file\?boxId=shared&path=%2Fwork%2Farchive-link/);
+  assert.ok(clicks.has("archive-link/"), "an in-root directory alias is a folder button, not a download");
+  clicks.get("archive-link/")!();
+  assert.equal(pending[2]!.path, "/api/files?boxId=shared&dir=%2Fwork%2Farchive-link");
 });
 
 test("automation refresh shows discovery, ignores an old response and renders the new paused routine", async () => {

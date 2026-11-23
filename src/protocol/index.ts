@@ -500,7 +500,7 @@ export interface ListDirRequest {
 
 export interface DirEntry {
   name: string;
-  type: "file" | "directory" | "symlink" | "other"; target_in_work?: boolean;
+  type: "file" | "directory" | "symlink" | "other"; target_in_work?: boolean; target_type?: "file" | "directory";
   size: number;
   /**
    * Last modified, ISO 8601.

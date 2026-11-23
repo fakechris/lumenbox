@@ -292,9 +292,14 @@ async function listEntries(directory: string, workRoot?: string): Promise<DirEnt
     try {
       const path = resolve(directory, name);
       const info = await lstat(path);
-      const targetInWork = workRoot !== undefined && info.isSymbolicLink()
-        ? await realpath(path).then(target => withinDownloadRoot(target, workRoot), () => false)
+      const target = workRoot !== undefined && info.isSymbolicLink()
+        ? await realpath(path).catch(() => undefined)
         : undefined;
+      const targetInWork = workRoot !== undefined && info.isSymbolicLink()
+        ? target !== undefined && withinDownloadRoot(target, workRoot)
+        : undefined;
+      const targetInfo = targetInWork && target !== undefined ? await lstat(target).catch(() => undefined) : undefined;
+      const targetType = targetInfo?.isFile() ? "file" : targetInfo?.isDirectory() ? "directory" : undefined;
       entries.push({
         name,
         type: info.isDirectory()
@@ -307,6 +312,7 @@ async function listEntries(directory: string, workRoot?: string): Promise<DirEnt
         size: info.size,
         modified: info.mtime.toISOString(),
         ...(targetInWork === undefined ? {} : { target_in_work: targetInWork }),
+        ...(targetType === undefined ? {} : { target_type: targetType }),
       });
     } catch {
       // A entry that vanished between readdir and lstat is not worth failing over.

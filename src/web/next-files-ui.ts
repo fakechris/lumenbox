@@ -15,6 +15,11 @@ function readWorkFiles(box, dir) {
   });
 }
 
+function workFileType(entry) {
+  if (entry.type === "symlink" && entry.target_in_work === true) return entry.target_type;
+  return entry.type;
+}
+
 function renderFiles(view) {
   var available = boxes.list, active = boxById(workFiles.box);
   if (!active) {
@@ -49,12 +54,13 @@ function renderFiles(view) {
     list.appendChild(el("p", "why", workFiles.loading ? t("ui.next.auto.reading") : workFiles.error));
   } else {
     var entries = workFiles.entries.filter(function (entry) {
-      return entry.type === "directory" || entry.type === "file" || (entry.type === "symlink" && entry.target_in_work === true);
+      var type = workFileType(entry);
+      return type === "directory" || type === "file";
     });
     if (!entries.length) list.appendChild(el("p", "why", t("ui.next.screen.empty")));
     entries.forEach(function (entry) {
       var path = folder.replace(/\\/$/, "") + "/" + entry.name;
-      if (entry.type === "directory") {
+      if (workFileType(entry) === "directory") {
         var open = el("button", "file", entry.name + "/");
         open.addEventListener("click", function () { readWorkFiles(active.id, path); render(); });
         list.appendChild(open);
