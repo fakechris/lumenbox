@@ -773,7 +773,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The people, and the one-time migration from the old flat allow list: every
   // identity that used to be a bare channel grant becomes a driver principal, so a
   // person's existing access survives the upgrade rather than being silently revoked.
-  const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`) });
+  // The screens already open, asked again whenever the roster or a sign-in generation changes (INV-2071).
+  const openDesktops = new OpenDesktops();
+  const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`), changed: () => openDesktops.recheck() });
   /** What a task's mandate is checked against now (INV-1457): the principal's role today and the rule set as loaded. */
   const mandateWorld = (): MandateWorld => ({
     mayDrive: id => roleAtLeast(principals.list().find(person => person.id === id)?.role ?? principals.roleOf(id), "driver"),
@@ -2929,7 +2931,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Whether this installation is reached over TLS, so cookies can say Secure (INV-578). */
   let secureCookies = false;
   // Which generation of each person's sign-ins is still good (INV-537).
-  const epochs = new SessionEpochs(); const openDesktops = new OpenDesktops(); // and the screens already open, asked again when who may do what changes (INV-2071)
+  const epochs = new SessionEpochs(undefined, () => openDesktops.recheck());
 
   /**
    * Who may be served at all: the installation token, or a person's own session.
@@ -4880,7 +4882,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               identities,
             });
           }
-          principals.save(roster); openDesktops.recheck();
+          principals.save(roster);
           log(`principals roster updated (${roster.length} people)`);
           send(res, 200, { principals: principals.list() });
           return;
@@ -4900,7 +4902,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, apiError("person-unknown", { person: principalId }));
             return;
           }
-          const epoch = epochs.bump(person.id); openDesktops.recheck();
+          const epoch = epochs.bump(person.id);
           log(`signed out everywhere: ${person.name} (generation ${epoch})`);
           send(res, 200, { name: person.name, epoch });
           return;

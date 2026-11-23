@@ -149,6 +149,7 @@ export class Principals {
   private byAlias = new Map<string, StoredPrincipal>();
   private readonly incarnationOf: (identity: string) => number;
   private readonly warn: (line: string) => void;
+  private readonly changed: () => void;
 
   constructor(
     private readonly path: string = principalsPath(),
@@ -161,10 +162,13 @@ export class Principals {
        */
       incarnationOf?: (identity: string) => number;
       warn?: (line: string) => void;
+      /** After every save: who may do what may have changed (INV-2071). */
+      changed?: () => void;
     } = {}
   ) {
     this.incarnationOf = options.incarnationOf ?? (() => 1);
     this.warn = options.warn ?? (line => console.error(`[principals] ${line}`));
+    this.changed = options.changed ?? (() => {});
     this.reload();
   }
 
@@ -300,6 +304,11 @@ export class Principals {
    * the file never stores the conflict `reload` would have to resolve.
    */
   save(principals: Principal[]): void {
+    this.write(principals);
+    this.changed();
+  }
+
+  private write(principals: Principal[]): void {
     withRosterLock(this.path, () => {
     const previous = new Map<string, number>();
     // Aliases are the merge's record, not something the People dialog edits: a save keeps them.
