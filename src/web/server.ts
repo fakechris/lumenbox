@@ -2964,7 +2964,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const unavailable = personalBoxes.unavailable();
     const box = (id: string) => {
       const entry = registry.boxById(id);
-      return !!entry && !unavailable.has(id) && (entry.members === "everyone" || (principals.isKnown(principalId) && mayEnterBox(entry, principals.resolve(principalId).id)));
+      return !!entry && !unavailable.has(id) && (entry.members === "everyone" || ((person => person !== undefined && mayEnterBox(entry, person.id))(principals.personOf(principalId))));
     };
     return { box, agent: id => registry.has(id) && box(registry.boxOf(id).id) };
   }
