@@ -256,6 +256,31 @@ test("a driver with no visible box can start personal-box creation from setup", 
   assert.ok(created);
 });
 
+test("creating a personal box from chat clears the previous transcript before refresh renders", async () => {
+  const chat = {
+    box: "shared", agentId: "ada", entries: [{ text: "shared transcript" }], live: { text: "live reply" },
+    liveSurfaces: { form: {} }, loadedFor: "ada", loading: "ada", conversation: "topic", request: 2,
+  };
+  let refreshed = false;
+  const create = pageFunction("createSetupBox", {
+    chat, settings: {}, crypto: { randomUUID: () => "request" }, render: () => {},
+    postJson: async () => ({ boxId: "personal", boxes: [{ id: "personal", status: "ready" }] }),
+    failed: (error: unknown) => { throw error; }, refresh: () => { refreshed = true; },
+  });
+  create();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(refreshed);
+  assert.equal(chat.box, "personal");
+  assert.equal(chat.agentId, "");
+  assert.equal(chat.entries.length, 0);
+  assert.equal(chat.live, null);
+  assert.deepEqual(Object.keys(chat.liveSurfaces), []);
+  assert.equal(chat.loadedFor, "");
+  assert.equal(chat.loading, "");
+  assert.equal(chat.conversation, "main");
+  assert.equal(chat.request, 3, "late progress for the previous agent is ignored");
+});
+
 test("new agent box picker shows the selected box and remembers a changed target", () => {
   const member = { boxId: "personal" };
   const pickBox = pageFunction("memberBoxField", {

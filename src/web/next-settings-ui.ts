@@ -110,6 +110,9 @@ function createSetupBox() {
     var box = (got.boxes || []).find(function (row) { return row.id === got.boxId; });
     if (!box || box.status !== "ready") throw new Error(box && box.error || t("ui.next.box.off"));
     settings.boxRequest = ""; chat.box = box.id; chat.agentId = "";
+    chat.entries = []; chat.live = null; chat.liveSurfaces = {}; chat.plan = null;
+    chat.conversation = "main"; chat.loading = ""; chat.loadedFor = ""; chat.request++;
+    chat.find = ""; chat.focus = "";
   }).catch(failed).finally(function () { settings.creatingBox = false; refresh(); });
 }
 
