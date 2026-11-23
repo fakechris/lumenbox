@@ -400,13 +400,13 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
       });
       return { status: response.status, data: await response.json() };
     };
-    assert.equal((await call("/api/quotas", { personalBoxQuota: 1, personBoxQuotas: { alice: 2 } })).status, 200);
+    assert.equal((await call("/api/quotas", { personalBoxQuota: 1, personBoxQuotas: { alice: 2, charlie: 2 } })).status, 200);
     const collection = "/api/personal-boxes";
-    const create = async (person: string, name: string) => {
-      const result = await call(collection + "/create", { requestId: "first", name }, person);
+    const create = async (person: string, name: string, requestId = "first") => {
+      const result = await call(collection + "/create", { requestId, name }, person);
       assert.equal(result.status, 200, JSON.stringify(result.data));
-      assert.equal(result.data.boxes[0].status, "ready");
-      return result.data.boxes[0].id as string;
+      assert.equal(result.data.boxes.find((box: { id: string }) => box.id === result.data.boxId)?.status, "ready");
+      return result.data.boxId as string;
     };
     const alice = await create("alice", "Alice’s computer");
     const bob = await create("bob", "Bob’s computer");
@@ -488,10 +488,13 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.equal((await call(collection, undefined, "admin")).data.boxes[0].agents[0], "Bea");
 
     roster = roster.filter(person => person.id !== "charlie");
-    const transfer = { action: "transfer", recipient: "alice", boxIds: [charlie] };
+    const spare = await create("charlie", "Charlie’s spare", "spare");
+    assert.equal((await call(collection + "/remove", { id: spare, deleteData: false }, "charlie")).status, 200);
+    const transfer = { action: "transfer", recipient: "alice", boxIds: [charlie, spare] };
     assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { charlie: transfer } })).status, 200);
     assert.equal((await call(collection, undefined, "alice")).data.held, 2);
     assert.ok(fake.pods.has(resource(charlie)), "transfer retained the original pod and volumes");
+    assert.equal((await admin()).data.boxes.find((box: { id: string }) => box.id === spare).owner, "alice");
     roster = roster.filter(person => person.id !== "dana");
     const erase = { action: "delete", boxIds: [dana], agentIds: [dee.id] };
     assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { dana: erase } })).status, 200);

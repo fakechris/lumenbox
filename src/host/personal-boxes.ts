@@ -6,6 +6,10 @@ import type { BoxEntry } from "../box/boxes.ts";
 import { personalBoxesOf } from "./box-quota.ts";
 
 type Status = "provisioning" | "ready" | "failed" | "deleting" | "detached" | "deleted";
+export function personalBoxUsesQuota(status: Status | "interrupted"): boolean {
+  return status === "provisioning" || status === "ready" || status === "deleting";
+}
+
 export interface PersonalBoxRecord {
   id: string;
   owner: string;
@@ -173,7 +177,7 @@ export class PersonalBoxes {
     const managed = new Set(rows.map(row => row.id));
     return [
       ...this.options.entries().filter(entry => !managed.has(entry.id)),
-      ...rows.filter(row => !row.retained && ["provisioning", "ready", "deleting"].includes(row.status)).map(row => this.entry(row)),
+      ...rows.filter(row => !row.retained && personalBoxUsesQuota(row.status)).map(row => this.entry(row)),
     ];
   }
   private read<T>(action: (db: DatabaseSync) => T): T {
@@ -471,7 +475,7 @@ export class PersonalBoxes {
       this.allowed(owner);
       const quota = this.options.quota(owner);
       const held = personalBoxesOf(this.combined(db), owner).filter(entry => entry.id !== id).length;
-      if (quota !== undefined && held >= quota) throw new Error("The recipient has no personal box quota available");
+      if (personalBoxUsesQuota(row.status) && quota !== undefined && held >= quota) throw new Error("The recipient has no personal box quota available");
       if (this.options.entries().some(entry => entry.id === id)) this.options.attach({ ...this.entry(row), members: [owner] });
       this.save(db, { ...row, owner, ownerName, retained: false, request: `transfer-${randomUUID()}` });
     });

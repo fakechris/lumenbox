@@ -1,4 +1,4 @@
-import type { PersonalBoxes } from "../host/personal-boxes.ts";
+import { personalBoxUsesQuota, type PersonalBoxes } from "../host/personal-boxes.ts";
 import { roleAtLeast, type Principal, type Principals } from "../host/principals.ts";
 import { personalBoxesOf } from "../host/box-quota.ts";
 import type { apiError } from "./api-error.ts";
@@ -177,10 +177,12 @@ export function planBoxDispositions(
     if (choice.action === "transfer") {
       const recipient = roster.find(person => person.id === choice.recipient && roleAtLeast(person.role, "driver") && person.identities.length > 0);
       if (!recipient || !authorize(recipient.id)) throw new Error("Choose an eligible team member for the transfer.");
-      const held = personalBoxesOf(entries, recipient.id).length + (assigned.get(recipient.id) ?? 0);
-      const limit = quota(recipient.id);
-      if (limit !== undefined && held >= limit) throw new Error("The recipient has no personal box quota available.");
-      assigned.set(recipient.id, (assigned.get(recipient.id) ?? 0) + 1);
+      if (personalBoxUsesQuota(box.status)) {
+        const held = personalBoxesOf(entries, recipient.id).length + (assigned.get(recipient.id) ?? 0);
+        const limit = quota(recipient.id);
+        if (limit !== undefined && held >= limit) throw new Error("The recipient has no personal box quota available.");
+        assigned.set(recipient.id, (assigned.get(recipient.id) ?? 0) + 1);
+      }
       return async () => { boxes.transfer(box.id, recipient.id, recipient.name); };
     }
     const deleteData = choice.action === "delete";
