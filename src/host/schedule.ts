@@ -269,6 +269,8 @@ export interface SchedulerDeps {
    * its prompt so a retro opens with its own previous "next week" rather than a blank.
    */
   priorCommitments?: (slug: string) => string | undefined;
+  /** Why the agent cannot take a routine's turn in its chat now (INV-2036): skipped when due, refused by hand, never a 0-second Done. */
+  busy?: (skill: { slug: string; name: string; deliver?: string }, agent: string) => RoutineReason | undefined;
   /** The work directory of an agent's box, which a run's prompt names (INV-1737); the image's when not given. */
   workDirOf?: (agent: string) => string;
   /** Who a schedule wakes when it names nobody. */
@@ -650,6 +652,13 @@ export class Scheduler {
         this.lastRun.set(skill.slug, this.now());
         continue;
       }
+      const busy = this.deps.busy?.(skill, agent);
+      if (busy !== undefined) {
+        // On the run list and not held: the next window runs once the chat is free.
+        this.lastRun.set(skill.slug, this.now());
+        this.skip(skill, busy);
+        continue;
+      }
 
       // Marked before starting, so a slow first tick cannot be overtaken by the next one.
       this.lastRun.set(skill.slug, this.now());
@@ -855,6 +864,8 @@ export class Scheduler {
     const refused = await this.refusal(skill, agent);
     if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
+    const busy = this.deps.busy?.(skill, agent);
+    if (busy !== undefined) return { ok: false, reason: `${skill.name} did not run: ${busy.text}` };
 
     this.lastRun.set(slug, this.now());
     this.log(`${skill.name}: fired by webhook`);
@@ -903,6 +914,8 @@ export class Scheduler {
     const refused = await this.refusal(skill, agent);
     if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
+    const busy = this.deps.busy?.(skill, agent);
+    if (busy !== undefined) return { ok: false, reason: `${skill.name} did not run: ${busy.text}` };
 
     this.log(`${skill.name}: firing now, ${retry !== undefined ? `retry ${retry}` : "by hand"}`);
     // By hand is still this routine running (INV-534): same slug, same opening with last

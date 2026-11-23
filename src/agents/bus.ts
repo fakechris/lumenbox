@@ -428,12 +428,13 @@ export class AgentBus {
    * a child that was admitted but never recorded as such (the crash landed between the two
    * appends) is still found this way. Returns how many were dropped.
    */
-  dropAdmissionsWhere(select: (conversation: string) => boolean): number {
-    const dropped = this.inbox?.dropWhere(item => select(item.message.conversation ?? MAIN_CONVERSATION)) ?? 0;
+  dropAdmissionsWhere(select: (conversation: string, message: InboundMessage, agentId: string) => boolean): number {
+    let dropped = this.inbox?.dropWhere(item => select(item.message.conversation ?? MAIN_CONVERSATION, item.message, item.agentId)) ?? 0;
     for (const [agentId, queue] of this.pending) {
-      const kept = queue.filter(message => !select(message.conversation ?? MAIN_CONVERSATION));
+      const kept = queue.filter(message => !select(message.conversation ?? MAIN_CONVERSATION, message, agentId));
       if (kept.length === 0) this.pending.delete(agentId);
       else if (kept.length !== queue.length) this.pending.set(agentId, kept);
+      if (this.inbox === undefined) dropped += queue.length - kept.length;
     }
     return dropped;
   }
