@@ -380,7 +380,7 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
   let stop: (() => void) | undefined;
   try {
     const people = ["Admin", "Alice", "Bob", "Charlie", "Dana"].map(name => ({
-      id: name.toLowerCase(), name, role: name === "Admin" ? "admin" as const : "driver" as const,
+      id: name.toLowerCase(), name, role: (name === "Admin" ? "admin" : "driver") as "admin" | "driver" | "viewer",
       identities: [`web:${name.toLowerCase()}`],
     }));
     const principals = new Principals();
@@ -416,6 +416,11 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const registry = new AgentRegistry(join(home, "agents"));
     const bea = registry.create({ name: "Bea", boxId: bob });
     const dee = registry.create({ name: "Dee", boxId: dana });
+    principals.save(people.map(person => person.id === "bob" ? { ...person, role: "viewer" } : person));
+    assert.equal((await call(collection + "/remove", { id: bob, deleteData: true, deleteAgents: true }, "bob")).status, 403);
+    assert.ok(registry.has(bea.id));
+    assert.ok(fake.pods.has(resource(bob)));
+    principals.save(people);
     const renamed = (await call(collection + "/rename", { id: alice, name: "Desk" }, "alice")).data.boxes[0];
     assert.equal(renamed.name, "Desk");
     assert.equal(renamed.podStatus, "Running", "pod lookup uses the Kubernetes name after rename");

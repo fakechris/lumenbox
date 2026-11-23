@@ -103,7 +103,9 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
     principals.reload();
     const person = principals.resolve(identity);
     const stillAuthorized = () => { principals.reload(); return principals.hasCurrentIdentity(person.id, identity) && roleAtLeast(principals.roleOf(identity), "driver"); };
-    if (!principals.isKnown(identity) || (action !== "remove" && !stillAuthorized())) { send(403, error("personal-box-revoked")); return; }
+    if (!principals.isKnown(identity) || ((action !== "remove" || (body.deleteData === true && body.deleteAgents === true)) && !stillAuthorized())) {
+      send(403, error("personal-box-revoked")); return;
+    }
     if (Object.keys(body).some(key => !fields.includes(key)) ||
       (action === "create" ? typeof body.requestId !== "string" : typeof body.id !== "string") ||
       (action === "remove" && (typeof body.deleteData !== "boolean" || (body.deleteAgents !== undefined && typeof body.deleteAgents !== "boolean"))) ||
