@@ -76,8 +76,28 @@ function openChat(agentId) {
   if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.plan = null; chat.liveSurfaces = {}; }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
   if (next.agents[agentId] && next.agents[agentId].boxId) chat.box = next.agents[agentId].boxId; // an agent on another computer brings its computer with it
-  history.replaceState(null, "", "?agent=" + encodeURIComponent(agentId));
   render();
+}
+
+/**
+ * Where the person is — the computer and the agent — kept in the address and in this browser, so a reload
+ * stays put and a new sign-in comes back to it (INV-2064). Drawn from the chat view only: the other views
+ * keep their own address.
+ */
+var PLACE_KEY = "lumen-place";
+function rememberPlace() {
+  if (next.view !== "chat") return;
+  var query = chat.agentId ? "?agent=" + encodeURIComponent(chat.agentId) : "";
+  // A computer chosen with no agent on it is a place too: the address stops naming the agent left behind.
+  if (chat.agentId ? location.search !== query : /[?&]agent=/.test(location.search)) history.replaceState(null, "", query || location.pathname);
+  try { localStorage.setItem(PLACE_KEY, JSON.stringify({ box: chat.box || "", agent: chat.agentId || "" })); } catch (error) {}
+}
+/** The remembered place, when the address names none. */
+function recallPlace() {
+  var place = null; try { place = JSON.parse(localStorage.getItem(PLACE_KEY) || "null"); } catch (error) {}
+  if (!place || typeof place !== "object") return;
+  if (typeof place.box === "string") chat.box = place.box;
+  if (typeof place.agent === "string" && place.agent) { chat.agentId = place.agent; document.body.dataset.open = "1"; }
 }
 
 /** What a person does with something that was said: shown on hover, never by default. */
@@ -270,6 +290,7 @@ function renderThread(view) {
 
 function renderChat(view) {
   var agent = next.agents[chat.agentId];
+  rememberPlace();
   $("view-title").textContent = agent ? agent.name : t("ui.next.nav.chat"); $("view-title").title = agent ? t("ui.next.thread.agent") : "";
   $("view-hint").textContent = agent ? (agent.title || agent.description || "") : "";
   $("composer").hidden = !agent;
@@ -361,5 +382,6 @@ function chatStart() {
   $("back").addEventListener("click", function () { next.view = "chat"; delete document.body.dataset.open; render(); });
   var asked = new URLSearchParams(location.search).get("agent"), thread = new URLSearchParams(location.search).get("conversation");
   if (asked) { chat.agentId = asked; if (thread && thread !== "main") chat.focus = thread; document.body.dataset.open = "1"; }
+  else if (!/[?&](view|task|pane|import)=/.test(location.search)) recallPlace();
 }
 `;

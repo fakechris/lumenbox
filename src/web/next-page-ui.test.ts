@@ -882,3 +882,24 @@ test("a row's one line: what the member asks of the person, else what it says it
     assert.doesNotMatch(MESSAGES.en[key]!, /execution|linked|retained|authori[sz]ed|scope/i, key);
   }
 });
+
+test("a reload stays on the computer and agent the person was on, and a new sign-in comes back to them (INV-2064)", () => {
+  const stored = new Map<string, string>(), addresses: string[] = [];
+  const localStorage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } };
+  const location = { search: "?view=work", pathname: "/" };
+  const history = { replaceState: (_s: unknown, _t: string, url: string) => { addresses.push(url); location.search = url.startsWith("?") ? url : ""; } };
+  const body = { dataset: {} as Record<string, string> };
+  const globals = (chat: Record<string, unknown>, view = "chat") => ({ PLACE_KEY: "lumen-place", next: { view }, chat, localStorage, location, history, document: { body }, JSON });
+  pageFunction("rememberPlace", globals({ box: "shared", agentId: "ada" }))();
+  assert.deepEqual(addresses, ["?agent=ada"], "the address names the agent, replacing the view it was opened from");
+  pageFunction("rememberPlace", globals({ box: "mine", agentId: "aria" }, "work"))();
+  assert.equal(addresses.length, 1, "another view keeps its own address and does not move the place");
+  const signedInAgain = { box: "", agentId: "" };
+  pageFunction("recallPlace", globals(signedInAgain))();
+  assert.deepEqual(signedInAgain, { box: "shared", agentId: "ada" }, "with no address, the remembered place is where the page opens");
+  pageFunction("rememberPlace", globals({ box: "mine", agentId: "" }))();
+  assert.equal(location.search, "", "a computer chosen with no agent on it: the address stops naming the agent left behind");
+  const fresh = { box: "", agentId: "" };
+  pageFunction("recallPlace", globals(fresh))();
+  assert.deepEqual(fresh, { box: "mine", agentId: "" });
+});
