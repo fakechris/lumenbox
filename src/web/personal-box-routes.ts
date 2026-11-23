@@ -160,8 +160,9 @@ export function planBoxDispositions(
   const rows = boxes.inventory().filter(box => removed.has(box.owner) && !box.retained);
   const selected = choices && typeof choices === "object" && !Array.isArray(choices)
     ? choices as Record<string, { action?: unknown; recipient?: unknown; boxIds?: unknown; agentIds?: unknown }> : {};
+  const choiceFor = (owner: string) => Object.hasOwn(selected, owner) ? selected[owner] : undefined;
   for (const owner of removed.keys()) {
-    const ids = rows.filter(box => box.owner === owner).map(box => box.id), choice = selected[owner];
+    const ids = rows.filter(box => box.owner === owner).map(box => box.id), choice = choiceFor(owner);
     if (ids.length && !choice) throw new Error("Choose what to do with the member’s personal computers before removing them.");
     if (choice) confirmIds(choice.boxIds, ids, changedComputers);
     if (choice?.action === "delete") confirmIds(choice.agentIds, ids.flatMap(id => residents(id).map(agent => agent.id)), changedAgents);
@@ -170,7 +171,7 @@ export function planBoxDispositions(
   const entries = boxes.quotaEntries(), assigned = new Map<string, number>();
   const stopping: string[] = [], deleting: string[] = [];
   const ops = rows.map(box => {
-    const choice = selected[box.owner];
+    const choice = choiceFor(box.owner);
     if (!choice || !["keep", "transfer", "delete"].includes(String(choice.action))) throw new Error("Choose what to do with the member’s personal computers.");
     if (box.status === "provisioning" || box.status === "deleting" || box.status === "interrupted") throw new Error("Finish the pending computer operation before removing this person.");
     const owner = removed.get(box.owner)!;

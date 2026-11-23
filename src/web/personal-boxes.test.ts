@@ -379,7 +379,7 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
   process.env.AGENTBOX_HOME = home;
   let stop: (() => void) | undefined;
   try {
-    const people = ["Admin", "Alice", "Bob", "Charlie", "Dana"].map(name => ({
+    const people = ["Admin", "Alice", "Bob", "Charlie", "Dana", "Constructor"].map(name => ({
       id: name.toLowerCase(), name, role: (name === "Admin" ? "admin" : "driver") as "admin" | "driver" | "viewer",
       identities: [`web:${name.toLowerCase()}`],
     }));
@@ -502,6 +502,10 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.equal([...fake.pvcs.keys()].some(name => name.startsWith(resource(dana))), false);
     assert.equal(registry.has(dee.id), false);
     assert.equal(row((await admin()).data.boxes, dana), undefined);
+    roster = roster.filter(person => person.id !== "constructor");
+    const removedComputerless = await call("/api/principals", { principals: roster, personalBoxes: {} });
+    assert.equal(removedComputerless.status, 200, JSON.stringify(removedComputerless.data));
+    assert.equal((await call(collection, undefined, "constructor")).status, 403);
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;
