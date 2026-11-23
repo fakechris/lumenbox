@@ -219,7 +219,7 @@ export class PersonalBoxes {
       image: row.image,
       retained: row.retained === true,
       pendingRemoval: row.status === "deleting",
-      status: row.worker && !this.running(row) ? "interrupted" : row.status,
+      status: row.worker && !this.running(row) ? "interrupted" as const : row.status,
       error: row.error,
       ...(row.stateReason !== undefined ? { stateReason: row.stateReason } : {}),
       dataRetained: row.status === "detached" || row.status === "failed",
