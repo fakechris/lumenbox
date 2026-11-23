@@ -313,6 +313,13 @@ export class GoalLoop {
       return;
     }
 
+    if (report.how === "waiting_confirmation") {
+      this.deps.tasks.setPursuit(task.id, current => ({
+        ...current, spent: { ...current.spent, activeMs: current.spent.activeMs + elapsed, cost: Math.max(current.spent.cost, cost) },
+      }), "continuation waiting for confirmation");
+      return;
+    }
+
     const budgetSlice = report.how === "incomplete" && report.stopReason === "turn_budget";
     if (report.how !== "done" && report.how !== "silent" && !budgetSlice) {
       const failures = (pursuit.spent.errorStreak ?? 0) + 1;
