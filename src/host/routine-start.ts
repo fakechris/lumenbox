@@ -1,4 +1,5 @@
-import type { AgentBus } from "../agents/bus.ts";
+import { AGENT_MESSAGE_MAX_LENGTH, type AgentBus } from "../agents/bus.ts";
+import { clampMessage } from "../agents/registry.ts";
 import type { RoutineReason } from "./routine-runs.ts";
 
 type Attention = Pick<AgentBus, "workAttention" | "pauseOf">;
@@ -18,7 +19,7 @@ export function routineBlocked(bus: Attention, agentId: string, conversation: st
 /**
  * Read after the routine's prompt returned. Its message still queued means no turn ran: it is taken
  * back, so it cannot run hours later, and the run is failed with why rather than a 0-second Done.
- * Routines only: a member's reminder (Scheduler.once) stays queued, late to its chat but never lost (INV-2009).
+ * Not for a member's reminder (Scheduler.once, which has an origin): it stays queued, late to its chat but never lost (INV-2009).
  */
 export function routineNotStarted(
   bus: Pick<AgentBus, "workAttention" | "pauseOf" | "dropAdmissionsWhere">,
@@ -27,7 +28,8 @@ export function routineNotStarted(
   prompt: string,
   name: string
 ): { result: "failed"; reason: string } | undefined {
-  const unstarted = bus.dropAdmissionsWhere((at, message, owner) => owner === agentId && at === conversation && message.synthetic === true && message.text.includes(prompt));
+  const queued = clampMessage(prompt, AGENT_MESSAGE_MAX_LENGTH); // as the bus admitted it
+  const unstarted = bus.dropAdmissionsWhere((at, message, owner) => owner === agentId && at === conversation && message.synthetic === true && message.text === queued);
   if (unstarted === 0) return undefined;
   const why = routineBlocked(bus, agentId, conversation, name)?.text ?? `${name} did not take it up (busy with other work in this chat)`;
   return { result: "failed", reason: `its turn did not start: ${why}` };
