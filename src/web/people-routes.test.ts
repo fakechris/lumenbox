@@ -82,11 +82,15 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
 
     // Removing Bob takes him off the roster and signs him out of every browser at once.
     const pending = (await (await post("/api/channels/invite", { principalId: bob.id })).json()) as Code;
+    const sideDoor = (await (await post("/api/mcp/tokens", { principalId: bob.id, label: "Bob's IDE" })).json()) as { token: string };
+    const mcp = () => post("/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, { "content-type": "application/json", authorization: `Bearer ${sideDoor.token}` });
+    assert.equal((await mcp()).status, 200);
     assert.equal((await post("/api/principals/remove", { principalId: bob.id })).status, 200);
     rows = (await people()).people;
     assert.deepEqual(rows.map(row => row.name), ["Ada"]);
     assert.ok(!(await people()).invites.some(invite => invite.code === pending.code), "his own codes go with him");
     assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 401);
+    assert.equal((await mcp()).status, 401, "and out of the side door");
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;
