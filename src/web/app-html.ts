@@ -171,6 +171,7 @@ ${AGENT_ROW_STYLE}
     border-radius: var(--radius-input); display: flex; transition: color var(--dur) var(--ease);
   }
   #theme:hover, #settingsbtn:hover { color: var(--text); }
+  #settingsbtn[hidden], #guidebtn[hidden] { display: none; }
 
   /* Inside the desktop shell the top bar doubles as the window title bar: the whole
      strip drags, the controls opt out, and on macOS the traffic lights need room. */
@@ -262,6 +263,7 @@ ${AGENT_ROW_STYLE}
   /* The box bar: one tab per box, above everything, because switching a box switches the
      whole page (docs/39 §1). Hidden with one box — a bar of one tab says nothing. */
   .settab-off { display: none !important; }
+  body:not([data-role="admin"]) [data-operator] { display: none !important; }
   #boxbar { display: none; align-items: center; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
   #boxbar.many { display: flex; }
   #boxbar .tab { display: inline-flex; align-items: center; gap: 6px; }
@@ -880,9 +882,9 @@ ${AGENT_ROW_STYLE}
         style="font-size:12px;color:var(--muted);white-space:nowrap"
         title="{{ui.page.tokens-spent-today-all-agents}}"></span>
   <span id="whoami" style="font-size:12px;color:var(--muted);white-space:nowrap"></span>
-  <button id="guidebtn" class="btn ghost sm" title="{{ui.page.the-four-set-up-steps}}">{{ui.page.guide}}</button>
+  <button id="guidebtn" hidden class="btn ghost sm" title="{{ui.page.the-four-set-up-steps}}">{{ui.page.guide}}</button>
   <button id="teachreviewbtn" class="btn ghost sm">{{ui.page.teaching-drafts}}</button> <a id="manuallink" class="btn ghost sm" href="{{ui.manualUrl}}" target="_blank" rel="noopener noreferrer" style="text-decoration:none">{{ui.manual}}</a> <button id="langbtn" class="btn ghost sm" title="{{ui.page.lang-title}}" aria-label="{{ui.page.lang-title}}">{{ui.page.lang-other}}</button>
-  <button id="settingsbtn" title="{{ui.page.settings}}" aria-label="{{ui.page.settings}}">
+  <button id="settingsbtn" hidden title="{{ui.page.settings}}" aria-label="{{ui.page.settings}}">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.03Z"/></svg>
   </button>
   <button id="theme" title="{{ui.page.switch-theme}}" aria-label="{{ui.page.switch-theme}}">
@@ -1357,7 +1359,12 @@ var searchConfigured = "";
 /** Which settings tab is showing; fields carry data-settab, and those not on the tab are hidden. */
 function showSettingsTab(name) {
   var tabs = document.querySelectorAll("#settabs a[data-settab]");
-  for (var i = 0; i < tabs.length; i++) tabs[i].className = "tab" + (tabs[i].getAttribute("data-settab") === name ? " on" : "");
+  if (myRole !== "admin" && name !== "memory" && name !== "mine") name = "mine";
+  for (var i = 0; i < tabs.length; i++) {
+    var key = tabs[i].getAttribute("data-settab");
+    tabs[i].className = "tab" + (key === name ? " on" : "");
+    tabs[i].classList.toggle("settab-off", myRole !== "admin" && key !== "memory" && key !== "mine");
+  }
   var fields = document.querySelectorAll("#settingswrap .field[data-settab]");
   for (var j = 0; j < fields.length; j++) {
     if (fields[j].getAttribute("data-settab") === name) fields[j].classList.remove("settab-off");
@@ -1447,9 +1454,15 @@ $("setparts").addEventListener("click", function (event) {
 });
 
 function openSettings(tab) {
+  if (myRole !== "admin" && myRole !== "driver") return;
   showSettingsTab(typeof tab === "string" ? tab : "model");
   // Applied on open as well as on load: the dialog is built once and reopened, and whoever is at the browser may have signed in since the page did.
   applyRole();
+  if (myRole !== "admin") {
+    renderStandingGrants(); renderMemorySummary(); renderMcp();
+    $("settingswrap").style.display = "flex";
+    return;
+  }
   fetch("/api/config")
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -1719,7 +1732,7 @@ function renderMemorySummary() {
       if (!agents.length) { $("setmemstate").textContent = "{{ui.app.nothing-kept-yet-an-agent}}"; $("setmemsummary").innerHTML = ""; return; }
       $("setmemstate").textContent = "";
       var names = {};
-      (data.boxes || []).forEach(function (b) { names[b.id] = b.name; });
+      (data.boxes || []).forEach(function (b) { names[b.id] = [b.name, b.owner].filter(Boolean).join(" · "); });
       var byBox = {};
       agents.forEach(function (a) { (byBox[a.boxId] = byBox[a.boxId] || []).push(a); });
       $("setmemsummary").innerHTML = Object.keys(byBox).map(function (boxId) {
@@ -1864,12 +1877,13 @@ function renderMcp() {
   fetch("/api/mcp")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      var servers = data.servers || [];
       renderMcpTokens(data.tokens);
       mcpSetup = data.setup; renderMcpSetup();
       // An installation matter, so admins only — and admins with none see the empty state
       // and the reload, because "add one to config.json, then reload" is the way in.
       document.getElementById("setmcpwrap").style.display = myRole === "admin" ? "" : "none";
+      if (myRole !== "admin") return;
+      var servers = data.servers || [];
       var ext = data.extensions;
       $("setext").textContent = ext
         ? "{{ui.app.extensions-agentbox-extensions}} " + (ext.loaded.length ? ext.loaded.join(", ") : "{{ui.app.none}}") +
@@ -2851,7 +2865,7 @@ function renderBoxBar() {
       esc(b.name) + ' <span class="kind">' + esc(b.kind === "docker" ? "docker" : "{{ui.app.attached}}") + "</span>" +
       "</a>";
   }).join("") +
-    '<a href="#" class="tab" data-newbox="1" title="{{ui.app.create-or-attach-a-box}}">+ box</a>';
+    '<a href="#" class="tab" data-operator data-newbox="1" title="{{ui.app.create-or-attach-a-box}}">+ box</a>';
 }
 
 $("boxbar").onclick = function (event) {
@@ -2871,6 +2885,7 @@ $("boxbar").onclick = function (event) {
 function selectBox(boxId) {
   if (boxId === currentBox) return;
   currentBox = boxId;
+  refreshSetup();
   renderBoxBar();
   renderAgents();
   var selected = agentById(current);
@@ -4534,6 +4549,7 @@ function updateComposerTarget() {
 
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
+    var priorBox = currentBox;
     boxesSeen = state.boxes || [];
     agents = state.agents;
     // Who is mid-turn as of this load; the stream carries changes from here on.
@@ -4545,17 +4561,18 @@ function refresh() {
     }
     renderBoxBar();
     allTools = state.allTools || allTools;
-    $("model").innerHTML = "<b>" + esc(state.provider) + "</b>";
+    $("model").innerHTML = state.provider ? "<b>" + esc(state.provider) + "</b>" : "";
     boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
     dockerState = state.box.docker || null;
     $("boxinfo").textContent = (state.box.ok ? (state.box.detail === "answering" ? "{{ui.app.box-online}}" : state.box.detail) : "{{ui.app.box-unavailable}}") + // the probe's word, said plainly: nothing for the person to do
       (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " {{ui.app.up}}" : "");
     $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
     showBoxClass(state.box);
-    if (!onboardChecked) {
+    if (myRole === "admin" && !onboardChecked) {
       onboardChecked = true;
       maybeOnboard();
     }
+    if (priorBox !== currentBox || $("setupcard").style.display !== "none") refreshSetup();
     if (state.build) {
       $("buildinfo").textContent = "v" + state.build.version + " · " + state.build.commit;
     }
@@ -6956,15 +6973,18 @@ $("agentwrap").addEventListener("click", function (event) {
 
 // Who is at this browser. A name in the header rather than a silent identity, because
 // "my work is signed with my name" is the whole difference a second person notices.
-var myRole = "admin";
+var myRole = null;
 fetch("/api/me")
   .then(function (r) { return r.json(); })
   .then(function (me) {
     myRole = me.role || "viewer";
+    document.body.dataset.role = myRole;
     myIdentity = me.identity; renderMcpSetup();
     $("whoami").textContent = me.name ? me.name + " · " + (me.label || me.role) : ""; // "owner" on a single-machine installation (INV-1685)
     $("whoami").title = me.identity ? "{{ui.app.signed-in-as}} " + me.identity : "";
     applyRole();
+    if (myRole === "admin" && currentBox && !onboardChecked) { onboardChecked = true; maybeOnboard(); }
+    refreshSetup();
     applyPreferences(me.preferences);
   })
   .catch(function () {});
@@ -6982,6 +7002,8 @@ fetch("/api/me")
 function applyRole() {
   var admin = myRole === "admin";
   var driver = admin || myRole === "driver";
+  $("settingsbtn").hidden = !driver;
+  $("guidebtn").hidden = !driver;
   var fields = document.querySelectorAll("[data-tier]");
   for (var i = 0; i < fields.length; i++) {
     var tier = fields[i].getAttribute("data-tier");

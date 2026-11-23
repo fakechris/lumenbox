@@ -229,22 +229,27 @@ function render() {
 function renderView(view) {
   next.atEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80; next.scrollTop = view.scrollTop;
   view.replaceChildren();
+  if (settings.me && ((next.view === "system" && !canOperateInstallation()) || (next.view === "settings" && !canDriveAgents()))) next.view = "chat";
   document.body.dataset.view = next.view;
+  $("agent-new").hidden = !canDriveAgents() || !boxesKnown().length;
   renderSide();
   $("work-tools").hidden = next.view !== "work";
   $("composer").hidden = true; placeDock(null); // the conversation puts back what waits above it
-  document.querySelectorAll("[data-nav]").forEach(function (button) { button.setAttribute("aria-current", String(button.dataset.nav === next.view)); });
+  document.querySelectorAll("[data-nav]").forEach(function (button) {
+    if (button.dataset.nav === "settings") button.hidden = !canDriveAgents();
+    button.setAttribute("aria-current", String(button.dataset.nav === next.view));
+  });
   document.querySelectorAll("[data-layout]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.layout === next.layout)); });
   renderScreen();
   renderThreadTools(0);
   if (next.view === "chat") { renderChat(view); return; }
   $("view-title").textContent = t(next.view === "system" ? "ui.next.side.system" : next.view === "boxes" ? "ui.next.side.boxes2" : next.view === "settings" || next.view === "auto" ? "ui.next.side." + next.view : "ui.next.nav." + next.view);
-  $("view-hint").textContent = t("ui.next." + next.view + ".hint");
+  $("view-hint").textContent = next.view === "settings" && !canOperateInstallation() ? "" : t("ui.next." + next.view + ".hint");
   if (next.view === "inbox") renderInbox(view);
   else if (next.view === "settings") renderSettings(view);
   else if (next.view === "auto") renderAuto(view);
   else if (next.view === "boxes") renderBoxes(view);
-  else if (next.view === "system") renderSystem(view);
+  else if (next.view === "system") { if (canOperateInstallation()) renderSystem(view); }
   else renderWork(view);
 }
 
@@ -300,6 +305,7 @@ function navigateView(view, pane) {
 }
 
 function nextStart() {
+  getJson("/api/me").then(function (got) { settings.me = got || {}; render(); if (canDriveAgents()) landSharedTemplate(); }, function () {});
   document.querySelectorAll("[data-nav]").forEach(function (button) {
     button.addEventListener("click", function () { navigateView(button.dataset.nav); });
   });
@@ -341,7 +347,6 @@ function nextStart() {
     document.body.classList.add("electron");
     if (/Macintosh/.test(navigator.userAgent)) document.body.classList.add("electron-mac");
   }
-  landSharedTemplate();
   // What the desktop app calls to show an agent, when a notification about it is pressed.
   window.select = function (agentId) { if (next.agents[agentId]) openChat(agentId); };
   // A link to one piece of work — from a chat message, a notification — opens it.
