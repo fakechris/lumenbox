@@ -125,6 +125,11 @@ for (const recovers of [true, false]) {
         });
         assert.equal(reading.phase, "waiting");
         assert.equal(reading.blocker?.kind, "empty_output", "the card must explain that a new reply requires asking again");
+        const withQuestion = workReading(task, {
+          checks: new ResultChecks().snapshot(task),
+          stage: { active: false, questionPending: true, undelivered: false },
+        });
+        assert.equal(withQuestion.blocker?.kind, "confirmation", "an open question takes priority over a recorded empty reply");
       }
     } finally {
       episode.cleanup();
@@ -376,10 +381,20 @@ test("a foreground command finishing later returns to its waiting user work; an 
 
 test("a question awaiting the user's choice retains work without requiring a todo list (INV-1797)", async () => {
   const {WorkAttention} = await import("../agents/work-attention.ts"); const focus = new WorkAttention();
+  let modelCalls = 0;
+  const notices: string[] = [];
   const episode = await runEpisode({workAttention:focus,team:[{name:"Mia"},{name:"Zed"}],says:[],
-    script:({round,opened})=>opened.includes("Unrelated audit")?{say:"Noted."}:round===0?{call:"AskUser",input:{question:"Which installation directory?"}}:{say:"Waiting for your choice."},
+    onEvent: event => { if (event.type === "text") notices.push(event.delta); },
+    script:({round,opened})=>{
+      if (opened.includes("Unrelated audit")) return {say:"Noted."};
+      modelCalls++;
+      return round===0?{call:"AskUser",input:{question:"Which installation directory?"},saying:"I can help you install it."}:undefined;
+    },
     drive:async({bus,registry,frontId})=>{bus.sendFromUser(frontId,"Install the package");await bus.wake(frontId);await bus.idle();
       assert.equal(focus.get(frontId,"main")!.status,"waiting");
+      assert.equal(focus.get(frontId,"main")!.wait,"confirmation");
+      assert.equal(modelCalls,2,"the open question needs no closing nudge");
+      assert.doesNotMatch(notices.join(" "), /model returned no text/);
       bus.send({fromId:registry.resolve("Zed").id,toId:frontId,text:"Unrelated audit",priority:true});await bus.idle();
       assert.equal(bus.heldCount(frontId),0); assert.equal(focus.get(frontId,"main")!.status,"waiting","the question is still the person's to answer");
     }});

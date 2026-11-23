@@ -106,7 +106,12 @@ export function workReading(
   const reason = phase === "waiting" && boundary !== "linked" ? "historicalWaiting" : phase;
   const references = world.references ?? [];
   const root = task.workRoot?.state,
-    ending = root?.reason === "failed" || root?.reason === "empty_output" ? root.reason : undefined,
+    ending =
+      root?.reason === "failed"
+        ? "failed"
+        : root?.reason === "empty_output"
+          ? world.stage.questionPending ? "confirmation" : "empty_output"
+          : undefined,
     blocker =
       root?.status === "waiting"
         ? {

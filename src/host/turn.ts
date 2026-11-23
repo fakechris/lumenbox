@@ -3042,10 +3042,10 @@ ${outcome.text}`;
         }
       }
 
-      if (!finalText.trim() && personOpened && !closingNudged) {
+      if (!finalText.trim() && personOpened && !closingNudged && !confirmationPending) {
         const prior = messages.slice(0, -1).findLast(message => message.role === "assistant" ||
           (Array.isArray(message.content) && message.content.some(block => block.type === "tool_result")));
-        const toolsSucceeded = !confirmationPending && prior?.role === "user" && Array.isArray(prior.content)
+        const toolsSucceeded = prior?.role === "user" && Array.isArray(prior.content)
           && prior.content.every(block => block.type !== "tool_result" || block.is_error !== true);
         if (toolsSucceeded || (interimDelivered && guardsEnabled() && tools.length > 0)) {
           closingNudged = closingReply = true;
@@ -3100,7 +3100,7 @@ ${outcome.text}`;
         relayProseToPeer(answer);
         return;
       }
-
+      if (confirmationPending) return;
       // A turn that ends with nothing to say used to end silently: nothing appended, nothing
       // emitted. From the person's side that is "I asked and nothing happened", which is the
       // worst-feeling failure there is — indistinguishable from a hang, a crash, or being ignored.
