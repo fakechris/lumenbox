@@ -123,7 +123,7 @@ export function runsOf(records: readonly RunRecord[], slug: string, options: { l
       Object.assign(run, pick(record, ["agent", "ms", "tokens", "code", "reason", "retrying"]));
       open = undefined;
     } else if (record.event === "skipped") {
-      runs.push({ at: record.at, outcome: "skipped", code: record.code ?? "overlap_in_flight", reason: record.reason ?? "the previous run had not finished" });
+      runs.push({ at: record.at, outcome: "skipped", ...pick(record, ["agent"]), code: record.code ?? "overlap_in_flight", reason: record.reason ?? "the previous run had not finished" });
     } else if (record.event === "observed") {
       runs.push({ at: record.at, outcome: "observed", ...(record.would !== undefined ? { reason: `would have: ${record.would}` } : {}) });
     }

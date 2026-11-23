@@ -52,6 +52,7 @@ test("an auto routine's Run now is a real turn; with the chat held it is refused
     await host.scheduler.tick();
     assert.equal(host.scheduler.runs(slug)[0]?.outcome, "skipped", "a due window is skipped and says so");
     assert.match(host.scheduler.runs(slug)[0]?.reason ?? "", /waiting on an earlier request/);
+    assert.ok(host.scheduler.runs(slug)[0]?.agent !== undefined, "and names whose chat, so the list shows it only to who may read that agent");
     assert.equal(host.scheduler.holds.holdOf(slug), undefined, "and is not held: the next window runs once the chat is free");
 
     // Slipped past the check (the chat is busy, not yet waiting): the message is not let in, so the run fails with why and is taken back.

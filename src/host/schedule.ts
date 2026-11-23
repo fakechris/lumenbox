@@ -419,9 +419,10 @@ export class Scheduler {
    * A window that came round and did not run, written down with why (INV-1665). The overlap rule
    * is one reason; a check before the run (INV-1666's credentials) is another through the same door.
    */
-  skip(skill: { slug: string; name: string }, reason: RoutineReason): void {
+  /** `agent`: whose chat the reason is about, so the run list shows it only to whoever may read that agent. */
+  skip(skill: { slug: string; name: string }, reason: RoutineReason, agent?: string): void {
     this.log(`${skill.name}: skipped, ${reason.text}`);
-    this.record(skill.slug, "skipped", { code: reason.code, reason: reason.text });
+    this.record(skill.slug, "skipped", { ...(agent !== undefined ? { agent } : {}), code: reason.code, reason: reason.text });
   }
 
   /** Stops a routine until a person resumes it, with why; the attention list shows it. */
@@ -656,7 +657,7 @@ export class Scheduler {
       if (busy !== undefined) {
         // On the run list and not held: the next window runs once the chat is free.
         this.lastRun.set(skill.slug, this.now());
-        this.skip(skill, busy);
+        this.skip(skill, busy, agent);
         continue;
       }
 
@@ -864,8 +865,9 @@ export class Scheduler {
     const refused = await this.refusal(skill, agent);
     if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
-    const busy = this.deps.busy?.(skill, agent);
-    if (busy !== undefined) return { ok: false, reason: `${skill.name} did not run: ${busy.text}` };
+    // A waiting call runs in the main chat (runAndSay). Its caller holds the routine's secret, not the chat: told only that it is busy.
+    const busy = this.deps.busy?.(options.wait === true && this.deps.runAndSay !== undefined ? { slug: skill.slug, name: skill.name } : skill, agent);
+    if (busy !== undefined) return { ok: false, reason: `${skill.name} did not run: its agent is ${busy.code === "member_paused" ? "paused" : "busy with an earlier request"}; send it again later.` };
 
     this.lastRun.set(slug, this.now());
     this.log(`${skill.name}: fired by webhook`);
