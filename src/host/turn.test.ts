@@ -237,9 +237,10 @@ test("a goal continuation turn: the pursuit's workId, a host inbound entry, unde
 
     registry.appendTranscript(ada.id, { role: "user", text: "Keep working on this request.", at: new Date().toISOString(), fromPerson: true });
     const waiting = stubClient([message([toolUseBlock("AskUser", { question: "Which data should I use?" })], "tool_use"), message([])], { params: [] });
+    const { box } = stubBox();
     let asked = false;
     await runTurn(ada, inbound({ ...marker, seq: 3 }, "continue"), new AbortController().signal, {
-      client: waiting.client, registry, bus, box: undefined, resolution: undefined, turns,
+      client: waiting.client, registry, bus, box, resolution: undefined, turns,
       askUser: async () => { asked = true; return "in the app"; }, onGoalTurn: report => reports.push(report),
     });
     assert.ok(asked, "the continuation delivered its question");
@@ -3353,6 +3354,24 @@ test("acknowledged, ran tools, ended silent: one closing nudge, then the result 
       .filter(entry => entry.role === "assistant" && entry.kind === undefined)
       .map(entry => entry.text);
     assert.deepEqual(said, ["看完了：三个文件，没有问题。"]);
+
+    const needsSecret = stubClient([
+      message([textBlock("I'll check what is needed."), toolUseBlock("AskSecret", { id: "SERVICE_KEY", description: "Needed to connect the service." })], "tool_use"),
+      message([]),
+      message([textBlock("Open the app to supply the service key securely.")]),
+    ], { params: [] });
+    let requested = false;
+    await runTurn(
+      ada,
+      [{ id: "m-connect", fromId: "user", fromName: "user", text: "Connect the service", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client: needsSecret.client, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE, askSecret: () => { requested = true; return "in the app"; } }
+    );
+    assert.ok(requested, "the app-only request was shown");
+    assert.equal(needsSecret.capture.params.length, 3, "the acknowledgement path still retries");
+    const instructions = (registry.readTranscript(ada.id) as TranscriptEntry[]).at(-1);
+    assert.ok(instructions && "text" in instructions);
+    assert.equal(instructions.text, "Open the app to supply the service key securely.");
   } finally {
     cleanup();
   }

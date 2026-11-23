@@ -1437,7 +1437,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     ? inbound.map(message => message.work).find(stamp => stamp && bus.workAttention!.valid(stamp, agent.id)) ??
       (inbound[0]?.goal ? bus.workAttention.existing(agent.id, conversation, inbound[0].goal.workId, inbound[0].goal.taskId) : deps.resumeOf?.workId ? bus.workAttention.existing(agent.id, conversation, deps.resumeOf.workId) : undefined) : undefined;
   const historyConversation = workHistoryConversation(work, agent.id, conversation);
-  let blockedCapability: string | undefined; let confirmationPending = false;
+  let blockedCapability: string | undefined; let confirmationPending = false, questionDelivered = false;
   const registry = workRegistry(deps.registry, agent.id, conversation, historyConversation, work, entry => personAuthoredText(entry as HistoryEntry) ?? (givesTasks(entryChannel(entry as HistoryEntry)) ? entry.text : undefined));
   const audit = admittedAudit(inbound);
   const auditValid = () => !audit || !!audit.planId && !!deps.tasks?.get(audit.taskId) && auditCurrent(audit, agent.id, conversation, deps.tasks) && deps.resultChecks?.active(deps.tasks.get(audit.taskId)!, audit.planId, agent.id) === true;
@@ -3042,10 +3042,10 @@ ${outcome.text}`;
         }
       }
 
-      if (!finalText.trim() && personOpened && !closingNudged && !confirmationPending) {
+      if (!finalText.trim() && personOpened && !closingNudged && !questionDelivered) {
         const prior = messages.slice(0, -1).findLast(message => message.role === "assistant" ||
           (Array.isArray(message.content) && message.content.some(block => block.type === "tool_result")));
-        const toolsSucceeded = prior?.role === "user" && Array.isArray(prior.content)
+        const toolsSucceeded = !confirmationPending && prior?.role === "user" && Array.isArray(prior.content)
           && prior.content.every(block => block.type !== "tool_result" || block.is_error !== true);
         if (toolsSucceeded || (interimDelivered && guardsEnabled() && tools.length > 0)) {
           closingNudged = closingReply = true;
@@ -3100,7 +3100,7 @@ ${outcome.text}`;
         relayProseToPeer(answer);
         return;
       }
-      if (confirmationPending && goal === undefined) return;
+      if (questionDelivered && goal === undefined) return;
       // A turn that ends with nothing to say used to end silently: nothing appended, nothing
       // emitted. From the person's side that is "I asked and nothing happened", which is the
       // worst-feeling failure there is — indistinguishable from a hang, a crash, or being ignored.
@@ -3386,7 +3386,7 @@ ${outcome.text}`;
       }
       if (work && outcome.unavailable) { blockedCapability = outcome.unavailable; bus.workAttention?.capability(work, agent.id, outcome.unavailable, false); }
       if (work && requiredComputerTool && !outcome.isError) bus.workAttention?.capability(work, agent.id, calledTool, true);
-      if (!outcome.isError && ["AskUser", "AskSecret", "HandOverDesktop"].includes(toolUse.name)) confirmationPending = true;
+      if (!outcome.isError && ["AskUser", "AskSecret", "HandOverDesktop"].includes(toolUse.name)) { confirmationPending = true; questionDelivered ||= toolUse.name === "AskUser"; }
       if (outcome.approval !== undefined) {
         confirmationPending = true;
         deps.steps?.awaitingApproval(turnId, toolUse.id, outcome.approval.id);
