@@ -51,7 +51,7 @@ spec:
       serviceAccountName: agentbox-organisation
       containers:
         - name: web
-          image: fakechris/lumenbox:0.4.7
+          image: fakechris/lumenbox:REPLACE_WITH_RELEASE_TAG
           command:
             - node
             - /opt/hostd/hostd.mjs
@@ -71,7 +71,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: AGENTBOX_IMAGE
-              value: fakechris/lumenbox:0.4.7
+              value: fakechris/lumenbox:REPLACE_WITH_RELEASE_TAG
           envFrom:
             - secretRef:
                 name: agentbox-organisation-env

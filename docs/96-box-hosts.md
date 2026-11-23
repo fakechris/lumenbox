@@ -103,16 +103,21 @@ the pod and refuses to start without one of these settings in that Secret:
 - For a deployment behind a TLS-enabled ingress, set `AGENTBOX_PUBLIC_URL` to its public
   `https://` URL and leave `AGENTBOX_INSECURE` unset. Open that public URL instead of port-forwarding.
 
+Set `LUMENBOX_IMAGE` to a pullable release tag or digest that includes the organisation-server
+Kubernetes fixes. If that release is not published yet, build from this checkout and push the
+content-hash tag to your registry; see [Choose the image](../deploy/kubernetes/ONBOARDING.md#2-choose-the-image).
+Render the manifest before applying it so the server and the personal boxes use the same image.
+
 ```sh
 kubectl apply -f deploy/kubernetes/namespace.yaml -f deploy/kubernetes/rbac.yaml
-kubectl apply -f deploy/kubernetes/organisation.yaml
+sed "s|fakechris/lumenbox:REPLACE_WITH_RELEASE_TAG|${LUMENBOX_IMAGE:?Set LUMENBOX_IMAGE to the pullable image}|g" \
+  deploy/kubernetes/organisation.yaml | kubectl apply -f -
 kubectl -n agentbox rollout status deployment/agentbox-organisation
 kubectl -n agentbox port-forward service/agentbox-organisation 7777:7777
 ```
 
 For the port-forward path, open `http://localhost:7777` and follow the organisation admin
-bootstrap. To use a different image tag or registry, set both `image` and `AGENTBOX_IMAGE` in the
-deployment.
+bootstrap.
 
 The manifest labels the **web server's pod template** `agentbox/role: control`. If you use your
 own deployment, apply that label to its pod template, not just the Deployment or Service. A

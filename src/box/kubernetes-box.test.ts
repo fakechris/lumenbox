@@ -72,6 +72,12 @@ test("each box is its own pod, volumes, secret and policy, reached at its own Se
     const manifest = parseMinimalYaml(deployment) as { metadata: { namespace: string }; spec: { template: { metadata: { labels: Record<string, string> } } } };
     assert.equal(manifest.metadata.namespace, "agentbox");
     assert.equal(manifest.spec.template.metadata.labels["agentbox/role"], "control");
+    const rendered = parseMinimalYaml(deployment.replaceAll("fakechris/lumenbox:REPLACE_WITH_RELEASE_TAG", "registry.example/lumenbox:review")) as {
+      spec: { template: { spec: { containers: { image: string; env: { name: string; value?: string }[] }[] } } };
+    };
+    const web = rendered.spec.template.spec.containers[0]!;
+    assert.equal(web.image, "registry.example/lumenbox:review");
+    assert.equal(web.env.find(variable => variable.name === "AGENTBOX_IMAGE")?.value, web.image);
     // The order a reader can hold the code to, per box: nothing references what does not exist yet.
     const order = fake.calls.filter(c => c.verb === "apply" && c.name.startsWith(a.name)).map(c => c.kind);
     assert.deepEqual(order, ["secret", "pvc", "pvc", "pvc", "service", "networkpolicy", "pod"]);
