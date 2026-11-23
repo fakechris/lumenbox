@@ -2250,7 +2250,7 @@ ${outcome.text}`;
         marker: goal,
         turnId,
         conversation,
-        how: endedHow ?? "failed", ...(stoppedBy !== undefined ? { stopReason: stoppedBy } : {}),
+        how: endedHow === "waiting_confirmation" && !questionDelivered ? "empty_output" : endedHow ?? "failed", ...(stoppedBy !== undefined ? { stopReason: stoppedBy } : {}),
         worked: [...toolsUsedThisTurn].some(isWorkingTool),
         cost: weightedCost(turnUsage, provider.tokenWeights ?? DEFAULT_TOKEN_WEIGHTS) + asideCost,
         ...(lastFinalText !== undefined ? { finalText: lastFinalText } : {}),

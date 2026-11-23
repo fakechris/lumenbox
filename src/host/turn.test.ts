@@ -246,6 +246,15 @@ test("a goal continuation turn: the pursuit's workId, a host inbound entry, unde
     });
     assert.ok(asked, "the continuation delivered its question");
     assert.equal(reports.at(-1)?.how, "waiting_confirmation", "a delivered question is neither completion nor empty output");
+
+    const needsSecret = stubClient([message([toolUseBlock("AskSecret", { id: "SERVICE_KEY", description: "Needed for the report." })], "tool_use"), message([])], { params: [] });
+    let requested = false;
+    await runTurn(ada, inbound({ ...marker, seq: 4 }, "continue"), new AbortController().signal, {
+      client: needsSecret.client, registry, bus, box, resolution: undefined, turns,
+      askSecret: () => { requested = true; return "in the app"; }, onGoalTurn: report => reports.push(report),
+    });
+    assert.ok(requested, "the continuation requested the secret");
+    assert.equal(reports.at(-1)?.how, "empty_output", "keep Goal backoff for confirmations the scheduler does not track as questions");
   } finally {
     cleanup();
     rmSync(home, { recursive: true, force: true });
