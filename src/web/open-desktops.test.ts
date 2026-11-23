@@ -22,6 +22,7 @@ test("removing a person or signing them out closes the desktops they have open; 
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
   const upstreams: Socket[] = [];
+  const upstreamClosed: Promise<void>[] = [];
   const daemon = createServer(async (req, res) => {
     for await (const _ of req) { /* drained */ }
     res.setHeader("content-type", "application/json");
@@ -32,6 +33,8 @@ test("removing a person or signing them out closes the desktops they have open; 
   // The screen stays open, as a real one does, until somebody closes it.
   daemon.on("upgrade", (_req, socket: Socket) => {
     upstreams.push(socket);
+    socket.resume();
+    upstreamClosed.push(new Promise(done => socket.once("end", () => done()).once("close", () => done())));
     socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
   });
   const clients: Socket[] = [];
@@ -92,6 +95,7 @@ test("removing a person or signing them out closes the desktops they have open; 
 
     assert.equal((await post("/api/principals/logout", { principalId: "bob" })).status, 200);
     await within(bobScreen.closed, "Bob's desktop after Sign out everywhere");
+    await within(upstreamClosed[0]!, "Bob's connection to the box daemon");
     assert.ok(await stillOpen(caraScreen.socket), "nobody else's screen is touched");
 
     // Cara's token comes from her browser's sign-in, and the box is for Bob and Cara by name.

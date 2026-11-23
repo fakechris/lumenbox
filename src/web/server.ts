@@ -6853,7 +6853,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     upstream.setTimeout(DESKTOP_UPSTREAM_TIMEOUT_MS, drop);
     upstream.once("data", () => upstream.setTimeout(0));
     upstream.on("error", drop);
-    clientSocket.on("error", drop);
+    // On close too: a socket closed for its holder (INV-2071) is destroyed, and a destroyed source ends no pipe.
+    clientSocket.on("error", drop).on("close", drop);
   }
 
   const host = options.host ?? "127.0.0.1";
