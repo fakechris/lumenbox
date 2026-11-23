@@ -10,7 +10,7 @@ interface Deps {
   quota(owner: string): number | undefined;
   authorize(owner: string): boolean;
   connections(): ReadonlyArray<{ id: string; connected: boolean; detail?: string }> | undefined;
-  residents(id: string): string[];
+  residents(id: string): { id: string; name: string }[];
   reconnect(id: string): Promise<void>;
   read(): Promise<Record<string, unknown>>;
   send(status: number, body: unknown): void;
@@ -19,18 +19,30 @@ interface Deps {
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : "Personal computer operation failed.";
 
+function confirmIds(confirmed: unknown, current: string[], message: string) {
+  if (!Array.isArray(confirmed) || confirmed.length !== current.length || new Set(confirmed).size !== current.length ||
+    !current.every(id => confirmed.includes(id))) throw new Error(message);
+}
+
+const changedAgents = "The agents on these computers changed. Review them and confirm again.";
+const changedComputers = "The member’s computers changed. Review them and confirm again.";
+
 export async function personalBoxRoute(route: string, deps: Deps): Promise<void> {
   const { boxes, principals, identity, quota, residents, read, send, error } = deps;
   principals.reload();
   const admin = () => identity === undefined || (principals.isKnown(identity) && principals.roleOf(identity) === "admin");
   const counts = (owner: string, entries = boxes.quotaEntries()) => ({ quota: quota(owner) ?? null, held: personalBoxesOf(entries, owner).length });
+  const agentInfo = (id: string) => {
+    const agents = residents(id);
+    return { agents: agents.map(agent => agent.name), agentIds: agents.map(agent => agent.id) };
+  };
   const listed = async (owner?: string) => {
     const rows = await boxes.listWithPodStatus(owner);
     const connections = deps.connections();
     return rows.map(row => {
       const connection = connections?.find(box => box.id === row.id);
       const unreachable = connections !== undefined && row.status === "ready" && !connection?.connected;
-      return { ...row, ...(unreachable ? { status: "unreachable" as const, connectionError: connection?.detail } : {}), agents: residents(row.id) };
+      return { ...row, ...(unreachable ? { status: "unreachable" as const, connectionError: connection?.detail } : {}), ...agentInfo(row.id) };
     });
   };
   type Rows = Awaited<ReturnType<typeof listed>>;
@@ -83,6 +95,7 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
         if (result.status === "ready") await deps.reconnect(box.id);
         else if (result.error) throw new Error(result.error);
       } else if (body.action === "keep" || body.action === "delete") {
+        if (body.action === "delete") confirmIds(body.agentIds, agentInfo(box.id).agentIds, changedAgents);
         const result = await boxes.remove(box.owner, box.id, body.action === "delete", { deleteAgents: body.deleteAgents === true });
         if (result.error) throw new Error(result.error);
       } else { send(400, error("cleanup-needs-choice")); return; }
@@ -97,7 +110,7 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
     }
     const action = route.startsWith("POST /api/personal-boxes/") ? route.split("/").at(-1) : undefined;
     const fields = action === "create" ? ["requestId", "name"] : action === "rename" ? ["id", "name"] :
-      action === "remove" ? ["id", "deleteData", "deleteAgents"] : action === "retry" ? ["id"] : undefined;
+      action === "remove" ? ["id", "deleteData", "deleteAgents", "agentIds"] : action === "retry" ? ["id"] : undefined;
     if (!fields) { send(404, error("personal-box-action-unknown")); return; }
     const body = await read();
     principals.reload();
@@ -115,6 +128,10 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
     if (action === "rename") {
       boxes.rename(person.id, body.id as string, body.name as string);
       send(200, current(person, await listed(person.id))); return;
+    }
+    if (action === "remove" && body.deleteData === true && (body.deleteAgents === true || body.agentIds !== undefined)) {
+      if (!boxes.list(person.id).some(box => box.id === body.id)) { send(404, error("personal-box-not-found")); return; }
+      confirmIds(body.agentIds, agentInfo(body.id as string).agentIds, changedAgents);
     }
     const result = action === "create"
       ? await boxes.create(person.id, body.requestId as string, stillAuthorized, {
@@ -137,16 +154,23 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
 export function planBoxDispositions(
   boxes: PersonalBoxes, previous: Principal[], roster: Principal[], choices: unknown,
   quota: Deps["quota"], authorize: Deps["authorize"], checkResidents: (ids: string[], deleting: boolean) => void,
+  residents: Deps["residents"],
 ): () => Promise<void> {
   const removed = new Map(previous.filter(person => !roster.some(next => next.id === person.id)).map(person => [person.id, person]));
   const rows = boxes.inventory().filter(box => removed.has(box.owner) && !box.retained);
+  const selected = choices && typeof choices === "object" && !Array.isArray(choices)
+    ? choices as Record<string, { action?: unknown; recipient?: unknown; boxIds?: unknown; agentIds?: unknown }> : {};
+  for (const owner of removed.keys()) {
+    const ids = rows.filter(box => box.owner === owner).map(box => box.id), choice = selected[owner];
+    if (ids.length && !choice) throw new Error("Choose what to do with the member’s personal computers before removing them.");
+    if (choice) confirmIds(choice.boxIds, ids, changedComputers);
+    if (choice?.action === "delete") confirmIds(choice.agentIds, ids.flatMap(id => residents(id).map(agent => agent.id)), changedAgents);
+  }
   if (!rows.length) return async () => {};
-  if (!choices || typeof choices !== "object" || Array.isArray(choices))
-    throw new Error("Choose what to do with the member’s personal computers before removing them.");
   const entries = boxes.quotaEntries(), assigned = new Map<string, number>();
   const stopping: string[] = [], deleting: string[] = [];
   const ops = rows.map(box => {
-    const choice = (choices as Record<string, { action?: unknown; recipient?: unknown }>)[box.owner];
+    const choice = selected[box.owner];
     if (!choice || !["keep", "transfer", "delete"].includes(String(choice.action))) throw new Error("Choose what to do with the member’s personal computers.");
     if (box.status === "provisioning" || box.status === "deleting" || box.status === "interrupted") throw new Error("Finish the pending computer operation before removing this person.");
     const owner = removed.get(box.owner)!;

@@ -229,7 +229,9 @@ function computerRow(box, mine, people, locked) {
     });
     if (box.status !== "detached") button(t("ui.personal.keep"), function () { act(mine ? "remove" : "keep", mine ? { deleteData: false, deleteAgents: false } : {}); });
     button(t("ui.personal.delete"), function () {
-      deleteComputerDialog(box, function () { act(mine ? "remove" : "delete", mine ? { deleteData: true, deleteAgents: true } : { deleteAgents: true }); });
+      deleteComputerDialog(box, function (agentIds) {
+        act(mine ? "remove" : "delete", mine ? { deleteData: true, deleteAgents: agentIds.length > 0, agentIds: agentIds } : { deleteAgents: true, agentIds: agentIds });
+      });
     }, true);
   }
   if (["unreachable", "detached", "failed", "interrupted", "deleting"].indexOf(box.status) >= 0 && !locked && (!box.orphaned || box.pendingRemoval))

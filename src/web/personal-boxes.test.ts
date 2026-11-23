@@ -424,7 +424,7 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     for (const agent of registry.list()) if (agent.id !== bea.id && agent.id !== dee.id) registry.remove(agent.id, { archive: false });
     const lastAgents = await call("/api/principals", {
       principals: people.filter(person => person.id !== "bob" && person.id !== "dana"),
-      personalBoxes: { bob: { action: "delete" }, dana: { action: "delete" } },
+      personalBoxes: { bob: { action: "delete", boxIds: [bob], agentIds: [bea.id] }, dana: { action: "delete", boxIds: [dana], agentIds: [dee.id] } },
     });
     assert.equal(lastAgents.status, 409);
     assert.match(lastAgents.data.error, /Keep at least one agent/);
@@ -445,7 +445,8 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const row = (rows: { id: string }[], id: string) => rows.find(item => item.id === id);
     assert.deepEqual(row(inventory.data.boxes, bob), {
       id: bob, owner: "bob", ownerName: "Bob", name: "Bob’s computer", status: "ready", podStatus: "Running",
-      image, createdAt: own.mine.boxes[0].createdAt, retained: false, orphaned: false, pendingRemoval: false, dataRetained: false, agents: ["Bea"],
+      image, createdAt: own.mine.boxes[0].createdAt, retained: false, orphaned: false, pendingRemoval: false, dataRetained: false,
+      agents: ["Bea"], agentIds: [bea.id],
     });
     const quota = (await call("/api/quotas")).data.people;
     assert.equal(inventory.data.people.find((person: { id: string }) => person.id === "bob").held,
@@ -454,7 +455,24 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     let roster = people.filter(person => person.id !== "bob");
     assert.equal((await call("/api/principals", { principals: roster })).status, 409);
     assert.ok(fake.pods.has(resource(bob)), "removal without a disposition did not stop the pod");
-    const removed = await call("/api/principals", { principals: roster, personalBoxes: { bob: { action: "keep" } } });
+    const extra = registry.create({ name: "New agent", boxId: bob });
+    const staleAgents = { id: bob, deleteData: true, deleteAgents: true, agentIds: [bea.id] };
+    assert.match((await call(collection + "/remove", staleAgents, "bob")).data.error, /agents on these computers changed/);
+    assert.match((await call(collection + "/admin", { ...staleAgents, action: "delete" }, "admin")).data.error, /agents on these computers changed/);
+    const staleBoxes = await call("/api/principals", {
+      principals: roster, personalBoxes: { bob: { action: "delete", boxIds: [], agentIds: [] } },
+    });
+    assert.equal(staleBoxes.status, 409);
+    assert.match(staleBoxes.data.error, /computers changed/);
+    const staleRemoval = await call("/api/principals", {
+      principals: roster, personalBoxes: { bob: { action: "delete", boxIds: [bob], agentIds: [bea.id] } },
+    });
+    assert.equal(staleRemoval.status, 409);
+    assert.match(staleRemoval.data.error, /agents on these computers changed/);
+    assert.ok(fake.pods.has(resource(bob)) && registry.has(bea.id) && registry.has(extra.id));
+    assert.equal((await call(collection, undefined, "bob")).status, 200);
+    registry.remove(extra.id, { archive: false });
+    const removed = await call("/api/principals", { principals: roster, personalBoxes: { bob: { action: "keep", boxIds: [bob] } } });
     assert.equal(removed.status, 200, JSON.stringify(removed.data));
     assert.equal(fake.pods.has(resource(bob)), false);
     assert.equal([...fake.pvcs].filter(([name]) => name.startsWith(resource(bob))).length, 3);
@@ -470,11 +488,13 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.equal((await call(collection, undefined, "admin")).data.boxes[0].agents[0], "Bea");
 
     roster = roster.filter(person => person.id !== "charlie");
-    assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { charlie: { action: "transfer", recipient: "alice" } } })).status, 200);
+    const transfer = { action: "transfer", recipient: "alice", boxIds: [charlie] };
+    assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { charlie: transfer } })).status, 200);
     assert.equal((await call(collection, undefined, "alice")).data.held, 2);
     assert.ok(fake.pods.has(resource(charlie)), "transfer retained the original pod and volumes");
     roster = roster.filter(person => person.id !== "dana");
-    assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { dana: { action: "delete" } } })).status, 200);
+    const erase = { action: "delete", boxIds: [dana], agentIds: [dee.id] };
+    assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { dana: erase } })).status, 200);
     assert.equal(fake.pods.has(resource(dana)), false);
     assert.equal([...fake.pvcs.keys()].some(name => name.startsWith(resource(dana))), false);
     assert.equal(registry.has(dee.id), false);

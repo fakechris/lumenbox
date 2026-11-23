@@ -800,11 +800,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return !personalBoxesStopping && person?.id === owner && person.identities.length > 0 && roleAtLeast(person.role, "driver") && directoryQuotaContext(owner).eligible;
   };
   const checkBoxResidents = (target: string | string[], deleting: boolean) => {
-    const ids = new Set(typeof target === "string" ? [target] : target), agents = registry.list();
-    const residents = agents.filter(agent => ids.has(agent.boxId)), busy = new Set(orchestrator.bus.activeAgentIds());
+    const ids = typeof target === "string" ? [target] : target;
+    const residents = ids.flatMap(id => registry.agentsIn(id)), busy = new Set(orchestrator.bus.activeAgentIds());
     if (residents.some(agent => busy.has(agent.id))) throw new Error("Wait for the agents on this computer to finish before stopping it.");
-    if (deleting && residents.length > 0 && residents.length === agents.length) throw new Error("Keep at least one agent on another computer before deleting.");
+    if (deleting && residents.length > 0 && residents.length === registry.list().length) throw new Error("Keep at least one agent on another computer before deleting.");
   };
+  const boxResidents = (id: string) => registry.agentsIn(id).map(agent => ({ id: agent.id, name: agent.profile.name }));
   const personalBoxes = new PersonalBoxes({
     home: join(agentboxHome(), "personal-boxes"), entries: () => registry.listBoxes(),
     quota: personalQuota, authorize: mayProvision, checkResidents: checkBoxResidents,
@@ -3747,7 +3748,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (url.pathname === "/api/personal-boxes" || url.pathname.startsWith("/api/personal-boxes/")) {
           await personalBoxRoute(route, { boxes: personalBoxes, principals, identity: caller.userId, quota: personalQuota, authorize: mayProvision,
             connections: () => kubernetes ? orchestrator.boxStatus() : undefined,
-            residents: id => registry.agentsIn(id).map(agent => agent.profile.name),
+            residents: boxResidents,
             reconnect: async id => { const entry = registry.boxById(id); if (entry) await orchestrator.reconnectBox(entry); },
             read: () => readJson(req), send: (status, body) => send(res, status, body), error: apiError });
           return;
@@ -4840,7 +4841,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           principals.reload();
           if (refusedRole("admin")) return;
           let dispose: () => Promise<void>;
-          try { dispose = planBoxDispositions(personalBoxes, principals.list(), roster, body.personalBoxes, personalQuota, mayProvision, checkBoxResidents); }
+          try {
+            dispose = planBoxDispositions(personalBoxes, principals.list(), roster, body.personalBoxes, personalQuota, mayProvision, checkBoxResidents, boxResidents);
+          }
           catch (error) { send(res, 409, { error: (error as Error).message }); return; }
           principals.save(roster);
           try { await dispose(); }

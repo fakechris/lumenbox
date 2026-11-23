@@ -38,9 +38,10 @@ function computerLoss(boxes) {
 }
 
 function deleteComputerDialog(box, erase) {
+  var agentIds = (box.agentIds || []).slice();
   computerDialog(t("ui.personal.deleteTitle", { name: box.name }), function (body, action) {
     body.appendChild(computerElement("p", computerLoss([box])));
-    action(t("ui.personal.delete"), true, function (close) { close(); erase(); });
+    action(t("ui.personal.delete"), true, function (close) { close(); erase(agentIds); });
   });
 }
 
@@ -60,6 +61,8 @@ function computerQuota(person) {
 function removeMemberComputerDialog(person, inventory, remove) {
   var owned = inventory.boxes.filter(function (box) { return box.owner === person.id && !box.orphaned; });
   if (!owned.length) { remove(null); return; }
+  var boxIds = owned.map(function (box) { return box.id; });
+  var agentIds = owned.flatMap(function (box) { return box.agentIds || []; });
   computerDialog(t("ui.personal.removeMember", { name: person.name }), function (body, action) {
     body.appendChild(computerElement("p", t("ui.personal.choose", { names: owned.map(function (box) { return box.name; }).join(", ") })));
     var choice = computerElement("select"), recipient = computerElement("select"), note = computerElement("p");
@@ -71,7 +74,7 @@ function removeMemberComputerDialog(person, inventory, remove) {
     body.appendChild(choice); body.appendChild(recipient); body.appendChild(note);
     function submit(close) {
       if (!choice.value || (choice.value === "transfer" && !recipient.value)) return;
-      close(); remove({ action: choice.value, recipient: recipient.value });
+      close(); remove({ action: choice.value, recipient: recipient.value, boxIds: boxIds, agentIds: agentIds });
     }
     var apply = action(t("ui.personal.remove"), false, submit), erase = action(t("ui.personal.removeDelete"), true, submit);
     function show() {

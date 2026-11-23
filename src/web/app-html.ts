@@ -7122,7 +7122,7 @@ $("personalboxes").onclick = function (event) {
   if (retry) personalAction('retry', { id: retry });
   if (keep) personalAction('remove', { id: keep, deleteData: false, deleteAgents: false });
   var box = personalListed.find(function (item) { return item.id === erase; });
-  if (box) deleteComputerDialog(box, function () { personalAction('remove', { id: erase, deleteData: true, deleteAgents: true }); });
+  if (box) deleteComputerDialog(box, function (agentIds) { personalAction('remove', { id: erase, deleteData: true, deleteAgents: agentIds.length > 0, agentIds: agentIds }); });
 };
 
 function openShelf(preferredBox) {
