@@ -107,7 +107,7 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
   const code = deps.newCode();
   const invite: PendingInvite = { role, ...(person ? { principalId: person.id } : {}), ...(note ? { note } : {}), expiresAt: now + minutes * 60_000 };
   invites.set(code, invite);
-  deps.log(`channel invite: ${code} (${person ? `for ${person.name}` : role}, ${minutes} min) created`);
+  deps.log(`channel invite: ${person ? `for ${person.name}` : role}, ${minutes} min, created`); // never the code: a log reader could redeem it
   const forPerson = person ? { principalId: person.id, name: person.name } : {};
   return { status: 200, body: { code, ...invite, ...forPerson, minutes, ...invitationLink(deps.publicUrl, code) } }; // the link the app accepts (INV-1701)
 }
