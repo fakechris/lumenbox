@@ -3170,7 +3170,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (
         await handleMcpRequest(req, res, {
           tools: sideDoorTools(),
-          principalFor: presented => { const id = mcpTokens.principalFor(presented); return id !== undefined && principals.byId(id) ? id : undefined; }, // a removed person's tokens stop with them
+          principalFor: presented => { const id = mcpTokens.principalFor(presented); return id !== undefined && (principals.byId(id) || principals.isKnown(id)) ? id : undefined; }, // a removed person's tokens stop with them; issued to a principal or a sign-in
           log: line => log(line),
           idempotency: sideDoorIdempotency,
         })

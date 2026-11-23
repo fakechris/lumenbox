@@ -46,7 +46,7 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const forBob = (await (await post("/api/channels/invite", { role: "viewer" })).json()) as Code;
     assert.ok(forBob.expiresAt <= Date.now() + 15 * 60_000, "no lifetime asked for is the fifteen minutes it always was");
 
-    await login(forAda.code, "Ada");
+    const adaCookie = await login(forAda.code, "Ada");
     const bobCookie = await login(forBob.code, "Bob");
     const bobHeaders = { "content-type": "application/json", cookie: bobCookie };
     assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 200);
@@ -85,6 +85,8 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const sideDoor = (await (await post("/api/mcp/tokens", { principalId: bob.id, label: "Bob's IDE" })).json()) as { token: string };
     const mcp = () => post("/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, { "content-type": "application/json", authorization: `Bearer ${sideDoor.token}` });
     assert.equal((await mcp()).status, 200);
+    const adaDoor = (await (await post("/api/mcp/tokens", { label: "Ada's IDE" }, { "content-type": "application/json", cookie: adaCookie })).json()) as { token: string };
+    assert.equal((await post("/mcp", { jsonrpc: "2.0", id: 1, method: "tools/list" }, { "content-type": "application/json", authorization: `Bearer ${adaDoor.token}` })).status, 200, "a token issued to a sign-in works");
     assert.equal((await post("/api/principals/remove", { principalId: bob.id })).status, 200);
     rows = (await people()).people;
     assert.deepEqual(rows.map(row => row.name), ["Ada"]);
