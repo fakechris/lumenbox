@@ -11,11 +11,16 @@ export interface PersonalBoxRecord {
   owner: string;
   request: string;
   name: string;
+  displayName?: string;
+  ownerName?: string;
+  image?: string;
+  retained?: boolean;
   tokenFile: string;
   status: Status;
   createdAt: string;
   worker?: number;
   deleteData?: boolean;
+  deleteAgents?: boolean;
   error?: string;
   /** Why the box is in its state, in the platform's word (ImagePullBackOff, Unschedulable) — INV-712's state_reason. */
   stateReason?: string;
@@ -29,8 +34,10 @@ export interface RecoveredBox {
   drifted: boolean;
   endpoint?: string;
   reason?: string;
+  image?: string;
 }
 export interface PersonalBoxDriver {
+  readonly image?: string;
   start(record: PersonalBoxRecord): Promise<string>;
   remove(record: PersonalBoxRecord, deleteData: boolean): Promise<void>;
   podStatus?(name: string): Promise<string>;
@@ -59,6 +66,8 @@ interface Options {
   attach(entry: BoxEntry): void;
   detach(id: string): void;
   residents(id: string): number;
+  removeResidents?(id: string): void;
+  checkResidents?(id: string, deleting: boolean): void;
   driver: PersonalBoxDriver;
 }
 /** Durable reservations precede Docker effects; worker ownership outlives HTTP requests. */
@@ -71,7 +80,7 @@ export class PersonalBoxes {
     this.path = join(options.home, "personal-boxes.sqlite");
     this.transaction((db) => {
       db.exec(
-        "CREATE TABLE IF NOT EXISTS boxes (id TEXT PRIMARY KEY, owner TEXT NOT NULL, request TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(owner,request))",
+      "CREATE TABLE IF NOT EXISTS boxes (id TEXT PRIMARY KEY, owner TEXT NOT NULL, request TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(owner,request))",
       );
     });
     chmodSync(this.path, 0o600);
@@ -131,7 +140,7 @@ export class PersonalBoxes {
     );
   }
   private save(db: DatabaseSync, record: PersonalBoxRecord): void {
-    db.prepare("INSERT INTO boxes VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data").run(
+    db.prepare("INSERT INTO boxes VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET owner=excluded.owner, request=excluded.request, data=excluded.data").run(
       record.id,
       record.owner,
       record.request,
@@ -160,11 +169,12 @@ export class PersonalBoxes {
     return this.transaction((db) => this.combined(db));
   }
   private combined(db: DatabaseSync): BoxEntry[] {
-    const entries = [...this.options.entries()];
-    for (const row of this.records(db))
-      if (["provisioning", "ready", "deleting"].includes(row.status) && !entries.some((e) => e.id === row.id))
-        entries.push(this.entry(row));
-    return entries;
+    const rows = this.records(db);
+    const managed = new Set(rows.map(row => row.id));
+    return [
+      ...this.options.entries().filter(entry => !managed.has(entry.id)),
+      ...rows.filter(row => !row.retained && ["provisioning", "ready", "deleting"].includes(row.status)).map(row => this.entry(row)),
+    ];
   }
   private read<T>(action: (db: DatabaseSync) => T): T {
     const db = new DatabaseSync(this.path, { readOnly: true });
@@ -191,30 +201,52 @@ export class PersonalBoxes {
   manages(id: string): boolean {
     return this.read((db) => this.records(db).some((row) => row.id === id));
   }
-  list(
-    owner: string,
-  ): Array<{ id: string; name: string; status: string; error?: string; stateReason?: string; dataRetained: boolean }> {
-    return this.transaction((db) =>
-      this.records(db)
-        .filter((row) => row.owner === owner && row.status !== "deleted")
-        .map((row) => ({
-          id: row.id,
-          name: row.name,
-          status: row.worker && !this.running(row) ? "interrupted" : row.status,
-          error: row.error,
-          ...(row.stateReason !== undefined ? { stateReason: row.stateReason } : {}),
-          dataRetained: row.status === "detached" || row.status === "failed",
-        })),
-    );
+  private listed(owner?: string) {
+    return this.read(db => this.records(db)
+      .filter(row => row.status !== "deleted" && (owner === undefined || (row.owner === owner && !row.retained))));
+  }
+  private summary(row: PersonalBoxRecord) {
+    return {
+      id: row.id,
+      owner: row.owner,
+      ownerName: row.ownerName,
+      name: row.displayName ?? row.name,
+      createdAt: row.createdAt,
+      image: row.image,
+      retained: row.retained === true,
+      pendingRemoval: row.status === "deleting",
+      status: row.worker && !this.running(row) ? "interrupted" : row.status,
+      error: row.error,
+      ...(row.stateReason !== undefined ? { stateReason: row.stateReason } : {}),
+      dataRetained: row.status === "detached" || row.status === "failed",
+    };
+  }
+  list(owner: string) { return this.listed(owner).map(row => this.summary(row)); }
+  inventory() { return this.listed().map(row => this.summary(row)); }
+  names(): Map<string, string> {
+    return this.read(db => new Map(this.records(db).filter(row => row.status !== "deleted").map(row => [row.id, row.displayName ?? row.name])));
+  }
+
+  rename(owner: string, id: string, name: string): void {
+    const displayName = this.validName(name);
+    this.transaction(db => {
+      const row = this.own(db, owner, id);
+      if (row.retained || row.status === "deleted" || this.running(row)) throw new Error("Personal box is not available to rename");
+      this.save(db, { ...row, displayName });
+    });
+  }
+  private validName(name: string): string {
+    const value = name.trim();
+    if (!value || value.length > 100 || /\p{Cc}/u.test(value)) throw new Error("Enter a computer name between 1 and 100 characters");
+    return value;
   }
   private allowed(owner: string): void {
     if (!this.options.authorize(owner)) throw new Error("Personal box permission revoked");
   }
-  async listWithPodStatus(owner: string) {
-    const boxes = this.list(owner);
+  async listWithPodStatus(owner?: string) {
     const status = this.options.driver.podStatus?.bind(this.options.driver);
-    return status === undefined ? boxes : Promise.all(boxes.map(async box => ({
-      ...box, podStatus: await status(box.name).catch(() => "Unavailable"),
+    return Promise.all(this.listed(owner).map(async row => ({
+      ...this.summary(row), ...(status ? { podStatus: await status(row.name).catch(() => "Unavailable") } : {}),
     })));
   }
   private reserve(db: DatabaseSync, row: PersonalBoxRecord): void {
@@ -231,6 +263,7 @@ export class PersonalBoxes {
     owner: string,
     request: string,
     stillAuthorized: () => boolean = () => true,
+    details?: { name?: string; ownerName: string },
   ): Promise<PersonalBoxRecord> {
     if (!/^[A-Za-z0-9_-]{1,100}$/.test(request)) throw new Error("A request ID is required");
     let created = false;
@@ -249,6 +282,9 @@ export class PersonalBoxes {
         tokenFile,
         status: "provisioning",
         createdAt: new Date().toISOString(),
+        ...(details ? { ownerName: details.ownerName } : {}),
+        ...(details?.name !== undefined ? { displayName: this.validName(details.name) } : {}),
+        ...(this.options.driver.image !== undefined ? { image: this.options.driver.image } : {}),
       };
       this.reserve(db, record);
       created = true;
@@ -264,16 +300,18 @@ export class PersonalBoxes {
     owner: string,
     id: string,
     stillAuthorized: () => boolean = () => true,
+    cleanupRetained = false,
   ): Promise<PersonalBoxRecord> {
     let acquired = false;
     const row = this.transaction((db) => {
       const record = this.own(db, owner, id);
+      if (record.retained && !(cleanupRetained && record.status === "deleting")) throw new Error("An administrator must assign this retained computer before restoring it");
       if (record.status !== "deleting") this.allowed(owner);
       if (record.status === "deleted") throw new Error("Personal box not found");
       if (this.running(record)) return record;
       if (record.status === "ready") return record;
       acquired = true;
-      if (record.status === "deleting" && this.options.residents(id))
+      if (record.status === "deleting" && record.deleteData && this.options.residents(id) && !record.deleteAgents)
         throw new Error("Remove agents from this box first");
       this.acquire(record.id);
       if (record.status === "deleting") {
@@ -302,12 +340,12 @@ export class PersonalBoxes {
           if (
             existing &&
             (existing.members === "everyone" ||
-              existing.members.length !== 1 ||
-              existing.members[0] !== row.owner)
+              (existing.members.length !== 0 && (existing.members.length !== 1 || existing.members[0] !== row.owner)))
           )
             throw new Error("Personal box membership changed");
           this.options.attach(this.entry(row, endpoint));
           current.status = "ready";
+          if (this.options.driver.image !== undefined) current.image = this.options.driver.image;
           delete current.worker;
           this.save(db, current);
           Object.assign(row, current);
@@ -353,17 +391,25 @@ export class PersonalBoxes {
       .catch(() => {});
     return operation;
   }
-  async remove(owner: string, id: string, deleteData: boolean): Promise<PersonalBoxRecord> {
+  async remove(owner: string, id: string, deleteData: boolean, disposition?: { ownerName?: string; deleteAgents?: boolean }): Promise<PersonalBoxRecord> {
     const row = this.transaction((db) => {
       const record = this.own(db, owner, id);
+      if (record.retained && !disposition) throw new Error("Personal box not found");
       if (record.status === "deleted") return record;
       if (this.running(record)) throw new Error("Personal box operation is still running");
       if (record.status === "deleting" && record.deleteData !== deleteData)
         throw new Error("Retry the pending cleanup before changing data retention.");
-      if (this.options.residents(id)) throw new Error("Remove agents from this box first");
+      if (this.options.residents(id) && !disposition) throw new Error("Remove agents from this box first");
+      if (deleteData && this.options.residents(id) && !disposition?.deleteAgents) throw new Error("Confirm deletion of the agents on this computer");
+      this.options.checkResidents?.(id, deleteData);
       this.acquire(record.id);
+      if (disposition?.ownerName !== undefined) {
+        record.ownerName = disposition.ownerName;
+        record.retained = true;
+      }
       record.status = "deleting";
       record.deleteData = deleteData;
+      record.deleteAgents = disposition?.deleteAgents === true || record.deleteAgents === true;
       record.worker = process.pid;
       this.save(db, record);
       return record;
@@ -389,10 +435,11 @@ export class PersonalBoxes {
           const entry = this.options.entries().find((e) => e.id === row.id);
           if (entry && entry.endpoint?.baseUrl !== found.endpoint) this.options.attach(this.entry(row, found.endpoint));
         }
-        if (found.state === "gone" || found.state === "failed")
+        if (found.image !== undefined || found.state === "gone" || found.state === "failed")
           this.transaction((db) => {
             const current = this.own(db, row.owner, row.id);
-            Object.assign(current, { status: "failed", stateReason: found.reason ?? "Gone", stateChangedAt: new Date().toISOString(),
+            if (found.image !== undefined) current.image = found.image;
+            if (found.state === "gone" || found.state === "failed") Object.assign(current, { status: "failed", stateReason: found.reason ?? "Gone", stateChangedAt: new Date().toISOString(),
               error: `The box did not come back after a restart (${found.reason ?? "Gone"}). Retry or remove the box.` });
             this.save(db, current);
           });
@@ -413,7 +460,21 @@ export class PersonalBoxes {
   async cleanup(id: string, deleteData: boolean): Promise<void> {
     const row = this.transaction((db) => this.records(db).find((row) => row.id === id));
     if (!row) throw new Error("Personal box not found");
-    await this.remove(row.owner, id, deleteData);
+    const result = await this.remove(row.owner, id, deleteData);
+    if (result.error) throw new Error(result.error);
+  }
+  transfer(id: string, owner: string, ownerName: string): void {
+    this.transaction(db => {
+      const row = this.records(db).find(record => record.id === id && record.status !== "deleted");
+      if (!row) throw new Error("Personal box not found");
+      if (this.running(row) || row.status === "deleting") throw new Error("Finish the pending box operation before transferring");
+      this.allowed(owner);
+      const quota = this.options.quota(owner);
+      const held = personalBoxesOf(this.combined(db), owner).filter(entry => entry.id !== id).length;
+      if (quota !== undefined && held >= quota) throw new Error("The recipient has no personal box quota available");
+      if (this.options.entries().some(entry => entry.id === id)) this.options.attach({ ...this.entry(row), members: [owner] });
+      this.save(db, { ...row, owner, ownerName, retained: false, request: `transfer-${randomUUID()}` });
+    });
   }
   private detach(row: PersonalBoxRecord): void {
     if (this.options.residents(row.id)) throw new Error("Remove agents from this box first");
@@ -422,7 +483,13 @@ export class PersonalBoxes {
   private finishRemoval(row: PersonalBoxRecord): Promise<PersonalBoxRecord> {
     const operation = (async () => {
       try {
-        this.detach(row);
+        if (row.deleteAgents && row.deleteData) {
+          this.options.checkResidents?.(row.id, true);
+          this.options.removeResidents?.(row.id);
+        }
+        if (row.deleteData && this.options.residents(row.id)) throw new Error("Remove agents from this box first");
+        if (!this.options.residents(row.id)) this.detach(row);
+        else if (this.options.entries().some(entry => entry.id === row.id)) this.options.attach({ ...this.entry(row), members: [] });
         await this.options.driver.remove(row, row.deleteData === true);
         if (row.deleteData) rmSync(row.tokenFile, { force: true });
         row.status = row.deleteData ? "deleted" : "detached";

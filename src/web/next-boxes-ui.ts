@@ -7,7 +7,7 @@
  * reachable, how many agents it holds, and removing one that was attached.
  */
 export const NEXT_BOXES_JS = `
-var boxes = { list: [], own: "", starting: false, state: null, log: [], failed: "" };
+var boxes = { list: [], own: "", starting: false, state: null, log: [], failed: "", personal: {}, computerBusy: false, computerRequest: "" };
 
 function boxById(id) { return boxes.list.filter(function (box) { return box.id === id; })[0]; }
 
@@ -119,8 +119,13 @@ function boxMembers(box) {
 }
 
 function renderBoxes(view) {
+  renderPersonalComputers(view);
+  var managed = (boxes.personal.mine || {}).boxes || [];
+  var inventory = boxes.personal.inventory;
+  if (inventory) managed = inventory.boxes;
   var list = el("div", "list"), admin = canOperateInstallation();
   boxes.list.forEach(function (box) {
+    if (managed.some(function (item) { return item.id === box.id; })) return;
     var row = el("div", "row"), body = el("div", "body");
     body.appendChild(el("div", "title", box.name));
     body.appendChild(el("div", "why", [box.kind, t("ui.next.box.agents", { n: box.agents || 0 }), box.version || ""].filter(Boolean).join(" · ")));
@@ -137,7 +142,7 @@ function renderBoxes(view) {
       if (boxes.failed) body.appendChild(el("div", "why", boxes.failed));
     }
     if (!box.connected && box.kind === "kubernetes" && box.id !== boxes.own) body.appendChild(el("div", "why", podUnreachable(box.detail)));
-    if (admin && box.id !== boxes.own && box.kind !== "kubernetes" && !(box.agents > 0)) {
+    if (admin && !box.personal && box.id !== boxes.own && box.kind !== "kubernetes" && !(box.agents > 0)) {
       var remove = el("button", "act", t("ui.next.box.remove"));
       remove.addEventListener("click", function () {
         var confirm = el("button", "act-danger", t("ui.next.box.removeConfirm"));
@@ -156,5 +161,99 @@ function renderBoxes(view) {
   more.appendChild(el("p", "", t("ui.next.box.addNote")));
   more.appendChild(link);
   view.appendChild(more);
+}
+
+function runComputer(path, body, created) {
+  if (boxes.computerBusy) return;
+  boxes.computerBusy = true; render();
+  postJson("/api/personal-boxes/" + path, body).then(function () {
+    if (created) boxes.computerRequest = "";
+  }, failed).finally(function () { boxes.computerBusy = false; refresh(); });
+}
+
+function editComputerName(title, value, save) {
+  computerDialog(title, function (body, action) {
+    var name = el("input"); name.value = value; name.maxLength = 100;
+    name.setAttribute("aria-label", t("ui.personal.name"));
+    body.appendChild(labelled(t("ui.personal.name"), name));
+    var button = action(t("ui.personal.saveName"), false, function (close) {
+      if (name.value.trim()) { close(); save(name.value.trim()); }
+    });
+    name.addEventListener("input", function () { button.disabled = !name.value.trim(); });
+    name.addEventListener("keydown", function (event) { if (event.key === "Enter") button.click(); });
+  });
+}
+
+function computerRow(box, mine, people, locked) {
+  var row = el("div", "row"), body = el("span", "body"), acts = el("span", "acts");
+  var metadata = [t("ui.personal.created", { date: new Date(box.createdAt).toLocaleString() }), t("ui.personal.image", { image: box.image || t("ui.personal.unknown") })];
+  if (!mine) metadata.unshift(t(box.orphaned ? "ui.personal.formerOwner" : "ui.personal.owner", { name: box.ownerName }));
+  body.appendChild(el("div", "title", box.name)); body.appendChild(el("div", "why", metadata.join(" · ")));
+  if (box.podStatus) body.appendChild(el("div", "why", box.podStatus));
+  if (box.error || box.status === "unreachable") body.appendChild(el("div", "why", box.error || podUnreachable(box.connectionError)));
+  var statusLabel = box.status === "unreachable" ? t("ui.next.box.off") : t("ui.personal.state." + box.status);
+  row.appendChild(body); row.appendChild(el("span", box.status === "ready" ? "chip-run" : "chip", statusLabel));
+  row.appendChild(acts);
+  function button(label, run, danger) {
+    var control = el("button", danger ? "act-danger" : "act", label);
+    control.disabled = boxes.computerBusy; control.addEventListener("click", run); acts.appendChild(control);
+  }
+  function act(action, extra) {
+    var data = Object.assign({ id: box.id }, extra || {});
+    if (!mine) data.action = action;
+    runComputer(mine ? action : "admin", data);
+  }
+  if (["ready", "unreachable", "detached", "failed"].indexOf(box.status) >= 0 || (box.status === "interrupted" && !box.pendingRemoval)) {
+    if (mine && !locked) button(t("ui.personal.rename"), function () {
+      editComputerName(t("ui.personal.rename"), box.name, function (name) { act("rename", { name: name }); });
+    });
+    if (!mine) button(t("ui.personal.transfer"), function () {
+      computerDialog(t("ui.personal.transfer"), function (form, action) {
+        var recipient = el("select"); computerRecipients(recipient, people, box.orphaned ? "" : box.owner);
+        form.appendChild(labelled(t("ui.personal.selectRecipient"), recipient));
+        var apply = action(t("ui.personal.transfer"), false, function (close) { if (recipient.value) { close(); act("transfer", { recipient: recipient.value }); } });
+        apply.disabled = true;
+        recipient.addEventListener("change", function () { apply.disabled = !recipient.value; });
+      });
+    });
+    if (box.status !== "detached") button(t("ui.personal.keep"), function () { act(mine ? "remove" : "keep", mine ? { deleteData: false, deleteAgents: false } : {}); });
+    button(t("ui.personal.delete"), function () {
+      deleteComputerDialog(box, function () { act(mine ? "remove" : "delete", mine ? { deleteData: true, deleteAgents: true } : { deleteAgents: true }); });
+    }, true);
+  }
+  if (["unreachable", "detached", "failed", "interrupted", "deleting"].indexOf(box.status) >= 0 && !locked && (!box.orphaned || box.pendingRemoval))
+    button(t(box.status === "unreachable" ? "ui.next.boxset.retryConnection" : "ui.personal.restore"), function () { act(mine ? "retry" : "recover"); });
+  return row;
+}
+
+function renderPersonalComputers(view) {
+  var mine = boxes.personal.mine, inventory = boxes.personal.inventory;
+  if (mine && (mine.canCreate || mine.boxes.length)) {
+    var own = el("section", "setting"), create = el("button", "act-primary", t("ui.personal.create")), list = el("div", "list");
+    var full = mine.quota !== null && mine.held >= mine.quota;
+    own.appendChild(el("h2", "group", t("ui.personal.mine")));
+    own.appendChild(el("p", "why", computerQuota(mine)));
+    if (full) own.appendChild(el("p", "why", t("ui.personal.full")));
+    create.disabled = !mine.canCreate || full || boxes.computerBusy;
+    create.addEventListener("click", function () {
+      editComputerName(t("ui.personal.create"), t("ui.personal.defaultName", { name: mine.name }), function (name) {
+        if (!boxes.computerRequest) boxes.computerRequest = crypto.randomUUID();
+        runComputer("create", { requestId: boxes.computerRequest, name: name }, true);
+      });
+    });
+    own.appendChild(create);
+    if (boxes.computerBusy) own.appendChild(el("p", "why", t("ui.personal.working")));
+    mine.boxes.forEach(function (box) { list.appendChild(computerRow(box, true, [], !mine.canCreate)); });
+    own.appendChild(list); view.appendChild(own);
+  }
+  if (!inventory) return;
+  var teamBoxes = el("section", "setting"), allocations = el("div", "acts"), list2 = el("div", "list");
+  allocations.style.flexWrap = "wrap";
+  teamBoxes.appendChild(el("h2", "group", t("ui.personal.team")));
+  inventory.people.forEach(function (person) { allocations.appendChild(el("span", "chip", person.name + " · " + computerQuota(person))); });
+  teamBoxes.appendChild(allocations);
+  if (!inventory.boxes.length) list2.appendChild(el("p", "why", t("ui.personal.none")));
+  inventory.boxes.forEach(function (box) { list2.appendChild(computerRow(box, false, inventory.people, false)); });
+  teamBoxes.appendChild(list2); view.appendChild(teamBoxes);
 }
 `;

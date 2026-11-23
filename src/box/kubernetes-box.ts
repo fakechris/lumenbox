@@ -61,6 +61,8 @@ function startFailure(error: KubernetesError): PersonalBoxStartError {
 export class KubernetesBoxDriver implements PersonalBoxDriver {
   constructor(private readonly options: KubernetesBoxDriverOptions) {}
 
+  get image(): string { return this.options.image; }
+
   /** One box record, one placement. The pod's name is the record's name — the container's under Docker. */
   placement(record: PersonalBoxRecord, token = readFileSync(record.tokenFile, "utf8").trim()): KubeBoxPlacement {
     return {
@@ -105,7 +107,7 @@ export class KubernetesBoxDriver implements PersonalBoxDriver {
     const found = await this.options.boxes.locate(record.name);
     if (found === undefined) return { state: "gone", drifted: false, reason: "Gone" };
     const drifted = found.digest !== undefined && found.digest !== this.options.boxes.digestOf(placement);
-    if (found.running) return { state: "running", drifted, endpoint: found.boxdUrl };
+    if (found.running) return { state: "running", drifted, endpoint: found.boxdUrl, ...(found.image ? { image: found.image } : {}) };
     try {
       await this.options.boxes.restart(placement);
     } catch (error) {

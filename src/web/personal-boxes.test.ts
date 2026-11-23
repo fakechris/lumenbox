@@ -10,6 +10,10 @@ import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { UsageLog } from "../host/usage.ts";
 import { Principals } from "../host/principals.ts";
 import { AgentRegistry } from "../agents/registry.ts";
+import { KubernetesBoxDriver } from "../box/kubernetes-box.ts";
+import { KubeBoxes } from "../control/kube-box.ts";
+import { staticDecision } from "../control/policy.ts";
+import { fakeKubeApi } from "../control/testing/fake-kube.ts";
 
 // These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
 process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
@@ -361,6 +365,107 @@ test("member provisioning uses canonical owner, rejects injected host options, e
     });
     assert.equal(cleanup.status, 200);
     assert.deepEqual(((await cleanup.json()) as { boxes: unknown[] }).boxes, []);
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Computers inventories personal Kubernetes boxes and member removal keeps, transfers or deletes their resources explicitly", async () => {
+  const home = mkdtempSync(join(tmpdir(), "personal-lifecycle-http-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  let stop: (() => void) | undefined;
+  try {
+    const people = ["Admin", "Alice", "Bob", "Charlie", "Dana"].map(name => ({
+      id: name.toLowerCase(), name, role: name === "Admin" ? "admin" as const : "driver" as const,
+      identities: [`web:${name.toLowerCase()}`],
+    }));
+    const principals = new Principals();
+    principals.save(people);
+    const fake = fakeKubeApi(), image = "lumenbox:test-version";
+    const kube = new KubeBoxes({ api: fake.api, namespace: "org", defaultImage: () => image, pollIntervalMs: 1, startTimeoutMs: 50 });
+    const driver = new KubernetesBoxDriver({ boxes: kube, image, decision: staticDecision({}) });
+    let base = "";
+    stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "personal-lifecycle", useBox: false,
+      onLog: () => {}, onReady: url => { base = url; }, personalBoxDriver: driver });
+    const call = async (path: string, body?: unknown, member?: string) => {
+      const response = await fetch(base + path, {
+        method: body === undefined ? "GET" : "POST",
+        headers: { authorization: "Bearer personal-lifecycle", "content-type": "application/json",
+          ...(member ? { "x-agentbox-user": `web:${member}`, "x-agentbox-role": member === "admin" ? "admin" : "member" } : {}) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      return { status: response.status, data: await response.json() };
+    };
+    assert.equal((await call("/api/quotas", { personalBoxQuota: 1, personBoxQuotas: { alice: 2 } })).status, 200);
+    const collection = "/api/personal-boxes";
+    const create = async (person: string, name: string) => {
+      const result = await call(collection + "/create", { requestId: "first", name }, person);
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      assert.equal(result.data.boxes[0].status, "ready");
+      return result.data.boxes[0].id as string;
+    };
+    const alice = await create("alice", "Alice’s computer");
+    const bob = await create("bob", "Bob’s computer");
+    const charlie = await create("charlie", "Charlie’s computer");
+    const dana = await create("dana", "Dana’s computer");
+    const resource = (id: string) => `personal-${id.slice(4)}`;
+    const registry = new AgentRegistry(join(home, "agents"));
+    const bea = registry.create({ name: "Bea", boxId: bob });
+    const dee = registry.create({ name: "Dee", boxId: dana });
+    const renamed = (await call(collection + "/rename", { id: alice, name: "Desk" }, "alice")).data.boxes[0];
+    assert.equal(renamed.name, "Desk");
+    assert.equal(renamed.podStatus, "Running", "pod lookup uses the Kubernetes name after rename");
+    assert.equal((await call(collection + "/rename", { id: bob, name: "Unexpected" }, "alice")).status, 409);
+    const own = (await call(collection + "/panel", undefined, "bob")).data;
+    assert.equal(own.inventory, null);
+    assert.equal(own.mine.held, 1);
+    assert.equal(own.mine.boxes[0].podStatus, "Running");
+    assert.deepEqual(own.mine.boxes[0].agents, ["Bea"]);
+    assert.equal((await call(collection + "/admin", undefined, "bob")).status, 403);
+    const admin = () => call(collection + "/admin", undefined, "admin");
+    const inventory = await admin();
+    assert.equal(inventory.data.boxes.length, 4);
+    const row = (rows: { id: string }[], id: string) => rows.find(item => item.id === id);
+    assert.deepEqual(row(inventory.data.boxes, bob), {
+      id: bob, owner: "bob", ownerName: "Bob", name: "Bob’s computer", status: "ready", podStatus: "Running",
+      image, createdAt: own.mine.boxes[0].createdAt, retained: false, orphaned: false, pendingRemoval: false, dataRetained: false, agents: ["Bea"],
+    });
+    const quota = (await call("/api/quotas")).data.people;
+    assert.equal(inventory.data.people.find((person: { id: string }) => person.id === "bob").held,
+      quota.find((person: { id: string }) => person.id === "bob").held);
+
+    let roster = people.filter(person => person.id !== "bob");
+    assert.equal((await call("/api/principals", { principals: roster })).status, 409);
+    assert.ok(fake.pods.has(resource(bob)), "removal without a disposition did not stop the pod");
+    const removed = await call("/api/principals", { principals: roster, personalBoxes: { bob: { action: "keep" } } });
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+    assert.equal(fake.pods.has(resource(bob)), false);
+    assert.equal([...fake.pvcs].filter(([name]) => name.startsWith(resource(bob))).length, 3);
+    assert.equal(registry.has(bea.id), true);
+    assert.deepEqual((await call(collection, undefined, "bob")).status, 403);
+    const retained = (await admin()).data.boxes.find((box: { id: string }) => box.id === bob);
+    assert.equal(retained.ownerName, "Bob");
+    assert.equal(retained.orphaned, true);
+    assert.equal(retained.status, "detached");
+    assert.equal((await call(collection + "/admin", { id: bob, action: "transfer", recipient: "admin" })).status, 200);
+    assert.equal((await call(collection + "/admin", { id: bob, action: "recover" })).status, 200);
+    assert.ok(fake.pods.has(resource(bob)));
+    assert.equal((await call(collection, undefined, "admin")).data.boxes[0].agents[0], "Bea");
+
+    roster = roster.filter(person => person.id !== "charlie");
+    assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { charlie: { action: "transfer", recipient: "alice" } } })).status, 200);
+    assert.equal((await call(collection, undefined, "alice")).data.held, 2);
+    assert.ok(fake.pods.has(resource(charlie)), "transfer retained the original pod and volumes");
+    roster = roster.filter(person => person.id !== "dana");
+    assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { dana: { action: "delete" } } })).status, 200);
+    assert.equal(fake.pods.has(resource(dana)), false);
+    assert.equal([...fake.pvcs.keys()].some(name => name.startsWith(resource(dana))), false);
+    assert.equal(registry.has(dee.id), false);
+    assert.equal(row((await admin()).data.boxes, dana), undefined);
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;

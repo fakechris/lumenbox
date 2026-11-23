@@ -106,6 +106,7 @@ export const SERVER_ERRORS = {
   "err.cleanup-admin-only": ["只有管理员可以清理。", "Administrator cleanup only."],
   "err.cleanup-needs-choice": ["清理需要 id，并明确选择是否删除数据。", "Cleanup requires id and an explicit deleteData choice."],
   "err.cleanup-failed": ["清理没能完成。请先移走驻留的 agent，或等 Docker 可用后重试。", "Cleanup could not finish. Remove resident agents or retry when Docker is available."],
+  "err.personal-box-not-found": ["找不到这台个人电脑。", "Personal computer not found."],
   "err.personal-box-sign-in": ["请以成员身份登录后再管理个人 box。", "Sign in as a member to manage personal boxes."],
   "err.personal-box-action-unknown": ["没有这个个人 box 操作。", "No personal box action."],
   "err.personal-box-revoked": ["你管理个人 box 的权限已被收回。", "Personal box permission revoked."],

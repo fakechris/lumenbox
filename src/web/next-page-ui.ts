@@ -43,7 +43,7 @@ import { INSTALLATIONS_JS } from "./installations-ui.ts";
 import { NEXT_SPEND_JS } from "./next-spend-ui.ts";
 import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 import { NEXT_MEMBER_JS } from "./next-member-ui.ts";
-import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
+import { NEXT_BOXES_JS } from "./next-boxes-ui.ts"; import { PERSONAL_BOX_DIALOG_JS } from "./personal-box-dialog-ui.ts";
 import { NEXT_CARDS_JS } from "./next-cards-ui.ts";
 import { NEXT_NEED_JS } from "./next-need-ui.ts";
 import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
@@ -519,7 +519,7 @@ ${NEXT_SET_SHELL_JS}
 ${NEXT_SPEND_JS}
 ${NEXT_COMPOSER_JS}
 ${NEXT_MEMBER_JS}
-${NEXT_BOXES_JS}
+${PERSONAL_BOX_DIALOG_JS}${NEXT_BOXES_JS}
 ${NEXT_CARDS_JS}
 ${NEXT_NEED_JS}
 ${NEXT_DOCK_JS}

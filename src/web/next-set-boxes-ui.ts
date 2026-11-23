@@ -138,12 +138,12 @@ function attachBlock() {
     text.appendChild(el("b", "", machine.name));
     text.appendChild(el("div", "why", [machine.kind, t(machine.connected ? "ui.next.box.on" : "ui.next.box.off"), t("ui.next.boxset.agents", { n: machine.agents || 0 })].filter(Boolean).join(" · ")));
     if (machine.membersLabel) text.appendChild(boxMembers(machine));
-    if (settings.me && settings.me.role === "admin") {
+    if (!machine.personal && settings.me && settings.me.role === "admin") {
       var open = el("button", "act", t("ui.next.boxset.everyone"));
       open.addEventListener("click", function () { postJson("/api/boxes/update", { name: machine.name, members: "everyone" }).then(loadBoxSet, failed); });
       if (machine.members && machine.members !== "everyone") acts.appendChild(open);
     }
-    if (machine.id !== own) {
+    if (!machine.personal && machine.id !== own) {
       var detach = el("button", "act", t("ui.next.boxset.detach"));
       detach.disabled = (machine.agents || 0) > 0; detach.title = detach.disabled ? t("ui.next.boxset.detachBusy") : "";
       detach.addEventListener("click", function () {

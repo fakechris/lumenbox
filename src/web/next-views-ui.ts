@@ -260,10 +260,12 @@ function refresh() {
   // A refused optional read must not prevent the rest of the page from drawing.
   var machines = getJson("/api/boxes?lang={{@locale}}").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
   var setup = getJson("/api/setup").catch(function () { return settings.setup; });
-  return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines, setup]).then(function (got) {
+  var personal = getJson("/api/personal-boxes/panel").catch(function () { return boxes.personal; });
+  return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines, setup, personal]).then(function (got) {
     boxes.list = got[3].boxes || []; boxes.own = got[3].own || ""; boxes.state = got[0].box || null;
     boxes.starting = !!(boxes.state && boxes.state.starting);
     settings.setup = got[4];
+    boxes.personal = got[5];
     var first = Object.keys(next.agents).length === 0;
     next.agents = {}; member.allTools = got[0].allTools || [];
     (got[0].agents || []).forEach(function (agent) { next.agents[agent.id] = agent; });

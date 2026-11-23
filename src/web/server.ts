@@ -250,6 +250,7 @@ import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
+import { personalBoxRoute, planBoxDispositions } from "./personal-box-routes.ts";
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
@@ -792,14 +793,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     principals.list().find(person => person.id === id)?.identities ?? [id], directorySources(), Date.now(), identity => principals.hasCurrentIdentity(id, identity));
 
   let personalBoxesStopping = false;
+  const personalQuota = (owner: string) => personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner));
+  const mayProvision = (owner: string) => {
+    principals.reload();
+    const person = principals.byId(owner);
+    return !personalBoxesStopping && person?.id === owner && person.identities.length > 0 && roleAtLeast(person.role, "driver") && directoryQuotaContext(owner).eligible;
+  };
+  const checkBoxResidents = (id: string, deleting: boolean) => {
+    const residents = registry.agentsIn(id), busy = new Set(orchestrator.bus.activeAgentIds());
+    if (residents.some(agent => busy.has(agent.id))) throw new Error("Wait for the agents on this computer to finish before stopping it.");
+    if (deleting && residents.length > 0 && residents.length === registry.list().length) throw new Error("Keep at least one agent on another computer before deleting this computer.");
+  };
   const personalBoxes = new PersonalBoxes({
     home: join(agentboxHome(), "personal-boxes"), entries: () => registry.listBoxes(),
-    quota: owner => personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)),
-    authorize: owner => {
-      principals.reload();
-      const person = principals.list().find(person => person.id === owner);
-      return !personalBoxesStopping && person !== undefined && person.identities.length > 0 && roleAtLeast(person.role, "driver") && directoryQuotaContext(owner).eligible;
-    },
+    quota: personalQuota, authorize: mayProvision, checkResidents: checkBoxResidents,
+    removeResidents: id => { for (const agent of registry.agentsIn(id)) registry.remove(agent.id, { archive: false }); },
     attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); },
     detach: id => { orchestrator.detachBox(id); }, residents: id => registry.agentsIn(id).length,
     driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
@@ -3735,51 +3743,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           } catch { send(res, 503, apiError("directory-sync-failed")); }
           return;
         }
-        if (route === "GET /api/personal-boxes/admin-cleanup" || route === "POST /api/personal-boxes/admin-cleanup") {
-          principals.reload();
-          const administrator = () => caller.userId === undefined || (principals.isKnown(caller.userId) && principals.roleOf(caller.userId) === "admin");
-          if (!administrator()) { send(res, 403, apiError("cleanup-admin-only")); return; }
-          if (req.method === "POST") {
-            const body = await readJson(req);
-            principals.reload();
-            if (!administrator()) { send(res, 403, apiError("cleanup-admin-only")); return; }
-            if (typeof body.id !== "string" || typeof body.deleteData !== "boolean" || Object.keys(body).some(key => !["id", "deleteData"].includes(key))) { send(res, 400, apiError("cleanup-needs-choice")); return; }
-            try { await personalBoxes.cleanup(body.id, body.deleteData); }
-            catch { send(res, 409, apiError("cleanup-failed")); return; }
-          }
-          send(res, 200, { boxes: personalBoxes.cleanupList() }); return;
-        }
         if (url.pathname === "/api/personal-boxes" || url.pathname.startsWith("/api/personal-boxes/")) {
-          principals.reload();
-          const identity = caller.userId;
-          if (!identity || !principals.isKnown(identity)) { send(res, 403, apiError("personal-box-sign-in")); return; }
-          const view = async (owner: string) => ({ boxes: (await personalBoxes.listWithPodStatus(owner)).map(row => {
-              const box = kubernetes && row.status === "ready" ? orchestrator.boxStatus().find(box => box.id === row.id) : undefined;
-              return kubernetes && row.status === "ready" && !box?.connected ? { ...row, status: "unreachable", connectionError: box?.detail } : row;
-            }),
-            quota: personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)) ?? null,
-            held: personalBoxesOf(personalBoxes.quotaEntries(), owner).length });
-          if (route === "GET /api/personal-boxes") { send(res, 200, await view(principals.resolve(identity).id)); return; }
-          if (!["POST /api/personal-boxes/create", "POST /api/personal-boxes/retry", "POST /api/personal-boxes/remove"].includes(route)) { send(res, 404, apiError("personal-box-action-unknown")); return; }
-          const body = await readJson(req);
-          principals.reload();
-          if (!principals.isKnown(identity) || (!route.endsWith("/remove") && !roleAtLeast(principals.roleOf(identity), "driver"))) { send(res, 403, apiError("personal-box-revoked")); return; }
-          const owner = principals.resolve(identity).id;
-          const stillAuthorized = () => { principals.reload(); return principals.isKnown(identity) && principals.resolve(identity).id === owner && roleAtLeast(principals.roleOf(identity), "driver"); };
-          const allowed = route.endsWith("/create") ? ["requestId"] : route.endsWith("/remove") ? ["id", "deleteData"] : ["id"];
-          if (Object.keys(body).some(key => !allowed.includes(key)) ||
-            (route.endsWith("/create") ? typeof body.requestId !== "string" : typeof body.id !== "string") ||
-            (route.endsWith("/remove") && typeof body.deleteData !== "boolean")) { send(res, 400, apiError("personal-box-params")); return; }
-          try {
-            const record = route.endsWith("/create") ? await personalBoxes.create(owner, body.requestId as string, stillAuthorized)
-              : route.endsWith("/retry") ? await personalBoxes.retry(owner, body.id as string, stillAuthorized)
-                : await personalBoxes.remove(owner, body.id as string, body.deleteData as boolean);
-            if (record.status === "ready") {
-              const entry = registry.boxById(record.id);
-              if (entry) await orchestrator.reconnectBox(entry);
-            }
-            send(res, 200, { ...await view(owner), boxId: record.id });
-          } catch (error) { send(res, 409, { error: error instanceof Error ? error.message : "Personal box operation failed." }); }
+          await personalBoxRoute(route, { boxes: personalBoxes, principals, identity: caller.userId, quota: personalQuota, authorize: mayProvision,
+            connections: () => kubernetes ? orchestrator.boxStatus() : undefined,
+            residents: id => registry.agentsIn(id).map(agent => agent.profile.name),
+            reconnect: async id => { const entry = registry.boxById(id); if (entry) await orchestrator.reconnectBox(entry); },
+            read: () => readJson(req), send: (status, body) => send(res, status, body), error: apiError });
           return;
         }
         if (route === "GET /api/quotas/self") {
@@ -3823,10 +3792,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             saveConfig({ ...(body.personalBoxQuota !== undefined ? { personalBoxQuota: body.personalBoxQuota as number | null } : {}), personBoxQuotas: patch, departmentBoxQuotas: departmentPatch });
             log(`Personal-box quotas updated by ${caller.userId ?? "operator"}`);
           }
-          const config = loadConfig();
+          const config = loadConfig(), entries = personalBoxes.quotaEntries();
           send(res, 200, { departments: directoryDepartments().map(item => ({ ...item, override: config.departmentBoxQuotas?.[item.key] ?? null })), personalBoxQuota: config.personalBoxQuota ?? null, people: principals.list().map(person => ({
             id: person.id, name: person.name, override: Object.hasOwn(config.personBoxQuotas ?? {}, person.id) ? config.personBoxQuotas![person.id] : null,
-            quota: personalQuotaFor(person.id, config, directoryQuotaContext(person.id)) ?? null, held: personalBoxesOf(registry.listBoxes(), person.id).length,
+            quota: personalQuotaFor(person.id, config, directoryQuotaContext(person.id)) ?? null, held: personalBoxesOf(entries, person.id).length,
           })) });
           return;
         }
@@ -4867,7 +4836,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             });
           }
           if (leavesNoAdmin(principals.list(), roster)) { send(res, 409, apiError("last-admin")); return; } // INV-2053
+          principals.reload();
+          if (refusedRole("admin")) return;
+          let dispose: () => Promise<void>;
+          try { dispose = planBoxDispositions(personalBoxes, principals.list(), roster, body.personalBoxes, personalQuota, mayProvision, checkBoxResidents); }
+          catch (error) { send(res, 409, { error: (error as Error).message }); return; }
           principals.save(roster);
+          try { await dispose(); }
+          catch (error) { send(res, 409, { error: (error as Error).message }); return; }
           log(`principals roster updated (${roster.length} people)`);
           send(res, 200, { principals: principals.list() });
           return;
@@ -5078,7 +5054,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...CATALOG_EXPERTS.map(entry => ({ kind: "expert", slug: entry.slug, name: entry.name, title: entry.title, summary: summaryIn(entry, localeOf(req, url)), domain: entry.domain })),
             ...CATALOG_CREWS.map(crew => ({ kind: "crew", slug: crew.slug, name: crew.name, title: "", summary: summaryIn(crew, localeOf(req, url)), domain: crew.domain, members: crew.members })),
           ];
-          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(withBoxBackend) });
+          const labels = personalBoxes.names();
+          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(box => ({ ...withBoxBackend(box), name: labels.get(box.id) ?? box.name })) });
           return;
         }
         // Stamp: one template, one box, one new agent (or a crew's several). Wraps the two
@@ -5981,8 +5958,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // tells them it exists, which is the one thing a members set is for.
           // Registered boxes carry their lifecycle state and version (INV-434).
           const nameOfPrincipal = (id: string): string => principals.list().find(person => person.id === id)?.name ?? id;
+          const labels = personalBoxes.names();
           const boxes = orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(status => {
-            const box = withBoxBackend(status);
+            const label = labels.get(status.id);
+            const box = withBoxBackend(label === undefined ? status : { ...status, name: label, personal: true });
             const entry = registry.listBoxes().find(candidate => candidate.id === box.id);
             const membership =
               entry === undefined
