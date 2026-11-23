@@ -78,8 +78,10 @@ test("a principal steers only its own goals; pause and resume its own pause; cle
   // A goal a token started under the sign-in, before the token answered with the person (INV-2074), is still theirs.
   const linked = setup({ owns: (requester, who) => requester === who || (requester === "web:old" && who === "p1") });
   const old = idOf(await linked.start.run({ objective: "Tidy the shared drive" }, "web:old", { idempotencyKey: "k1" }));
+  await linked.control.run({ task_id: old, action: "pause" }, "web:old");
+  await assert.rejects(linked.control.run({ task_id: old, action: "resume" }, "p2"), /not started by you/);
+  assert.match(await linked.control.run({ task_id: old, action: "resume" }, "p1"), /continues/, "a pause the sign-in made, the person resumes");
   assert.match(await linked.control.run({ task_id: old, action: "pause" }, "p1"), /paused/);
-  await assert.rejects(linked.control.run({ task_id: old, action: "pause" }, "p2"), /not started by you/);
 });
 
 test("a stop the system made is not resumable from the door; neither is a person's own pause", async () => {

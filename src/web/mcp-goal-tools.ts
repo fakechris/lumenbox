@@ -131,7 +131,8 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
         const task = board.get(id);
         const pursuit = task?.pursuit;
         if (task === undefined || pursuit === undefined) throw new Error(`No goal ${id}.`);
-        if (!(deps.owns ?? ((requester, id) => requester === id))(task.requester, principalId)) throw new Error(`Goal ${id} was not started by you; only its requester steers it here.`);
+        const owns = deps.owns ?? ((requester, id) => requester === id);
+        if (!owns(task.requester, principalId)) throw new Error(`Goal ${id} was not started by you; only its requester steers it here.`);
         if (task.assigneeId !== undefined && !deps.mayDrive(task.assigneeId, principalId)) throw new Error(`You may no longer drive the agent on goal ${id}; nothing changed.`);
         const who = deps.nameOf(principalId);
         switch (input.action) {
@@ -146,7 +147,7 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
             return `Goal ${id} cleared. The record stays on the board; it will not be pursued again.`;
           case "resume":
             if (pursuit.status !== "paused") throw new Error(`Goal ${id} is ${pursuit.status}, not paused.`);
-            if (pursuit.pausedReason !== "person" || pursuit.pausedBy !== principalId) {
+            if (pursuit.pausedReason !== "person" || !owns(pursuit.pausedBy, principalId)) {
               throw new Error(`Goal ${id} was stopped ${pursuit.pausedReason === "person" ? "by somebody else" : `by the system (${pursuit.pausedReason ?? "paused"})`}. Going on past that stop is a person's decision: the person whose token this is can resume it with /goal resume. Nothing changed.`);
             }
             board.setPursuit(id, p => ({ ...p, status: "active", pausedReason: undefined, pausedBy: undefined }), `resumed by ${who} through the side door`, principalId);
