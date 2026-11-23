@@ -35,7 +35,7 @@ export function fallbackNames(agentList: readonly string[] | undefined, installa
   return [...new Set(names)].filter(name => resolveProviderPreset(name.toLowerCase())?.label !== primary.label).slice(0, MAX_FALLBACKS);
 }
 
-/** Clients for fallback providers, built once each. A preset with no key is left out and said once. */
+/** Named presets are cached; custom runtimes follow the current settings. */
 export class FallbackRuntimes {
   private readonly cache = new Map<string, Runtime | null>();
   constructor(private readonly log: (line: string) => void = line => console.error(line), private readonly build: (profile: ProviderProfile) => Anthropic = createClient) {}
@@ -43,18 +43,20 @@ export class FallbackRuntimes {
   for(names: readonly string[]): Runtime[] {
     const runtimes: Runtime[] = [];
     for (const name of names) {
-      if (!this.cache.has(name)) {
+      const preset = name.toLowerCase();
+      const custom = preset === "custom" || preset === "compatible";
+      let runtime = this.cache.get(name);
+      if (runtime === undefined) {
         try {
-          const preset = name.toLowerCase();
-          const provider = preset === "custom" || preset === "compatible" ? resolveProvider(preset) : resolveProviderPreset(preset);
+          const provider = custom ? resolveProvider(preset) : resolveProviderPreset(preset);
           if (!provider) throw new Error(`Unknown provider "${name}".`);
-          this.cache.set(name, { client: this.build(provider), provider });
+          runtime = { client: this.build(provider), provider };
         } catch (error) {
           this.log(`[fallback] ${name} is not usable as a fallback: ${error instanceof Error ? error.message : String(error)}`);
-          this.cache.set(name, null);
+          runtime = null;
         }
+        if (!custom) this.cache.set(name, runtime);
       }
-      const runtime = this.cache.get(name);
       if (runtime) runtimes.push(runtime);
     }
     return runtimes;
