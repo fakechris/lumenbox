@@ -2307,8 +2307,7 @@ ${outcome.text}`;
   let newerChecked = false;
   // Set while the newer-message look is the round in flight: the reply it is about.
   let newerLook: string | undefined;
-  // A one-round demand that the next response contain a tool call (docs/31 layer 1d/1e):
-  // set by a guard, spent by the next request, never carried further.
+  // A guard's tool choice is spent by the next request (docs/31 layer 1d/1e).
   let forceTools: Anthropic.MessageCreateParams["tool_choice"] | undefined;
   let closingReply = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -2421,6 +2420,7 @@ ${outcome.text}`;
     let estimated = calibratedTokens(wire, requestEstimate.total);
     if (round > 0 && estimated - calibratedTokens(wire, requestEstimate.floor) > policyForModel(answering.model).triggerTokens) {
       await refreshContext();
+      if (closingReply && !audit) appendUserNudge(messages, closingNudge(chinese, interimDelivered));
       if (deps.policy?.isStopped(agent.id)) return;
       requestEstimate = estimateRequestTokens({ messages, system, tools });
       estimated = calibratedTokens(wire, requestEstimate.total);

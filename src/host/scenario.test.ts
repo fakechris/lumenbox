@@ -59,10 +59,17 @@ import type { TranscriptEntry } from "./turn.ts";
 import { workReading } from "./work-reading.ts";
 
 for (const recovers of [true, false]) {
-  test(`empty reply after successful tools (INV-2032, ${recovers ? "recovers" : "explains how to retry"})`, async () => {
+  test(`empty reply after successful tools (INV-2032, ${recovers ? "recovers" : "explains how to retry"})`, async t => {
     const greeting = "Hello! I'm Ada. How can I help?";
     const events: string[] = [];
     const tasks = new TaskStore(null);
+    const trigger = DEFAULT_POLICY.triggerTokens;
+    const envTrigger = process.env.AGENTBOX_COMPACT_AT_TOKENS;
+    t.after(() => {
+      DEFAULT_POLICY.triggerTokens = trigger;
+      if (envTrigger === undefined) delete process.env.AGENTBOX_COMPACT_AT_TOKENS;
+      else process.env.AGENTBOX_COMPACT_AT_TOKENS = envTrigger;
+    });
     const episode = await runEpisode({
       team: [{ name: "Ada", tools: ["read_file", "list_dir"] }],
       says: ["Hi Ada!"],
@@ -72,7 +79,14 @@ for (const recovers of [true, false]) {
       script: ({ round, messages, offered }) => {
         if (round === 0) return { call: "read_file", input: { path: "/home/box/work/welcome.txt" } };
         if (round === 1) return { call: "list_dir", input: { path: "/home/box/work" } };
-        if (round === 2) return undefined;
+        if (round === 2) {
+          if (!recovers) {
+            // Force the context rebuild between the empty response and the closing request.
+            process.env.AGENTBOX_COMPACT_AT_TOKENS = "1";
+            DEFAULT_POLICY.triggerTokens = 1;
+          }
+          return undefined;
+        }
         assert.equal(round, 3, "only one recovery request");
         const last = messages.at(-1);
         assert.equal(last?.role, "user");
@@ -86,9 +100,10 @@ for (const recovers of [true, false]) {
     });
     try {
       assert.equal(episode.score.rounds, 4);
-      assert.deepEqual(episode.score.trail, ["Ada:read_file", "Ada:list_dir"]);
+      assert.deepEqual(episode.score.trail, recovers ? ["Ada:read_file", "Ada:list_dir", "Ada:list_dir"] : ["Ada:read_file", "Ada:list_dir"]);
       assert.deepEqual(episode.score.refusals, []);
       const transcript = episode.registry.readTranscript(episode.registry.resolve("Ada").id) as TranscriptEntry[];
+      assert.equal(transcript.filter(entry => "kind" in entry && entry.kind === "results").length, 2, "the unsolicited repeat never ran");
       const last = transcript.at(-1);
       assert.ok(last?.role === "assistant" && "text" in last);
       if (recovers) {
