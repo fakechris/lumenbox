@@ -67,7 +67,7 @@ ${renderSettingsTabs()}
       <div class="fieldnote">{{ui.settings.the-prompt-parts-every-agent}}</div>
       <div id="setparts"></div>
     </div>
-    <div class="field" data-tier="installation" data-settab="memory">
+    <div class="field" data-tier="personal" data-settab="memory">
       <label>{{ui.settings.memory}}</label>
       <div class="fieldnote" style="margin:0">{{ui.settings.what-each-agent-has-kept}}</div>
       <div id="setmemstate" class="fieldnote" style="margin:4px 0 0"></div>
@@ -257,9 +257,9 @@ ${renderSettingsTabs()}
     </div>
     <div class="fieldnote" id="setstatus"></div>
     <div class="actions">
-      <button class="btn" id="settest">{{ui.settings.test-connection}}</button>
-      <button class="btn accent" id="setsaverestart">{{ui.settings.save-restart}}</button>
-      <button class="btn" id="setsave">{{ui.settings.save}}</button>
+      <button class="btn" id="settest" data-operator>{{ui.settings.test-connection}}</button>
+      <button class="btn accent" id="setsaverestart" data-operator>{{ui.settings.save-restart}}</button>
+      <button class="btn" id="setsave" data-operator>{{ui.settings.save}}</button>
       <button class="btn ghost" id="setcancel">{{ui.settings.cancel}}</button>
     </div>
   </div>

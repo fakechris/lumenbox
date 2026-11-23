@@ -26,5 +26,6 @@ export const UI_NEXT_LINE: Record<string, readonly [string, string]> = {
   "ui.next.line.blocker.dependency": ["等另一件工作的结果", "Waiting on another piece of work"],
   "ui.next.line.blocker.plan": ["计划里还有步骤没做完", "Steps of its plan are still left"],
   "ui.next.line.blocker.execution": ["这一轮没做完，会接着做", "Not finished this round; it carries on"],
+  "ui.next.line.blocker.empty_output": ["本轮已结束。请再问一次。", "This turn ended. Ask again."],
   "ui.next.line.blocker.failed": ["出错停下了，打开看是哪一步", "Stopped on an error; open it to see where"],
 };

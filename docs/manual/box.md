@@ -25,6 +25,8 @@ the sidebar, where the footer shows the box and each agent's row shows what that
 
 - **Start the box:** Settings → Boxes → *Start the box*. The first start pulls the image, which
   is hundreds of megabytes.
+- **Update the box:** Settings → Boxes shows an available image update at the top. Choose
+  *Apply update* to wait for the agents to finish their work before updating.
 - **Add a box:** press `+ box` in the box bar at the top, or Settings → Boxes → *Attach* to
   drive a box on another machine.
 - **Watch an agent:** pick the agent, then open the *Desktop* tab on the right.

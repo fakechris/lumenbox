@@ -17,6 +17,7 @@ function boxById(id) { return boxes.list.filter(function (box) { return box.id =
  * or the line it failed on — is what replaces "starting".
  */
 function startBox() {
+  if (!canOperateInstallation()) return;
   boxes.starting = true; boxes.log = []; boxes.failed = ""; render();
   postJson("/api/box/up", {}).then(function (got) {
     // Already up: there will be no events to wait for.
@@ -46,17 +47,21 @@ function boxWhy(box) {
 
 /** Said beside the agents when the computer they are on is not reachable: it explains every silence below it. */
 function boxNotice() {
-  var box = boxById(chat.box), strip = $("box-notice");
+  var box = boxById(chat.box), strip = $("box-notice"), members = $("box-members");
+  if (box && box.members === "everyone" && box.membersLabel) {
+    if (members.dataset.label !== box.membersLabel) { members.replaceChildren(boxMembers(box)); members.dataset.label = box.membersLabel; }
+  } else { members.replaceChildren(); delete members.dataset.label; }
+  members.hidden = !members.firstChild;
   strip.hidden = !box || box.connected !== false;
   if (strip.hidden) return;
-  var why = boxWhy(box);
+  var admin = canOperateInstallation(), why = admin ? boxWhy(box) : "offline";
   strip.replaceChildren(el("span", "", why === "missing" ? t("ui.box.dockerMissing") : why === "stopped" ? t("ui.box.dockerStopped") : t("ui.next.box.offline", { name: box.name })));
   if (why === "missing") {
     [["Docker Desktop", "https://www.docker.com/products/docker-desktop/"], ["OrbStack", "https://orbstack.dev/"]].forEach(function (pair) {
       var link = el("a", "", pair[0]); link.href = pair[1]; link.target = "_blank"; link.rel = "noopener noreferrer"; strip.appendChild(link);
     });
   }
-  if (box.id !== boxes.own) return;
+  if (!admin || box.id !== boxes.own) return;
   var start = el("button", "act", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
   start.id = "box-start"; start.disabled = boxes.starting;
   start.addEventListener("click", startBox);
@@ -68,21 +73,31 @@ function boxNotice() {
   }
 }
 
+function boxMembers(box) {
+  if (box.members !== "everyone") return el("div", "why", box.membersLabel);
+  var details = el("details", "box-members");
+  details.dataset.boxId = box.id;
+  details.appendChild(el("summary", "", t("ui.access.shared")));
+  details.appendChild(el("div", "", box.membersLabel));
+  return details;
+}
+
 function renderBoxes(view) {
-  var list = el("div", "list");
+  var list = el("div", "list"), admin = canOperateInstallation();
   boxes.list.forEach(function (box) {
-    var row = el("div", "row"), body = el("span", "body");
+    var row = el("div", "row"), body = el("div", "body");
     body.appendChild(el("div", "title", box.name));
-    body.appendChild(el("div", "why", [box.kind, t("ui.next.box.agents", { n: box.agents || 0 }), box.version || "", box.membersLabel || ""].filter(Boolean).join(" · ")));
+    body.appendChild(el("div", "why", [box.kind, t("ui.next.box.agents", { n: box.agents || 0 }), box.version || ""].filter(Boolean).join(" · ")));
+    if (box.membersLabel) body.appendChild(boxMembers(box));
     row.appendChild(el("span", "who", initial(box.name)));
     row.appendChild(body);
     row.appendChild(el("span", box.connected ? "chip-run" : "chip", t(box.connected ? "ui.next.box.on" : "ui.next.box.off")));
-    if (!box.connected && box.id === boxes.own) {
+    if (admin && !box.connected && box.id === boxes.own) {
       var start = el("button", "act", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
       start.disabled = boxes.starting; start.addEventListener("click", startBox);
       row.appendChild(start);
     }
-    if (box.id !== boxes.own && !(box.agents > 0)) {
+    if (admin && box.id !== boxes.own && !(box.agents > 0)) {
       var remove = el("button", "act", t("ui.next.box.remove"));
       remove.addEventListener("click", function () {
         var confirm = el("button", "act-danger", t("ui.next.box.removeConfirm"));
@@ -94,6 +109,7 @@ function renderBoxes(view) {
     list.appendChild(row);
   });
   view.appendChild(list);
+  if (!admin) return;
   var more = el("section", "setting"), link = el("button", "act", t("ui.next.box.addOpen"));
   link.addEventListener("click", function () { openSettingsPane("boxes"); });
   more.appendChild(el("h2", "group", t("ui.next.box.add")));

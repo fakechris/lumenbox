@@ -5,7 +5,7 @@
  * and never shown again.
  */
 export const NEXT_SET_MODEL_JS = `
-var model = { config: null, error: "", fallbacks: null, rests: null, note: "", test: "", parts: null, jev: null };
+var model = { config: null, error: "", fallbacks: null, rests: null, note: "", test: "", testNote: null, parts: null, jev: null };
 
 function loadModel() {
   refreshModelReadiness();
@@ -34,14 +34,19 @@ function selectOf(rows, chosen) {
 }
 function labelled(text, control) { var label = el("label", "", text); label.appendChild(control); return label; }
 
+function modelKeySource(preset) {
+  return t(preset.keySource === "environment" ? "ui.next.config.keyEnvironment" :
+    preset.keySource === "saved" ? "ui.next.config.keySaved" : "ui.next.config.noKey");
+}
+
 function modelForm() {
   var config = model.config, presets = config.presets || [], saved = config.config || {}, search = (config.search || {}).providers || [];
-  var box = el("section", "setting"), admin = settings.me && settings.me.role === "admin";
+  var box = el("section", "setting"), admin = settings.me && settings.me.role === "admin", effective = config.effective || {};
   box.appendChild(el("h2", "group", t("ui.next.model.title")));
-  box.appendChild(el("p", "why", t("ui.next.model.now", { label: (config.effective || {}).label || "", model: (config.effective || {}).model || "" })));
+  box.appendChild(el("p", "why", effective.configured ? t("ui.next.model.now", effective) : t("ui.next.model.notConfigured")));
   if (!admin) { box.appendChild(el("p", "why", t("ui.next.set.adminOnly"))); return box; }
-  var chosen = saved.provider || config.current || "", searchWas = (search.filter(function (row) { return row.keyPresent; })[0] || {}).name || "";
-  var provider = selectOf(presets.map(function (preset) { return [preset.name, preset.label + " · " + preset.model]; }), chosen);
+  var chosen = saved.provider || effective.provider || "", searchWas = (search.filter(function (row) { return row.keyPresent; })[0] || {}).name || "";
+  var provider = selectOf(presets.map(function (preset) { return [preset.name, preset.label + " · " + preset.model + " · " + modelKeySource(preset)]; }), chosen);
   var name = el("input"), address = el("input"), key = el("input"), keyNote = el("p", "why"), summary = el("input"), searchKey = el("input"), list = el("datalist");
   var vision = selectOf([["auto", t("ui.next.model.vision.auto")], ["on", t("ui.next.model.vision.on")], ["off", t("ui.next.model.vision.off")]], (config.settings || {}).vision || "auto");
   var searchProvider = selectOf([["", t("ui.next.model.noSearch")]].concat(search.map(function (row) { return [row.name, row.name]; })), searchWas);
@@ -51,11 +56,20 @@ function modelForm() {
     var preset = presets.filter(function (row) { return row.name === provider.value; })[0] || {};
     addressLabel.hidden = provider.value !== "custom";
     name.placeholder = preset.model || "";
-    keyNote.textContent = preset.keyPresent ? t("ui.next.model.keySet") : t("ui.next.model.keyMissing");
+    keyNote.textContent = preset.keyPresent ? modelKeySource(preset) : t("ui.next.model.keyMissing");
     list.replaceChildren();
     (preset.models || []).forEach(function (value) { var node = el("option"); node.value = value; list.appendChild(node); });
   };
-  provider.addEventListener("change", follow); follow();
+  var previous = provider.value;
+  provider.addEventListener("change", function () {
+    if (previous !== provider.value + "-global" && provider.value !== previous + "-global") {
+      name.value = provider.value === chosen ? saved.model || "" : "";
+      address.value = provider.value === chosen ? saved.baseUrl || "" : "";
+      key.value = "";
+    }
+    previous = provider.value;
+    follow();
+  }); follow();
   // Named, because the first-run acceptance drives these four through the window (scripts/onboarding-e2e.mjs).
   provider.id = "set-provider"; key.id = "set-key";
   var form = function () {
@@ -81,9 +95,13 @@ function modelForm() {
     test.disabled = true; model.test = t("ui.next.model.testing"); note.textContent = model.test;
     postJson("/api/config/test", body).then(function (got) {
       model.test = got.ok ? t("ui.next.model.testOk", { model: got.model || "", ms: got.latencyMs || 0 }) : t("ui.next.model.testBad", { error: got.error || "" });
-    }, function (error) { model.test = t("ui.next.model.testBad", { error: error.message }); }).then(function () { test.disabled = false; note.textContent = model.test; });
+    }, function (error) { model.test = t("ui.next.model.testBad", { error: error.message }); }).then(function () {
+      test.disabled = false;
+      model.testNote.textContent = model.test;
+    });
   });
-  var note = el("p", "why", model.test || model.note);
+  var note = el("p", "note", model.test || model.note);
+  model.testNote = note;
   save.id = "set-save"; note.id = "set-note";
   acts.appendChild(save); acts.appendChild(test); box.appendChild(acts); box.appendChild(note);
   return box;
@@ -97,7 +115,7 @@ function fallbackBlock() {
   box.appendChild(el("p", "why", t("ui.next.model.fallbacksNote")));
   [0, 1, 2].forEach(function (index) {
     var rows = [["", t("ui.next.model.noFallback")]].concat((data.presets || []).map(function (preset) {
-      return [preset.name, preset.label + " · " + preset.model + (preset.hasKey ? "" : " · " + t("ui.next.config.noKey"))];
+      return [preset.name, preset.label + " · " + preset.model + " · " + modelKeySource(preset)];
     }));
     var pick = selectOf(rows, (data.names || [])[index] || "");
     picks.push(pick); box.appendChild(labelled(t("ui.next.model.fallbackN", { n: index + 1 }), pick));

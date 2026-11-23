@@ -196,16 +196,20 @@ function eachField(view, visit) {
     visit(node, name + "#" + seen[name]);
   });
 }
+function foldKey(summary) {
+  var boxId = summary.parentNode.dataset.boxId;
+  return boxId === undefined ? "summary:" + summary.textContent : "box:" + boxId;
+}
 function keepEdits(view) {
-  var kept = { fields: {}, open: {} };
+  var kept = { fields: {}, open: new Set() };
   eachField(view, function (node, key) {
     if (node.dataset.edited) kept.fields[key] = { value: node.value, checked: node.checked, focus: document.activeElement === node, at: node.selectionStart };
   });
-  view.querySelectorAll("details[open] > summary").forEach(function (summary) { kept.open[summary.textContent] = true; });
+  view.querySelectorAll("details[open] > summary").forEach(function (summary) { kept.open.add(foldKey(summary)); });
   return kept;
 }
 function restoreEdits(view, kept) {
-  view.querySelectorAll("details > summary").forEach(function (summary) { if (kept.open[summary.textContent] && !summary.parentNode.open) summary.parentNode.open = true; });
+  view.querySelectorAll("details > summary").forEach(function (summary) { if (kept.open.has(foldKey(summary))) summary.parentNode.open = true; });
   eachField(view, function (node, key) {
     var was = kept.fields[key];
     if (!was) return;
@@ -225,22 +229,27 @@ function render() {
 function renderView(view) {
   next.atEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80; next.scrollTop = view.scrollTop;
   view.replaceChildren();
+  if (settings.me && ((next.view === "system" && !canOperateInstallation()) || (next.view === "settings" && !canDriveAgents()))) next.view = "chat";
   document.body.dataset.view = next.view;
+  $("agent-new").hidden = !canDriveAgents() || !boxesKnown().length;
   renderSide();
   $("work-tools").hidden = next.view !== "work";
   $("composer").hidden = true; placeDock(null); // the conversation puts back what waits above it
-  document.querySelectorAll("[data-nav]").forEach(function (button) { button.setAttribute("aria-current", String(button.dataset.nav === next.view)); });
+  document.querySelectorAll("[data-nav]").forEach(function (button) {
+    if (button.dataset.nav === "settings") button.hidden = !canDriveAgents();
+    button.setAttribute("aria-current", String(button.dataset.nav === next.view));
+  });
   document.querySelectorAll("[data-layout]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.layout === next.layout)); });
   renderScreen();
   renderThreadTools(0);
   if (next.view === "chat") { renderChat(view); return; }
   $("view-title").textContent = t(next.view === "system" ? "ui.next.side.system" : next.view === "boxes" ? "ui.next.side.boxes2" : next.view === "settings" || next.view === "auto" ? "ui.next.side." + next.view : "ui.next.nav." + next.view);
-  $("view-hint").textContent = t("ui.next." + next.view + ".hint");
+  $("view-hint").textContent = next.view === "settings" && !canOperateInstallation() ? "" : t("ui.next." + next.view + ".hint");
   if (next.view === "inbox") renderInbox(view);
   else if (next.view === "settings") renderSettings(view);
   else if (next.view === "auto") renderAuto(view);
   else if (next.view === "boxes") renderBoxes(view);
-  else if (next.view === "system") renderSystem(view);
+  else if (next.view === "system") { if (canOperateInstallation()) renderSystem(view); }
   else renderWork(view);
 }
 
@@ -248,7 +257,7 @@ function refresh() {
   if (next.loading) { next.refreshAgain = true; return Promise.resolve(); }
   next.loading = true;
   // A refused optional read must not prevent the rest of the page from drawing.
-  var machines = getJson("/api/boxes").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
+  var machines = getJson("/api/boxes?lang={{@locale}}").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
   var setup = getJson("/api/setup").catch(function () { return settings.setup; });
   return Promise.all([getJson("/api/state"), getJson("/api/attention"), getJson("/api/tasks/list?records=user&limit=100"), machines, setup]).then(function (got) {
     boxes.list = got[3].boxes || []; boxes.own = got[3].own || ""; boxes.state = got[0].box || null;
@@ -272,14 +281,39 @@ function refresh() {
 var refreshTimer = 0;
 function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 400); }
 
+function writeViewAddress(view, pane) {
+  var url = new URL(location.href), wasSettings = url.searchParams.get("view") === "settings";
+  ["token", "agent", "conversation", "task", "view", "pane"].forEach(function (key) { url.searchParams.delete(key); });
+  if (view !== "chat") url.searchParams.set("view", view);
+  if (pane) url.searchParams.set("pane", pane);
+  if (url.href === location.href) return;
+  if (wasSettings || view === "settings") history.pushState(null, "", url);
+  else history.replaceState(null, "", url);
+}
+
+function readViewAddress() {
+  var params = new URLSearchParams(location.search), view = params.get("view");
+  next.view = ["work", "inbox", "settings", "auto", "boxes", "system"].includes(view) ? view : "chat";
+  settings.pane = next.view === "settings" ? settingsPane(params.get("pane")) : "";
+  if (next.view !== "chat" || params.has("agent")) document.body.dataset.open = "1";
+  else delete document.body.dataset.open;
+}
+
+function navigateView(view, pane) {
+  next.view = view; settings.pane = view === "settings" ? settingsPane(pane) : "";
+  document.body.dataset.open = "1"; writeViewAddress(view, settings.pane); render();
+}
+
 function nextStart() {
-  var address = new URL(location.href);
-  if (address.searchParams.has("token")) {
-    address.searchParams.delete("token");
-    history.replaceState(null, "", address.pathname + address.search + address.hash);
-  }
+  getJson("/api/me").then(function (got) { settings.me = got || {}; render(); if (canDriveAgents()) landSharedTemplate(); }, function () {});
   document.querySelectorAll("[data-nav]").forEach(function (button) {
-    button.addEventListener("click", function () { next.view = button.dataset.nav; settings.pane = ""; document.body.dataset.open = "1"; history.replaceState(null, "", "?view=" + next.view); render(); });
+    button.addEventListener("click", function () { navigateView(button.dataset.nav); });
+  });
+  window.addEventListener("popstate", function () { readViewAddress(); render(); });
+  // Clear the view route before chatStart's back handler returns to the agent list.
+  $("back").addEventListener("click", function () {
+    if (next.view === "chat") return;
+    settings.pane = ""; writeViewAddress("chat", "");
   });
   $("work-find").addEventListener("input", function () { findWork($("work-find").value.trim()); });
   document.querySelectorAll("[data-layout]").forEach(function (button) {
@@ -295,10 +329,8 @@ function nextStart() {
     document.cookie = "lumen-lang=" + ("{{@locale}}" === "zh" ? "en" : "zh") + "; path=/; max-age=31536000; samesite=lax";
     location.reload();
   });
-  var asked = new URLSearchParams(location.search).get("view"), linked = new URLSearchParams(location.search).get("task");
-  if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto" || asked === "boxes" || asked === "system") { next.view = asked; document.body.dataset.open = "1"; }
-  var pane = new URLSearchParams(location.search).get("pane");
-  if (asked === "settings" && pane && NATIVE_PANES[pane]) settings.pane = pane;
+  var linked = new URLSearchParams(location.search).get("task");
+  readViewAddress();
   panelStart();
   // A field the person touched is theirs until it is sent or the view changes.
   ["input", "change"].forEach(function (kind) {
@@ -315,7 +347,6 @@ function nextStart() {
     document.body.classList.add("electron");
     if (/Macintosh/.test(navigator.userAgent)) document.body.classList.add("electron-mac");
   }
-  landSharedTemplate();
   // What the desktop app calls to show an agent, when a notification about it is pressed.
   window.select = function (agentId) { if (next.agents[agentId]) openChat(agentId); };
   // A link to one piece of work — from a chat message, a notification — opens it.

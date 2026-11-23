@@ -105,11 +105,16 @@ export function malformedOutput(text: string, stopReason: string | null | undefi
  * person's way back, rather than told to use an interface it does not have — which is how the
  * incident started.
  */
-export function malformedNudge(kind: MalformedKind, toolsOffered: boolean, chinese: boolean): string {
+export function malformedNudge(kind: MalformedKind, toolsOffered: boolean | "closing", chinese: boolean): string {
   if (kind === "degenerate") {
     return chinese
       ? "[harness] 你上一条回复陷入了重复，已被丢弃，对方没有看到。不要重复，也不要接着写：给出一条简短、完整的回答。"
       : "[harness] Your last reply fell into repetition and was discarded; the person did not see it. Do not repeat it or continue it: give one short, complete answer.";
+  }
+  if (toolsOffered === "closing") {
+    return chinese
+      ? "[harness] 你上一条回复把工具调用写成了文字，已被丢弃。不要调用工具，直接用文字告诉对方已有的结果。"
+      : "[harness] Your last reply wrote a tool call as text and was discarded. Do not call tools. Reply in plain text with the results you already have.";
   }
   if (!toolsOffered) {
     return chinese

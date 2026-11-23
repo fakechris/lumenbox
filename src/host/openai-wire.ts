@@ -46,7 +46,9 @@ interface OpenAIToolCall {
 
 interface OpenAIRequest {
   model: string;
-  max_tokens: number;
+  max_tokens?: number;
+  max_completion_tokens?: number;
+  reasoning_effort?: "none";
   messages: OpenAIMessage[];
   tools?: { type: "function"; function: object }[];
   tool_choice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
@@ -103,7 +105,7 @@ function toolChoiceOf(choice: CreateParams["tool_choice"]): Pick<OpenAIRequest, 
 }
 
 /** Anthropic-shaped request → chat completions body. Exported for its tests. */
-export function toOpenAIRequest(params: CreateParams): OpenAIRequest {
+export function toOpenAIRequest(params: CreateParams, officialOpenAI = false): OpenAIRequest {
   const out: OpenAIMessage[] = [];
 
   const system =
@@ -174,11 +176,14 @@ export function toOpenAIRequest(params: CreateParams): OpenAIRequest {
 
   return {
     model: params.model,
-    max_tokens: params.max_tokens,
+    ...(officialOpenAI && /^(?:gpt-[56]|o[134])(?:[.-]|$)/.test(params.model)
+      ? { max_completion_tokens: params.max_tokens }
+      : { max_tokens: params.max_tokens }),
     messages: out,
     ...toolChoiceOf(params.tool_choice),
     ...(params.tools !== undefined && params.tools.length > 0
       ? {
+          ...(officialOpenAI && /^gpt-6(?:[.-]|$)/.test(params.model) ? { reasoning_effort: "none" as const } : {}),
           tools: params.tools.map(tool => ({
             type: "function" as const,
             function: {
@@ -329,7 +334,7 @@ class OpenAIWireStream {
     officialOpenAI = false
   ): Promise<Anthropic.Message> {
     const request = {
-      ...toOpenAIRequest(params),
+      ...toOpenAIRequest(params, officialOpenAI),
       stream: true,
       stream_options: { include_usage: true },
     };
@@ -347,7 +352,7 @@ class OpenAIWireStream {
       // The vendor's own words, status included: "invalid api key" from the horse's
       // mouth beats any paraphrase, and overflow classification reads this text.
       const detail = await response.text().catch(() => "");
-      throw new Error(`${response.status} ${detail.slice(0, 2000)}`);
+      throw new OpenAIWireError(response.status, detail);
     }
 
     const tally: StreamTally = {
@@ -442,6 +447,21 @@ class OpenAIWireStream {
   }
 }
 
+export class OpenAIWireError extends Error {
+  readonly parameterError: boolean;
+
+  constructor(readonly status: number, detail: string) {
+    super(`${status} ${detail.slice(0, 2000)}`);
+    this.parameterError = false;
+    if (status >= 400 && status < 500) {
+      try {
+        const error = JSON.parse(detail)?.error;
+        this.parameterError = Boolean(error?.param) || error?.code === "unsupported_parameter";
+      } catch { /* Non-JSON gateway errors have no parameter metadata. */ }
+    }
+  }
+}
+
 /**
  * The client. Presents `{ messages: { create, stream } }`, which is the entire
  * surface the engine, the summariser, the extractor and the connection test use.
@@ -463,11 +483,11 @@ export class OpenAIWireClient {
             "content-type": "application/json",
             ...(key ? { authorization: `Bearer ${key}` } : {}),
           },
-          body: JSON.stringify(toOpenAIRequest(params)),
+          body: JSON.stringify(toOpenAIRequest(params, officialOpenAI)),
         });
         if (!response.ok) {
           const detail = await response.text().catch(() => "");
-          throw new Error(`${response.status} ${detail.slice(0, 2000)}`);
+          throw new OpenAIWireError(response.status, detail);
         }
         return fromOpenAIResponse(
           (await response.json()) as Parameters<typeof fromOpenAIResponse>[0],

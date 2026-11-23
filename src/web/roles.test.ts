@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
@@ -75,6 +75,26 @@ test("installation and organisation are an admin's; a person's own access is the
     assert.equal(await status("/api/channels", dana), 403, "channel roster and invitation secrets");
     assert.equal(await status("/api/channels", vic), 403, "viewers cannot read invitation secrets");
     assert.equal(await status("/api/config", dana, { provider: "anthropic" }), 403, "provider");
+    for (const jar of [dana, vic]) {
+      for (const route of ["/api/config/test", "/api/long-work", "/api/box/up", "/api/boxes/attach", "/api/boxes/update", "/api/boxes/detach"]) {
+        assert.equal(await status(route, jar, {}), 403, route);
+      }
+    }
+    const get = async (path: string, headers: HeadersInit) => (await fetch(BASE + path, { headers })).json();
+    const providerUrl = "http://127.0.0.1:1/installation-provider";
+    writeFileSync(join(home, "config.json"), JSON.stringify({ provider: "custom", baseUrl: providerUrl }));
+    assert.equal((await get("/api/config", ui)).config.baseUrl, providerUrl);
+    for (const [jar, role] of [[dana, "driver"], [vic, "viewer"]] as const) {
+      const headers = { cookie: jar };
+      assert.equal((await get("/api/me", headers)).role, role);
+      assert.equal((await get("/api/state", headers)).provider, undefined, "no provider URL in member state");
+      const config = await get("/api/config", headers);
+      assert.deepEqual(Object.keys(config), ["presets"], "the agent editor still gets a provider catalogue");
+      assert.ok(config.presets.length > 0);
+      const setup = await get("/api/setup", headers);
+      assert.deepEqual(Object.keys(setup), role === "driver" ? ["installationId", "hasPersonalBox"] : ["installationId"]);
+      if (role === "driver") assert.equal(setup.hasPersonalBox, false);
+    }
     assert.equal(await status("/api/scopes", dana, { scopes: [] }), 403, "scopes");
     assert.equal(await status("/api/principals", dana, { principals: [] }), 403, "roster");
     assert.equal(await status("/api/channels/approve", dana, { identity: "x" }), 403, "knocks");
