@@ -7,6 +7,7 @@ export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
   "ui.wr.blocker.dependency": ["等待关联工作的结果。", "Waiting for related work to return."],
   "ui.wr.blocker.plan": ["执行计划仍有未完成的步骤。", "The execution plan still has unfinished steps."],
   "ui.wr.blocker.execution": ["本轮未完成工作，需要继续执行。", "This execution did not finish the work; continuation is needed."],
+  "ui.wr.blocker.empty_output": ["模型没有回复，本轮已结束。请再问一次。", "The turn ended without a reply from the model. Ask again."],
   "ui.wr.blocker.failed": ["执行失败，请查看执行过程后决定如何继续。", "Execution failed. Inspect the process before deciding how to continue."],
   "ui.wr.progress": ["现在的进展与依据", "Current progress and evidence"],
   "ui.wr.hostContext": ["系统提供的执行上下文", "Host execution context"],
