@@ -5724,3 +5724,40 @@ test("an agent finds what a teammate decided in another conversation, reads it b
     episode.cleanup();
   }
 });
+
+test("delegated, colleague reported, coordinator converges (INV-2037)", async () => {
+  // Ada asked Rex to check example.com's title and then kept her turn open, checking in a loop instead
+  // of ending it. Rex reported in seconds; Ada never read it and ran to her turn budget, and the operator
+  // had to fetch Rex's answer by hand. The report must reach the turn that is waiting on it.
+  const { WorkAttention } = await import("../agents/work-attention.ts");
+  const focus = new WorkAttention();
+  let adaCalls = 0, sawReport = -1, rexDone = -1;
+  const episode = await runEpisode({
+    workAttention: focus, team: [{ name: "Ada" }, { name: "Rex" }], says: [],
+    script: ({ agent, messages }) => {
+      const text = JSON.stringify(messages);
+      if (agent === "Rex") {
+        if (!text.includes("curl")) return { call: "bash", input: { command: "curl -s https://example.com | grep -o '<title>.*</title>'" } };
+        rexDone = adaCalls;
+        return { say: "REX_REPORT: the title of example.com is \"Example Domain\"." };
+      }
+      adaCalls++;
+      if (text.includes("REX_REPORT")) { if (sawReport < 0) sawReport = adaCalls; return { say: "Combined brief: example.com is titled \"Example Domain\" — Rex and I agree." }; }
+      if (adaCalls === 1) return { call: "SendToAgent", input: { target_id: "Rex", message: "Independently check the title of example.com and tell me." } };
+      return { call: "bash", input: { command: `sleep 5 # waiting for Rex, check ${adaCalls}` } };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      bus.sendFromUser(frontId, "Ask Rex to independently check example.com's title, then the two of you combine into one brief.");
+      await bus.wake(frontId); await bus.idle();
+      assert.ok(rexDone > 0, "Rex reported");
+      assert.ok(sawReport > 0, "Ada read Rex's report");
+      assert.ok(sawReport - rexDone <= 3, `Ada read Rex's report within a round or two of it landing, not after ${sawReport - rexDone} more calls`);
+      const said = JSON.stringify(registry.readTranscript(frontId));
+      assert.match(said, /Combined brief/);
+      assert.doesNotMatch(said, /turn budget|model calls/i, "Ada's wait ended by itself, not at the budget");
+      assert.equal(focus.get(frontId, "main")!.status, "answered");
+      assert.equal(focus.get(frontId, "main")!.awaiting.length, 0);
+    },
+  });
+  episode.cleanup();
+});
