@@ -278,7 +278,7 @@ function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(r
 
 function writeViewAddress(view, pane) {
   var url = new URL(location.href), wasSettings = url.searchParams.get("view") === "settings";
-  ["agent", "conversation", "task", "view", "pane"].forEach(function (key) { url.searchParams.delete(key); });
+  ["token", "agent", "conversation", "task", "view", "pane"].forEach(function (key) { url.searchParams.delete(key); });
   if (view !== "chat") url.searchParams.set("view", view);
   if (pane) url.searchParams.set("pane", pane);
   if (url.href === location.href) return;
