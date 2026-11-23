@@ -18,6 +18,7 @@ function nextStateOf(row: { status: string; reading?: { phase: string; blocker?:
   if (phase === "checking") return { key: "checking", tone: "run" };
   if (phase === "working") return { key: "running", tone: "run" };
   if (phase === "queued") return { key: "queued", tone: "run" };
+  if (blocker === "empty_output") return { key: "noReply", tone: "need" };
   // Waiting on a tool or after a failure is stuck; waiting on the person is theirs to answer.
   if (blocker === "capability" || blocker === "failed" || blocker === "interrupted") return { key: "stuck", tone: "stuck" };
   if (phase === "needs" || blocker === "confirmation") return { key: "answer", tone: "need" };
@@ -29,7 +30,7 @@ function nextStateOf(row: { status: string; reading?: { phase: string; blocker?:
 /** Which section of the work view a row sits in. */
 function nextGroupOf(stateKey: string): string {
   if (stateKey === "running" || stateKey === "queued" || stateKey === "checking" || stateKey === "waiting") return "running";
-  if (stateKey === "answer" || stateKey === "stuck" || stateKey === "proposal") return "you";
+  if (stateKey === "answer" || stateKey === "stuck" || stateKey === "proposal" || stateKey === "noReply") return "you";
   if (stateKey === "review") return "review";
   return "done";
 }

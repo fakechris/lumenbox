@@ -28,6 +28,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.state.review": ["待验收", "Ready for review"],
   "ui.next.state.stuck": ["卡住了", "Stuck"],
   "ui.next.state.waiting": ["等待中", "Waiting"],
+  "ui.next.state.noReply": ["没有回复", "No reply"],
   "ui.next.state.done": ["完成", "Done"],
   "ui.next.state.stopped": ["已停止", "Stopped"],
   "ui.next.state.proposal": ["提议", "Proposed"],

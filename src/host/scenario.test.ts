@@ -56,14 +56,17 @@ import { evidenceDigest } from "./review-dispatch.ts";
 import { approvedCallNotice } from "./approval-notice.ts";
 import { ExceptionLedger, noteTurnEnd } from "./exceptions.ts";
 import type { TranscriptEntry } from "./turn.ts";
+import { workReading } from "./work-reading.ts";
 
 for (const recovers of [true, false]) {
   test(`empty reply after successful tools (INV-2032, ${recovers ? "recovers" : "explains how to retry"})`, async () => {
     const greeting = "Hello! I'm Ada. How can I help?";
     const events: string[] = [];
+    const tasks = new TaskStore(null);
     const episode = await runEpisode({
       team: [{ name: "Ada", tools: ["read_file", "list_dir"] }],
       says: ["Hi Ada!"],
+      tasks,
       files: { "/home/box/work/welcome.txt": "Welcome" },
       onEvent: event => { if (event.type === "text") events.push(event.delta); },
       script: ({ round, messages }) => {
@@ -93,6 +96,14 @@ for (const recovers of [true, false]) {
         assert.match(last.text, /model returned no text.*Ask again/);
         assert.equal(last.host, true);
         assert.ok(events.includes(last.text), "the watcher receives the actionable reason");
+        const task = tasks.list().find(row => row.workRoot?.automatic);
+        assert.ok(task, "the web request has an obligation card");
+        const reading = workReading(task, {
+          checks: new ResultChecks().snapshot(task),
+          stage: { active: false, questionPending: false, undelivered: false },
+        });
+        assert.equal(reading.phase, "waiting");
+        assert.equal(reading.blocker?.kind, "empty_output", "the card must explain that a new reply requires asking again");
       }
     } finally {
       episode.cleanup();
