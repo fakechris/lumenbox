@@ -146,6 +146,27 @@ function pageFunction(name: string, globals: Record<string, unknown>): (...args:
   return vm.runInNewContext(`(${script.slice(start, end)})`, globals) as (...args: unknown[]) => unknown;
 }
 
+test("opening Computers refreshes inventory even if the tab was already open", () => {
+  const next = { view: "work" }, settings = { pane: "team" }, visits: string[] = [];
+  const opened = { dataset: {} };
+  const renderOpenedView = pageFunction("renderOpenedView", {
+    next,
+    render: () => {},
+    refresh: () => visits.push("refresh " + next.view),
+  });
+  const openView = pageFunction("navigateView", {
+    next, settings, document: { body: opened }, renderOpenedView,
+    writeViewAddress: (view: string) => visits.push("?view=" + view),
+  });
+  openView("boxes");
+  openView("work");
+  openView("boxes");
+  openView("boxes");
+  assert.deepEqual(visits, ["?view=boxes", "refresh boxes", "?view=work", "?view=boxes", "refresh boxes", "?view=boxes", "refresh boxes"]);
+  assert.equal(settings.pane, "");
+  assert.deepEqual(opened.dataset, { open: "1" });
+});
+
 test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an owner refusal", async () => {
   const mine = { setup: null as null | { admins: number; bootstrap: boolean }, needsPerson: false, issued: "", tokens: [] };
   const settings = { me: { identity: null as string | null } };

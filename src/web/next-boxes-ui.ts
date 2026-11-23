@@ -184,16 +184,27 @@ function editComputerName(title, value, save) {
   });
 }
 
+function computerText(tag, className, text) {
+  var node = el(tag, className, text);
+  node.style.whiteSpace = "normal";
+  node.style.overflowWrap = "anywhere";
+  return node;
+}
+
 function computerRow(box, mine, people, locked) {
-  var row = el("div", "row"), body = el("span", "body"), acts = el("span", "acts");
+  var row = el("div", "row"), body = el("div", "body"), acts = el("div", "acts");
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "minmax(0, 1fr) auto";
+  acts.style.gridColumn = "1 / -1";
+  acts.style.flexWrap = "wrap";
   var metadata = [t("ui.personal.created", { date: new Date(box.createdAt).toLocaleString() }), t("ui.personal.image", { image: box.image || t("ui.personal.unknown") })];
   if (!mine) metadata.unshift(t(box.orphaned ? "ui.personal.formerOwner" : "ui.personal.owner", { name: box.ownerName }));
-  body.appendChild(el("div", "title", box.name)); body.appendChild(el("div", "why", metadata.join(" · ")));
-  if (box.podStatus) body.appendChild(el("div", "why", box.podStatus));
-  if (box.error || box.status === "unreachable") body.appendChild(el("div", "why", box.error || podUnreachable(box.connectionError)));
+  body.appendChild(computerText("div", "title", box.name));
+  body.appendChild(computerText("div", "why", metadata.join(" · ")));
+  if (box.podStatus) body.appendChild(computerText("div", "why", box.podStatus));
+  if (box.error || box.status === "unreachable") body.appendChild(computerText("div", "why", box.error || podUnreachable(box.connectionError)));
   var statusLabel = box.status === "unreachable" ? t("ui.next.box.off") : t("ui.personal.state." + box.status);
   row.appendChild(body); row.appendChild(el("span", box.status === "ready" ? "chip-run" : "chip", statusLabel));
-  row.appendChild(acts);
   function button(label, run, danger) {
     var control = el("button", danger ? "act-danger" : "act", label);
     control.disabled = boxes.computerBusy; control.addEventListener("click", run); acts.appendChild(control);
@@ -223,6 +234,7 @@ function computerRow(box, mine, people, locked) {
   }
   if (["unreachable", "detached", "failed", "interrupted", "deleting"].indexOf(box.status) >= 0 && !locked && (!box.orphaned || box.pendingRemoval))
     button(t(box.status === "unreachable" ? "ui.next.boxset.retryConnection" : "ui.personal.restore"), function () { act(mine ? "retry" : "recover"); });
+  if (acts.childElementCount) row.appendChild(acts);
   return row;
 }
 
@@ -233,7 +245,7 @@ function renderPersonalComputers(view) {
     var full = mine.quota !== null && mine.held >= mine.quota;
     own.appendChild(el("h2", "group", t("ui.personal.mine")));
     own.appendChild(el("p", "why", computerQuota(mine)));
-    if (full) own.appendChild(el("p", "why", t("ui.personal.full")));
+    if (full) own.appendChild(computerText("p", "why", t("ui.personal.full")));
     create.disabled = !mine.canCreate || full || boxes.computerBusy;
     create.addEventListener("click", function () {
       editComputerName(t("ui.personal.create"), t("ui.personal.defaultName", { name: mine.name }), function (name) {

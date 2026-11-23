@@ -307,7 +307,12 @@ function readViewAddress() {
 
 function navigateView(view, pane) {
   next.view = view; settings.pane = view === "settings" ? settingsPane(pane) : "";
-  document.body.dataset.open = "1"; writeViewAddress(view, settings.pane); render();
+  document.body.dataset.open = "1"; writeViewAddress(view, settings.pane); renderOpenedView();
+}
+
+function renderOpenedView() {
+  render();
+  if (next.view === "boxes") refresh();
 }
 
 function nextStart() {
@@ -315,7 +320,7 @@ function nextStart() {
   document.querySelectorAll("[data-nav]").forEach(function (button) {
     button.addEventListener("click", function () { navigateView(button.dataset.nav); });
   });
-  window.addEventListener("popstate", function () { readViewAddress(); render(); });
+  window.addEventListener("popstate", function () { readViewAddress(); renderOpenedView(); });
   // Clear the view route before chatStart's back handler returns to the agent list.
   $("back").addEventListener("click", function () {
     if (next.view === "chat") return;
