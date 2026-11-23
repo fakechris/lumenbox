@@ -2127,6 +2127,7 @@ function renderPeople() {
     $("setpeople").innerHTML = '<div class="fieldnote" style="margin:0">{{ui.app.nobody-yet-add-a-person}}</div>';
     return;
   }
+  var admins = people.filter(function (p) { return p.role === "admin"; }).length; // the last admin's last sign-in has no Remove (INV-2053)
   $("setpeople").innerHTML = people.map(function (p, i) {
     var roles = ["viewer", "driver", "admin"].map(function (role) {
       return '<option value="' + role + '"' + (p.role === role ? " selected" : "") + ">" + ({ viewer: "{{ui.role.viewer}}", driver: "{{ui.role.driver}}", admin: "{{ui.role.admin}}" }[role] || role) + "</option>";
@@ -2135,7 +2136,7 @@ function renderPeople() {
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
       '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +
       ((window.ownerBadge && window.ownerBadge(p)) || ('<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>" +
-      '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>')) + "</div>";
+      (p.role === "admin" && admins === 1 ? '<span class="fieldnote" style="margin:0">{{ui.app.only-admin}}</span>' : '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>'))) + "</div>";
   }).join("");
 }
 
@@ -2185,6 +2186,8 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   var idx = event.target.getAttribute && event.target.getAttribute("data-remove");
   if (idx === null || idx === undefined) return;
   event.preventDefault();
+  var row = people[Number(idx)];
+  if (!row || !window.confirm("{{ui.app.remove-confirm}}".replace("{name}", row.name).replace("{identity}", row.identity || "-"))) return;
   people.splice(Number(idx), 1);
   renderPeople();
   savePeople();
