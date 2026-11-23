@@ -13,7 +13,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,7 +33,7 @@ test("an upload lands where it says it does", async () => {
   assert.equal(readFileSync(join(ROOT, "notes.txt"), "utf8"), "hello");
 });
 
-test("work-folder listings cannot follow a directory link outside the work folder", async () => {
+test("work-folder listings cannot follow an outside link or a swapped directory", { skip: process.platform !== "linux" }, async t => {
   const reports = join(ROOT, "reports");
   mkdirSync(reports);
   writeFileSync(join(reports, "brief.md"), "brief");
@@ -42,6 +44,21 @@ test("work-folder listings cannot follow a directory link outside the work folde
   assert.deepEqual(listed.entries.map(entry => entry.name), ["brief.md"]);
   await assert.rejects(listDir({ path: outside, work_only: true }), /outside/);
   assert.equal((await listDir({ path: outside })).path, outside, "the agent tool still follows its own filesystem policy");
+  writeFileSync(join(OUTSIDE, "private-listing.txt"), "outside");
+  const originalReaddir = fs.readdir;
+  const swap = t.mock.method(fs, "readdir", (directory: string) => {
+    renameSync(reports, join(ROOT, "previous-reports"));
+    symlinkSync(OUTSIDE, reports);
+    return originalReaddir(directory);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.deepEqual((await listDir({ path: reports, work_only: true })).entries, listed.entries);
+    assert.equal(swap.mock.callCount(), 1);
+  } finally {
+    swap.mock.restore();
+    syncBuiltinESMExports();
+  }
 });
 
 test("an upload will not write through a link that leaves the work directory", async () => {

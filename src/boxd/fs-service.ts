@@ -7,9 +7,11 @@
 
 import { Roots, parseRepositories, type Repository } from "./headless.ts";
 import {
+  constants,
   readdir,
   lstat,
   mkdir,
+  open,
   readFile as fsReadFile,
   realpath,
   rename,
@@ -278,9 +280,7 @@ export async function writeFile(
   return { path, bytes_written: Buffer.byteLength(request.content) };
 }
 
-export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
-  const path = requireInside(requirePath(request.path), "ro");
-  const directory = request.work_only ? await requireDownloadable(path) : path;
+async function listEntries(directory: string): Promise<DirEntry[]> {
   const names = await readdir(directory);
 
   const entries: DirEntry[] = [];
@@ -310,5 +310,19 @@ export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
     return a.name.localeCompare(b.name);
   });
 
-  return { path, entries, ...(request.work_only ? { work_only: true } : {}) };
+  return entries;
+}
+
+export async function listDir(request: ListDirRequest): Promise<ListDirResult> {
+  const path = requireInside(requirePath(request.path), "ro");
+  if (!request.work_only) return { path, entries: await listEntries(path) };
+
+  const handle = await open(await requireDownloadable(path), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    const directory = `/proc/self/fd/${handle.fd}`;
+    await requireDownloadable(directory);
+    return { path, entries: await listEntries(directory), work_only: true };
+  } finally {
+    await handle.close();
+  }
 }
