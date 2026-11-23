@@ -75,6 +75,7 @@ function boxNotice() {
 function boxMembers(box) {
   if (box.members !== "everyone") return el("div", "why", box.membersLabel);
   var details = el("details", "box-members");
+  details.dataset.boxId = box.id;
   details.appendChild(el("summary", "", t("ui.access.shared")));
   details.appendChild(el("div", "", box.membersLabel));
   return details;

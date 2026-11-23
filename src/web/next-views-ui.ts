@@ -196,16 +196,20 @@ function eachField(view, visit) {
     visit(node, name + "#" + seen[name]);
   });
 }
+function foldKey(summary) {
+  var boxId = summary.parentNode.dataset.boxId;
+  return boxId === undefined ? "summary:" + summary.textContent : "box:" + boxId;
+}
 function keepEdits(view) {
-  var kept = { fields: {}, open: {} };
+  var kept = { fields: {}, open: new Set() };
   eachField(view, function (node, key) {
     if (node.dataset.edited) kept.fields[key] = { value: node.value, checked: node.checked, focus: document.activeElement === node, at: node.selectionStart };
   });
-  view.querySelectorAll("details[open] > summary").forEach(function (summary) { kept.open[summary.textContent] = true; });
+  view.querySelectorAll("details[open] > summary").forEach(function (summary) { kept.open.add(foldKey(summary)); });
   return kept;
 }
 function restoreEdits(view, kept) {
-  view.querySelectorAll("details > summary").forEach(function (summary) { if (kept.open[summary.textContent] && !summary.parentNode.open) summary.parentNode.open = true; });
+  view.querySelectorAll("details > summary").forEach(function (summary) { if (kept.open.has(foldKey(summary))) summary.parentNode.open = true; });
   eachField(view, function (node, key) {
     var was = kept.fields[key];
     if (!was) return;
