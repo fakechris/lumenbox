@@ -4984,6 +4984,7 @@ export async function dispatchTool(
       const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
       const cited = (task: Task) => { const policy = context.resultChecks?.snapshot(task).policy; const line = context.verifications !== undefined ? citationFor(task, context.verifications, policy?.mode === "model" ? policy.reviewers : policy?.mode === "files" ? 1 : context.reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, nameOf) : undefined; return line === undefined ? "" : `\n  · ${line}`; }; // the record stands in for a re-check (INV-1614)
       const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id; // an id or a name; teammates say names, the board stores ids
+      const resolveAssignee = (raw: string): string | undefined => raw.replace(/^@/, "").toLowerCase() === context.agent.profile.name.toLowerCase() ? context.registry.tryGet(raw)?.id ?? context.agent.id : resolveAgent(raw);
       const mayAssign = (taskId: string): boolean => {
         const task = board.get(taskId);
         return task === undefined || task.assigneeId === undefined ||
@@ -5015,7 +5016,7 @@ export async function dispatchTool(
         const discovery = parseDiscovery(input); const propose = input.propose === true || discovery !== undefined || context.unrequested === true; const already = discovery !== undefined ? board.byFingerprint(discovery.fingerprint) : undefined; if (already !== undefined) return { text: `Not proposed again: ${already.id} (${already.status}${already.proposedBy !== undefined ? ", awaiting a person's commit" : ""}) already carries this finding from ${discovery!.source}.${already.status === "dropped" ? " It was dismissed; do not raise it again unless the evidence changed." : ""}`, isError: true };
         const assigneeRaw = String(input.assignee ?? "").trim();
         const reviewerRaw = String(input.reviewer ?? "").trim();
-        const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
+        const assigneeId = assigneeRaw === "" ? undefined : resolveAssignee(assigneeRaw);
         const reviewerId = reviewerRaw === "" ? undefined : resolveAgent(reviewerRaw);
         if (assigneeRaw !== "" && assigneeId === undefined) {
           return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
@@ -5092,7 +5093,7 @@ export async function dispatchTool(
         const refusal = status === "done" ? reviewerInspectionRefusal(target, context.agent.id, context.toolsUsedThisTurn) : undefined;
         if (refusal) return { text: refusal, isError: true };
         const assigneeRaw = String(input.assignee ?? "").trim();
-        const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
+        const assigneeId = assigneeRaw === "" ? undefined : resolveAssignee(assigneeRaw);
         if (assigneeRaw !== "" && assigneeId === undefined) {
           return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
         }

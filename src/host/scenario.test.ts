@@ -4585,6 +4585,8 @@ test("an agent asked to create team work learns when it is actually visible in A
       if (round === 0) return { call: "Tasks", input: { action: "create", title: "Unassigned draft" } };
       if (round === 1) return { call: "Tasks", input: { action: "create", title: "Internal step", assignee: "Runner" } };
       if (round === 2) return { call: "Tasks", input: { action: "create", title: "Shared team task", parent: "none", assignee: "Runner" } };
+      if (round === 3) return { call: "Tasks", input: { action: "create", title: "Self-assigned task", parent: "none", assignee: "Ada" } };
+      if (round === 4) return { call: "Tasks", input: { action: "update", id: tasks.list().find(task => task.title === "Unassigned draft")?.id, assignee: "@aDa" } };
       return { say: "The shared team task is listed for members of this box." };
     },
   });
@@ -4592,6 +4594,10 @@ test("an agent asked to create team work learns when it is actually visible in A
     assert.match(visibility[0] ?? "", /Unassigned: other signed-in box members cannot see/);
     assert.match(visibility[1] ?? "", /not a standalone card in All work/);
     assert.match(visibility[2] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
+    assert.match(visibility[3] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
+    const adaId = episode.registry.resolve("Ada").id;
+    assert.equal(tasks.list().find(task => task.title === "Self-assigned task")?.assigneeId, adaId);
+    assert.equal(tasks.list().find(task => task.title === "Unassigned draft")?.assigneeId, adaId);
   } finally { episode.cleanup(); }
 });
 
