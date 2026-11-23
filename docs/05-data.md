@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-11-21
+     updated: 2026-11-23
 -->
 # Data
 
@@ -64,7 +64,9 @@ with a concrete purpose, acceptance, exact read paths, K reviewers and total rou
 call, time and configured-currency limits. File checks have a three-round and 60-second total
 limit and read complete bounded raw file bytes, including binary artifacts. Passing file conditions is not acceptance of the user's whole request.
 
-A goal/version change invalidates the policy. Evidence versions identify activities: unchanged
+A goal/version change invalidates the policy. Evidence versions identify activities; a version
+covers the evidence lines and the files handed over (deliverables), so a revised file is new
+evidence and its resubmission is not refused as one already made (INV-2035). Unchanged
 evidence is never dispatched twice, including no-verdict replies or disagreement. New evidence
 can consume a remaining round; it cannot reset the work-root account. Each physical provider
 attempt reserves worst-case cost from declared context/output bounds and configured rates
