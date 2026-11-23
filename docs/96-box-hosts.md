@@ -95,7 +95,13 @@ Two rules hold in every cell:
 Use a dedicated namespace for the organisation server and its personal boxes. The example uses
 `agentbox`. Apply the namespace and permissions, then provision the `agentbox-organisation-env`
 Secret there with a stable `AGENTBOX_UI_TOKEN` and any provider settings using your usual secret
-management tooling. Don't put credentials in the manifest.
+management tooling. Don't put credentials in the manifest. The server binds to `0.0.0.0` inside
+the pod and refuses to start without one of these settings in that Secret:
+
+- For an isolated, port-forward-only deployment, set `AGENTBOX_INSECURE=1`. Keep the Service
+  internal and do not publish its HTTP port.
+- For a deployment behind a TLS-enabled ingress, set `AGENTBOX_PUBLIC_URL` to its public
+  `https://` URL and leave `AGENTBOX_INSECURE` unset. Open that public URL instead of port-forwarding.
 
 ```sh
 kubectl apply -f deploy/kubernetes/namespace.yaml -f deploy/kubernetes/rbac.yaml
@@ -104,9 +110,9 @@ kubectl -n agentbox rollout status deployment/agentbox-organisation
 kubectl -n agentbox port-forward service/agentbox-organisation 7777:7777
 ```
 
-Open `http://localhost:7777` and follow the organisation admin bootstrap. To use a different image
-tag or registry, set both `image` and `AGENTBOX_IMAGE` in the deployment. Use a TLS-enabled ingress
-for access beyond the port forward.
+For the port-forward path, open `http://localhost:7777` and follow the organisation admin
+bootstrap. To use a different image tag or registry, set both `image` and `AGENTBOX_IMAGE` in the
+deployment.
 
 The manifest labels the **web server's pod template** `agentbox/role: control`. If you use your
 own deployment, apply that label to its pod template, not just the Deployment or Service. A
