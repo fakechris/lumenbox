@@ -37,7 +37,10 @@ try {
     const actualSetup = await (await context.request.get(meta.base + "/api/setup")).json();
     assert.equal(actualSetup.established, true); assert.equal(actualSetup.box, false);
     assert.equal(typeof actualSetup.installationId, "string");
-    let setup = { installationId: "established-fixture", established: true, key: true, box: false, agentTurn: true, door: true, review: true, search: true };
+    const boxId = actualSetup.installationId;
+    assert.equal(actualSetup.byBox[boxId].established, true);
+    let setup = { installationId: "established-fixture", key: true, door: true, search: true,
+      byBox: { [boxId]: { established: true, box: false, agent: true, agentTurn: true, review: true } } };
     page.on("pageerror", error => errors.push(error.message));
     await page.route("**/*", route => route.request().url().startsWith(meta.base) ? route.continue() : route.abort());
     await page.route("**/api/agents/config-versions?*", route => route.fulfill({ json: { current: 123, versions: [], switches: [
@@ -45,7 +48,9 @@ try {
     ] } }));
     await page.route("**/api/setup", route => route.fulfill({ json: setup }));
     await page.goto(meta.base + "/?ui=classic&lang=" + lang + "&agent=" + meta.agent);
+    const waitForAdminBox = () => page.waitForFunction(id => window.myRole === "admin" && window.currentBox === id, boxId);
     await page.waitForFunction(() => typeof window.configVersionChip === "function" && typeof current !== "undefined" && current);
+    await waitForAdminBox();
     if (await page.locator("#settingswrap").isVisible()) await page.locator("#setcancel").click();
     await page.waitForSelector("#cvchip", { state: "visible" });
     for (const width of [640, 360, 480, 800, 1080]) for (const scale of [1, 1.5, 2]) for (const running of [false, true]) {
@@ -115,14 +120,15 @@ try {
     assert.ok((await page.locator("#setupcard").innerText()).includes(lang === "en" ? "currently offline" : "离线"));
     await page.locator("[data-setup-close]").click(); await page.evaluate(() => refreshSetup());
     assert.equal(await page.locator("#setupcard").isVisible(), false);
-    await page.reload(); await page.waitForFunction(() => typeof refreshSetup === "function"); await page.evaluate(() => refreshSetup());
+    await page.reload(); await waitForAdminBox(); await page.evaluate(() => refreshSetup());
     assert.equal(await page.locator("#setupcard").isVisible(), false);
     // First run still guides. Closing survives polling and reload, scoped to that installation.
-    setup = { installationId: "fresh-fixture", established: false, key: false, box: false, agentTurn: false, door: false, review: false, search: false };
+    setup = { installationId: "fresh-fixture", key: false, door: false, search: false,
+      byBox: { [boxId]: { established: false, box: false, agent: false, agentTurn: false, review: false } } };
     await page.evaluate(() => refreshSetup()); await page.waitForSelector("#setupcard", { state: "visible" });
     await page.locator("[data-setup-close]").click(); await page.evaluate(() => refreshSetup());
     assert.equal(await page.locator("#setupcard").isVisible(), false);
-    await page.reload(); await page.waitForFunction(() => typeof refreshSetup === "function"); await page.evaluate(() => refreshSetup());
+    await page.reload(); await waitForAdminBox(); await page.evaluate(() => refreshSetup());
     assert.equal(await page.locator("#setupcard").isVisible(), false);
     setup.installationId = "another-installation"; await page.evaluate(() => refreshSetup());
     assert.equal(await page.locator("#setupcard").isVisible(), true);

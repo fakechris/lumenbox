@@ -247,7 +247,7 @@ test("a driver with no visible box can start personal-box creation from setup", 
   const setupCard = pageFunction("setupCard", {
     settings: { setup: { installationId: "test", hasPersonalBox: false }, me: { identity: "person" } },
     chat: { box: "" }, canDriveAgents: () => true, canOperateInstallation: () => false,
-    localStorage: { getItem: () => null }, t: String, el: fakeEl, createSetupBox: () => { created = true; },
+    localStorage: { getItem: () => null }, t: String, el: fakeEl, agentsHere: () => [], createSetupBox: () => { created = true; },
   }) as () => Fake | null;
   const card = setupCard();
   assert.ok(card);
