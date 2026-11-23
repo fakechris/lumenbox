@@ -289,6 +289,11 @@ export class Principals {
     return this.resolve(identity).role;
   }
 
+  /** The person an id names, a roster id (or alias) or one of their sign-ins; nobody for a sign-in nobody holds (INV-2074). */
+  personOf(id: string): Principal | undefined {
+    return this.byId(id) ?? (this.isKnown(id) ? this.resolve(id) : undefined);
+  }
+
   /** True when this identity is a configured person, not the fallback viewer. */
   isKnown(identity: string): boolean {
     return this.byIdentity.has(identity);

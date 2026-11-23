@@ -13,7 +13,7 @@ import { Principals } from "../host/principals.ts";
 import { applyPendingMerge, confirmMerge, mergePreview } from "../host/self-merge.ts";
 import { SIX, sixPaths, writeSixIdentities } from "../host/testing/six-identities.ts";
 
-function setup(options: { mayDrive?: boolean; board?: TaskStore; aliasesOf?: (id: string) => readonly string[] } = {}) {
+function setup(options: { mayDrive?: boolean; board?: TaskStore; aliasesOf?: (id: string) => readonly string[]; owns?: (requester: string | undefined, id: string) => boolean } = {}) {
   const board = options.board ?? new TaskStore(null);
   const prompts: { agentId: string; text: string; userId?: string; conversation?: string }[] = [];
   const agent = { id: "a1", profile: { name: "Ada" } };
@@ -30,6 +30,7 @@ function setup(options: { mayDrive?: boolean; board?: TaskStore; aliasesOf?: (id
     mayDrive: () => options.mayDrive ?? true,
     nameOf: id => id,
     ...(options.aliasesOf !== undefined ? { aliasesOf: options.aliasesOf } : {}),
+    ...(options.owns !== undefined ? { owns: options.owns } : {}),
     log: () => {},
   });
   const start = tools.find(tool => tool.name === "goal_start")!;
@@ -73,6 +74,12 @@ test("a principal steers only its own goals; pause and resume its own pause; cle
   assert.match(await control.run({ task_id: id, action: "clear" }, "p1"), /cleared/);
   await assert.rejects(control.run({ task_id: id, action: "clear" }, "p1"), /already cleared/);
   await assert.rejects(control.run({ task_id: "t999", action: "pause" }, "p1"), /No goal t999/);
+
+  // A goal a token started under the sign-in, before the token answered with the person (INV-2074), is still theirs.
+  const linked = setup({ owns: (requester, who) => requester === who || (requester === "web:old" && who === "p1") });
+  const old = idOf(await linked.start.run({ objective: "Tidy the shared drive" }, "web:old", { idempotencyKey: "k1" }));
+  assert.match(await linked.control.run({ task_id: old, action: "pause" }, "p1"), /paused/);
+  await assert.rejects(linked.control.run({ task_id: old, action: "pause" }, "p2"), /not started by you/);
 });
 
 test("a stop the system made is not resumable from the door; neither is a person's own pause", async () => {

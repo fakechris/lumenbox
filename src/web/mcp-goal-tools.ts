@@ -27,6 +27,8 @@ export interface McpGoalDeps {
   nameOf: (principalId: string) => string;
   /** The ids folded into this principal by a merge (`Principals.byId(id).aliases`, INV-1698): a goal one of them started is still this person's. */
   aliasesOf?: (principalId: string) => readonly string[];
+  /** Whether a goal's requester is this person, one of their sign-ins included (INV-2074); absent, the same id. */
+  owns?: (requester: string | undefined, principalId: string) => boolean;
   log: (line: string) => void;
 }
 
@@ -129,7 +131,7 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
         const task = board.get(id);
         const pursuit = task?.pursuit;
         if (task === undefined || pursuit === undefined) throw new Error(`No goal ${id}.`);
-        if (task.requester !== principalId) throw new Error(`Goal ${id} was not started by you; only its requester steers it here.`);
+        if (!(deps.owns ?? ((requester, id) => requester === id))(task.requester, principalId)) throw new Error(`Goal ${id} was not started by you; only its requester steers it here.`);
         if (task.assigneeId !== undefined && !deps.mayDrive(task.assigneeId, principalId)) throw new Error(`You may no longer drive the agent on goal ${id}; nothing changed.`);
         const who = deps.nameOf(principalId);
         switch (input.action) {

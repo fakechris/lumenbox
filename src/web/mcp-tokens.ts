@@ -77,10 +77,9 @@ export class McpTokenStore {
    * sign-in is not the person's id: the doors inside judge the person, so it answers with them.
    * A sign-in nobody holds any more answers nobody, and the token stops with the person.
    */
-  personFor(presented: string | undefined, principals: Pick<Principals, "byId" | "isKnown" | "resolve">): string | undefined {
+  personFor(presented: string | undefined, principals: Pick<Principals, "personOf">): string | undefined {
     const id = this.principalFor(presented);
-    if (id === undefined) return undefined;
-    return (principals.byId(id) ?? (principals.isKnown(id) ? principals.resolve(id) : undefined))?.id;
+    return id === undefined ? undefined : principals.personOf(id)?.id;
   }
 
   /** Revoke the one made at `createdAt` that `may` allows; false when none matches. */

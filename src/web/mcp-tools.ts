@@ -22,7 +22,7 @@ export interface McpToolsDeps {
   progressAccess?: (principalId: string) => ProgressSourceAccess;
   registry: AgentRegistry;
   orchestrator: Orchestrator;
-  principals: { resolve(id: string): { name: string }; list?(): readonly { id: string; name: string }[]; byId?(id: string): { aliases?: readonly string[] } | undefined };
+  principals: { resolve(id: string): { name: string }; list?(): readonly { id: string; name: string }[]; byId?(id: string): { aliases?: readonly string[] } | undefined; personOf?(id: string): { id: string } | undefined };
   workDir: string;
   log: (line: string) => void;
   /** Turn events, for as long as the listener is registered: how a task learns its turn stopped itself. */
@@ -44,6 +44,8 @@ export interface McpToolsDeps {
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
   const { registry, orchestrator, principals, workDir, log } = deps;
   const nameOf = (id: string) => registry.tryGet(id)?.profile.name ?? id;
+  // Work a token started before INV-2074 is kept under the sign-in that asked for it; it is still the person's.
+  const owns = (requester: string | undefined, principalId: string) => requester === principalId || (requester !== undefined && principals.personOf?.(requester)?.id === principalId);
   const recordOf = (task: Task, principalId: string) => taskRecord(task, { progressAccess: deps.progressAccess?.(principalId) ?? { agent: () => false, box: () => false }, nameOf, forksOf: id => orchestrator.pendingWork?.forks?.ofTask(id) ?? [], ...(deps.stageWorld !== undefined ? { stageWorld: deps.stageWorld } : {}) });
   /** task_status, once: the text it always said, and the same tasks as the record has them (INV-1506). */
   const statusOf = (input: Record<string, unknown>, principalId: string): { text: string; structured: Record<string, unknown> } => {
@@ -52,7 +54,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
     const id = typeof input.task_id === "string" ? input.task_id : "";
     if (id === "") {
       // scope all (INV-1509): every live task, for a supervisor that watches the whole board; reading any task was always allowed.
-      const mine = board.list().filter(task => (input.scope === "all" || task.requester === principalId) && isLive(task.status));
+      const mine = board.list().filter(task => (input.scope === "all" || owns(task.requester, principalId)) && isLive(task.status));
       return {
         text: mine.length === 0 ? "Nothing of yours is still open." : mine.map(task => `${describeOutcome(outcomeOf(task))}\n${describeTask(task, nameOf, board)}`).join("\n"),
         structured: { tasks: mine.map(task => recordOf(task, principalId)) },
@@ -229,20 +231,20 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
         return `Saved the current desktop of ${agent.profile.name} to ${path}.`;
       },
     },
-    ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, aliasesOf: id => principals.byId?.(id)?.aliases ?? [], log }) : []),
-    ...(deps.changeFeed !== undefined ? [watchTool(deps.changeFeed)] : []),
+    ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, aliasesOf: id => principals.byId?.(id)?.aliases ?? [], owns, log }) : []),
+    ...(deps.changeFeed !== undefined ? [watchTool(deps.changeFeed, owns)] : []),
     ...(orchestrator.tasks !== undefined ? [raiseAttentionTool(orchestrator.tasks, principals, deps.notifyTask)] : []),
-    ...(orchestrator.tasks !== undefined ? [fetchDeliverableTool(orchestrator.tasks, deps.mayReadTask ?? ((task, principalId) => task.requester === principalId))] : []),
+    ...(orchestrator.tasks !== undefined ? [fetchDeliverableTool(orchestrator.tasks, deps.mayReadTask ?? ((task, principalId) => owns(task.requester, principalId)))] : []),
   ];
 }
 
 /** `watch` (INV-1508): what moved since the cursor, or the next move, within the caller's wait. */
-function watchTool(feed: ChangeFeed): McpServerTool {
+function watchTool(feed: ChangeFeed, owns: (requester: string | undefined, principalId: string) => boolean): McpServerTool {
   const runWatch = async (input: Record<string, unknown>, principalId: string, signal?: AbortSignal) => {
     const since = typeof input.since === "string" ? input.since : undefined;
     const seconds = typeof input.wait_seconds === "number" && Number.isFinite(input.wait_seconds) ? Math.max(0, Math.min(WAIT_MAX_SECONDS, input.wait_seconds)) : 25;
     const all = input.scope === "all";
-    const result = await feed.wait(since, event => all || event.requester === principalId, seconds * 1000, signal);
+    const result = await feed.wait(since, event => all || owns(event.requester, principalId), seconds * 1000, signal);
     return { text: describeWatch(result), structured: { ...result } as Record<string, unknown> };
   };
   return {
