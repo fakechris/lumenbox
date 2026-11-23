@@ -242,6 +242,20 @@ test("the member setup checklist counts only the selected box; a viewer gets no 
   assert.equal(setupCard(), null);
 });
 
+test("a driver with no visible box can start personal-box creation from setup", () => {
+  let created = false;
+  const setupCard = pageFunction("setupCard", {
+    settings: { setup: { installationId: "test", hasPersonalBox: false }, me: { identity: "person" } },
+    chat: { box: "" }, canDriveAgents: () => true, canOperateInstallation: () => false,
+    localStorage: { getItem: () => null }, t: String, el: fakeEl, createSetupBox: () => { created = true; },
+  }) as () => Fake | null;
+  const card = setupCard();
+  assert.ok(card);
+  assert.deepEqual(card.kids.slice(1, -1).map(step => step.kids[1]!.text), ["ui.next.setup.personalBox"]);
+  card.kids[1]!.kids[2]!.press!();
+  assert.ok(created);
+});
+
 test("new agent box picker shows the selected box and remembers a changed target", () => {
   const member = { boxId: "personal" };
   const pickBox = pageFunction("memberBoxField", {

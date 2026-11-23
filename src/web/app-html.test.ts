@@ -48,6 +48,24 @@ test("Mine offers first-admin setup only to an uninitialized operator, and expla
   assert.equal(render('myIdentity = null; mcpSetup = undefined; renderMcpSetup();'), "", "missing setup data does not invent a bootstrap path");
 });
 
+test("the classic Guide offers personal-box creation to a driver without a visible box", async () => {
+  const card = { style: { display: "none" }, innerHTML: "", onclick: (_event: object) => {} };
+  let opened = false, focused = false;
+  const source = APP_HTML.slice(APP_HTML.indexOf("var guideForced"), APP_HTML.indexOf('setInterval(refreshSetup,'));
+  const refresh = runInNewContext(source + "; refreshSetup", {
+    $: (id: string) => id === "personalcreate" ? { focus: () => { focused = true; } } : card,
+    myRole: "driver", currentBox: null, myIdentity: "driver:alice", t: String, esc: String,
+    fetch: async () => ({ json: async () => ({ installationId: "test", hasPersonalBox: false }) }),
+    openShelf: () => { opened = true; },
+  });
+  await refresh();
+  assert.equal(card.style.display, "");
+  assert.match(card.innerHTML, /ui.next.setup.personalBox/);
+  assert.doesNotMatch(card.innerHTML, /ui.next.setup.agent/);
+  card.onclick({ target: { closest: (selector: string) => selector === "button[data-setup]" ? { getAttribute: () => "0" } : null }, preventDefault() {} });
+  assert.ok(opened && focused);
+});
+
 test("classic Automations shows where a message routine replies (INV-1969)", () => {
   const source = APP_HTML.slice(APP_HTML.indexOf("function automationRow("), APP_HTML.indexOf("// The URLs and secrets, by slug."));
   const row = runInNewContext(`${source}; automationRow`, { esc: String }) as (entry: object, hooks: object) => string;
