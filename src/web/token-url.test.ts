@@ -13,14 +13,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { APP_PAGE } from "./page-locale.ts";
+import { APP_PAGE, NEXT_PAGE } from "./page-locale.ts";
 /** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
 const APP_HTML = APP_PAGE("en");
 
-function stripFrom(href: string): string | undefined {
-  const start = APP_HTML.indexOf("(function stripToken()");
+function stripFrom(href: string, html = APP_HTML): string | undefined {
+  const start = html.indexOf("(function stripToken()");
   assert.ok(start > 0, "the page must still strip the token");
-  const end = APP_HTML.indexOf("})();", start) + 5;
+  const end = html.indexOf("})();", start) + 5;
 
   let replaced: string | undefined;
   const window = {
@@ -32,7 +32,7 @@ function stripFrom(href: string): string | undefined {
     },
   };
   // eslint-disable-next-line no-new-func -- running the page's own code is the point
-  new Function("window", "URL", APP_HTML.slice(start, end))(window, URL);
+  new Function("window", "URL", html.slice(start, end))(window, URL);
   return replaced;
 }
 
@@ -42,6 +42,10 @@ test("a token in the URL is replaced away once the page has loaded", () => {
   assert.equal(
     stripFrom("http://127.0.0.1:7777/?token=secret123&agent=ada#desktop"),
     "/?agent=ada#desktop"
+  );
+  assert.equal(
+    stripFrom("http://127.0.0.1:7777/?ui=next&token=fixture&view=settings&pane=team", NEXT_PAGE("en")),
+    "/?ui=next&view=settings&pane=team"
   );
 });
 

@@ -5,19 +5,21 @@
  * again; the page is told only that it exists and who holds it.
  */
 export const NEXT_SET_TEAM_JS = `
-var team = { people: null, installation: null, error: "", invite: null, invites: [], scopes: null, allTools: [], vault: null, mcp: null, merge: null, loadedAt: 0, timer: 0 };
+var team = { people: null, installation: null, error: "", invite: null, inviteCheck: 0, invites: [], scopes: null, allTools: [], vault: null, mcp: null, merge: null, loadedAt: 0, timer: 0 };
 var ROLES = ["admin", "driver", "viewer"];
 var INVITE_MINUTES = ["15", "60", "1440", "10080"];
 var invitePick = { role: "driver", minutes: "15" }, removing = { id: "" };
+
+function keepPeople(got) {
+  team.people = got.people || []; team.installation = got.installation || {}; team.invites = got.invites || []; team.error = "";
+  if (team.invite && !team.invites.some(function (invite) { return invite.code === team.invite.code; })) team.invite = null; // used or expired
+}
 
 /** The People list, re-read while the pane is open so a person who just redeemed a code appears (INV-2054). */
 function loadPeople() {
   team.loadedAt = Date.now(); clearTimeout(team.timer);
   team.timer = setTimeout(function () { if (next.view === "settings" && settings.pane === "team" && !removing.id) loadPeople(); }, 15000);
-  return getJson("/api/people").then(function (got) {
-    team.people = got.people || []; team.installation = got.installation || {}; team.invites = got.invites || []; team.error = "";
-    if (team.invite && !team.invites.some(function (invite) { return invite.code === team.invite.code; })) team.invite = null; // used or expired
-  }, function (error) {
+  return getJson("/api/people").then(keepPeople, function (error) {
     team.people = team.people || []; team.error = error.message;
   }).then(function () { if (next.view === "settings") render(); });
 }
@@ -30,6 +32,23 @@ function loadTeam() {
   also("/api/mcp", function (got) { team.mcp = got; });
   also("/api/installation/merge", function (got) { team.merge = got; });
   loadLimits();
+}
+
+function teamPaneOpen() { return next.view === "settings" && settings.pane === "team"; }
+
+function watchTeamInvite() {
+  if (team.inviteCheck || !team.invite || !teamPaneOpen()) return;
+  team.inviteCheck = setTimeout(function () {
+    if (!teamPaneOpen()) { team.inviteCheck = 0; return; }
+    var invite = team.invite;
+    getJson("/api/people").then(function (got) {
+      if (team.invite !== invite || !Array.isArray(got.invites) || got.invites.some(function (active) { return active.code === invite.code; })) return;
+      keepPeople(got);
+      if (teamPaneOpen()) render();
+    }, function () {}).finally(function () {
+      team.inviteCheck = 0; watchTeamInvite();
+    });
+  }, 3000);
 }
 
 /** A comma-separated field as a list, without blanks. */
@@ -285,6 +304,7 @@ function renderTeamPane(view) {
   if (team.people === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadTeam(); return; }
   if (Date.now() - team.loadedAt > 15000) loadPeople();
   if (team.error) { view.appendChild(el("p", "why", team.error)); return; }
+  watchTeamInvite();
   [mergeBlock(), peopleBlock(), limitsBlock(), memoryReviewBlock(), scopesBlock(), secretsBlock(), toolServersBlock()].forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

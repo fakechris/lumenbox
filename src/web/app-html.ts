@@ -11,6 +11,7 @@ import { TASK_FOCUS_JS, TASK_FOCUS_STYLE } from "./task-focus-ui.ts";
 import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
 import { LIVE_TOOLS_JS } from "./live-tools.ts";
 import { MCP_TOKEN_JS } from "./mcp-token-ui.ts";
+import { STRIP_TOKEN_JS } from "./token-url-ui.ts";
 
 /**
  * The web UI, as a single inlined document.
@@ -1310,23 +1311,7 @@ ${SETTINGS_DIALOG_HTML}
 // html:false is what keeps model output inert — see src/web/markdown.ts.
 var md = window.markdownit ? window.markdownit(${JSON.stringify(MARKDOWN_OPTIONS)}) : null;
 
-// The token, out of the address bar.
-//
-// It is accepted once as a query parameter to bootstrap the cookie, and the cookie is what every later request uses — so by the time this runs it has done its job. Leaving
-// it there put a working credential in browser history, in autocomplete, in the title bar of any screenshot, and in the referrer of any outbound link. The one that actually happens: you copy the address bar to show a colleague an agent's desktop, and hand over control of the box with it.
-//
-// Only if the page loaded, which means the cookie was set — this runs after the server accepted the
-// request. Replacing it before that would lock someone out on the next refresh.
-(function stripToken() {
-  try {
-    var url = new URL(window.location.href);
-    if (!url.searchParams.has("token")) return;
-    url.searchParams.delete("token");
-    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
-  } catch (error) {
-    // A browser without history.replaceState still works; it just keeps the token visible.
-  }
-})();
+${STRIP_TOKEN_JS}
 
 function renderMarkdown(text, options) {
   var value = String(text == null ? "" : text);
@@ -2225,7 +2210,7 @@ document.addEventListener("click", function (event) {
 
 /** The box list in Settings, with attach and detach. */
 function renderBoxes() {
-  return fetch("/api/boxes")
+  return fetch("/api/boxes?lang={{@locale}}")
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var boxes = data.boxes || [];
@@ -2240,7 +2225,8 @@ function renderBoxes() {
           "</div>" +
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
-          '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>" + renderDesktopResources(b);
+          (b.members === "everyone" ? '<details class="dim"><summary>' + esc(t("ui.access.shared")) + "</summary>" + esc(b.membersLabel || "") + "</details>" :
+            '<div class="dim" style="font-size:11.5px;margin:2px 0 8px 16px">' + esc(b.membersLabel || "") + "</div>") + renderDesktopResources(b);
       }).join("") ||
         '<div class="dim" style="font-size:12.5px">' + esc(t("ui.boxes.none")) + "</div>";
     })

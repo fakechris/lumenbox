@@ -149,14 +149,16 @@ test("a box is for its members: the list, the web, and the chat door all say the
     const danaId = roster.principals.find(person => person.name === "Dana")?.id;
     assert.ok(danaId);
 
-    const boxes = async (jar: string) =>
-      ((await (await fetch(`${base}/api/boxes`, { headers: { cookie: jar } })).json()) as { boxes: { id: string; membersLabel?: string }[] }).boxes;
+    const boxes = async (jar: string, lang = "zh") =>
+      ((await (await fetch(`${base}/api/boxes?lang=${lang}`, { headers: { cookie: jar } })).json()) as { boxes: { id: string; membersLabel?: string }[] }).boxes;
     const drive = (jar: string) =>
       fetch(`${base}/api/prompt`, { method: "POST", headers: { "content-type": "application/json", cookie: jar }, body: JSON.stringify({ agent: ada, text: "" }) });
 
     // Everyone, which is what every installation has today: nothing changes.
     assert.equal((await boxes(dana)).length, 1);
     assert.match((await boxes(dana))[0]!.membersLabel ?? "", /^共享 box/);
+    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /访问它。$/);
+    assert.match((await boxes(dana, "en"))[0]!.membersLabel ?? "", /^Shared box: .* or the web UI\.$/);
     assert.equal((await drive(dana)).status, 400, "reached the body");
     assert.equal((await drive(mia)).status, 400);
 
