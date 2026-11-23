@@ -74,8 +74,10 @@ function personActs(person) {
   out.addEventListener("click", function () {
     postJson("/api/principals/logout", { principalId: person.id }).then(function () { toast(t("ui.next.team.signedOut", { name: person.name })); }, failed);
   });
-  acts.appendChild(code); acts.appendChild(out);
+  acts.appendChild(code);
+  // Signing the only admin out everywhere can leave nobody able to sign back in to the settings.
   if (person.lastAdmin) { acts.appendChild(el("span", "why", t("ui.next.team.lastAdmin"))); return acts; }
+  acts.appendChild(out);
   if (removing.id !== person.id) {
     var remove = el("button", "act", t("ui.next.team.remove"));
     remove.addEventListener("click", function () { removing.id = person.id; render(); });
@@ -106,7 +108,10 @@ function personLine(person, personal) {
     var role = selectOf(ROLES.map(function (name) { return [name, t("ui.next.team.role." + name)]; }), person.role);
     role.addEventListener("change", function () {
       delete role.dataset.edited; // the next redraw shows the role the server kept, refused or not
-      postJson("/api/principals", { principals: rosterWith(team.people, person.id, role.value) }).then(function () { toast(t("ui.next.settings.saved2")); loadPeople(); }, function (error) {
+      // The roster as it is now, not as last drawn: a sign-in linked since then must survive the save.
+      getJson("/api/people").then(function (got) {
+        return postJson("/api/principals", { principals: rosterWith(got.people || [], person.id, role.value) });
+      }).then(function () { toast(t("ui.next.settings.saved2")); loadPeople(); }, function (error) {
         failed(error); loadPeople();
       });
     });
