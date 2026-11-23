@@ -2310,6 +2310,7 @@ ${outcome.text}`;
   // A one-round demand that the next response contain a tool call (docs/31 layer 1d/1e):
   // set by a guard, spent by the next request, never carried further.
   let forceTools: Anthropic.MessageCreateParams["tool_choice"] | undefined;
+  let closingReply = false;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (signal.aborted) {
       emit({ type: "aborted", agentId: agent.id });
@@ -2518,9 +2519,9 @@ ${outcome.text}`;
           : {}),
         ...effortConfig(answering, "turn", deps.effort),
         system,
-        tools,
+        tools: closingReply ? [] : tools,
         messages,
-        ...(forceTools !== undefined ? { tool_choice: forceTools } : {}),
+        ...(!closingReply && forceTools !== undefined ? { tool_choice: forceTools } : {}),
       },
       { signal: attemptControl.signal }
     );
@@ -2790,6 +2791,7 @@ ${outcome.text}`;
       return;
     }
 
+    if (closingReply) response.content = response.content.filter(block => block.type !== "tool_use");
     // The output gate (INV-761): a response with no structured call whose text is a call written out, or a loop
     // that ran to the cap, is not an answer. Discarded before it reaches the transcript — which is what the
     // channels deliver from — and before any guard reads it; asked for once more; a second one fails the turn
@@ -2834,8 +2836,8 @@ ${outcome.text}`;
       }
     }
 
-    // Append the whole content array, not just text: tool_use blocks and thinking
-    // blocks have to be echoed back unchanged for the next round to be valid.
+    closingReply = false;
+    // Echo tool_use and thinking blocks unchanged for the next round.
     messages.push({ role: "assistant", content: response.content });
 
     // The newer-message look is a no-tools round (INV-1189). tool_choice "none" is a request a
@@ -3047,7 +3049,7 @@ ${outcome.text}`;
         const toolsSucceeded = !confirmationPending && typeof prior !== "string" && prior?.some(block => block.type === "tool_result")
           && prior.every(block => block.type !== "tool_result" || block.is_error !== true);
         if (toolsSucceeded || (interimDelivered && guardsEnabled() && tools.length > 0)) {
-          closingNudged = true;
+          closingNudged = closingReply = true;
           console.error(`[conduct] ${agent.profile.name}: closing nudge (ran tools, ended without a reply)`);
           messages.pop();
           appendUserNudge(messages, closingNudge(chinese, interimDelivered));

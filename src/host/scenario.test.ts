@@ -69,7 +69,7 @@ for (const recovers of [true, false]) {
       tasks,
       files: { "/home/box/work/welcome.txt": "Welcome" },
       onEvent: event => { if (event.type === "text") events.push(event.delta); },
-      script: ({ round, messages }) => {
+      script: ({ round, messages, offered }) => {
         if (round === 0) return { call: "read_file", input: { path: "/home/box/work/welcome.txt" } };
         if (round === 1) return { call: "list_dir", input: { path: "/home/box/work" } };
         if (round === 2) return undefined;
@@ -80,7 +80,8 @@ for (const recovers of [true, false]) {
         const [result, nudge] = last.content;
         assert.ok(result?.type === "tool_result" && !result.is_error, "the successful tool result remains paired");
         assert.ok(nudge?.type === "text" && /answer them now/.test(nudge.text), "the retry asks for a reply");
-        return recovers ? { say: greeting } : undefined;
+        assert.deepEqual(offered, [], "the recovery request can only reply");
+        return recovers ? { call: "list_dir", input: { path: "/home/box/work" }, saying: greeting } : undefined;
       },
     });
     try {
