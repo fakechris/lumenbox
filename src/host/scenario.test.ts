@@ -55,6 +55,50 @@ import { auditConversation } from "./audit-context.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
 import { approvedCallNotice } from "./approval-notice.ts";
 import { ExceptionLedger, noteTurnEnd } from "./exceptions.ts";
+import type { TranscriptEntry } from "./turn.ts";
+
+for (const recovers of [true, false]) {
+  test(`empty reply after successful tools (INV-2032, ${recovers ? "recovers" : "explains how to retry"})`, async () => {
+    const greeting = "Hello! I'm Ada. How can I help?";
+    const events: string[] = [];
+    const episode = await runEpisode({
+      team: [{ name: "Ada", tools: ["read_file", "list_dir"] }],
+      says: ["Hi Ada!"],
+      files: { "/home/box/work/welcome.txt": "Welcome" },
+      onEvent: event => { if (event.type === "text") events.push(event.delta); },
+      script: ({ round, messages }) => {
+        if (round === 0) return { call: "read_file", input: { path: "/home/box/work/welcome.txt" } };
+        if (round === 1) return { call: "list_dir", input: { path: "/home/box/work" } };
+        if (round === 2) return undefined;
+        assert.equal(round, 3, "only one recovery request");
+        const last = messages.at(-1);
+        assert.equal(last?.role, "user");
+        assert.ok(Array.isArray(last.content));
+        const [result, nudge] = last.content;
+        assert.ok(result?.type === "tool_result" && !result.is_error, "the successful tool result remains paired");
+        assert.ok(nudge?.type === "text" && /answer them now/.test(nudge.text), "the retry asks for a reply");
+        return recovers ? { say: greeting } : undefined;
+      },
+    });
+    try {
+      assert.equal(episode.score.rounds, 4);
+      assert.deepEqual(episode.score.trail, ["Ada:read_file", "Ada:list_dir"]);
+      assert.deepEqual(episode.score.refusals, []);
+      const transcript = episode.registry.readTranscript(episode.registry.resolve("Ada").id) as TranscriptEntry[];
+      const last = transcript.at(-1);
+      assert.ok(last?.role === "assistant" && "text" in last);
+      if (recovers) {
+        assert.equal(last.text, greeting);
+      } else {
+        assert.match(last.text, /model returned no text.*Ask again/);
+        assert.equal(last.host, true);
+        assert.ok(events.includes(last.text), "the watcher receives the actionable reason");
+      }
+    } finally {
+      episode.cleanup();
+    }
+  });
+}
 
 test("a host approval notice wakes a member to retry the unexecuted call without a second card (INV-1990)", async () => {
   const { PolicyGate } = await import("./policy.ts");

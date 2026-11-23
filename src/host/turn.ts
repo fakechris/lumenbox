@@ -1364,6 +1364,13 @@ export function historyToMessages(
   return mergeAdjacent(repairPairs(messages));
 }
 
+function appendUserNudge(messages: Anthropic.MessageParam[], text: string): void {
+  const nudge: Anthropic.TextBlockParam = { type: "text", text };
+  const last = messages.at(-1);
+  if (last?.role !== "user") messages.push({ role: "user", content: [nudge] });
+  else last.content = typeof last.content === "string" ? [{ type: "text", text: last.content }, nudge] : [...last.content, nudge];
+}
+
 /**
  * Builds the tool_result content block for one tool call.
  *
@@ -2825,15 +2832,7 @@ ${outcome.text}`;
         // Nothing of the discarded reply is appended, so the request still ends on the
         // person's side; the nudge joins that message, because the Anthropic wire rejects
         // two user messages in a row.
-        const nudge: Anthropic.TextBlockParam = { type: "text", text: malformedNudge(malformed.kind, tools.length > 0, chinese) };
-        const last = messages[messages.length - 1];
-        if (last !== undefined && last.role === "user") {
-          last.content = typeof last.content === "string"
-            ? [{ type: "text", text: last.content }, nudge]
-            : [...last.content, nudge];
-        } else {
-          messages.push({ role: "user", content: [nudge] });
-        }
+        appendUserNudge(messages, malformedNudge(malformed.kind, tools.length > 0, chinese));
         round -= 1; // retry this round rather than consuming one
         continue;
       }
@@ -3047,14 +3046,19 @@ ${outcome.text}`;
         }
       }
 
-      // The closing send (Grok Bot's `turnEndedOnSilentToolCalls`, docs/31 layer 1b): the
-      // person saw the opening line, then tools ran, then nothing. Once.
-      if (!finalText.trim() && personOpened && interimDelivered && !closingNudged && guardsEnabled() && tools.length > 0) {
-        closingNudged = true;
-        console.error(`[conduct] ${agent.profile.name}: closing nudge (acknowledged, ran tools, ended silent)`);
-        messages.push({ role: "user", content: closingNudge(chinese) });
-        finishing = false;
-        continue;
+      if (!finalText.trim() && personOpened && !closingNudged) {
+        const prior = messages.at(-2)?.content;
+        const toolsSucceeded = !confirmationPending && typeof prior !== "string" && prior?.some(block => block.type === "tool_result")
+          && prior.every(block => block.type !== "tool_result" || block.is_error !== true);
+        if (toolsSucceeded || (interimDelivered && guardsEnabled() && tools.length > 0)) {
+          closingNudged = true;
+          console.error(`[conduct] ${agent.profile.name}: closing nudge (ran tools, ended without a reply)`);
+          messages.pop();
+          appendUserNudge(messages, closingNudge(chinese, interimDelivered));
+          if (round === MAX_ROUNDS - 1) round -= 1;
+          finishing = false;
+          continue;
+        }
       }
 
       if (finalText.trim()) {
