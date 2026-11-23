@@ -5,7 +5,7 @@
  * again; the page is told only that it exists and who holds it.
  */
 export const NEXT_SET_TEAM_JS = `
-var team = { people: null, installation: null, error: "", invite: null, scopes: null, allTools: [], vault: null, mcp: null, merge: null };
+var team = { people: null, installation: null, error: "", invite: null, inviteCheck: 0, scopes: null, allTools: [], vault: null, mcp: null, merge: null };
 var ROLES = ["admin", "driver", "viewer"];
 
 function loadTeam() {
@@ -18,6 +18,23 @@ function loadTeam() {
   also("/api/mcp", function (got) { team.mcp = got; });
   also("/api/installation/merge", function (got) { team.merge = got; });
   loadLimits();
+}
+
+function teamPaneOpen() { return next.view === "settings" && settings.pane === "team"; }
+
+function watchTeamInvite() {
+  if (team.inviteCheck || !team.invite || !teamPaneOpen()) return;
+  team.inviteCheck = setTimeout(function () {
+    if (!teamPaneOpen()) { team.inviteCheck = 0; return; }
+    var invite = team.invite;
+    getJson("/api/channels").then(function (got) {
+      if (team.invite !== invite || !Array.isArray(got.invites) || got.invites.some(function (active) { return active.code === invite.code; })) return;
+      team.invite = null; team.people = got.principals || [];
+      if (teamPaneOpen()) render();
+    }, function () {}).finally(function () {
+      team.inviteCheck = 0; watchTeamInvite();
+    });
+  }, 3000);
 }
 
 /** A comma-separated field as a list, without blanks. */
@@ -176,6 +193,7 @@ function toolServersBlock() {
 function renderTeamPane(view) {
   if (team.people === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadTeam(); return; }
   if (team.error) { view.appendChild(el("p", "why", team.error)); return; }
+  watchTeamInvite();
   [mergeBlock(), peopleBlock(), limitsBlock(), memoryReviewBlock(), scopesBlock(), secretsBlock(), toolServersBlock()].forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

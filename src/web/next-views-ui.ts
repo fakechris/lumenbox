@@ -276,10 +276,35 @@ function refresh() {
 var refreshTimer = 0;
 function refreshSoon() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 400); }
 
+function writeViewAddress(view, pane) {
+  var url = new URL(location.href), wasSettings = url.searchParams.get("view") === "settings";
+  ["agent", "conversation", "task", "view", "pane"].forEach(function (key) { url.searchParams.delete(key); });
+  if (view !== "chat") url.searchParams.set("view", view);
+  if (pane) url.searchParams.set("pane", pane);
+  if (url.href === location.href) return;
+  if (wasSettings || view === "settings") history.pushState(null, "", url);
+  else history.replaceState(null, "", url);
+}
+
+function readViewAddress() {
+  var params = new URLSearchParams(location.search), view = params.get("view");
+  next.view = ["work", "inbox", "settings", "auto", "boxes", "system"].includes(view) ? view : "chat";
+  settings.pane = next.view === "settings" ? settingsPane(params.get("pane")) : "";
+  if (next.view !== "chat" || params.has("agent")) document.body.dataset.open = "1";
+  else delete document.body.dataset.open;
+}
+
+function navigateView(view, pane) {
+  next.view = view; settings.pane = view === "settings" ? settingsPane(pane) : "";
+  document.body.dataset.open = "1"; writeViewAddress(view, settings.pane); render();
+}
+
 function nextStart() {
   document.querySelectorAll("[data-nav]").forEach(function (button) {
-    button.addEventListener("click", function () { next.view = button.dataset.nav; settings.pane = ""; document.body.dataset.open = "1"; history.replaceState(null, "", "?view=" + next.view); render(); });
+    button.addEventListener("click", function () { navigateView(button.dataset.nav); });
   });
+  window.addEventListener("popstate", function () { readViewAddress(); render(); });
+  $("back").addEventListener("click", function () { if (next.view === "settings") { settings.pane = ""; writeViewAddress("chat", ""); } });
   $("work-find").addEventListener("input", function () { findWork($("work-find").value.trim()); });
   document.querySelectorAll("[data-layout]").forEach(function (button) {
     button.addEventListener("click", function () { next.layout = button.dataset.layout; render(); });
@@ -294,10 +319,8 @@ function nextStart() {
     document.cookie = "lumen-lang=" + ("{{@locale}}" === "zh" ? "en" : "zh") + "; path=/; max-age=31536000; samesite=lax";
     location.reload();
   });
-  var asked = new URLSearchParams(location.search).get("view"), linked = new URLSearchParams(location.search).get("task");
-  if (asked === "work" || asked === "inbox" || asked === "settings" || asked === "auto" || asked === "boxes" || asked === "system") { next.view = asked; document.body.dataset.open = "1"; }
-  var pane = new URLSearchParams(location.search).get("pane");
-  if (asked === "settings" && pane && NATIVE_PANES[pane]) settings.pane = pane;
+  var linked = new URLSearchParams(location.search).get("task");
+  readViewAddress();
   panelStart();
   // A field the person touched is theirs until it is sent or the view changes.
   ["input", "change"].forEach(function (kind) {
