@@ -581,6 +581,10 @@ test("the box update's backup is unticked unless the server says otherwise, and 
   };
   const nodes = draw({ state: { runningRef: "fakechris/lumenbox:0.4.3", expectedRef: "fakechris/lumenbox:0.4.4" }, backupByDefault: false });
   const box = nodes.find(node => node.type === "checkbox")!;
+  assert.ok(!nodes.some(node => node.text === "ui.next.boxset.available"), "no update notice without availability");
+  const available = draw({ state: { available: true, needsPull: true }, backupByDefault: false });
+  assert.ok(available.some(node => node.text === "ui.next.boxset.available"), "the available update is announced even if the image needs downloading");
+  assert.ok(available.some(node => node.text === "ui.next.boxset.whenIdle"), "the announcement has an Apply update action in its section");
   assert.equal(box.checked, false, "unticked: an update leaves the volumes alone");
   assert.ok(nodes.some(node => node.text.includes("ui.next.boxset.backupWhy")), "the cost of ticking it is said beside it");
   box.checked = true; box.press!(); // the change event: the choice is kept by the page, not by this checkbox
