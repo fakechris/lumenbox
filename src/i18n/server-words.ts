@@ -46,6 +46,7 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "page.recovery.sign-in-expired": ["登录二维码已过期", "Your sign-in QR code expired"],
   "page.recovery.contact": ["如果无法重新登录，请联系本安装的管理员。", "If you can't sign in again, contact this installation's administrator."],
   "page.recovery.login": ["前往登录", "Go to sign-in"],
+  "page.recovery.desktop": ["在 LumenBox 桌面应用中，切换到个人安装，打开设置 → 组织，断开此组织，然后用组织地址或管理员提供的新邀请链接重新加入。", "In the LumenBox desktop app, switch to your personal installation and open Settings → Organisations. Disconnect this organisation, then rejoin using its address or a fresh invite link from your admin."],
   // A sign-in this installation does not know yet.
   "page.not-linked.title": ["这个飞书账号还没有链接到本安装", "This Feishu account is not linked to this installation yet"],
   "page.not-linked.your-id": ["你的 id：", "Your id: "],

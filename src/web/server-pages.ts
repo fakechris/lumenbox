@@ -14,12 +14,17 @@ function escapeHtml(value: string): string {
 
 const lang = (locale: Locale): string => (locale === "zh" ? "zh-CN" : "en");
 
-export function signInRecoveryPage(reason: "sign-in-required" | "access-removed" | "session-expired" | "sign-in-expired", locale: Locale, setup = false): string {
+export function signInRecoveryPage(
+  reason: "sign-in-required" | "access-removed" | "session-expired" | "sign-in-expired",
+  locale: Locale,
+  { setup = false, orgView = false } = {},
+): string {
   const say = (key: string) => escapeHtml(tr(key, locale));
   const title = say(`page.recovery.${reason}`);
+  const action = orgView ? say("page.recovery.desktop") : `<a href="/login">${say("page.recovery.login")}</a>`;
   return `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>` +
     `<body style="font:16px system-ui;max-width:600px;margin:80px auto;padding:20px"><h1>${title}</h1><p>${say("page.recovery.contact")}</p>` +
-    `<p><a href="/login">${say("page.recovery.login")}</a></p>${setup ? `<p><a href="/bootstrap">${say("page.bootstrap.title")}</a></p>` : ""}</body></html>`;
+    `<p>${action}</p>${setup ? `<p><a href="/bootstrap">${say("page.bootstrap.title")}</a></p>` : ""}</body></html>`;
 }
 
 /** GET /bootstrap: the one-use code and a Feishu channel to sign in through. */

@@ -3035,7 +3035,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     oauthStates.delete(state);
     if (code === null || pending === undefined || pending.channelId !== channelId || pending.appId !== appId || pending.incarnation !== record.incarnation ||
         Date.now() - pending.at > 10 * 60_000) {
-      if (wantsHtml(res.req.headers.accept)) send(res, 400, signInRecoveryPage("sign-in-expired", localeOf(res.req, url), bootstrapPending()), "text/html");
+      if (wantsHtml(res.req.headers.accept)) send(res, 400, signInRecoveryPage("sign-in-expired", localeOf(res.req, url), { setup: bootstrapPending() }), "text/html");
       else send(res, 400, apiError("sign-in-expired"));
       return;
     }
@@ -3209,7 +3209,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (!decision.allow && route !== "POST /api/login") {
         if (req.method === "GET" && !/^\/api(?:\/|$)/.test(url.pathname) && wantsHtml(req.headers.accept)) {
           const reason = decision.reason === "access-removed" || decision.reason === "session-expired" ? decision.reason : "sign-in-required";
-          send(res, 401, signInRecoveryPage(reason, localeOf(req, url)), "text/html");
+          const orgView = /\bLumenBoxOrgView\/1\b/.test(req.headers["user-agent"] ?? "");
+          send(res, 401, signInRecoveryPage(reason, localeOf(req, url), { orgView }), "text/html");
           return;
         }
         send(res, 401, {
