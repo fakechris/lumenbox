@@ -167,6 +167,17 @@ test("opening Computers refreshes inventory even if the tab was already open", (
   assert.deepEqual(opened.dataset, { open: "1" });
 });
 
+test("personal computer creation has a request ID on HTTP without randomUUID", () => {
+  let calls = 0;
+  const requestId = pageFunction("personalComputerRequestId", {
+    crypto: { getRandomValues: (bytes: Uint8Array) => bytes.fill(++calls) },
+  });
+  const first = requestId(), second = requestId();
+  assert.match(String(first), /^[A-Za-z0-9_-]{1,100}$/);
+  assert.notEqual(first, second);
+  assert.equal(calls, 2);
+});
+
 test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an owner refusal", async () => {
   const mine = { setup: null as null | { admins: number; bootstrap: boolean }, needsPerson: false, issued: "", tokens: [] };
   const settings = { me: { identity: null as string | null } };

@@ -1,4 +1,11 @@
 export const PERSONAL_BOX_DIALOG_JS = `
+function personalComputerRequestId() {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), function (byte) {
+    return byte.toString(16).padStart(2, "0");
+  }).join("");
+}
+
 function computerElement(tag, text, className) {
   var node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;

@@ -251,7 +251,7 @@ function renderPersonalComputers(view) {
     create.disabled = !mine.canCreate || full || boxes.computerBusy;
     create.addEventListener("click", function () {
       editComputerName(t("ui.personal.create"), t("ui.personal.defaultName", { name: mine.name }), function (name) {
-        if (!boxes.computerRequest) boxes.computerRequest = crypto.randomUUID();
+        if (!boxes.computerRequest) boxes.computerRequest = personalComputerRequestId();
         runComputer("create", { requestId: boxes.computerRequest, name: name }, true);
       });
     });

@@ -7110,7 +7110,7 @@ function personalAction(action, body) {
     }).catch(function () { $("personalstatus").textContent = '{{ui.app.connection-interrupted-retry-uses-the}}'; $("personalcreate").disabled = false; });
 }
 $("personalcreate").onclick = function () {
-  if (!personalRequestId) personalRequestId = crypto.randomUUID();
+  if (!personalRequestId) personalRequestId = personalComputerRequestId();
   personalAction('create', { requestId: personalRequestId, name: t("ui.personal.defaultName", { name: personalOwner }) });
 };
 $("personalboxes").onclick = function (event) {
