@@ -20,18 +20,13 @@ const primary: ProviderProfile = { ...resolveProvider("anthropic"), label: "Mini
 const backup: ProviderProfile = { ...resolveProvider("anthropic"), label: "Backup", model: "backup-model", baseUrl: "https://backup.example" };
 const ask = (text: string) => [{ id: `m-${text}`, fromId: "user", fromName: "user", text, priority: false, receivedAt: "" }];
 
-test("a custom fallback follows live model changes while named presets keep their defaults", t => {
+test("a custom fallback uses its configured model while named presets keep their defaults", t => {
   const previous = process.env.AGENTBOX_MODEL;
   process.env.AGENTBOX_MODEL = "custom-model";
   t.after(() => { if (previous === undefined) delete process.env.AGENTBOX_MODEL; else process.env.AGENTBOX_MODEL = previous; });
   const names = fallbackNames(["custom", "compatible", "openai"], undefined, primary);
-  const fallbacks = new FallbackRuntimes(assert.fail, () => fakeModel(() => reply("ok")));
-  const first = fallbacks.for(names);
-  assert.deepEqual(first.map(runtime => runtime.provider.model), ["custom-model", "custom-model", resolveProviderPreset("openai")!.model]);
-  process.env.AGENTBOX_MODEL = "updated-model";
-  const next = fallbacks.for(names);
-  assert.deepEqual(next.slice(0, 2).map(runtime => runtime.provider.model), ["updated-model", "updated-model"]);
-  assert.equal(next[2], first[2], "the named preset is still cached");
+  const runtimes = new FallbackRuntimes(assert.fail, () => fakeModel(() => reply("ok"))).for(names);
+  assert.deepEqual(runtimes.map(runtime => runtime.provider.model), ["custom-model", "custom-model", resolveProviderPreset("openai")!.model]);
 });
 
 test("scenario: the plan runs out mid-work; the round finishes on the fallback, the chat says so, spend is the fallback's; after the reset the agent is back on its own", async () => {
