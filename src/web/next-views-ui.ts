@@ -304,7 +304,11 @@ function nextStart() {
     button.addEventListener("click", function () { navigateView(button.dataset.nav); });
   });
   window.addEventListener("popstate", function () { readViewAddress(); render(); });
-  $("back").addEventListener("click", function () { if (next.view === "settings") { settings.pane = ""; writeViewAddress("chat", ""); } });
+  // Clear the view route before chatStart's back handler returns to the agent list.
+  $("back").addEventListener("click", function () {
+    if (next.view === "chat") return;
+    settings.pane = ""; writeViewAddress("chat", "");
+  });
   $("work-find").addEventListener("input", function () { findWork($("work-find").value.trim()); });
   document.querySelectorAll("[data-layout]").forEach(function (button) {
     button.addEventListener("click", function () { next.layout = button.dataset.layout; render(); });

@@ -89,6 +89,15 @@ try {
       await page.locator(`[data-nav="${nav}"]`).click(); await page.waitForTimeout(350); await fits(`the ${nav} view`);
       if (width < 1000) await page.locator("#back").click();
     }
+    if (width < 1000) {
+      await page.locator('[data-nav="work"]').click();
+      await page.locator("#back").click();
+      assert.ok(!new URL(page.url()).searchParams.has("view"), `${where}: closing Work clears its route`);
+      await page.locator('[data-nav="settings"]').click();
+      await page.goBack();
+      await page.locator(".agent").first().waitFor();
+      assert.ok(!new URL(page.url()).searchParams.has("view"), `${where}: Back from Settings returns to the agent list`);
+    }
     await page.route("**/api/boxes?*", async route => {
       const response = await route.fetch(), result = await response.json();
       const shared = result.boxes.find(machine => machine.members === "everyone");
