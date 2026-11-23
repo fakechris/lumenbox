@@ -4,7 +4,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { hermeticEnv } from "./test-env.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -34,7 +36,7 @@ async function checkHostd(dir, args, env, ready, check) {
   }
 }
 
-test("the standalone Docker host bundle uses the release build stamp", async t => {
+test("the standalone Docker host bundle uses the release build stamp and loads Markdown and Feishu", async t => {
   const dir = mkdtempSync(join(tmpdir(), "lumenbox-hostd-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
@@ -67,9 +69,36 @@ users:
   });
 
   const webReady = /agentbox web.*on (http:\/\/127\.0\.0\.1:\d+)[^\n]*\n/;
-  await checkHostd(dir, ["web", "--port", "0", "--no-box"], env, webReady, async output => {
-    const response = await fetch(`${webReady.exec(output)[1]}/api/state`, { signal: AbortSignal.timeout(10_000) });
+  await checkHostd(dir, ["web", "--port", "0", "--no-box"], {
+    ...env, SMOKE_APP_ID: "cli_smoke", SMOKE_APP_SECRET: "fixture",
+  }, webReady, async output => {
+    const base = webReady.exec(output)[1];
+    const signal = AbortSignal.timeout(10_000);
+    const response = await fetch(`${base}/api/state`, { signal });
     assert.equal(response.status, 200);
     assert.deepEqual((await response.json()).build, { version, commit });
+
+    const markdown = await fetch(`${base}/vendor/markdown-it.js`, { signal });
+    assert.equal(markdown.status, 200);
+    const browser = { atob, TextDecoder };
+    runInNewContext(await markdown.text(), browser);
+    assert.equal(browser.markdownit().renderInline("**ready**"), "<strong>ready</strong>");
+
+    const saved = await fetch(`${base}/api/channels/records`, {
+      method: "POST", headers: { "content-type": "application/json" }, signal,
+      body: JSON.stringify({ id: "smoke", type: "feishu" }),
+    });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await saved.json(), { restartNeeded: false, started: true });
+    for (;;) {
+      const { channels } = await (await fetch(`${base}/api/channels?lang=en`, { signal })).json();
+      const channel = channels.find(entry => entry.name === "smoke");
+      assert.ok(channel, "Feishu door is missing");
+      if (channel.detail !== "starting") {
+        assert.equal(channel.running, true, channel.detail);
+        break;
+      }
+      await setTimeout(25, undefined, { signal });
+    }
   });
 });
