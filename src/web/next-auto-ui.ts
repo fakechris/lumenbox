@@ -63,6 +63,13 @@ function autoRuns(routine) {
     var line = el("div", "fact"), known = MSG["ui.next.auto.outcome." + run.outcome];
     line.appendChild(el("span", "why", new Date(run.at).toLocaleString() + (run.manual ? " · " + t("ui.next.auto.byHand") : "")));
     line.appendChild(el("span", "", (known ? t("ui.next.auto.outcome." + run.outcome) : run.outcome) + (run.reason ? " · " + run.reason : "")));
+    // What the run cost and where it is (INV-2036): a run that did nothing shows it, not just "Done".
+    if (run.ms != null) line.appendChild(el("span", "why", t("ui.next.auto.took", { s: Math.round(run.ms / 1000), tokens: (run.tokens || 0).toLocaleString() })));
+    if (run.agentId && run.outcome !== "skipped" && run.outcome !== "observed") {
+      var go = el("button", "act", t("ui.next.auto.openRun", { name: run.agentName || "" }));
+      go.addEventListener("click", function () { openChat(run.agentId); });
+      line.appendChild(go);
+    }
     box.appendChild(line);
   });
   return box;

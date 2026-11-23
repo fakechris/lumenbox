@@ -329,6 +329,8 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.auto.reading": ["正在读取…", "Reading…"],
   "ui.next.auto.noRuns": ["还没有运行过。", "It has not run yet."],
   "ui.next.auto.byHand": ["手动", "by hand"],
+  "ui.next.auto.took": ["{s} 秒 · {tokens} tokens", "{s} s · {tokens} tokens"],
+  "ui.next.auto.openRun": ["打开 {name} 的对话", "Open {name}'s chat"],
   "ui.next.auto.held": ["连续失败后被暂停：{reason}", "Paused after failing repeatedly: {reason}"],
   "ui.next.auto.heldIdle": ["已暂停：有一段时间没有人发消息了。有人再发消息时会自动恢复。", "Paused: nobody has sent a message for a while. It starts again by itself when someone writes."],
   "ui.next.remind.title": ["成员给自己设的提醒", "Reminders members set for themselves"],
