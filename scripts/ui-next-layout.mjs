@@ -89,6 +89,15 @@ try {
       await page.locator(`[data-nav="${nav}"]`).click(); await page.waitForTimeout(350); await fits(`the ${nav} view`);
       if (width < 1000) await page.locator("#back").click();
     }
+    if (width < 1000) {
+      await page.locator('[data-nav="work"]').click();
+      await page.locator("#back").click();
+      assert.ok(!new URL(page.url()).searchParams.has("view"), `${where}: closing Work clears its route`);
+      await page.locator('[data-nav="settings"]').click();
+      await page.goBack();
+      await page.locator(".agent").first().waitFor();
+      assert.ok(!new URL(page.url()).searchParams.has("view"), `${where}: Back from Settings returns to the agent list`);
+    }
     await page.route("**/api/boxes?*", async route => {
       const response = await route.fetch(), result = await response.json();
       const shared = result.boxes.find(machine => machine.members === "everyone");
@@ -117,6 +126,52 @@ try {
     assert.deepEqual(errors, [], `${where}: the page reported errors`);
     await context.close(); cases++;
   }
+  const admin = await browser.newContext({
+    extraHTTPHeaders: { authorization: "Bearer layout-fixture", "x-agentbox-user": "web:layout-viewer" },
+  });
+  const settings = await admin.newPage();
+  const people = settings.getByRole("heading", { name: "People", exact: true });
+  const overview = settings.getByRole("heading", { name: "Other settings", exact: true });
+  await settings.goto(`${meta.base}/?ui=next&lang=en`);
+  await settings.locator('[data-nav="settings"]').click();
+  await overview.waitFor();
+  await settings.getByRole("button", { name: /^Team\b/ }).click();
+  await people.waitFor();
+  const teamUrl = settings.url();
+  assert.equal(new URL(teamUrl).searchParams.get("pane"), "team");
+  await settings.reload();
+  await people.waitFor();
+  await settings.goBack();
+  await overview.waitFor();
+  await settings.goForward();
+  await people.waitFor();
+  await settings.locator('[data-nav="work"]').click();
+  await settings.goBack();
+  await people.waitFor();
+  assert.equal(settings.url(), teamUrl);
+  await settings.getByRole("button", { name: /Settings · Team/ }).click();
+  await overview.waitFor();
+  assert.equal(new URL(settings.url()).searchParams.has("pane"), false);
+
+  const deepLink = await admin.newPage();
+  await deepLink.goto(teamUrl.replace("pane=team", "pane=constructor"));
+  await deepLink.getByRole("heading", { name: "Other settings", exact: true }).waitFor();
+  await deepLink.goto(teamUrl);
+  await deepLink.getByRole("heading", { name: "People", exact: true }).waitFor();
+  await deepLink.getByRole("button", { name: "Make an invitation" }).click();
+  const invite = deepLink.locator("#view .card-code");
+  await invite.waitFor();
+  const guest = await browser.newContext();
+  const redeemed = await guest.request.post(`${meta.base}/api/login`, {
+    data: { code: await invite.textContent(), name: "Invited colleague" },
+  });
+  assert.ok(redeemed.ok(), "the other browser can redeem the invite");
+  await invite.waitFor({ state: "hidden", timeout: 8000 });
+  await deepLink.getByText(/^Invited colleague · /).waitFor();
+  assert.equal(deepLink.url(), teamUrl, "the invite updates without navigating away");
+  await guest.close();
+  await admin.close();
+  console.log("settings: deep links, browser history and invite redemption passed");
   console.log(`next layout: ${cases} real browser cases passed`);
 } finally {
   await browser?.close();

@@ -204,6 +204,23 @@ test("welcome setup uses the latest box result even when setup is the last respo
   assert.deepEqual(drawn, [["✓", "ui.next.setup.box", "ui.next.box.on"]], "the refresh redraws the card from the new setup response");
 });
 
+test("reopening Boxes settings refreshes its status and preserves the settings route", () => {
+  const boxSet = { config: null as object | null };
+  const writes: unknown[][] = [];
+  let loads = 0;
+  const navigateView = pageFunction("navigateView", {
+    next: {}, settings: {}, settingsPane: (key: unknown) => key, document: { body: { dataset: {} } },
+    writeViewAddress: (...args: unknown[]) => writes.push(args), render() {},
+  });
+  const open = pageFunction("openSettingsPane", { navigateView, boxSet, loadBoxSet: () => { loads++; } });
+  open("boxes");
+  assert.equal(loads, 0, "the first render loads the previously unseen pane");
+  boxSet.config = {};
+  open("boxes");
+  assert.equal(loads, 1, "reopening the pane refreshes the cached boxes");
+  assert.deepEqual(writes, [["settings", "boxes"], ["settings", "boxes"]]);
+});
+
 test("\"@Bob …\" typed to Ada is said to Bob; a name mid-sentence, an unknown name and the agent's own are not", () => {
   const agents = { a: { id: "a", name: "Ada" }, b: { id: "b", name: "Bob" } };
   const addressed = pageFunction("addressed", { next: { agents }, chat: { agentId: "a" } });

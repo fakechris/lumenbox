@@ -195,8 +195,8 @@ export function whyWaiting(turn: {
   unfinished: boolean;
 }): [string | undefined, WorkWait | undefined] {
   if (turn.lacking !== undefined) return ["required tool unavailable: " + turn.lacking, "capability"];
+  if (turn.how === "waiting_confirmation" || (turn.how === "done" && turn.confirmationPending)) return ["waiting for confirmation", "confirmation"];
   if (turn.how !== "done") return [turn.how, "execution"];
-  if (turn.confirmationPending) return ["waiting for confirmation", "confirmation"];
   if (turn.pendingPeers) return ["waiting for related work", "dependency"];
   if (turn.unfinished) return ["unfinished plan", "plan"];
   return [undefined, undefined];
