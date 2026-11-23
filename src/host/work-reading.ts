@@ -106,10 +106,16 @@ export function workReading(
   const reason = phase === "waiting" && boundary !== "linked" ? "historicalWaiting" : phase;
   const references = world.references ?? [];
   const root = task.workRoot?.state,
+    ending =
+      root?.reason === "failed"
+        ? "failed"
+        : root?.reason === "empty_output"
+          ? world.stage.questionPending ? "confirmation" : "empty_output"
+          : undefined,
     blocker =
       root?.status === "waiting"
         ? {
-            kind: root.reason === "failed" ? "failed" : root.reason === "aborted" ? "interrupted" : (root.wait ?? "execution"),
+            kind: ending ?? (root.reason === "aborted" ? "interrupted" : (root.wait ?? "execution")),
             tools: [...new Set((root.unavailable ?? []).map(row => row.tool))],
           }
         : undefined;

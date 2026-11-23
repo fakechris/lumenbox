@@ -22,18 +22,17 @@ function numberField(labelText, value, min, max) {
   return { label: label, input: input };
 }
 
-/** One settings pane, opened in the settings view. */
+function settingsPane(key) { return Object.hasOwn(NATIVE_PANES, key) ? key : ""; }
 function openSettingsPane(key) {
-  if (settingsPanes().indexOf(key) < 0) return;
-  next.view = "settings"; document.body.dataset.open = "1";
-  settings.pane = NATIVE_PANES[key] ? key : ""; render();
+  if (!canDriveAgents() || (key && settingsPanes().indexOf(key) < 0)) return;
+  navigateView("settings", key);
 }
 
 function renderSettings(view) {
   var panes = settingsPanes(), admin = canOperateInstallation();
   if (panes.indexOf(settings.pane) >= 0) {
     var back = el("button", "file", "‹ " + t("ui.next.side.settings") + " · " + t("ui.pane." + settings.pane));
-    back.addEventListener("click", function () { settings.pane = ""; render(); });
+    back.addEventListener("click", function () { openSettingsPane(""); });
     view.appendChild(back);
     NATIVE_PANES[settings.pane](view);
     return;
@@ -56,7 +55,7 @@ function renderSettings(view) {
   body.appendChild(el("div", "title", t("ui.next.side.system")));
   body.appendChild(el("div", "why", t("ui.next.system.open")));
   status.appendChild(body);
-  status.addEventListener("click", function () { next.view = "system"; system.state = null; render(); });
+  status.addEventListener("click", function () { system.state = null; navigateView("system"); });
   more.appendChild(status);
 }
 

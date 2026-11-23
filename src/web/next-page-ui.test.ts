@@ -213,13 +213,26 @@ test("member Settings has only personal panes; an installation pane cannot be op
   const settingPanes = pageFunction("settingsPanes", {
     canOperateInstallation: () => settings.me.role === "admin", canDriveAgents: () => settings.me.role !== "viewer",
   });
+  const navigations: string[][] = [];
+  const openSettingsPane = pageFunction("openSettingsPane", {
+    settingsPanes: settingPanes, canDriveAgents: () => settings.me.role !== "viewer",
+    navigateView: (view: string, pane: string) => { navigations.push([view, pane]); settings.pane = pane; },
+  });
   const renderSettings = pageFunction("renderSettings", {
-    settings, settingsPanes: settingPanes, canOperateInstallation: () => false, NATIVE_PANES: { model: fail }, renderLongWork: fail, el: fakeEl, t: String,
+    settings, settingsPanes: settingPanes, canOperateInstallation: () => false, openSettingsPane,
+    NATIVE_PANES: { model: fail, mine: () => {} }, renderLongWork: fail, el: fakeEl, t: String,
   });
   const view = fakeEl("div");
   renderSettings(view);
   assert.deepEqual(view.kids[0]!.kids.map(row => row.kids[0]!.kids[0]!.text), ["ui.pane.mine", "ui.pane.memory"]);
+  openSettingsPane("model");
+  view.kids[0]!.kids[0]!.press!();
+  const mine = fakeEl("div");
+  renderSettings(mine);
+  mine.kids[0]!.press!();
   settings.me.role = "viewer";
+  openSettingsPane("");
+  assert.deepEqual(navigations, [["settings", "mine"], ["settings", ""]]);
   const viewer = fakeEl("div");
   renderSettings(viewer);
   assert.equal(viewer.kids.length, 0);
@@ -673,6 +686,10 @@ test("the box update's backup is unticked unless the server says otherwise, and 
   };
   const nodes = draw({ state: { runningRef: "fakechris/lumenbox:0.4.3", expectedRef: "fakechris/lumenbox:0.4.4" }, backupByDefault: false });
   const box = nodes.find(node => node.type === "checkbox")!;
+  assert.ok(!nodes.some(node => node.text === "ui.next.boxset.available"), "no update notice without availability");
+  const available = draw({ state: { available: true, needsPull: true }, backupByDefault: false });
+  assert.ok(available.some(node => node.text === "ui.next.boxset.available"), "the available update is announced even if the image needs downloading");
+  assert.ok(available.some(node => node.text === "ui.next.boxset.whenIdle"), "the announcement has an Apply update action in its section");
   assert.equal(box.checked, false, "unticked: an update leaves the volumes alone");
   assert.ok(nodes.some(node => node.text.includes("ui.next.boxset.backupWhy")), "the cost of ticking it is said beside it");
   box.checked = true; box.press!(); // the change event: the choice is kept by the page, not by this checkbox
