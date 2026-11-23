@@ -6569,7 +6569,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           ); if (asks !== undefined && asks !== null) registry.update(created.id, { toolPermissions: asks }); registry.configVersions.saved(created.id, registry.get(created.id).profile, (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator")); // before its first turn, so that turn already asks; its version 1 (INV-1669)
           // Its first turn, so the new agent speaks before anyone has to.
           void orchestrator
-            .prompt(created.id, firstRunCue(caller.userId), caller, { steerable: false, lane: "background", synthetic: true }) // model-text: cue
+            .prompt(created.id, firstRunCue(caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : undefined), caller, { steerable: false, lane: "background", synthetic: true }) // model-text: cue
             .catch(error => log(`first run for ${created.profile.name} failed: ${error instanceof Error ? error.message : String(error)}`));
           send(res, 200, { id: created.id, name: created.profile.name });
           return;
