@@ -243,6 +243,7 @@ function renderView(view) {
   renderScreen();
   renderThreadTools(0);
   if (next.view === "chat") { renderChat(view); return; }
+  $("view-title").title = "";
   $("view-title").textContent = t(next.view === "system" ? "ui.next.side.system" : next.view === "boxes" ? "ui.next.side.boxes2" : next.view === "settings" || next.view === "auto" ? "ui.next.side." + next.view : "ui.next.nav." + next.view);
   $("view-hint").textContent = next.view === "settings" && !canOperateInstallation() ? "" : t("ui.next." + next.view + ".hint");
   if (next.view === "inbox") renderInbox(view);
