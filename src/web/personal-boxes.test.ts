@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { startWebServer } from "./server.ts";
+import { APP_PAGE } from "./page-locale.ts";
+import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { UsageLog } from "../host/usage.ts";
 import { Principals } from "../host/principals.ts";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -69,6 +72,33 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.equal(box.connected, false);
   assert.ok(box.detail);
   assert.equal(personal.data.boxes[0].connectionError, box.detail);
+  const state = await request("/api/state", "web:alice");
+  for (const [data, own] of [[state.data, state.data.box.own], [computers.data, computers.data.own]]) {
+    const shared = data.boxes.find((row: { id: string }) => row.id === own);
+    assert.equal(shared.connected, false);
+    assert.equal(shared.kind, "kubernetes");
+  }
+
+  const page = APP_PAGE("en"), bar = { innerHTML: "" };
+  const classic = page.slice(page.indexOf("function renderBoxBar()"), page.indexOf('$("boxbar").onclick'));
+  runInNewContext(classic + "renderBoxBar();", {
+    boxesSeen: state.data.boxes, currentBox: state.data.box.own, $: () => bar, esc: String,
+  });
+  assert.match(bar.innerHTML, /title="kubernetes"[^>]*>.*<span class="kind">kubernetes<\/span>/);
+  assert.doesNotMatch(bar.innerHTML, /docker|the box on this machine/i);
+
+  const subtitles: string[] = [];
+  const node = { appendChild() {}, addEventListener() {} };
+  runInNewContext(NEXT_BOXES_JS + "\nObject.assign(boxes, input); renderBoxes(view);", {
+    input: { list: computers.data.boxes, own: computers.data.own, state: state.data.box },
+    view: node, initial: String, t: String,
+    el: (_tag: string, style: string, value: string) => {
+      if (style === "why") subtitles.push(value);
+      return { ...node };
+    },
+  });
+  assert.match(subtitles[computers.data.boxes.findIndex((row: { id: string }) => row.id === computers.data.own)] ?? "", /^kubernetes · /);
+  assert.ok(subtitles.every(value => !/docker/i.test(value)));
   assert.equal(sharedDials, 0);
   assert.ok(!logs.some(line => /Docker lookup|docker inspect|box update:/.test(line)));
 });

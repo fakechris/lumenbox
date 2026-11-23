@@ -415,6 +415,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Asked once: the answer cannot change while this process runs. */
   const build = buildInfo();
   const backend = boxBackendFromEnvironment(), kubernetes = backend.backend === "kubernetes";
+  const withBoxBackend = (box: ReturnType<Orchestrator["boxStatus"]>[number]) =>
+    kubernetes && box.id === registry.box.id ? { ...box, kind: backend.backend } : box;
   const events = new SseReplay<OutboundEvent>();
 
   /**
@@ -5818,7 +5820,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             allTools: ALL_TOOLS,
             // Every box this installation drives, own first (docs/30). An agent's row names its
             // box and its desktop path is on that box.
-            boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)),
+            boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(withBoxBackend),
             agents: registry.list().filter(record => mayReadBox(registry.boxOf(record.id).id)).map(record => {
               const index = registry.displayIndexFor(record.id);
               const boxEntry = registry.boxOf(record.id);
@@ -6013,7 +6015,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             mayEnterBox(registry.listBoxes().find(entry => entry.id === boxId) ?? { members: "everyone" }, principals.resolve(caller.userId).id);
           // Registered boxes carry their lifecycle state and version (INV-434).
           const nameOfPrincipal = (id: string): string => principals.list().find(person => person.id === id)?.name ?? id;
-          const boxes = orchestrator.boxStatus().filter(box => mine(box.id)).map(box => {
+          const boxes = orchestrator.boxStatus().filter(box => mine(box.id)).map(status => {
+            const box = withBoxBackend(status);
             const entry = registry.listBoxes().find(candidate => candidate.id === box.id);
             const membership =
               entry === undefined

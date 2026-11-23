@@ -2868,10 +2868,12 @@ function renderBoxBar() {
   bar.className = many ? "many" : "";
   if (!many) return;
   bar.innerHTML = boxesSeen.map(function (b) {
+    var kind = b.kind === "docker" || b.kind === "kubernetes" ? b.kind : "{{ui.app.attached}}";
     return '<a href="#" role="tab" class="tab' + (b.id === currentBox ? " on" : "") + '" data-box="' + esc(b.id) + '"' +
-      ' title="' + esc(b.kind === "docker" ? "{{ui.app.the-box-on-this-machine}}" : "{{ui.app.attached-at}} " + (b.baseUrl || b.address || "{{ui.app.another-machine}}")) + '">' +
+      ' title="' + esc(b.kind === "docker" ? "{{ui.app.the-box-on-this-machine}}" : b.kind === "kubernetes" ? kind :
+        "{{ui.app.attached-at}} " + (b.baseUrl || b.address || "{{ui.app.another-machine}}")) + '">' +
       '<span class="dot" style="background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
-      esc(b.name) + ' <span class="kind">' + esc(b.kind === "docker" ? "docker" : "{{ui.app.attached}}") + "</span>" +
+      esc(b.name) + ' <span class="kind">' + esc(kind) + "</span>" +
       "</a>";
   }).join("") +
     '<a href="#" class="tab" data-newbox="1" title="{{ui.app.create-or-attach-a-box}}">+ box</a>';
