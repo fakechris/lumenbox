@@ -2166,9 +2166,7 @@ ${outcome.text}`;
   let toolCallsInTurn = 0;
   // Their names, for the claim guard (INV-779): "已发送" with no reach-tier call this turn.
   const toolNamesInTurn: string[] = [];
-  // Guard bookkeeping: how many times the model was sent back, whether a send-back is
-  // awaiting its answer (so the answer can be logged as complied or not), and whether the
-  // closing nudge has been spent.
+  // Guard bookkeeping: bounded send-backs, a pending compliance check, and a one-time closing nudge.
   let guardNudges = 0;
   let guardPending: GuardReason | undefined;
   let closingNudged = false;
