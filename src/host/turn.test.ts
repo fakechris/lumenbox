@@ -19,6 +19,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { TurnLedger } from "./resume.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
+import { WorkAttention } from "../agents/work-attention.ts";
 import { fakeModel, fakeModelReplying } from "./testing/fake-model.ts";
 import { HookRunner } from "./hooks.ts";
 import type { BoxClient } from "../box/client.ts";
@@ -3372,6 +3373,21 @@ test("acknowledged, ran tools, ended silent: one closing nudge, then the result 
     const instructions = (registry.readTranscript(ada.id) as TranscriptEntry[]).at(-1);
     assert.ok(instructions && "text" in instructions);
     assert.equal(instructions.text, "Open the app to supply the service key securely.");
+
+    const focus = new WorkAttention();
+    const request = { id: "m-connect-again", fromId: "user", fromName: "user", text: "Connect another service", priority: false, receivedAt: "" };
+    const work = focus.begin(ada.id, "main", [request]);
+    assert.ok(work);
+    const silent = stubClient([message([textBlock("I'll check what is needed."), toolUseBlock("AskSecret", { id: "OTHER_KEY", description: "Needed to connect the other service." })], "tool_use"), message([]), message([])], { params: [] });
+    const notices: string[] = [];
+    await runTurn(ada, [{ ...request, work }], new AbortController().signal, {
+      client: silent.client, registry, box, resolution: undefined, provider: MINIMAX_PROFILE, askSecret: () => "in the app",
+      bus: new AgentBus(registry, async () => {}, undefined, undefined, false, undefined, focus),
+      onEvent: event => { if (event.type === "text") notices.push(event.delta); },
+    });
+    assert.equal(silent.capture.params.length, 3, "only one attempt to explain the app request");
+    assert.equal(focus.get(ada.id, "main")?.wait, "confirmation", "the app request is still pending");
+    assert.doesNotMatch(notices.join(" "), /model returned no text/);
   } finally {
     cleanup();
   }
