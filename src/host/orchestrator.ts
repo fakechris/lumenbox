@@ -723,7 +723,7 @@ export class Orchestrator {
         conversation,
         ...scope,
       });
-      await this.settle(); const unstarted = slug === undefined ? undefined : routineNotStarted(this.bus, agentId, conversation, prompt, record.profile.name); if (unstarted !== undefined) return unstarted;
+      await this.settle(); const unstarted = origin !== undefined ? undefined : routineNotStarted(this.bus, agentId, conversation, prompt, record.profile.name); if (unstarted !== undefined) return unstarted;
       const said = this.replySince(agentId, before, conversation).trim();
       const result = resultOf(agentId);
       // The box was reconnected under the run (INV-1476): its result is the old incarnation's and is not delivered.
