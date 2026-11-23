@@ -13,6 +13,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import type { Principals } from "../host/principals.ts";
 
 export interface StoredToken {
   hash: string;
@@ -69,6 +70,17 @@ export class McpTokenStore {
     if (presented === undefined || presented === "" || this.readOnly) return undefined;
     const hash = hashOf(presented);
     return this.tokens.find(entry => sameHash(entry.hash, hash))?.principalId;
+  }
+
+  /**
+   * Who a token acts as (INV-2074). It is kept under the sign-in that issued it, and a linked
+   * sign-in is not the person's id: the doors inside judge the person, so it answers with them.
+   * A sign-in nobody holds any more answers nobody, and the token stops with the person.
+   */
+  personFor(presented: string | undefined, principals: Pick<Principals, "byId" | "isKnown" | "resolve">): string | undefined {
+    const id = this.principalFor(presented);
+    if (id === undefined) return undefined;
+    return (principals.byId(id) ?? (principals.isKnown(id) ? principals.resolve(id) : undefined))?.id;
   }
 
   /** Revoke the one made at `createdAt` that `may` allows; false when none matches. */

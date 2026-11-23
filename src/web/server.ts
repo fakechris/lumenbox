@@ -243,6 +243,7 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { quietWiring } from "./quiet-wiring.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
 import { SessionEpochs } from "./session-epochs.ts";
+import { OpenDesktops } from "./open-desktops.ts";
 import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
@@ -2928,7 +2929,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Whether this installation is reached over TLS, so cookies can say Secure (INV-578). */
   let secureCookies = false;
   // Which generation of each person's sign-ins is still good (INV-537).
-  const epochs = new SessionEpochs();
+  const epochs = new SessionEpochs(); const openDesktops = new OpenDesktops(); // and the screens already open, asked again when who may do what changes (INV-2071)
 
   /**
    * Who may be served at all: the installation token, or a person's own session.
@@ -3170,7 +3171,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (
         await handleMcpRequest(req, res, {
           tools: sideDoorTools(),
-          principalFor: presented => mcpTokens.principalFor(presented),
+          principalFor: presented => mcpTokens.personFor(presented, principals),
           log: line => log(line),
           idempotency: sideDoorIdempotency,
         })
@@ -4879,7 +4880,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               identities,
             });
           }
-          principals.save(roster);
+          principals.save(roster); openDesktops.recheck();
           log(`principals roster updated (${roster.length} people)`);
           send(res, 200, { principals: principals.list() });
           return;
@@ -4899,7 +4900,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 404, apiError("person-unknown", { person: principalId }));
             return;
           }
-          const epoch = epochs.bump(person.id);
+          const epoch = epochs.bump(person.id); openDesktops.recheck();
           log(`signed out everywhere: ${person.name} (generation ${epoch})`);
           send(res, 200, { name: person.name, epoch });
           return;
@@ -6761,36 +6762,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * everything after it is framed RFB rather than HTTP.
    */
   server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
-    const raw = req.url ?? "";
-    const [pathname, query] = raw.split("?");
+    const [pathname, query] = (req.url ?? "").split("?");
     // The RFB socket carries the screen, so it needs the same check. A browser sends the
-    // cookie on an upgrade but cannot set a header, which is why the cookie exists.
-    const upgradeDecision = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie });
-    if (!upgradeDecision.allow) {
-      clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    // cookie on an upgrade but cannot set a header, which is why the cookie exists. Asked again
+    // whenever who may do what changes, because the socket outlives the moment it was let in (INV-2071).
+    const admitted = (): number | NonNullable<ReturnType<typeof desktopRouteOf>> => {
+      const decision = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie });
+      if (!decision.allow) return 401;
+      // And the role, not only the token: this socket is bidirectional, so authorising it as though
+      // it only carried pixels is what let someone who may only watch drive the desktop instead.
+      const gateway = callerOf(req.headers, decision.allow, trustsGatewayIdentity());
+      const route = desktopRouteOf(pathname ?? "", query ? `?${query}` : "", mayDrive(gateway));
+      if (!route) return 404;
+      const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
+      principals.reload();
+      const targetBox = registry.boxById(route.boxId ?? registry.box.id);
+      return !targetBox || (identity !== undefined && !mayEnterBox(targetBox, principals.resolve(identity).id)) ? 403 : route;
+    };
+    const desktop = admitted();
+    if (typeof desktop === "number") {
+      if (desktop === 404) clientSocket.destroy(); else clientSocket.end(`HTTP/1.1 ${desktop === 401 ? "401 Unauthorized" : "403 Forbidden"}\r\n\r\n`);
       return;
     }
-
-    // And the role, not only the token: this socket is bidirectional, so authorising it as though
-    // it only carried pixels is what let someone who may only watch drive the desktop instead.
-    const desktop = desktopRouteOf(
-      pathname ?? "",
-      query ? `?${query}` : "",
-      mayDrive(callerOf(req.headers, upgradeDecision.allow, trustsGatewayIdentity()))
-    );
-
-    if (!desktop) {
-      clientSocket.destroy();
-      return;
-    }
-
-    const gateway = callerOf(req.headers, upgradeDecision.allow, trustsGatewayIdentity());
-    const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
-    principals.reload();
-    const targetBox = registry.boxById(desktop.boxId ?? registry.box.id);
-    if (!targetBox || (identity !== undefined && !mayEnterBox(targetBox, principals.resolve(identity).id))) {
-      clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return;
-    }
+    openDesktops.hold(clientSocket, () => { const again = admitted(); return typeof again !== "number" && again.upstream === desktop.upstream; });
 
     void (async () => {
       // noVNC reconnects its socket without reloading the HTML after a box restart.
