@@ -34,12 +34,14 @@ export async function workFileRoute(route: string, url: URL, res: ServerResponse
   }
   try {
     if (listing) {
-      const dir = await client.listDir(path, boxId !== null);
-      if (boxId !== null && dir.work_only !== true && posix.normalize(path) !== work) {
+      const subfolder = boxId !== null && posix.normalize(path) !== work;
+      if (subfolder && (await client.listDir(work, true)).work_only !== true) {
         deps.send(res, 503, { ...apiError("work-browsing-needs-update"), ...root });
-      } else {
-        deps.send(res, 200, { path: dir.path, entries: dir.entries, ...root });
+        return true;
       }
+      const dir = await client.listDir(path, boxId !== null);
+      if (subfolder && dir.work_only !== true) deps.send(res, 503, { ...apiError("work-browsing-needs-update"), ...root });
+      else deps.send(res, 200, { path: dir.path, entries: dir.entries, ...root });
     } else {
       const file = await client.downloadFile(path);
       const bytes = Buffer.from(file.base64, "base64");

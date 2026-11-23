@@ -29,6 +29,7 @@ test("Files lists and downloads from the requested box for its members only", as
   process.env.AGENTBOX_HOME = home;
   process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
   const calls: string[] = [];
+  let legacy = false;
   const boxd = createHttpServer(async (req, res) => {
     res.setHeader("content-type", "application/json");
     if (req.url === "/health") { res.end(JSON.stringify({ protocol: BOXD_PROTOCOL })); return; }
@@ -39,7 +40,7 @@ test("Files lists and downloads from the requested box for its members only", as
     const privateBox = req.headers.authorization === "Bearer private-fixture";
     if (input.work_only || req.url === "/fs/download") calls.push(`${privateBox ? "private" : "default"}:${req.url}:${input.path}`);
     if (req.url === "/fs/list") {
-      res.end(JSON.stringify({ path: input.path, work_only: input.work_only, entries: [{ name: "alice-47.md", type: "file", size: 10 }] }));
+      res.end(JSON.stringify({ path: input.path, work_only: legacy ? undefined : input.work_only, entries: [{ name: "alice-47.md", type: "file", size: 10 }] }));
     } else {
       res.end(JSON.stringify({ path: input.path, media_type: "text/markdown", base64: Buffer.from("ALICE-ONLY").toString("base64") }));
     }
@@ -78,6 +79,14 @@ test("Files lists and downloads from the requested box for its members only", as
     assert.match(file.headers.get("content-disposition") ?? "", /^attachment; filename="alice-47.md"/);
     assert.equal(await file.text(), "ALICE-ONLY");
     assert.deepEqual(calls, [`private:/fs/list:${work}`, `private:/fs/download:${work}/alice-47.md`]);
+    const subfolder = list + "&dir=" + encodeURIComponent(work + "/reports");
+    assert.equal((await get(subfolder, "alice")).status, 200);
+    assert.deepEqual(calls.splice(2), [`private:/fs/list:${work}`, `private:/fs/list:${work}/reports`]);
+    legacy = true;
+    const refused = await get(subfolder, "alice");
+    assert.equal(refused.status, 503);
+    assert.equal((await refused.json()).code, "work-browsing-needs-update");
+    assert.deepEqual(calls.splice(2), [`private:/fs/list:${work}`], "never send the subfolder path to a legacy daemon");
   } finally {
     stop?.();
     boxd.close();
