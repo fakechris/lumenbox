@@ -756,12 +756,12 @@ function configEnvEntries(config: AgentboxConfig): [string, string][] {
   return entries;
 }
 
-/**
- * Which process.env keys the config file put there, as opposed to the shell. Kept so a later
- * re-apply can tell a value it may replace from one the operator exported on purpose: after
- * startup the two look identical in process.env (INV-1268).
- */
+/** Which keys the config file put in process.env, as opposed to the shell (INV-1268). */
 const appliedFromConfig = new Set<string>();
+
+export function configCredentialSource(key: string): "saved" | "environment" | null {
+  return process.env[key] ? (appliedFromConfig.has(key) ? "saved" : "environment") : null;
+}
 
 /**
  * Apply a config file again, after a save, to a process that is already running (INV-1268).

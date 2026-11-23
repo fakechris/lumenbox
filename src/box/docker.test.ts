@@ -286,6 +286,21 @@ test("a box runs on its own network rather than the shared default bridge", () =
   assert.notEqual(networkNameFor("agentbox-a"), networkNameFor("agentbox-b"));
 });
 
+test("the MiniMax Global key is forwarded only to a non-relayed box with an in-box host", t => {
+  const name = "MINIMAX_CODE_GLOBAL_API_KEY";
+  const previous = process.env[name];
+  const fixture = "fixture-global-key";
+  process.env[name] = fixture;
+  t.after(() => { if (previous === undefined) delete process.env[name]; else process.env[name] = previous; });
+  for (const [withHost, relayed, forwarded] of [[true, false, true], [true, true, false], [false, false, false]] as const) {
+    const args = new BoxManager({
+      containerName: "minimax-global-test", image: "image:1", token: "t", host: "127.0.0.1", boxdPort: 0,
+      displayWidth: 1280, displayHeight: 800, runArgs: [], withHost, relayed, uiToken: "test-ui",
+    }).runArguments();
+    assert.equal(args.some((arg, i) => arg === "--env" && args[i + 1] === `${name}=${fixture}`), forwarded);
+  }
+});
+
 test("the spool does not travel out of the box in a backup", () => {
   assert.ok(
     BACKUP_EXCLUDES.includes("./.spool"),
