@@ -87,6 +87,16 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.match(bar.innerHTML, /title="kubernetes"[^>]*>.*<span class="kind">kubernetes<\/span>/);
   assert.doesNotMatch(bar.innerHTML, /docker|the box on this machine/i);
 
+  const settings = { innerHTML: "" };
+  const listStart = page.indexOf("function renderBoxes()");
+  const listScript = page.slice(listStart, page.indexOf('\ndocument.addEventListener("click"', listStart));
+  const external = { id: "external", kind: "attached", name: "Remote VM", displayFloor: 1, agents: 0 };
+  await runInNewContext(listScript + "renderBoxes();", {
+    $: () => settings, esc: String, t: String, myRole: "admin", renderDesktopResources: () => "",
+    fetch: async () => ({ json: async () => ({ ...computers.data, boxes: [...computers.data.boxes, external] }) }),
+  });
+  assert.match(settings.innerHTML, /data-detach-box="Remote VM">/, "the first visible attached box can be detached");
+
   const subtitles: string[] = [];
   const node = { appendChild() {}, addEventListener() {} };
   runInNewContext(NEXT_BOXES_JS + "\nObject.assign(boxes, input); renderBoxes(view);", {

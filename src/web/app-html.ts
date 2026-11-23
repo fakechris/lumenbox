@@ -2226,14 +2226,15 @@ function renderBoxes() {
     .then(function (r) { return r.json(); })
     .then(function (data) {
       var boxes = (data.boxes || []).filter(function (b) { return data.backend !== "kubernetes" || (b.id !== data.own && b.kind !== "kubernetes"); });
-      $("setboxes").innerHTML = boxes.map(function (b, i) {
+      $("setboxes").innerHTML = boxes.map(function (b) {
+        var own = b.id === data.own;
         var where = b.kind === "docker" ? "{{ui.app.docker-on-this-machine}}" : esc(b.endpoint || "{{ui.app.attached}}");
         return '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">' +
           '<span class="dot" style="width:8px;height:8px;background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
-          '<b>' + esc(b.name) + "</b>" + (i === 0 ? ' <span class="dim">{{ui.app.own}}</span>' : "") +
+          '<b>' + esc(b.name) + "</b>" + (own ? ' <span class="dim">{{ui.app.own}}</span>' : "") +
           '<span class="dim" style="flex:1">' + where + " {{ui.app.displays-from}}" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "{{ui.plural.s}}") + (b.connected ? "" : " {{ui.app.not-connected-2}}") + "</span>" +
           (myRole === "admin" ? '<button class="btn sm ghost" data-members-box="' + esc(b.name) + '" title="' + esc(b.membersLabel || "") + '">{{ui.app.members}}</button>' : "") +
-          (i === 0 ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">{{ui.app.detach}}</button>") +
+          (own ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">{{ui.app.detach}}</button>") +
           "</div>" +
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
