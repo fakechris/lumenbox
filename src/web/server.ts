@@ -102,9 +102,11 @@ import {
   type Caller,
 } from "./auth.ts";
 import {
+  isInviteBrowserIdentity,
   newWebIdentity,
   readSession,
   SESSION_COOKIE,
+  SESSION_MAX_AGE_SECONDS,
   sessionCookie,
   sessionKey,
 } from "./session.ts";
@@ -776,14 +778,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const openDesktops = new OpenDesktops();
   const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`), changed: () => openDesktops.recheck() });
   const retiredSignIn = (person: Principal, identity: string): boolean => {
+    const expiresAt = principals.browserSignInExpiresAt(person.id, identity);
+    if (expiresAt !== undefined) return expiresAt <= Date.now();
+    if (isInviteBrowserIdentity(identity)) return false;
     const door = doorOfIdentity(identity);
-    return door !== "web" && (!channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity));
+    return !channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity);
   };
   const usableSignIns = (person: Principal) => {
     const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
-    return person.identities.filter(identity =>
-      principals.hasCurrentIdentity(person.id, identity) &&
-      (identity.startsWith("web:") || doors.some(door => identity.startsWith(door.id + ":"))));
+    const now = Date.now();
+    return person.identities.filter(identity => {
+      if (!principals.hasCurrentIdentity(person.id, identity)) return false;
+      const expiresAt = principals.browserSignInExpiresAt(person.id, identity);
+      if (expiresAt !== undefined) return expiresAt > now;
+      const separator = identity.indexOf(":");
+      return !isInviteBrowserIdentity(identity) && separator > 0 && identity.slice(separator + 1).trim() !== ""
+        && doors.some(door => door.id === identity.slice(0, separator));
+    });
   };
   /** What a task's mandate is checked against now (INV-1457): the principal's role today and the rule set as loaded. */
   const mandateWorld = (): MandateWorld => ({
@@ -3855,7 +3866,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           invites.delete(code);
-          const redeemed = redeemInvite(principals, invite, identity, name); // a code for somebody known links this browser to them: same human, second surface, one bill
+          const redeemed = redeemInvite(principals, invite, identity, name, Date.now() + SESSION_MAX_AGE_SECONDS * 1_000);
           if (redeemed.kind === "gone") { send(res, 409, apiError("invite-person-gone")); return; }
           // Two cookies, because they answer different questions: the token says this browser may reach the installation at all, the session says who it is. What the person may then *do* is their roster role.
           res.setHeader("set-cookie", [sessionCookie(identity, sessionSecret, epochs.of(redeemed.person.id), secureCookies)]);
