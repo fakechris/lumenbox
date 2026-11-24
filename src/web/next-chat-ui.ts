@@ -87,9 +87,12 @@ function openChat(agentId) {
 var PLACE_KEY = "lumen-place";
 function rememberPlace() {
   if (next.view !== "chat") return;
-  var query = chat.agentId ? "?agent=" + encodeURIComponent(chat.agentId) : "";
-  // A computer chosen with no agent on it is a place too: the address stops naming the agent left behind.
-  if (chat.agentId ? location.search !== query : /[?&]agent=/.test(location.search)) history.replaceState(null, "", query || location.pathname);
+  // The address names the agent only while its conversation is open: that is how readViewAddress reads it back,
+  // and a narrow screen showing the list is not in a conversation. Nothing else in the address is touched.
+  var url = new URL(location.href), open = !!chat.agentId && document.body.dataset.open === "1";
+  ["agent", "conversation"].forEach(function (key) { url.searchParams.delete(key); });
+  if (open) url.searchParams.set("agent", chat.agentId);
+  if (url.href !== location.href) history.replaceState(null, "", url);
   try { localStorage.setItem(PLACE_KEY, JSON.stringify({ box: chat.box || "", agent: chat.agentId || "" })); } catch (error) {}
 }
 /** The remembered place, when the address names none. */

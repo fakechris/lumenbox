@@ -884,22 +884,26 @@ test("a row's one line: what the member asks of the person, else what it says it
 });
 
 test("a reload stays on the computer and agent the person was on, and a new sign-in comes back to them (INV-2064)", () => {
-  const stored = new Map<string, string>(), addresses: string[] = [];
+  const stored = new Map<string, string>();
   const localStorage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } };
-  const location = { search: "?view=work", pathname: "/" };
-  const history = { replaceState: (_s: unknown, _t: string, url: string) => { addresses.push(url); location.search = url.startsWith("?") ? url : ""; } };
+  const location = { href: "http://box/?ui=next&view=work" };
+  const history = { replaceState: (_s: unknown, _t: string, url: URL) => { location.href = String(url); } };
   const body = { dataset: {} as Record<string, string> };
-  const globals = (chat: Record<string, unknown>, view = "chat") => ({ PLACE_KEY: "lumen-place", next: { view }, chat, localStorage, location, history, document: { body }, JSON });
+  const globals = (chat: Record<string, unknown>, view = "chat") => ({ PLACE_KEY: "lumen-place", next: { view }, chat, localStorage, location, history, document: { body }, JSON, URL });
+  body.dataset.open = "1";
   pageFunction("rememberPlace", globals({ box: "shared", agentId: "ada" }))();
-  assert.deepEqual(addresses, ["?agent=ada"], "the address names the agent, replacing the view it was opened from");
+  assert.equal(location.href, "http://box/?ui=next&view=work&agent=ada", "an open conversation is named in the address; the rest of the address stays");
   pageFunction("rememberPlace", globals({ box: "mine", agentId: "aria" }, "work"))();
-  assert.equal(addresses.length, 1, "another view keeps its own address and does not move the place");
+  assert.equal(location.href, "http://box/?ui=next&view=work&agent=ada", "another view keeps its own address and does not move the place");
+  delete body.dataset.open;
+  pageFunction("rememberPlace", globals({ box: "shared", agentId: "ada" }))();
+  assert.equal(location.href, "http://box/?ui=next&view=work", "a narrow screen showing the list is not in the conversation, so Back does not reopen it");
   const signedInAgain = { box: "", agentId: "" };
   pageFunction("recallPlace", globals(signedInAgain))();
-  assert.deepEqual(signedInAgain, { box: "shared", agentId: "ada" }, "with no address, the remembered place is where the page opens");
+  assert.deepEqual(signedInAgain, { box: "shared", agentId: "ada" }, "with no address, the remembered computer and agent are where the page opens");
+  assert.equal(body.dataset.open, undefined, "chosen, not opened: a narrow screen still lands on the list");
   pageFunction("rememberPlace", globals({ box: "mine", agentId: "" }))();
-  assert.equal(location.search, "", "a computer chosen with no agent on it: the address stops naming the agent left behind");
   const fresh = { box: "", agentId: "" };
   pageFunction("recallPlace", globals(fresh))();
-  assert.deepEqual(fresh, { box: "mine", agentId: "" });
+  assert.deepEqual(fresh, { box: "mine", agentId: "" }, "a computer chosen with no agent on it is a place too");
 });
