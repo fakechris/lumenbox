@@ -2976,8 +2976,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Which generation of each person's sign-ins is still good (INV-537).
   const epochs = new SessionEpochs(undefined, () => openDesktops.recheck());
 
-  /** The operator token or a valid session for someone still on the roster. */
-  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision | { allow: false; reason: "access-removed" | "session-expired" } => {
+  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision | { allow: true; reason: "token"; sessionIdentity: string } | { allow: false; reason: "access-removed" | "session-expired" } => {
     const byToken = authorize({ token, host }, request);
     if (byToken.allow) return byToken;
     const cookie = parseCookies(request.cookie).get(SESSION_COOKIE);
@@ -2986,7 +2985,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     if (session === undefined) return { allow: false, reason: "session-expired" };
     if (!principals.isKnown(session.identity)) return { allow: false, reason: "access-removed" };
     if (session.epoch < epochs.of(principals.resolve(session.identity).id)) return { allow: false, reason: "session-expired" };
-    return { allow: true, reason: "token" };
+    return { allow: true, reason: "token", sessionIdentity: session.identity };
   };
 
   // The outside door (docs/90 §2): a computer and a team, never our memory, files or settings; every call goes through a person's objects (INV-1358).
@@ -4765,8 +4764,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        // The People list, removing or signing out a person, and invitation codes are handled by people-routes.ts.
         const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req), signOut: id => epochs.bump(id),
+          currentSessionIdentity: "sessionIdentity" in decision && gatewayCaller.userId === undefined ? decision.sessionIdentity : undefined,
           usableSignIns, retiredSignIn, planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, checkBoxResidents, boxResidents),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });

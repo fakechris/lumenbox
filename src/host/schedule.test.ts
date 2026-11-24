@@ -22,6 +22,7 @@ import {
   triggerPrompt,
   type Scheduled,
 } from "./schedule.ts";
+import { NOT_STARTED } from "./routine-runs.ts";
 
 function scheduleOf(text: string) {
   const result = parseSchedule(text);
@@ -948,6 +949,33 @@ test("nobody writing pauses a due routine across a restart; turning it on by han
     // A box the record knows nobody in is not called idle, however long that has been.
     lastPerson = undefined;
     assert.deepEqual(await at(scheduler, 60), ["brief", "heartbeat:ada"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// INV-2036 review: a caller waiting on a webhook whose turn never started was told {ok:true} with no text.
+test("a waiting webhook whose turn never started is told it did not run, and three of them do not pause it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "webhook-unstarted-"));
+  try {
+    const hook = { slug: "intake", name: "Intake", path: "/p", webhook: true };
+    const ended: string[] = [];
+    const scheduler = new Scheduler({
+      due: async () => [], hooked: async () => [hook], defaultAgent: () => "ada",
+      run: async () => {}, path: join(dir, "schedules.jsonl"), log: () => {},
+      runAndSay: async () => ({ result: "failed", code: NOT_STARTED, reason: "its turn did not start: Ada is waiting on an earlier request in this chat (secret plan)" }),
+      finished: skill => { ended.push(skill.slug); },
+    });
+    for (let call = 0; call < 3; call++) {
+      const fired = await scheduler.fireWebhook(hook.slug, "payload", undefined, { wait: true });
+      assert.equal(fired.ok, false, "never {ok:true} with empty text");
+      assert.match(!fired.ok ? fired.reason : "", /Intake did not run: its agent is busy with an earlier request; send it again later/);
+      assert.doesNotMatch(!fired.ok ? fired.reason : "", /secret plan/, "the caller holds the routine's secret, not the chat: no wait reason");
+      assert.equal(scheduler.runs(hook.slug)[0]?.outcome, "failed");
+      assert.match(scheduler.runs(hook.slug)[0]?.reason ?? "", /its turn did not start/);
+    }
+    assert.equal(scheduler.holds.holdOf(hook.slug), undefined, "not the routine's failure: no pause");
+    assert.deepEqual(ended, [], "and no issue with a Retry");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
