@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { Principals } from "../host/principals.ts";
 import { McpTokenStore } from "./mcp-tokens.ts";
 
 test("a token issued before a restart is still accepted after it; the file holds its hash, never the secret, and is 0600", () => {
@@ -56,6 +57,38 @@ test("an unreadable file accepts no token and is not overwritten, and the reason
     store.mint("p1", "x");
     assert.equal(readFileSync(path, "utf8"), "{ not json", "the evidence is kept");
     assert.equal(new McpTokenStore(undefined).principalFor("lmbx_x"), undefined, "memory only works too");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a token from a sign-in is whoever holds the sign-in now, never the roster id it also names (INV-2074)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-tokens-"));
+  try {
+    const principals = new Principals(join(dir, "principals.json"));
+    // Alice joined by invite, so her roster id is her first sign-in; Carol likewise.
+    principals.save([
+      { id: "feishu:ou_a", name: "Alice", role: "driver", identities: ["feishu:ou_a", "web:alice2"] },
+      { id: "feishu:ou_x", name: "Carol", role: "admin", identities: ["feishu:ou_x"] },
+      { id: "p_bob", name: "Bob", role: "viewer", identities: ["web:bob"] },
+    ]);
+    const store = new McpTokenStore(undefined);
+    const alice = store.mint("feishu:ou_a", "ide");
+    const linked = store.mint("web:alice2", "ide");
+    const forBob = store.mint("p_bob", "ide", new Date(), "person");
+    assert.equal(store.personFor(linked.token, principals), "feishu:ou_a", "a linked sign-in acts as its person");
+    assert.equal(store.personFor(forBob.token, principals), "p_bob", "minted for a roster id: that person");
+
+    principals.save([
+      { id: "feishu:ou_a", name: "Alice", role: "driver", identities: ["web:alice2"] },
+      { id: "feishu:ou_x", name: "Carol", role: "admin", identities: [] },
+      { id: "p_bob", name: "Bob", role: "viewer", identities: ["web:bob", "feishu:ou_x"] },
+    ]);
+    assert.equal(store.personFor(alice.token, principals), undefined, "the sign-in was removed; the token went with it");
+    assert.equal(store.personFor(linked.token, principals), "feishu:ou_a");
+    assert.equal(store.personFor(store.mint("feishu:ou_x", "ide").token, principals), "p_bob", "Carol's old sign-in, now Bob's, is Bob");
+    // Work stored under Carol's roster id stays Carol's, though Bob now holds the sign-in it also names.
+    assert.equal(principals.personOf("feishu:ou_x")?.id, "feishu:ou_x");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

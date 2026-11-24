@@ -234,6 +234,7 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { quietWiring } from "./quiet-wiring.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
 import { SessionEpochs } from "./session-epochs.ts";
+import { OpenDesktops } from "./open-desktops.ts";
 import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
 import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
@@ -771,7 +772,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The people, and the one-time migration from the old flat allow list: every
   // identity that used to be a bare channel grant becomes a driver principal, so a
   // person's existing access survives the upgrade rather than being silently revoked.
-  const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`) });
+  // The screens already open, asked again whenever the roster or a sign-in generation changes (INV-2071).
+  const openDesktops = new OpenDesktops();
+  const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`), changed: () => openDesktops.recheck() });
   const retiredSignIn = (person: Principal, identity: string): boolean => {
     const door = doorOfIdentity(identity);
     return door !== "web" && (!channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity));
@@ -810,8 +813,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     home: join(agentboxHome(), "personal-boxes"), entries: () => registry.listBoxes(),
     quota: personalQuota, authorize: mayProvision, checkResidents: checkBoxResidents,
     removeResidents: id => { for (const agent of registry.agentsIn(id)) registry.remove(agent.id, { archive: false }); },
-    attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); },
-    detach: id => { orchestrator.detachBox(id); }, residents: id => registry.agentsIn(id).length,
+    attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); openDesktops.recheck(); },
+    detach: id => { orchestrator.detachBox(id); openDesktops.recheck(); }, residents: id => registry.agentsIn(id).length,
     driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
   }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
 
@@ -2960,7 +2963,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Whether this installation is reached over TLS, so cookies can say Secure (INV-578). */
   let secureCookies = false;
   // Which generation of each person's sign-ins is still good (INV-537).
-  const epochs = new SessionEpochs();
+  const epochs = new SessionEpochs(undefined, () => openDesktops.recheck());
 
   const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision | { allow: true; reason: "token"; sessionIdentity: string } | { allow: false; reason: "access-removed" | "session-expired" } => {
     const byToken = authorize({ token, host }, request);
@@ -2979,7 +2982,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const unavailable = personalBoxes.unavailable();
     const box = (id: string) => {
       const entry = registry.boxById(id);
-      return !!entry && !unavailable.has(id) && (entry.members === "everyone" || (principals.isKnown(principalId) && mayEnterBox(entry, principals.resolve(principalId).id)));
+      return !!entry && !unavailable.has(id) && (entry.members === "everyone" || ((person => person !== undefined && mayEnterBox(entry, person.id))(principals.personOf(principalId))));
     };
     return { box, agent: id => registry.has(id) && box(registry.boxOf(id).id) };
   }
@@ -3188,11 +3191,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (
         await handleMcpRequest(req, res, {
           tools: sideDoorTools(),
-          // A removed person's tokens stop with them; a token names a principal or a sign-in.
-          principalFor: presented => {
-            const id = mcpTokens.principalFor(presented);
-            return id !== undefined && (principals.byId(id) || principals.isKnown(id)) ? id : undefined;
-          },
+          principalFor: presented => mcpTokens.personFor(presented, principals),
           log: line => log(line),
           idempotency: sideDoorIdempotency,
         })
@@ -4492,7 +4491,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, apiError("token-needs-person", { admins: principals.list().filter(person => person.role === "admin").length }));
             return;
           }
-          const minted = mcpTokens.mint(owner, String(body.label ?? ""));
+          const minted = mcpTokens.mint(owner, String(body.label ?? ""), new Date(), caller.userId === undefined ? "person" : "sign-in");
           log(`mcp token issued to ${owner} (${minted.label})`);
           send(res, 200, { token: minted.token, label: minted.label, createdAt: minted.createdAt });
           return;
@@ -6044,6 +6043,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ...(members !== undefined ? { members } : {}),
             });
             if (members !== undefined) {
+              openDesktops.recheck(); // who may stay on its open desktops changed too (INV-2071)
               log(`box ${name} is now for ${members === "everyone" ? "everyone" : members.map(id => principals.list().find(person => person.id === id)?.name ?? id).join(", ")}`);
             }
             log(`box ${name} moved to ${result.box.endpoint?.baseUrl ?? "(no endpoint)"}: ${result.detail}`);
@@ -6062,7 +6062,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (target && mayReadBox(target.id) && personalBoxes.manages(target.id)) { send(res, 409, apiError("personal-box-remove")); return; }
             if (refusedRole("admin")) return;
             if (target && personalBoxes.manages(target.id)) { send(res, 409, apiError("personal-box-remove")); return; }
-            const entry = orchestrator.detachBox(String(body.name ?? ""));
+            const entry = orchestrator.detachBox(String(body.name ?? "")); openDesktops.recheck();
             log(`detached box ${entry.name} (${entry.id})`);
             send(res, 200, { ok: true, box: entry });
           } catch (error) {
@@ -6624,36 +6624,29 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * everything after it is framed RFB rather than HTTP.
    */
   server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
-    const raw = req.url ?? "";
-    const [pathname, query] = raw.split("?");
+    const [pathname, query] = (req.url ?? "").split("?");
     // The RFB socket carries the screen, so it needs the same check. A browser sends the
-    // cookie on an upgrade but cannot set a header, which is why the cookie exists.
-    const upgradeDecision = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie });
-    if (!upgradeDecision.allow) {
-      clientSocket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    // cookie on an upgrade but cannot set a header, which is why the cookie exists. Asked again
+    // whenever who may do what changes, because the socket outlives the moment it was let in (INV-2071).
+    const admitted = (): number | NonNullable<ReturnType<typeof desktopRouteOf>> => {
+      const decision = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie });
+      if (!decision.allow) return 401;
+      // And the role, not only the token: this socket is bidirectional, so authorising it as though
+      // it only carried pixels is what let someone who may only watch drive the desktop instead.
+      const gateway = callerOf(req.headers, decision.allow, trustsGatewayIdentity());
+      const route = desktopRouteOf(pathname ?? "", query ? `?${query}` : "", mayDrive(gateway));
+      if (!route) return 404;
+      const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
+      principals.reload();
+      const targetBox = registry.boxById(route.boxId ?? registry.box.id);
+      return !targetBox || (identity !== undefined && !mayEnterBox(targetBox, principals.resolve(identity).id)) ? 403 : route;
+    };
+    const desktop = admitted();
+    if (typeof desktop === "number") {
+      if (desktop === 404) clientSocket.destroy(); else clientSocket.end(`HTTP/1.1 ${desktop === 401 ? "401 Unauthorized" : "403 Forbidden"}\r\n\r\n`);
       return;
     }
-
-    // And the role, not only the token: this socket is bidirectional, so authorising it as though
-    // it only carried pixels is what let someone who may only watch drive the desktop instead.
-    const desktop = desktopRouteOf(
-      pathname ?? "",
-      query ? `?${query}` : "",
-      mayDrive(callerOf(req.headers, upgradeDecision.allow, trustsGatewayIdentity()))
-    );
-
-    if (!desktop) {
-      clientSocket.destroy();
-      return;
-    }
-
-    const gateway = callerOf(req.headers, upgradeDecision.allow, trustsGatewayIdentity());
-    const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
-    principals.reload();
-    const targetBox = registry.boxById(desktop.boxId ?? registry.box.id);
-    if (!targetBox || (identity !== undefined && !mayEnterBox(targetBox, principals.resolve(identity).id))) {
-      clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return;
-    }
+    openDesktops.hold(clientSocket, () => { const again = admitted(); return typeof again !== "number" && again.upstream === desktop.upstream; });
 
     void (async () => {
       // noVNC reconnects its socket without reloading the HTML after a box restart.
@@ -6720,7 +6713,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     upstream.setTimeout(DESKTOP_UPSTREAM_TIMEOUT_MS, drop);
     upstream.once("data", () => upstream.setTimeout(0));
     upstream.on("error", drop);
-    clientSocket.on("error", drop);
+    // On close too: a socket closed for its holder (INV-2071) is destroyed, and a destroyed source ends no pipe.
+    clientSocket.on("error", drop).on("close", drop);
   }
 
   const host = options.host ?? "127.0.0.1";

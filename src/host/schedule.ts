@@ -39,7 +39,7 @@ import { mkdirSync } from "node:fs";
 import { appendLine } from "./jsonl.ts"; import { DOCKER_WORK } from "./box-paths.ts";
 import type { DeliverWhen } from "./routine-resolve.ts";
 import type { RunResult } from "./run-result.ts";
-import { readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
+import { NOT_STARTED, readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
 import { upcomingFires } from "./schedule-time.ts";
 import { classifyFailure } from "./failure-taxonomy.ts";
 import { IDLE_OWNER, idleDays, idleReason, type IdledRoutine, type IdleOwner } from "./routine-idle.ts";
@@ -237,7 +237,7 @@ export interface SchedulerDeps {
    * Only a waiting webhook needs this: the caller is holding an HTTP connection open and the
    * point of waiting is to hand back the answer. Everything else fires and forgets.
    */
-  runAndSay?: (agent: string, prompt: string, toolScope?: readonly string[]) => Promise<string>;
+  runAndSay?: (agent: string, prompt: string, toolScope?: readonly string[]) => Promise<string | { result: "failed"; code: string; reason: string }>;
   /**
    * Starts a turn. Rejecting is fine: the next window is the retry.
    *
@@ -251,7 +251,7 @@ export interface SchedulerDeps {
    * a listener passes no slug, because a listener run is not reconciled, but its results
    * are its own — not one `ad-hoc` history every listener shares.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string, origin?: string) => Promise<void | { result: RunResult; reason?: string }>;
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string, origin?: string) => Promise<void | { result: RunResult; reason?: string; code?: string }>;
   /**
    * Asked before every run (INV-1666): a reason means "not now" — the window is skipped with it and
    * the routine is held until a person resumes it, through the same `skip` / `hold` doors as the
@@ -269,6 +269,8 @@ export interface SchedulerDeps {
    * its prompt so a retro opens with its own previous "next week" rather than a blank.
    */
   priorCommitments?: (slug: string) => string | undefined;
+  /** Why the agent cannot take a routine's turn in its chat now (INV-2036): skipped when due, refused by hand, never a 0-second Done. */
+  busy?: (skill: { slug: string; name: string; deliver?: string }, agent: string) => RoutineReason | undefined;
   /** The work directory of an agent's box, which a run's prompt names (INV-1737); the image's when not given. */
   workDirOf?: (agent: string) => string;
   /** Who a schedule wakes when it names nobody. */
@@ -417,9 +419,10 @@ export class Scheduler {
    * A window that came round and did not run, written down with why (INV-1665). The overlap rule
    * is one reason; a check before the run (INV-1666's credentials) is another through the same door.
    */
-  skip(skill: { slug: string; name: string }, reason: RoutineReason): void {
+  /** `agent`: whose chat the reason is about, so the run list shows it only to whoever may read that agent. */
+  skip(skill: { slug: string; name: string }, reason: RoutineReason, agent?: string): void {
     this.log(`${skill.name}: skipped, ${reason.text}`);
-    this.record(skill.slug, "skipped", { code: reason.code, reason: reason.text });
+    this.record(skill.slug, "skipped", { ...(agent !== undefined ? { agent } : {}), code: reason.code, reason: reason.text });
   }
 
   /** Stops a routine until a person resumes it, with why; the attention list shows it. */
@@ -491,13 +494,13 @@ export class Scheduler {
   private launch(
     skill: { slug: string; name: string; boxId?: string },
     agent: string,
-    start: () => Promise<void | { result: RunResult; reason?: string }>,
+    start: () => Promise<void | { result: RunResult; reason?: string; code?: string }>,
     started: { deliver?: string; manual?: boolean; retry?: number } = {}
   ): Promise<void> {
     if (this.deps.allowed?.(skill) === false) return Promise.resolve();
     this.running.add(skill.slug);
     const startedAt = this.now();
-    let outcome: { result?: RunResult; reason?: string } = {};
+    let outcome: { result?: RunResult; reason?: string; code?: string } = {};
     this.record(skill.slug, "started", { agent, ...started });
     return start()
       .then(result => { if (result) outcome = result; })
@@ -516,18 +519,21 @@ export class Scheduler {
           ...(retrying ? { retrying: retry } : {}),
           agent,
           ...(outcome.result !== undefined ? { result: outcome.result } : {}),
-          ...(outcome.reason !== undefined ? { reason: outcome.reason.slice(0, 300) } : {}),
+          ...(outcome.code !== undefined ? { code: outcome.code } : {}), ...(outcome.reason !== undefined ? { reason: outcome.reason.slice(0, 300) } : {}),
           ms: this.now().getTime() - startedAt.getTime(),
           ...(this.deps.spentSinceAgent !== undefined ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) } : {}),
         });
-        try { this.deps.finished?.(skill, agent, outcome.result, outcome.reason); } catch (error) { this.log(`${skill.name}: could not note the end (${error instanceof Error ? error.message : String(error)})`); }
+        // A turn that never started is not the routine failing: no issue and no Retry, as it is no pause either.
+        if (outcome.code !== NOT_STARTED) {
+          try { this.deps.finished?.(skill, agent, outcome.result, outcome.reason); } catch (error) { this.log(`${skill.name}: could not note the end (${error instanceof Error ? error.message : String(error)})`); }
+        }
         if (retrying) {
           this.log(`${skill.name}: failed on a passing cause; retry ${retry} of ${ROUTINE_RETRIES} in ${routineRetryDelayMs(retry) / 60_000} min`);
           const timer = setTimeout(() => { void this.runNow(skill.slug, retry).then(ran => { if (!ran.ok) { this.retries.delete(skill.slug); this.log(`${skill.name}: retry ${retry} did not start — ${ran.reason}`); } }); }, routineRetryDelayMs(retry));
           timer.unref?.();
           return;
         }
-        const hold = this.holds.noteFinished(skill.slug, outcome.result, outcome.reason, this.now().toISOString());
+        const hold = this.holds.noteFinished(skill.slug, outcome.result, outcome.reason, this.now().toISOString(), true, outcome.code);
         if (hold !== undefined) {
           this.record(skill.slug, "held", { by: hold.by, code: hold.code, reason: hold.reason });
           this.log(`${skill.name}: paused — ${hold.reason}`);
@@ -580,6 +586,9 @@ export class Scheduler {
       const deliver = message.threadKey ?? message.chatKey;
       if (skill.mode === "observe") { this.observe(skill, agent, `run as ${agent} for a message in ${deliver} matching ${skill.match}`); fired.push(skill.slug); continue; }
       if (await this.refusal(skill, agent) !== undefined || this.deps.allowed?.(skill) === false) continue;
+      // Skipped like a due window, never a failure: a chat held by an earlier request must not pause the listener.
+      const busy = this.deps.busy?.({ slug: skill.slug, name: skill.name, deliver }, agent);
+      if (busy !== undefined) { this.skip(skill, busy, agent); continue; }
       this.log(`${skill.name}: fired by a message in ${deliver}`);
       fired.push(skill.slug);
       void this.launch(skill, agent, () => this.deps.run(
@@ -648,6 +657,13 @@ export class Scheduler {
       }
       if (await this.refusal(skill, agent) !== undefined) {
         this.lastRun.set(skill.slug, this.now());
+        continue;
+      }
+      const busy = this.deps.busy?.(skill, agent);
+      if (busy !== undefined) {
+        // On the run list and not held: the next window runs once the chat is free.
+        this.lastRun.set(skill.slug, this.now());
+        this.skip(skill, busy, agent);
         continue;
       }
 
@@ -855,6 +871,9 @@ export class Scheduler {
     const refused = await this.refusal(skill, agent);
     if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
+    // A waiting call runs in the main chat (runAndSay). Its caller holds the routine's secret, not the chat: told only that it is busy.
+    const busy = this.deps.busy?.(options.wait === true && this.deps.runAndSay !== undefined ? { slug: skill.slug, name: skill.name } : skill, agent);
+    if (busy !== undefined) return { ok: false, reason: `${skill.name} did not run: its agent is ${busy.code === "member_paused" ? "paused" : "busy with an earlier request"}; send it again later.` };
 
     this.lastRun.set(slug, this.now());
     this.log(`${skill.name}: fired by webhook`);
@@ -875,7 +894,9 @@ export class Scheduler {
       let failure: string | undefined;
       await this.launch(skill, agent, async () => {
         try {
-          said = await runAndSay(agent, prompt, skill.allowedTools);
+          const got = await runAndSay(agent, prompt, skill.allowedTools);
+          if (typeof got !== "string") { failure = `${skill.name} did not run: its agent is busy with an earlier request; send it again later.`; return got; }
+          said = got;
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
           throw error;
@@ -903,6 +924,8 @@ export class Scheduler {
     const refused = await this.refusal(skill, agent);
     if (this.deps.allowed?.(skill) === false) return { ok: false, reason: "This automation entry was disabled by the operator." };
     if (refused !== undefined) return { ok: false, reason: `${skill.name} did not run and is paused: ${refused.text}` };
+    const busy = this.deps.busy?.(skill, agent);
+    if (busy !== undefined) return { ok: false, reason: `${skill.name} did not run: ${busy.text}` };
 
     this.log(`${skill.name}: firing now, ${retry !== undefined ? `retry ${retry}` : "by hand"}`);
     // By hand is still this routine running (INV-534): same slug, same opening with last
