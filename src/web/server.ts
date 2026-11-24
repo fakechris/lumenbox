@@ -4064,8 +4064,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         if (route === "POST /api/schedules/run") {
           if (refused()) return;
-          const body = await readJson(req);
-          const result = await orchestrator.scheduler.runNow(String(body.slug ?? ""));
+          const slug = String((await readJson(req)).slug ?? ""), entry = (await orchestrator.scheduler.status()).find(row => row.slug === slug);
+          const runner = entry && orchestrator.scheduler.runnerDecision({ slug, runAs: entry.agent, boxId: entry.boxId }).agent; // the agent that owns it, whose box decides (INV-2094)
+          if (entry && callerRole !== "admin" && !(runner ? mayReadAgent(runner) : mayReadBox(entry.boxId ?? registry.box.id))) { send(res, 403, apiError("box-not-yours")); return; }
+          const result = await orchestrator.scheduler.runNow(slug);
           if (!result.ok) {
             send(res, 400, { error: result.reason });
             return;
