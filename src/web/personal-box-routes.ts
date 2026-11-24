@@ -133,8 +133,10 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
       boxes.rename(person.id, body.id as string, body.name as string);
       send(200, current(person, await listed(person.id))); return;
     }
+    // Only the caller's own computers, for every removal: a computer kept when its owner was removed is not on their
+    // list any more, and is the admin's to dispose of even if they come back (INV-2099).
+    if (action === "remove" && !boxes.list(person.id).some(box => box.id === body.id)) { send(404, error("personal-box-not-found")); return; }
     if (action === "remove" && body.deleteData === true && (body.deleteAgents === true || body.agentIds !== undefined)) {
-      if (!boxes.list(person.id).some(box => box.id === body.id)) { send(404, error("personal-box-not-found")); return; }
       confirmIds(body.agentIds, agentInfo(body.id as string).agentIds, changedAgents);
     }
     const result = action === "create"
