@@ -9,10 +9,12 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
+import { saveConfig } from "../config.ts";
 import { Principals } from "../host/principals.ts";
 import { inviteMinutes, leavesNoAdmin, peopleRoute } from "./people-routes.ts";
 import { sessionCookie, sessionKey } from "./session.ts";
 import { InviteStore } from "./invite-store.ts";
+import { SESSION_MAX_AGE_SECONDS } from "./session.ts";
 
 const PORT = 7964;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -29,13 +31,20 @@ const login = async (code: string, name: string) => {
   return response.headers.getSetCookie().map(cookie => cookie.split(";")[0]).join("; ");
 };
 
-test("the roster keeps an admin; a code says who it is for; a person's own code brings back the same person", async () => {
+test("the roster keeps an admin; a code says who it is for; a person's own code brings back the same person", async t => {
   const home = mkdtempSync(join(tmpdir(), "agentbox-people-"));
   const previous = process.env.AGENTBOX_HOME;
+  const previousPublicUrl = process.env.AGENTBOX_PUBLIC_URL;
   process.env.AGENTBOX_HOME = home;
+  process.env.AGENTBOX_PUBLIC_URL = "https://people.example";
   let stop: (() => void) | undefined;
   try {
-    stop = await startWebServer({ port: PORT, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {} });
+    stop = await startWebServer({
+      port: PORT, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {},
+      loginFetch: async input => String(input).endsWith("oauth/token")
+        ? Response.json({ access_token: "fixture" })
+        : Response.json({ code: 0, data: { open_id: "ou_ada", name: "Ada" } }),
+    });
 
     // INV-2056: the note and the chosen lifetime travel with the code, and the live list shows both.
     const before = Date.now();
@@ -49,6 +58,7 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const forBob = (await (await post("/api/channels/invite", { role: "viewer" })).json()) as Code;
     assert.ok(forBob.expiresAt <= Date.now() + 15 * 60_000, "no lifetime asked for is the fifteen minutes it always was");
 
+    const beforeAdaLogin = Date.now();
     const adaCookie = await login(forAda.code, "Ada");
     const bobCookie = await login(forBob.code, "Bob");
     const bobHeaders = { "content-type": "application/json", cookie: bobCookie };
@@ -57,6 +67,10 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     // INV-2054: each row says how the person signs in, when they last did something, and their boxes.
     let rows = (await people()).people;
     const ada = rows.find(row => row.name === "Ada")!, bob = rows.find(row => row.name === "Bob")!;
+    const adaIdentity = ada.identities[0]!;
+    const adaExpiry = new Principals().browserSignInExpiresAt(ada.id, adaIdentity);
+    const sessionLifetime = SESSION_MAX_AGE_SECONDS * 1_000;
+    assert.ok(adaExpiry !== undefined && adaExpiry >= beforeAdaLogin + sessionLifetime && adaExpiry <= Date.now() + sessionLifetime);
     assert.deepEqual(bob.doors.map(door => door.door), ["web"]);
     assert.equal(bob.lastActive, undefined);
     assert.deepEqual(Object.keys(bob.boxes).sort(), ["held", "quota"]);
@@ -151,6 +165,48 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.ok(!(await people()).invites.some(invite => invite.code === pending.code), "his own codes go with him");
     assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 401);
     assert.equal((await mcp()).status, 401, "and out of the side door");
+
+    t.mock.timers.enable({ apis: ["Date"], now: adaExpiry });
+    const legacyIdentity = "web:0123456789ab";
+    roster.reload();
+    roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, legacyIdentity] } : person));
+    const renewedAda = (await (await post("/api/channels/invite", { principalId: ada.id })).json()) as Code;
+    const freshCookie = await login(renewedAda.code, "Ada after expiry");
+    const afterExpiry = await (await fetch(`${BASE}/api/channels`, { headers: ui })).json() as typeof classicRoster;
+    const renewed = afterExpiry.principals.find(person => person.id === ada.id)!;
+    const [freshIdentity] = renewed.usableSignIns;
+    assert.ok(freshIdentity && freshIdentity !== adaIdentity && freshIdentity !== legacyIdentity);
+    assert.deepEqual(renewed.usableSignIns, [freshIdentity], "neither expired nor undated browser links are usable backups (INV-2090)");
+    assert.deepEqual(renewed.retiredSignIns, [adaIdentity]);
+    const freshHeaders = { ...ui, authorization: "", cookie: freshCookie };
+    const revokeFresh = await post(revoke, { principalId: ada.id, identity: freshIdentity }, freshHeaders);
+    assert.equal(revokeFresh.status, 409);
+    assert.equal((await revokeFresh.json()).code, "sign-in-last-admin");
+    assert.equal((await post(revoke, { principalId: ada.id, identity: adaIdentity }, freshHeaders)).status, 200);
+
+    assert.equal((await post("/api/channels/records", { id: "web", type: "feishu" })).status, 200);
+    saveConfig({ env: { WEB_APP_ID: "fixture-app", WEB_APP_SECRET: "fixture-secret" } });
+    const feishuIdentity = "web:ou_ada";
+    roster.reload();
+    const saveAdaLinks = (...identities: string[]) => post("/api/principals", {
+      principals: roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, ...identities] } : person),
+    });
+    assert.equal((await saveAdaLinks("web", "web:")).status, 200);
+    const incompleteBackup = await post(revoke, { principalId: ada.id, identity: freshIdentity }, freshHeaders);
+    assert.equal(incompleteBackup.status, 409);
+    assert.equal((await incompleteBackup.json()).code, "sign-in-last-admin");
+    assert.equal((await saveAdaLinks("web", "web:", feishuIdentity)).status, 200);
+    const begin = await fetch(`${BASE}/auth/web`, { redirect: "manual" });
+    assert.equal(begin.status, 302);
+    const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
+    const callback = await fetch(`${BASE}/auth/web/callback?state=${state}&code=fixture`, { redirect: "manual" });
+    assert.equal(callback.status, 302, await callback.clone().text());
+    const feishuHeaders = { "content-type": "application/json", cookie: callback.headers.getSetCookie()[0]!.split(";")[0]! };
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: feishuHeaders })).status, 200);
+    const withFeishu = await (await fetch(`${BASE}/api/channels`, { headers: ui })).json() as typeof classicRoster;
+    assert.deepEqual(withFeishu.principals.find(person => person.id === ada.id)?.usableSignIns, [freshIdentity, feishuIdentity]);
+    assert.equal((await post(revoke, { principalId: ada.id, identity: freshIdentity }, feishuHeaders)).status, 200);
+
     roster.reload();
     roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [oldFeishu] } : person));
     assert.deepEqual((await people()).people.find(row => row.id === ada.id)?.identities, [oldFeishu]);
@@ -167,6 +223,8 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;
     else process.env.AGENTBOX_HOME = previous;
+    if (previousPublicUrl === undefined) delete process.env.AGENTBOX_PUBLIC_URL;
+    else process.env.AGENTBOX_PUBLIC_URL = previousPublicUrl;
     rmSync(home, { recursive: true, force: true });
   }
 });

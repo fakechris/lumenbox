@@ -111,3 +111,7 @@ export function sessionCookie(identity: string, key: string, epoch = 0, secure =
 export function newWebIdentity(): string {
   return `web:${randomBytes(6).toString("hex")}`;
 }
+
+export function isInviteBrowserIdentity(identity: string): boolean {
+  return /^web:[0-9a-f]{12}$/.test(identity);
+}
