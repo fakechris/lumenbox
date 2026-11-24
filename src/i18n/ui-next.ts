@@ -234,6 +234,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.desk.copy": ["取回它的剪贴板", "Fetch its clipboard"],
   "ui.next.desk.pasted": ["已放进它的剪贴板，在桌面里粘贴即可", "It is on its clipboard; paste in the desktop"],
   "ui.next.thread.more": ["这个对话", "This conversation"],
+  "ui.next.thread.agent": ["这个 agent 的设置", "Settings for this agent"],
   "ui.next.thread.find": ["在对话里查找", "Find in this conversation"],
   "ui.next.thread.findPlaceholder": ["要找的话…", "Words to look for…"],
   "ui.next.thread.found": ["{n} 条", "{n} found"],

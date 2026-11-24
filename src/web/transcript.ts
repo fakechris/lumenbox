@@ -345,6 +345,13 @@ export function toDisplayEntries(
         const messages = parseWakePrompt(text, knownNames) ?? heard.flatMap(row => row.speaker.by === "teammate" ? [{ from: row.speaker.from, priority: false, text }] : []);
         push({ kind: "peer", messages, ...heardAt(raw) });
       } else {
+        // The harness's own cue for a first turn or a template setup is no brief anybody wrote (INV-2061): a quiet row,
+        // and what the agent says after it is said to the person, as it was asked to.
+        if (by("routine") && entryChannel(raw as HistoryEntry) === "cue") {
+          owedOpening = true; background = false;
+          push({ kind: "trigger", label: triggerOf(text, false) ?? "first run", provenance: "host", text, ...stamp(raw) });
+          continue;
+        }
         // A routine a person set opens a request; the host's own notes belong to one only when it stood behind them.
         background = by("routine") ? false : !heard.some(row => row.asked);
         if (by("routine")) { owedOpening = true; push({ kind: "text", role: "user", text, source: "routine", ...stamp(raw) }); continue; } // the routine's brief is the request

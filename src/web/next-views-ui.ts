@@ -243,6 +243,7 @@ function renderView(view) {
   renderScreen();
   renderThreadTools(0);
   if (next.view === "chat") { renderChat(view); return; }
+  $("view-title").title = "";
   $("view-title").textContent = t(next.view === "system" ? "ui.next.side.system" : next.view === "boxes" ? "ui.next.side.boxes2" : next.view === "settings" || next.view === "auto" ? "ui.next.side." + next.view : "ui.next.nav." + next.view);
   $("view-hint").textContent = next.view === "settings" && !canOperateInstallation() ? "" : t("ui.next." + next.view + ".hint");
   if (next.view === "inbox") renderInbox(view);
@@ -268,8 +269,10 @@ function refresh() {
     (got[0].agents || []).forEach(function (agent) { next.agents[agent.id] = agent; });
     next.mine = got[1].mine || [];
     next.rows = got[2].tasks || [];
-    // An agent named in the address decides which computer is shown.
-    if (chat.agentId && next.agents[chat.agentId] && !chat.box) chat.box = next.agents[chat.agentId].boxId || "";
+    // An agent named in the address, or remembered, decides which computer is shown; one this person can no
+    // longer see is not where they are (INV-2064).
+    if (chat.agentId && !next.agents[chat.agentId]) chat.agentId = "";
+    if (chat.agentId && next.agents[chat.agentId]) chat.box = next.agents[chat.agentId].boxId || chat.box;
     render();
     // Work opened from a link was drawn before anybody's name was known.
     if (first && panel.task) renderPanel();

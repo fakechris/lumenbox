@@ -408,6 +408,7 @@ export const NEXT_HTML = `<!doctype html>
     <button class="act" id="screen-toggle" aria-pressed="false" hidden>{{ui.next.screen.toggle}}</button>
     <button class="act" id="thread-more" aria-label="{{ui.next.thread.more}}" title="{{ui.next.thread.more}}" hidden>⋯</button>
     <div class="menu" id="thread-menu" hidden>
+      <button id="thread-agent">{{ui.next.thread.agent}}</button>
       <button id="thread-find">{{ui.next.thread.find}}</button>
       <button id="thread-export">{{ui.next.thread.export}}</button>
       <button id="thread-link">{{ui.next.thread.link}}</button>
