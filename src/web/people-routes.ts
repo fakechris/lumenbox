@@ -86,9 +86,10 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
   }
 
   const body = await deps.readJson();
+  principals.reload();
+  if (deps.refusedAdmin()) return { status: 0, body: undefined };
 
   if (removing || revoking) {
-    principals.reload();
     const roster = principals.list(), person = principals.byId(String(body.principalId ?? ""));
     if (person === undefined) return { status: 404, body: apiError("person-unknown", { person: String(body.principalId ?? "") }) };
     if (revoking) {

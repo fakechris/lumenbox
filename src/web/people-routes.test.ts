@@ -9,7 +9,8 @@ import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
-import { inviteMinutes, leavesNoAdmin } from "./people-routes.ts";
+import { Principals } from "../host/principals.ts";
+import { inviteMinutes, leavesNoAdmin, peopleRoute } from "./people-routes.ts";
 
 const PORT = 7964;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -82,6 +83,23 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const revoke = "/api/principals/revoke-sign-in";
     const laptopIdentity = rows.find(row => row.id === bob.id)!.identities.find(identity => !bob.identities.includes(identity))!;
     const revocation = { principalId: bob.id, identity: laptopIdentity };
+    const roster = new Principals();
+    const originalRoster = roster.list();
+    let authorityChecks = 0;
+    const pendingRevocation = await peopleRoute("POST /api/principals/revoke-sign-in", {
+      principals: roster, invites: new Map(), newCode: () => "", publicUrl: undefined,
+      callerId: () => ada.identities[0], refusedAdmin: () => { authorityChecks++; return roster.roleOf(ada.identities[0]!) !== "admin"; },
+      readJson: async () => {
+        new Principals().save(originalRoster.map(person => person.id === ada.id ? { ...person, role: "viewer" } : person));
+        return revocation;
+      },
+      signOut() {}, planRemoval: () => async () => {}, boxesOf: () => ({ held: 0, quota: null }),
+      lastActive: () => new Map(), doorType: () => undefined, log() {},
+    });
+    assert.equal(authorityChecks, 2);
+    assert.equal(pendingRevocation?.status, 0);
+    assert.equal(new Principals().byId(bob.id)?.identities.length, 2, "a request pending across the demotion cannot revoke a sign-in");
+    roster.save(originalRoster);
     assert.equal((await post(revoke, revocation, bobHeaders)).status, 403);
     assert.equal((await post(revoke, { ...revocation, principalId: ada.id })).status, 404);
     assert.equal((await post(revoke, revocation)).status, 200);

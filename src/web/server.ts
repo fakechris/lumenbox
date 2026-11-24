@@ -3273,7 +3273,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // turned a tenant's owner into a viewer on their first click (2026-09-08, k8s).
       const assertedByGateway =
         gatewayCaller.userId !== undefined && gatewayCaller.role !== undefined;
-      const callerRole: Role = caller.userId === undefined ? "admin" : assertedByGateway ? gatewayCaller.role! : principals.roleOf(caller.userId);
+      const currentCallerRole = (): Role => caller.userId === undefined ? "admin" : assertedByGateway ? gatewayCaller.role! : principals.roleOf(caller.userId);
+      const callerRole = currentCallerRole();
 
       const refused = (agentId?: string): boolean => {
         // Whoever the session says this is, their authority is the roster's answer —
@@ -3337,11 +3338,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
       };
 
-      const refusedRole = (need: Role): boolean => {
+      const refusedRole = (need: Role, role = callerRole): boolean => {
         // One vocabulary (INV-537): the gateway's words were translated in `callerOf`, so
         // what arrives here is already `viewer | driver | admin` — or nothing, which is the
         // operator holding the installation's own credential.
-        const role = callerRole;
         if (roleAtLeast(role, need)) return false;
         send(res, 403, {
           ...apiError("role-needed", { need, role }),
@@ -4746,7 +4746,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         // The People list, removing a person, and invitation codes: people-routes.ts (INV-2053, INV-2054, INV-2056, INV-2057).
-        const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req), signOut: id => epochs.bump(id),
+        const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req), signOut: id => epochs.bump(id),
           planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, checkBoxResidents, boxResidents),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });
