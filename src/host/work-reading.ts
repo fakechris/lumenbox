@@ -3,6 +3,7 @@ import type { Task } from "./tasks.ts";
 import { taskStage, type StageWorld } from "./task-stage.ts";
 import type { CheckSnapshot } from "./result-check-policy.ts";
 import { evidenceDigest, type VerificationRecord } from "./review-dispatch.ts";
+import { MODEL_AUTH_REJECTED } from "../agents/work-attention.ts";
 
 export type WorkSource = "user" | "collaboration" | "internal" | "unknown";
 export interface WorkReference {
@@ -107,8 +108,8 @@ export function workReading(
   const references = world.references ?? [];
   const root = task.workRoot?.state,
     ending =
-      root?.reason === "failed"
-        ? "failed"
+      root?.reason === "failed" || root?.reason === MODEL_AUTH_REJECTED
+        ? root.reason
         : root?.reason === "empty_output"
           ? world.stage.questionPending ? "confirmation" : "empty_output"
           : undefined,

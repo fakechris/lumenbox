@@ -35,6 +35,7 @@ export interface CancelledWork extends WorkStamp {
   resources: StopResource[];
 }
 export type WorkWait = "queue" | "interrupted" | "focus" | "capability" | "confirmation" | "dependency" | "plan" | "execution";
+export const MODEL_AUTH_REJECTED = "model_auth_rejected";
 export interface CurrentWork extends WorkStamp {
   wait?: WorkWait;
   unresolved?: true;

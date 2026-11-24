@@ -91,6 +91,8 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.panel.process": ["过程", "Process"],
   "ui.next.panel.asked": ["你交代的", "What you asked"],
   "ui.next.panel.noResult": ["没有交付文件，也没有留下说明。", "No file was delivered and no report was left."],
+  "ui.next.panel.modelAuthAdmin": ["在设置中检查并测试模型密钥，然后重新发送你的请求。", "Check and test the model key in Settings, then send your request again."],
+  "ui.next.panel.modelAuthMember": ["请联系管理员检查模型密钥。修复后，再重新发送你的请求。", "Ask an administrator to check the model key. Once it’s fixed, send your request again."],
   "ui.next.panel.changesPlaceholder": ["要改什么？", "What should change?"],
   "ui.next.panel.stopNote": ["停止后不会再自动继续。已经发生的外部变化不会撤销。", "Once stopped it will not continue on its own. What already happened outside is not undone."],
   "ui.next.panel.review": ["结果已交付，这件事需要你看一眼：", "A result was delivered, and it needs your look:"],

@@ -98,12 +98,16 @@ function fromFields(error: unknown, seen: Set<unknown>): FailureCategory | undef
   return fromFields(record.cause, seen);
 }
 
+export function classifyStructuredFailureOf(error: unknown): FailureCategory | undefined {
+  return fromFields(error, new Set());
+}
+
 /**
  * Classify an error of any shape: fields first, text second. A string has only text.
  */
 export function classifyFailureOf(error: unknown): FailureCategory {
   if (typeof error === "string") return classifyFailure(error);
-  const structured = fromFields(error, new Set());
+  const structured = classifyStructuredFailureOf(error);
   if (structured !== undefined) return structured;
   const message = error instanceof Error ? error.message : String(error);
   return classifyFailure(message);
