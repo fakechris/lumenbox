@@ -233,7 +233,7 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { quietWiring } from "./quiet-wiring.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
 import { SessionEpochs } from "./session-epochs.ts";
-import { leavesNoAdmin, peopleRoute, type PendingInvite } from "./people-routes.ts";
+import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
 import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
@@ -817,9 +817,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   // Letting somebody in is one click, not an id copied around. A stranger's message
   // records a knock; the settings dialog approves it with one button, or the owner
-  // hands out a short-lived invite code the person redeems in the chat itself.
-  // In memory on purpose: a knock lost to a restart costs the person one more
-  // message, and a code that did not outlive the process is a *property* of a code.
+  // hands out an invite code the person redeems in the chat itself. Knocks are in
+  // memory on purpose: one lost to a restart costs the person one more message. Codes
+  // are kept as hashes, because a week-long code must outlive a restart (INV-2082, invite-store.ts).
   // Side-door tokens, one per person per client, kept across restarts as hashes (INV-1520, mcp-tokens.ts).
   const mcpTokens = new McpTokenStore(join(agentboxHome(), "mcp-tokens.json"), line => log(line));
 
@@ -829,11 +829,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   >();
   /**
    * Sign-ins in flight through a Feishu door (docs: 网页应用免登). Keyed by the state
-   * nonce; in memory like the invite codes, and for the same reason — a dance that
+   * nonce; in memory like the knocks, and for the same reason — a dance that
    * does not survive a restart costs the person one more click.
    */
   const oauthStates = new Map<string, { channelId: string; next: string; at: number; appId: string; incarnation: number; bootstrapCode?: string }>();
-  const invites = new Map<string, PendingInvite>();
+  const invites = new InviteStore(join(agentboxHome(), "invites.json"), line => log(line));
   const newInviteCode = (): string => {
     // Unambiguous alphabet — no 0/O, 1/I/L — because this travels by voice and by
     // hand. Six characters of 31 ≈ 10^9, plenty for 15 minutes and one use.
@@ -4580,9 +4580,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         if (route === "GET /api/channels") {
           if (refusedRole("admin")) return;
-          for (const [code, invite] of invites) {
-            if (invite.expiresAt < Date.now()) invites.delete(code);
-          }
+          invites.dropWhere(invite => invite.expiresAt < Date.now());
           send(res, 200, {
             bootstrapPending: caller.userId === undefined && bootstrapPending(),
             feishuCallbackTemplate: feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID"),
@@ -4605,12 +4603,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               .map(record => ({ id: record.id, name: record.profile.name })),
             principals: principals.list(), installation: principals.installation(),
             knocks: [...knocks.values()],
-            invites: [...invites.entries()].map(([code, invite]) => ({
-              code,
-              role: invite.role,
-              principalId: invite.principalId,
-              expiresAt: invite.expiresAt,
-            })),
+            invites: invites.list().map(({ code, role, principalId, expiresAt }) => ({ code, role, principalId, expiresAt })),
           });
           return;
         }
@@ -4774,7 +4767,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        // The People list, removing a person, and invitation codes: people-routes.ts (INV-2053, INV-2054, INV-2056, INV-2057).
+        // The People list, removing or signing out a person, and invitation codes: people-routes.ts (INV-2053, INV-2054, INV-2056, INV-2057, INV-2082).
         const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req), signOut: id => epochs.bump(id),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });
@@ -4858,26 +4851,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           principals.save(roster);
           log(`principals roster updated (${roster.length} people)`);
           send(res, 200, { principals: principals.list() });
-          return;
-        }
-
-        // Signing one person out of everywhere (INV-537): their generation moves on, and
-        // every browser and tab they left signed in stops being served on its next
-        // request. Nobody else is touched — which is the difference between this and
-        // rotating the token, the only way to do it before, and therefore the reason it
-        // was never done.
-        if (route === "POST /api/principals/logout") {
-          if (refusedRole("admin")) return;
-          const body = await readJson(req);
-          const principalId = String(body.principalId ?? "").trim();
-          const person = principals.list().find(entry => entry.id === principalId);
-          if (person === undefined) {
-            send(res, 404, apiError("person-unknown", { person: principalId }));
-            return;
-          }
-          const epoch = epochs.bump(person.id);
-          log(`signed out everywhere: ${person.name} (generation ${epoch})`);
-          send(res, 200, { name: person.name, epoch });
           return;
         }
 

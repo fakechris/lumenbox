@@ -185,7 +185,7 @@ function peopleBlock() {
   if (waiting.length > 0) {
     box.appendChild(el("h3", "group", t("ui.next.team.pending")));
     waiting.forEach(function (invite) {
-      box.appendChild(el("div", "fact", t("ui.next.team.pendingLine", { code: invite.code, who: inviteWho(invite), when: untilText(invite.expiresAt) })));
+      box.appendChild(el("div", "fact", t("ui.next.team.pendingLine", { code: invite.code || "••••••", who: inviteWho(invite), when: untilText(invite.expiresAt) })));
     });
   }
   return box;
