@@ -80,6 +80,9 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.equal(box.connected, false);
   assert.ok(box.detail);
   assert.equal(personal.data.boxes[0].connectionError, box.detail);
+  const recovery = await request("/api/personal-boxes/admin", "web:operator", { id: box.id, action: "recover" }, "owner");
+  assert.equal(recovery.status, 409, "admin connection retry must not report success while the computer remains unreachable");
+  assert.equal(recovery.data.error, box.detail);
   const state = await request("/api/state", "web:alice");
   for (const [data, own] of [[state.data, state.data.box.own], [computers.data, computers.data.own]]) {
     const shared = data.boxes.find((row: { id: string }) => row.id === own);

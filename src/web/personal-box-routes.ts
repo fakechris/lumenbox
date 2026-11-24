@@ -92,8 +92,12 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
       } else if (body.action === "recover") {
         if (!principals.byId(box.owner) && !box.pendingRemoval) throw new Error("Assign this computer to a team member first.");
         const result = await boxes.retry(box.owner, box.id, undefined, true);
-        if (result.status === "ready") await deps.reconnect(box.id);
-        else if (result.error) throw new Error(result.error);
+        if (result.status === "ready") {
+          await deps.reconnect(box.id);
+          const connections = box.status === "ready" ? deps.connections() : undefined;
+          const connection = connections?.find(row => row.id === box.id);
+          if (connections && !connection?.connected) throw new Error(connection?.detail || "Personal computer is unreachable.");
+        } else if (result.error) throw new Error(result.error);
       } else if (body.action === "keep" || body.action === "delete") {
         if (body.action === "delete") confirmIds(body.agentIds, agentInfo(box.id).agentIds, changedAgents);
         const result = await boxes.remove(box.owner, box.id, body.action === "delete", { deleteAgents: body.deleteAgents === true });
