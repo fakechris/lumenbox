@@ -6,7 +6,7 @@
  * to do, who does it, and what starts it. The routes are the classic page's.
  */
 export const NEXT_AUTO_JS = `
-var auto = { creating: false, createdSlug: "", open: "", runs: null, trigger: "schedule", read: 0 };
+var auto = { creating: false, createdSlug: "", open: "", runs: null, trigger: "schedule", read: 0, poll: 0 };
 // minute hour day month weekday, as the scheduler reads it
 var AUTO_TIMES = [["hourly", "0 * * * *"], ["daily", "0 9 * * *"], ["weekdays", "0 9 * * 1-5"], ["monday", "0 9 * * 1"]];
 
@@ -57,12 +57,26 @@ function autoRuns(routine) {
     getJson("/api/schedules/runs?slug=" + encodeURIComponent(routine.slug) + "&limit=10").then(function (got) { if (auto.open === routine.slug) { auto.runs = got; render(); } }, failed);
     return box;
   }
+  // An open history follows the runs as they land: sooner while one is running (INV-2036).
+  var busy = (auto.runs.runs || []).some(function (run) { return run.outcome === "running"; });
+  clearTimeout(auto.poll);
+  auto.poll = setTimeout(function () {
+    if (auto.open !== routine.slug || next.view !== "auto" || auto.creating) return;
+    getJson("/api/schedules/runs?slug=" + encodeURIComponent(routine.slug) + "&limit=10").then(function (got) { if (auto.open === routine.slug && next.view === "auto" && !auto.creating) { auto.runs = got; render(); } }, function () {});
+  }, busy ? 3000 : 15000);
   if (auto.runs.hold) box.appendChild(el("p", "why", auto.runs.hold.code === "idle_owner" ? t("ui.next.auto.heldIdle") : t("ui.next.auto.held", { reason: auto.runs.hold.reason || "" })));
   if (!(auto.runs.runs || []).length) box.appendChild(el("p", "why", t("ui.next.auto.noRuns")));
   (auto.runs.runs || []).forEach(function (run) {
     var line = el("div", "fact"), known = MSG["ui.next.auto.outcome." + run.outcome];
     line.appendChild(el("span", "why", new Date(run.at).toLocaleString() + (run.manual ? " · " + t("ui.next.auto.byHand") : "")));
     line.appendChild(el("span", "", (known ? t("ui.next.auto.outcome." + run.outcome) : run.outcome) + (run.reason ? " · " + run.reason : "")));
+    // What the run cost and where it is (INV-2036): a run that did nothing shows it, not just "Done".
+    if (run.ms != null) line.appendChild(el("span", "why", t("ui.next.auto.took", { s: Math.round(run.ms / 1000), tokens: (run.tokens || 0).toLocaleString() })));
+    if (run.agentId && (run.outcome === "running" || run.tokens > 0)) { // a run that never started has no chat to open
+      var go = el("button", "act", t("ui.next.auto.openRun", { name: run.agentName || "" }));
+      go.addEventListener("click", function () { chat.loadedFor = ""; openChat(run.agentId); }); // read afresh: the run's turn is newer than a thread already open
+      line.appendChild(go);
+    }
     box.appendChild(line);
   });
   return box;

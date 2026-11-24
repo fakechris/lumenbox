@@ -22,6 +22,8 @@ export function personalBoxConfig(record: PersonalBoxRecord, token?: string): Bo
   };
 }
 export class PersonalDocker implements PersonalBoxDriver {
+  get image(): string { return defaultBoxImage(); }
+
   async start(record: PersonalBoxRecord): Promise<string> {
     const result = await new BoxManager(personalBoxConfig(record)).up();
     if (!result.status.boxdUrl) throw new Error("Personal box has no endpoint");

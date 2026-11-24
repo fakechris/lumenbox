@@ -115,7 +115,7 @@ test("removing a person or signing them out closes the desktops they have open; 
     assert.notEqual(started.result?.isError, true, String(started.result?.content?.[0]?.text));
     assert.match(started.result?.content?.[0]?.text ?? "", /^t\d+/, "a goal on the box she is a member of");
 
-    assert.equal((await post("/api/principals", { principals: [chris, bob] })).status, 200);
+    assert.equal((await post("/api/principals/remove", { principalId: "cara" })).status, 200);
     await within(caraScreen.closed, "Cara's desktop after she was removed");
     assert.equal((await startGoal("second")).status, 401, "and her token went with her");
   } finally {

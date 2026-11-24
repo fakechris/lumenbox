@@ -202,7 +202,7 @@ import { connectorSatisfied } from "../host/mcp-connectors.ts";
 import { adminRecipients } from "../host/upgrade.ts";
 import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { outboxRoute } from "./outbox-routes.ts"; import { OUTBOX_JS } from "./outbox-ui.ts"; import { chatTarget } from "../host/outbox-drafts.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { orgKnowledgeRoute } from "./org-knowledge-routes.ts"; import { orgCorrectionRoute } from "./org-correction-routes.ts"; import { ORG_CORRECTION_JS } from "./org-correction-ui.ts"; import { ORG_KNOWLEDGE_JS } from "./org-knowledge-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { longWorkRoute } from "./long-work-routes.ts"; import { taskArchiveRoute } from "./task-archive-routes.ts"; import { runLaterWords } from "../host/run-later-words.ts"; import type { RunLaterFinding } from "../host/run-later-paths.ts";
 import { agentPauseRoute } from "./agent-pause-routes.ts"; import { reminderRoute } from "./reminder-routes.ts"; import { historySearchRoute } from "./history-search-routes.ts"; import { installationHeld } from "../host/search-history-tool.ts"; import { exceptionRetryDeps, exceptionRoute, noteDelivery } from "./exception-routes.ts"; import { EXCEPTIONS_JS } from "./exceptions-ui.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestAnswerReview } from "../host/answer-review.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts"; import { boxRegisterRoute } from "./box-register-routes.ts"; import { nodeMembersRefusal, nodeOfBox, nodeRoute } from "./node-routes.ts"; import { NODES_JS } from "./nodes-ui.ts"; import { blockerProblem, dependencyView, notReady, parseBlockers } from "../host/task-deps.ts"; import { TASK_DEPS_JS } from "./task-deps-ui.ts";
-import { BootstrapAdmins } from "../host/bootstrap.ts"; import { boxRegistrationModeAt, openRoster, PERSONAL_ONLY_KEY, PersonalInstallationOnly, roleLabel } from "../host/installation.ts"; import { redeemInvite } from "../host/invite-redeem.ts"; import { installationRoute, mergeRoute, routeErrorReply } from "./installation-routes.ts"; import { adoptOperatorNotes, applyPendingMerge, lastActiveByPrincipal, mergePaths } from "../host/self-merge.ts"; import { operatorKey } from "../host/person.ts"; import { INSTALLATION_JS } from "./installation-ui.ts";
+import { BootstrapAdmins } from "../host/bootstrap.ts"; import { boxRegistrationModeAt, openRoster, PERSONAL_ONLY_KEY, PersonalInstallationOnly, roleLabel } from "../host/installation.ts"; import { redeemInvite } from "../host/invite-redeem.ts"; import { installationRoute, mergeRoute, routeErrorReply } from "./installation-routes.ts"; import { adoptOperatorNotes, applyPendingMerge, doorOfIdentity, lastActiveByPrincipal, mergePaths } from "../host/self-merge.ts"; import { operatorKey } from "../host/person.ts"; import { INSTALLATION_JS } from "./installation-ui.ts";
 import { Principals, principalsPath, roleAtLeast, soleAdmin, type Principal, type Role } from "../host/principals.ts";
 import type { MandateWorld } from "../host/mandate.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
@@ -240,6 +240,7 @@ import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
+import { personalBoxRoute, planBoxDispositions } from "./personal-box-routes.ts";
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
@@ -774,6 +775,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // The screens already open, asked again whenever the roster or a sign-in generation changes (INV-2071).
   const openDesktops = new OpenDesktops();
   const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`), changed: () => openDesktops.recheck() });
+  const retiredSignIn = (person: Principal, identity: string): boolean => {
+    const door = doorOfIdentity(identity);
+    return door !== "web" && (!channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity));
+  };
+  const usableSignIns = (person: Principal) => {
+    const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
+    return person.identities.filter(identity =>
+      principals.hasCurrentIdentity(person.id, identity) &&
+      (identity.startsWith("web:") || doors.some(door => identity.startsWith(door.id + ":"))));
+  };
   /** What a task's mandate is checked against now (INV-1457): the principal's role today and the rule set as loaded. */
   const mandateWorld = (): MandateWorld => ({
     mayDrive: id => roleAtLeast(principals.list().find(person => person.id === id)?.role ?? principals.roleOf(id), "driver"),
@@ -785,14 +796,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     principals.list().find(person => person.id === id)?.identities ?? [id], directorySources(), Date.now(), identity => principals.hasCurrentIdentity(id, identity));
 
   let personalBoxesStopping = false;
+  const personalQuota = (owner: string) => personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner));
+  const mayProvision = (owner: string) => {
+    principals.reload();
+    const person = principals.byId(owner);
+    return !personalBoxesStopping && person?.id === owner && person.identities.length > 0 && roleAtLeast(person.role, "driver") && directoryQuotaContext(owner).eligible;
+  };
+  const checkBoxResidents = (target: string | string[], deleting: boolean) => {
+    const ids = typeof target === "string" ? [target] : target;
+    const residents = ids.flatMap(id => registry.agentsIn(id)), busy = new Set(orchestrator.bus.activeAgentIds());
+    if (residents.some(agent => busy.has(agent.id))) throw new Error("Wait for the agents on this computer to finish before stopping it.");
+    if (deleting && residents.length > 0 && residents.length === registry.list().length) throw new Error("Keep at least one agent on another computer before deleting.");
+  };
+  const boxResidents = (id: string) => registry.agentsIn(id).map(agent => ({ id: agent.id, name: agent.profile.name }));
   const personalBoxes = new PersonalBoxes({
     home: join(agentboxHome(), "personal-boxes"), entries: () => registry.listBoxes(),
-    quota: owner => personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)),
-    authorize: owner => {
-      principals.reload();
-      const person = principals.list().find(person => person.id === owner);
-      return !personalBoxesStopping && person !== undefined && person.identities.length > 0 && roleAtLeast(person.role, "driver") && directoryQuotaContext(owner).eligible;
-    },
+    quota: personalQuota, authorize: mayProvision, checkResidents: checkBoxResidents,
+    removeResidents: id => { for (const agent of registry.agentsIn(id)) registry.remove(agent.id, { archive: false }); },
     attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); openDesktops.recheck(); },
     detach: id => { orchestrator.detachBox(id); openDesktops.recheck(); }, residents: id => registry.agentsIn(id).length,
     driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
@@ -3269,7 +3289,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // turned a tenant's owner into a viewer on their first click (2026-09-08, k8s).
       const assertedByGateway =
         gatewayCaller.userId !== undefined && gatewayCaller.role !== undefined;
-      const callerRole: Role = caller.userId === undefined ? "admin" : assertedByGateway ? gatewayCaller.role! : principals.roleOf(caller.userId);
+      const currentCallerRole = (): Role => caller.userId === undefined ? "admin" : assertedByGateway ? gatewayCaller.role! : principals.roleOf(caller.userId);
+      const callerRole = currentCallerRole();
 
       const refused = (agentId?: string): boolean => {
         // Whoever the session says this is, their authority is the roster's answer —
@@ -3333,11 +3354,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
       };
 
-      const refusedRole = (need: Role): boolean => {
+      const refusedRole = (need: Role, role = callerRole): boolean => {
         // One vocabulary (INV-537): the gateway's words were translated in `callerOf`, so
         // what arrives here is already `viewer | driver | admin` — or nothing, which is the
         // operator holding the installation's own credential.
-        const role = callerRole;
         if (roleAtLeast(role, need)) return false;
         send(res, 403, {
           ...apiError("role-needed", { need, role }),
@@ -3720,51 +3740,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           } catch { send(res, 503, apiError("directory-sync-failed")); }
           return;
         }
-        if (route === "GET /api/personal-boxes/admin-cleanup" || route === "POST /api/personal-boxes/admin-cleanup") {
-          principals.reload();
-          const administrator = () => caller.userId === undefined || (principals.isKnown(caller.userId) && principals.roleOf(caller.userId) === "admin");
-          if (!administrator()) { send(res, 403, apiError("cleanup-admin-only")); return; }
-          if (req.method === "POST") {
-            const body = await readJson(req);
-            principals.reload();
-            if (!administrator()) { send(res, 403, apiError("cleanup-admin-only")); return; }
-            if (typeof body.id !== "string" || typeof body.deleteData !== "boolean" || Object.keys(body).some(key => !["id", "deleteData"].includes(key))) { send(res, 400, apiError("cleanup-needs-choice")); return; }
-            try { await personalBoxes.cleanup(body.id, body.deleteData); }
-            catch { send(res, 409, apiError("cleanup-failed")); return; }
-          }
-          send(res, 200, { boxes: personalBoxes.cleanupList() }); return;
-        }
         if (url.pathname === "/api/personal-boxes" || url.pathname.startsWith("/api/personal-boxes/")) {
-          principals.reload();
-          const identity = caller.userId;
-          if (!identity || !principals.isKnown(identity)) { send(res, 403, apiError("personal-box-sign-in")); return; }
-          const view = async (owner: string) => ({ boxes: (await personalBoxes.listWithPodStatus(owner)).map(row => {
-              const box = kubernetes && row.status === "ready" ? orchestrator.boxStatus().find(box => box.id === row.id) : undefined;
-              return kubernetes && row.status === "ready" && !box?.connected ? { ...row, status: "unreachable", connectionError: box?.detail } : row;
-            }),
-            quota: personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)) ?? null,
-            held: personalBoxesOf(personalBoxes.quotaEntries(), owner).length });
-          if (route === "GET /api/personal-boxes") { send(res, 200, await view(principals.resolve(identity).id)); return; }
-          if (!["POST /api/personal-boxes/create", "POST /api/personal-boxes/retry", "POST /api/personal-boxes/remove"].includes(route)) { send(res, 404, apiError("personal-box-action-unknown")); return; }
-          const body = await readJson(req);
-          principals.reload();
-          if (!principals.isKnown(identity) || (!route.endsWith("/remove") && !roleAtLeast(principals.roleOf(identity), "driver"))) { send(res, 403, apiError("personal-box-revoked")); return; }
-          const owner = principals.resolve(identity).id;
-          const stillAuthorized = () => { principals.reload(); return principals.isKnown(identity) && principals.resolve(identity).id === owner && roleAtLeast(principals.roleOf(identity), "driver"); };
-          const allowed = route.endsWith("/create") ? ["requestId"] : route.endsWith("/remove") ? ["id", "deleteData"] : ["id"];
-          if (Object.keys(body).some(key => !allowed.includes(key)) ||
-            (route.endsWith("/create") ? typeof body.requestId !== "string" : typeof body.id !== "string") ||
-            (route.endsWith("/remove") && typeof body.deleteData !== "boolean")) { send(res, 400, apiError("personal-box-params")); return; }
-          try {
-            const record = route.endsWith("/create") ? await personalBoxes.create(owner, body.requestId as string, stillAuthorized)
-              : route.endsWith("/retry") ? await personalBoxes.retry(owner, body.id as string, stillAuthorized)
-                : await personalBoxes.remove(owner, body.id as string, body.deleteData as boolean);
-            if (record.status === "ready") {
-              const entry = registry.boxById(record.id);
-              if (entry) await orchestrator.reconnectBox(entry);
-            }
-            send(res, 200, { ...await view(owner), boxId: record.id });
-          } catch (error) { send(res, 409, { error: error instanceof Error ? error.message : "Personal box operation failed." }); }
+          await personalBoxRoute(route, { boxes: personalBoxes, principals, identity: caller.userId, quota: personalQuota, authorize: mayProvision,
+            connections: () => kubernetes ? orchestrator.boxStatus() : undefined,
+            residents: boxResidents,
+            reconnect: async id => { const entry = registry.boxById(id); if (entry) await orchestrator.reconnectBox(entry); },
+            read: () => readJson(req), send: (status, body) => send(res, status, body), error: apiError });
           return;
         }
         if (route === "GET /api/quotas/self") {
@@ -3808,10 +3789,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             saveConfig({ ...(body.personalBoxQuota !== undefined ? { personalBoxQuota: body.personalBoxQuota as number | null } : {}), personBoxQuotas: patch, departmentBoxQuotas: departmentPatch });
             log(`Personal-box quotas updated by ${caller.userId ?? "operator"}`);
           }
-          const config = loadConfig();
+          const config = loadConfig(), entries = personalBoxes.quotaEntries();
           send(res, 200, { departments: directoryDepartments().map(item => ({ ...item, override: config.departmentBoxQuotas?.[item.key] ?? null })), personalBoxQuota: config.personalBoxQuota ?? null, people: principals.list().map(person => ({
             id: person.id, name: person.name, override: Object.hasOwn(config.personBoxQuotas ?? {}, person.id) ? config.personBoxQuotas![person.id] : null,
-            quota: personalQuotaFor(person.id, config, directoryQuotaContext(person.id)) ?? null, held: personalBoxesOf(registry.listBoxes(), person.id).length,
+            quota: personalQuotaFor(person.id, config, directoryQuotaContext(person.id)) ?? null, held: personalBoxesOf(entries, person.id).length,
           })) });
           return;
         }
@@ -4063,8 +4044,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         if (route === "POST /api/schedules/run") {
           if (refused()) return;
-          const body = await readJson(req);
-          const result = await orchestrator.scheduler.runNow(String(body.slug ?? ""));
+          const slug = String((await readJson(req)).slug ?? ""), entry = (await orchestrator.scheduler.status()).find(row => row.slug === slug);
+          const runner = entry && orchestrator.scheduler.runnerDecision({ slug, runAs: entry.agent, boxId: entry.boxId }).agent; // the agent that owns it, whose box decides (INV-2094)
+          if (entry && callerRole !== "admin" && !(runner ? mayReadAgent(runner) : mayReadBox(entry.boxId ?? registry.box.id))) { send(res, 403, apiError("box-not-yours")); return; }
+          const result = await orchestrator.scheduler.runNow(slug);
           if (!result.ok) {
             send(res, 400, { error: result.reason });
             return;
@@ -4603,7 +4586,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               .list()
               .filter(record => record.profile.hidden !== true)
               .map(record => ({ id: record.id, name: record.profile.name })),
-            principals: principals.list(), installation: principals.installation(),
+            principals: principals.list().map(person => ({
+              ...person, usableSignIns: usableSignIns(person), retiredSignIns: person.identities.filter(identity => retiredSignIn(person, identity)),
+            })), installation: principals.installation(),
             knocks: [...knocks.values()],
             invites: invites.list().map(({ code, role, principalId, expiresAt }) => ({ code, role, principalId, expiresAt })),
           });
@@ -4769,8 +4754,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        // The People list, removing or signing out a person, and invitation codes: people-routes.ts (INV-2053, INV-2054, INV-2056, INV-2057, INV-2082).
-        const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req), signOut: id => epochs.bump(id),
+        // The People list, removing or signing out a person, and invitation codes are handled by people-routes.ts.
+        const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req), signOut: id => epochs.bump(id),
+          usableSignIns, retiredSignIn, planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, checkBoxResidents, boxResidents),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });
         if (peopleReply !== undefined) { if (peopleReply.status !== 0) send(res, peopleReply.status, peopleReply.body); return; }
@@ -4849,7 +4835,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               identities,
             });
           }
-          if (leavesNoAdmin(principals.list(), roster)) { send(res, 409, apiError("last-admin")); return; } // INV-2053
+          principals.reload();
+          const previous = principals.list();
+          if (leavesNoAdmin(previous, roster)) { send(res, 409, apiError("last-admin")); return; } // INV-2053
+          if (previous.some(person => !roster.some(next => next.id === person.id))) {
+            send(res, 409, apiError("principals-use-remove")); return;
+          }
           principals.save(roster);
           log(`principals roster updated (${roster.length} people)`);
           send(res, 200, { principals: principals.list() });
@@ -4984,7 +4975,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...CATALOG_EXPERTS.map(entry => ({ kind: "expert", slug: entry.slug, name: entry.name, title: entry.title, summary: summaryIn(entry, localeOf(req, url)), domain: entry.domain })),
             ...CATALOG_CREWS.map(crew => ({ kind: "crew", slug: crew.slug, name: crew.name, title: "", summary: summaryIn(crew, localeOf(req, url)), domain: crew.domain, members: crew.members })),
           ];
-          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(withBoxBackend) });
+          const labels = personalBoxes.names();
+          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(box => ({ ...withBoxBackend(box), name: labels.get(box.id) ?? box.name })) });
           return;
         }
         // Stamp: one template, one box, one new agent (or a crew's several). Wraps the two
@@ -5888,8 +5880,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // tells them it exists, which is the one thing a members set is for.
           // Registered boxes carry their lifecycle state and version (INV-434).
           const nameOfPrincipal = (id: string): string => principals.list().find(person => person.id === id)?.name ?? id;
+          const labels = personalBoxes.names();
           const boxes = orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(status => {
-            const box = withBoxBackend(status);
+            const label = labels.get(status.id);
+            const backendBox = withBoxBackend(status);
+            const box = label === undefined ? backendBox : { ...backendBox, name: label, personal: true };
             const entry = registry.listBoxes().find(candidate => candidate.id === box.id);
             const membership =
               entry === undefined

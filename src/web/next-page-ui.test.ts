@@ -213,6 +213,39 @@ function pageFunction(name: string, globals: Record<string, unknown>): (...args:
   return vm.runInNewContext(`(${script.slice(start, end)})`, globals) as (...args: unknown[]) => unknown;
 }
 
+test("opening Computers refreshes inventory even if the tab was already open", () => {
+  const next = { view: "work" }, settings = { pane: "team" }, visits: string[] = [];
+  const opened = { dataset: {} };
+  const renderOpenedView = pageFunction("renderOpenedView", {
+    next,
+    render: () => {},
+    refresh: () => visits.push("refresh " + next.view),
+  });
+  const selectView = pageFunction("selectView", { next, settings });
+  const openView = pageFunction("navigateView", {
+    selectView, settings, document: { body: opened }, renderOpenedView,
+    writeViewAddress: (view: string) => visits.push("?view=" + view),
+  });
+  openView("boxes");
+  openView("work");
+  openView("boxes");
+  openView("boxes");
+  assert.deepEqual(visits, ["?view=boxes", "refresh boxes", "?view=work", "?view=boxes", "refresh boxes", "?view=boxes", "refresh boxes"]);
+  assert.equal(settings.pane, "");
+  assert.deepEqual(opened.dataset, { open: "1" });
+});
+
+test("personal computer creation has a request ID on HTTP without randomUUID", () => {
+  let calls = 0;
+  const requestId = pageFunction("personalComputerRequestId", {
+    crypto: { getRandomValues: (bytes: Uint8Array) => bytes.fill(++calls) },
+  });
+  const first = requestId(), second = requestId();
+  assert.match(String(first), /^[A-Za-z0-9_-]{1,100}$/);
+  assert.notEqual(first, second);
+  assert.equal(calls, 2);
+});
+
 test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an owner refusal", async () => {
   const mine = { setup: null as null | { admins: number; bootstrap: boolean }, needsPerson: false, issued: "", tokens: [] };
   const settings = { me: { identity: null as string | null } };
@@ -278,11 +311,13 @@ test("reopening Boxes settings refreshes its status and preserves the settings r
   const boxSet = { config: null as object | null };
   const writes: unknown[][] = [];
   let loads = 0;
+  const next = {};
+  const renderOpenedView = pageFunction("renderOpenedView", { next, render() {} });
   const settings = { pane: "" };
-  const selectView = pageFunction("selectView", { next: {}, settings, settingsPane: (key: unknown) => key });
+  const selectView = pageFunction("selectView", { next, settings, settingsPane: (key: unknown) => key });
   const navigateView = pageFunction("navigateView", {
     selectView, settings, document: { body: { dataset: {} } },
-    writeViewAddress: (...args: unknown[]) => writes.push(args), render() {},
+    writeViewAddress: (...args: unknown[]) => writes.push(args), renderOpenedView,
   });
   const open = pageFunction("openSettingsPane", {
     navigateView, boxSet, loadBoxSet: () => { loads++; }, canDriveAgents: () => true, settingsPanes: () => ["boxes"],

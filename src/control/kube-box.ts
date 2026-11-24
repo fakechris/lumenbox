@@ -121,6 +121,7 @@ export interface KubeBoxLocation {
   running: boolean;
   /** The digest the pod was launched with; undefined when there is no pod. */
   digest?: string;
+  image?: string;
 }
 
 /**
@@ -432,11 +433,14 @@ export class KubeBoxes {
       return { boxdUrl: this.boxdUrlFor(name), uiUrl: this.uiUrlFor(name), running: false };
     }
     const digest = pod?.metadata.annotations?.[DIGEST_ANNOTATION];
+    const containers = pod?.spec.containers;
+    const image = Array.isArray(containers) ? containers[0]?.image : undefined;
     return {
       boxdUrl: this.boxdUrlFor(name),
       uiUrl: this.uiUrlFor(name),
       running: pod?.status?.conditions?.some(c => c.type === "Ready" && c.status === "True") === true,
       ...(digest !== undefined ? { digest } : {}),
+      ...(typeof image === "string" ? { image } : {}),
     };
   }
 

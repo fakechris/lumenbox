@@ -10,6 +10,10 @@ import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
 import { UsageLog } from "../host/usage.ts";
 import { Principals } from "../host/principals.ts";
 import { AgentRegistry } from "../agents/registry.ts";
+import { KubernetesBoxDriver } from "../box/kubernetes-box.ts";
+import { KubeBoxes } from "../control/kube-box.ts";
+import { staticDecision } from "../control/policy.ts";
+import { fakeKubeApi } from "../control/testing/fake-kube.ts";
 
 // These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
 process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
@@ -76,6 +80,9 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.equal(box.connected, false);
   assert.ok(box.detail);
   assert.equal(personal.data.boxes[0].connectionError, box.detail);
+  const recovery = await request("/api/personal-boxes/admin", "web:operator", { id: box.id, action: "recover" }, "owner");
+  assert.equal(recovery.status, 409, "admin connection retry must not report success while the computer remains unreachable");
+  assert.equal(recovery.data.error, box.detail);
   const state = await request("/api/state", "web:alice");
   for (const [data, own] of [[state.data, state.data.box.own], [computers.data, computers.data.own]]) {
     const shared = data.boxes.find((row: { id: string }) => row.id === own);
@@ -260,7 +267,7 @@ test("member provisioning uses canonical owner, rejects injected host options, e
     assert.equal((await request("/api/personal-boxes/retry", { id: box.id }, "web:bob")).status, 409);
     assert.equal(
       (await request("/api/personal-boxes/remove", { id: box.id, deleteData: true }, "web:bob")).status,
-      409,
+      404, // not his: refused at the ownership check every removal now passes (INV-2099)
     );
     assert.equal(
       (await request("/api/boxes/update", { name: box.name, baseUrl: "http://example.invalid" })).status,
@@ -361,6 +368,217 @@ test("member provisioning uses canonical owner, rejects injected host options, e
     });
     assert.equal(cleanup.status, 200);
     assert.deepEqual(((await cleanup.json()) as { boxes: unknown[] }).boxes, []);
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Computers inventories personal Kubernetes boxes and member removal keeps, transfers or deletes their resources explicitly", async () => {
+  const home = mkdtempSync(join(tmpdir(), "personal-lifecycle-http-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  let stop: (() => void) | undefined;
+  try {
+    const people = ["Admin", "Alice", "Bob", "Charlie", "Dana", "Constructor"].map(name => ({
+      id: name.toLowerCase(), name, role: (name === "Admin" ? "admin" : "driver") as "admin" | "driver" | "viewer",
+      identities: [`web:${name.toLowerCase()}`, ...(name === "Bob" ? ["extra:bob", "old:bob"] : [])],
+    }));
+    const principals = new Principals();
+    principals.save(people);
+    const fake = fakeKubeApi(), image = "lumenbox:test-version";
+    const kube = new KubeBoxes({ api: fake.api, namespace: "org", defaultImage: () => image, pollIntervalMs: 1, startTimeoutMs: 50 });
+    const driver = new KubernetesBoxDriver({ boxes: kube, image, decision: staticDecision({}) });
+    let base = "";
+    stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "personal-lifecycle", useBox: false,
+      onLog: () => {}, onReady: url => { base = url; }, personalBoxDriver: driver });
+    const call = async (path: string, body?: unknown, member?: string) => {
+      const response = await fetch(base + path, {
+        method: body === undefined ? "GET" : "POST",
+        headers: { authorization: "Bearer personal-lifecycle", "content-type": "application/json",
+          ...(member ? { "x-agentbox-user": `web:${member}`, "x-agentbox-role": member === "admin" ? "owner" : "member" } : {}) },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      return { status: response.status, data: await response.json() };
+    };
+    assert.equal((await call("/api/quotas", { personalBoxQuota: 1, personBoxQuotas: { alice: 2, bob: 2, charlie: 2 } })).status, 200);
+    const collection = "/api/personal-boxes";
+    const removeMember = (principalId: string, disposition?: unknown, member?: string) =>
+      call("/api/principals/remove", { principalId, disposition }, member);
+    const create = async (person: string, name: string, requestId = "first") => {
+      const result = await call(collection + "/create", { requestId, name }, person);
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      assert.equal(result.data.boxes.find((box: { id: string }) => box.id === result.data.boxId)?.status, "ready");
+      return result.data.boxId as string;
+    };
+    const alice = await create("alice", "Alice’s computer");
+    const bob = await create("bob", "Bob’s computer");
+    const charlie = await create("charlie", "Charlie’s computer");
+    const dana = await create("dana", "Dana’s computer");
+    const bobSecond = await create("bob", "Bob’s second computer", "second");
+    const resource = (id: string) => `personal-${id.slice(4)}`;
+    const registry = new AgentRegistry(join(home, "agents"));
+    const bea = registry.create({ name: "Bea", boxId: bob });
+    const ben = registry.create({ name: "Ben", boxId: bobSecond });
+    principals.save(people.map(person => person.id === "bob" ? { ...person, role: "viewer" } : person));
+    assert.equal((await call(collection + "/remove", { id: bob, deleteData: true, deleteAgents: true }, "bob")).status, 403);
+    assert.ok(registry.has(bea.id));
+    assert.ok(fake.pods.has(resource(bob)));
+    principals.save(people);
+    for (const agent of registry.list()) if (agent.id !== bea.id && agent.id !== ben.id) registry.remove(agent.id, { archive: false });
+    const deleteBobsBoxes = { action: "delete", boxIds: [bob, bobSecond], agentIds: [bea.id, ben.id] };
+    assert.equal((await removeMember("bob", deleteBobsBoxes, "alice")).status, 403);
+    const lastAgents = await removeMember("bob", deleteBobsBoxes, "admin");
+    assert.equal(lastAgents.status, 409);
+    assert.match(lastAgents.data.error, /Keep at least one agent/);
+    assert.ok(registry.has(bea.id) && registry.has(ben.id));
+    assert.ok(fake.pods.has(resource(bob)) && fake.pods.has(resource(bobSecond)));
+    assert.equal((await call(collection, undefined, "bob")).status, 200);
+    const dee = registry.create({ name: "Dee", boxId: dana });
+    assert.equal((await call(collection + "/remove", { id: bobSecond, deleteData: true, deleteAgents: true, agentIds: [ben.id] }, "bob")).status, 200);
+    const renamed = (await call(collection + "/rename", { id: alice, name: "Desk" }, "alice")).data.boxes[0];
+    assert.equal(renamed.name, "Desk");
+    assert.equal(renamed.podStatus, "Running", "pod lookup uses the Kubernetes name after rename");
+    assert.equal((await call(collection + "/rename", { id: bob, name: "Unexpected" }, "alice")).status, 409);
+    const own = (await call(collection + "/panel", undefined, "bob")).data;
+    assert.equal(own.inventory, null);
+    assert.equal(own.mine.held, 1);
+    assert.equal(own.mine.boxes[0].podStatus, "Running");
+    assert.deepEqual(own.mine.boxes[0].agents, ["Bea"]);
+    assert.equal((await call(collection + "/admin", undefined, "bob")).status, 403);
+    const admin = () => call(collection + "/admin", undefined, "admin");
+    const inventory = await admin();
+    assert.equal(inventory.data.boxes.length, 4);
+    const row = (rows: { id: string }[], id: string) => rows.find(item => item.id === id);
+    assert.deepEqual(row(inventory.data.boxes, bob), {
+      id: bob, owner: "bob", ownerName: "Bob", name: "Bob’s computer", status: "ready", podStatus: "Running",
+      image, createdAt: own.mine.boxes[0].createdAt, retained: false, orphaned: false, pendingRemoval: false, dataRetained: false,
+      agents: ["Bea"], agentIds: [bea.id],
+    });
+    const quota = (await call("/api/quotas")).data.people;
+    assert.equal(inventory.data.people.find((person: { id: string }) => person.id === "bob").held,
+      quota.find((person: { id: string }) => person.id === "bob").held);
+
+    const roster = people.filter(person => person.id !== "bob");
+    const keepBob = { action: "keep", boxIds: [bob] };
+    const bypass = await call("/api/principals", { principals: roster, personalBoxes: { bob: keepBob } });
+    assert.equal(bypass.status, 409);
+    assert.equal(bypass.data.code, "principals-use-remove");
+    const invitation = (await call("/api/channels/invite", { principalId: "bob" })).data.code;
+    assert.ok(invitation);
+    const page = APP_PAGE("en");
+    const renderPeople = page.slice(page.indexOf("function hasOtherSignIn("), page.indexOf("// A role changed in place"));
+    const removeIdentity = /document\.getElementById\("setpeople"\)\.addEventListener\("click",[\s\S]*?\n}\);/.exec(page)?.[0];
+    assert.ok(removeIdentity);
+    const rows = people.flatMap(person => person.identities.map(identity => ({ ...person, identity })));
+    const adminRow = { ...rows.find(row => row.id === "admin")!, usableSignIn: true };
+    const classicRows = { innerHTML: "" };
+    const classic = { people: [adminRow], window: {}, esc: String, $: () => classicRows };
+    runInNewContext(renderPeople + "\nrenderPeople()", classic);
+    assert.doesNotMatch(classicRows.innerHTML, /data-remove=/, "the only admin’s last sign-in still cannot be removed");
+    const retiredRow = { ...adminRow, identity: "removed-feishu:ou_admin", usableSignIn: false, retiredSignIn: true };
+    classic.people.push(retiredRow);
+    runInNewContext(renderPeople + "\nrenderPeople()", classic);
+    assert.deepEqual([...classicRows.innerHTML.matchAll(/data-remove="(\d+)"/g)].map(match => match[1]), ["1"],
+      "the only admin can revoke the retired identity but not the remaining usable sign-in");
+    classic.people[1] = { ...adminRow, identity: "web:extra-admin" };
+    runInNewContext(renderPeople + "\nrenderPeople()", classic);
+    assert.deepEqual([...classicRows.innerHTML.matchAll(/data-remove="(\d+)"/g)].map(match => match[1]), ["0", "1"],
+      "the only admin can choose either sign-in to revoke without leaving the roster");
+    const revokePath = "/api/principals/revoke-sign-in";
+    classic.people = [retiredRow];
+    runInNewContext(renderPeople + "\nrenderPeople()", classic);
+    assert.match(classicRows.innerHTML, /data-remove="0"/, "a retired identity can be revoked with no fallback");
+    const retiredRequests: [string, unknown][] = [];
+    runInNewContext(renderPeople + "\n" + removeIdentity, {
+      ...classic, window: { confirm: () => true }, t: String, renderChannels() {},
+      fetch: async (path: string, init: { body: string }) => {
+        retiredRequests.push([path, JSON.parse(init.body)]);
+        return { ok: true, json: async () => ({}) };
+      },
+      document: { getElementById: () => ({ addEventListener: (_type: string, click: (event: object) => void) => {
+        click({ target: { getAttribute: () => "0" }, preventDefault() {} });
+      } }) },
+    });
+    assert.deepEqual(retiredRequests, [[revokePath, { principalId: "admin", identity: retiredRow.identity }]]);
+    assert.equal((await call(revokePath, { principalId: "bob", identity: "old:bob" })).status, 200);
+    const writes: ReturnType<typeof call>[] = [];
+    runInNewContext(renderPeople + "\n" + removeIdentity, {
+      people: rows, window: { confirm: () => true }, t: String, $: () => ({}), renderChannels() {},
+      fetch: (path: string, init?: { body?: string }) => {
+        assert.equal(path, revokePath);
+        assert.deepEqual(JSON.parse(init!.body!), { principalId: "bob", identity: "extra:bob" });
+        const result = call(path, JSON.parse(init!.body!));
+        writes.push(result);
+        return result.then(({ status, data }) => ({ ok: status === 200, json: async () => data }));
+      },
+      document: { getElementById: () => ({ addEventListener: (_type: string, click: (event: object) => void) => {
+        click({ target: { getAttribute: () => rows.findIndex(row => row.identity === "extra:bob") }, preventDefault() {} });
+      } }) },
+    });
+    const saved = await Promise.all(writes);
+    assert.deepEqual(saved.map(result => result.status), [200]);
+    assert.deepEqual(saved[0]!.data.principals.find((person: { id: string }) => person.id === "bob")?.identities, ["web:bob"],
+      "a stale Classic People page does not restore old:bob while revoking extra:bob");
+    assert.ok(fake.pods.has(resource(bob)), "revoking one identity did not stop the member’s computer");
+    assert.equal((await removeMember("bob")).status, 409);
+    assert.equal((await removeMember("bob", { ...keepBob, action: ["keep"] })).status, 409);
+    assert.ok(fake.pods.has(resource(bob)), "removal without a disposition did not stop the pod");
+    const extra = registry.create({ name: "New agent", boxId: bob });
+    const staleAgents = { id: bob, deleteData: true, deleteAgents: true, agentIds: [bea.id] };
+    assert.match((await call(collection + "/remove", staleAgents, "bob")).data.error, /agents on these computers changed/);
+    assert.match((await call(collection + "/admin", { ...staleAgents, action: "delete" }, "admin")).data.error, /agents on these computers changed/);
+    const staleBoxes = await removeMember("bob", { action: "delete", boxIds: [], agentIds: [] });
+    assert.equal(staleBoxes.status, 409);
+    assert.match(staleBoxes.data.error, /computers changed/);
+    const staleRemoval = await removeMember("bob", { action: "delete", boxIds: [bob], agentIds: [bea.id] });
+    assert.equal(staleRemoval.status, 409);
+    assert.match(staleRemoval.data.error, /agents on these computers changed/);
+    assert.ok(fake.pods.has(resource(bob)) && registry.has(bea.id) && registry.has(extra.id));
+    assert.equal((await call(collection, undefined, "bob")).status, 200);
+    const invited = async () => (await call("/api/people")).data.invites.some((invite: { code: string }) => invite.code === invitation);
+    assert.equal(await invited(), true, "failed preflight leaves the member’s invitations intact");
+    registry.remove(extra.id, { archive: false });
+    const removed = await removeMember("bob", keepBob);
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+    assert.equal(fake.pods.has(resource(bob)), false);
+    assert.equal([...fake.pvcs].filter(([name]) => name.startsWith(resource(bob))).length, 3);
+    assert.equal(registry.has(bea.id), true);
+    assert.deepEqual((await call(collection, undefined, "bob")).status, 403);
+    assert.equal(await invited(), false, "successful removal revokes the member’s invitations");
+    const retained = (await admin()).data.boxes.find((box: { id: string }) => box.id === bob);
+    assert.equal(retained.ownerName, "Bob");
+    assert.equal(retained.orphaned, true);
+    assert.equal(retained.status, "detached");
+    // Back on the roster as a viewer, Bob cannot dispose of the computer the admin chose to keep (INV-2099).
+    principals.reload(); principals.save([...principals.list(), { id: "bob", name: "Bob", role: "viewer", identities: ["web:bob"] }]);
+    const sneak = await call(collection + "/remove", { id: bob, deleteData: true, deleteAgents: false }, "bob");
+    assert.equal(sneak.status, 404, JSON.stringify(sneak.data));
+    assert.equal([...fake.pvcs].filter(([name]) => name.startsWith(resource(bob))).length, 3, "the kept data is still there");
+    principals.reload(); principals.save(principals.list().filter(person => person.id !== "bob"));
+    assert.equal((await call(collection + "/admin", { id: bob, action: "transfer", recipient: "admin" })).status, 200);
+    assert.equal((await call(collection + "/admin", { id: bob, action: "recover" })).status, 200);
+    assert.ok(fake.pods.has(resource(bob)));
+    assert.equal((await call(collection, undefined, "admin")).data.boxes[0].agents[0], "Bea");
+
+    const spare = await create("charlie", "Charlie’s spare", "spare");
+    assert.equal((await call(collection + "/remove", { id: spare, deleteData: false }, "charlie")).status, 200);
+    const transfer = { action: "transfer", recipient: "alice", boxIds: [charlie, spare] };
+    assert.equal((await removeMember("charlie", transfer)).status, 200);
+    assert.equal((await call(collection, undefined, "alice")).data.held, 2);
+    assert.ok(fake.pods.has(resource(charlie)), "transfer retained the original pod and volumes");
+    assert.equal((await admin()).data.boxes.find((box: { id: string }) => box.id === spare).owner, "alice");
+    const erase = { action: "delete", boxIds: [dana], agentIds: [dee.id] };
+    assert.equal((await removeMember("dana", erase)).status, 200);
+    assert.equal(fake.pods.has(resource(dana)), false);
+    assert.equal([...fake.pvcs.keys()].some(name => name.startsWith(resource(dana))), false);
+    assert.equal(registry.has(dee.id), false);
+    assert.equal(row((await admin()).data.boxes, dana), undefined);
+    const removedComputerless = await removeMember("constructor");
+    assert.equal(removedComputerless.status, 200, JSON.stringify(removedComputerless.data));
+    assert.equal((await call(collection, undefined, "constructor")).status, 403);
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;
