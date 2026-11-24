@@ -1,4 +1,5 @@
 import { WorkGovernance, resourceKey } from "../host/work-governance.ts";
+import { CodeAttempts } from "./code-attempts.ts";
 import { governanceResources } from "./work-governance-resources.ts";
 import { governanceRoute } from "./work-governance-routes.ts";
 import { surfaceActionWork } from "../host/surface-action.ts";
@@ -834,6 +835,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    */
   const oauthStates = new Map<string, { channelId: string; next: string; at: number; appId: string; incarnation: number; bootstrapCode?: string }>();
   const invites = new InviteStore(join(agentboxHome(), "invites.json"), line => log(line));
+  // Wrong codes, bounded per source and overall, so a code that lives a week cannot be guessed (INV-2078).
+  const codeAttempts = new CodeAttempts();
   const newInviteCode = (): string => {
     // Unambiguous alphabet — no 0/O, 1/I/L — because this travels by voice and by
     // hand. Six characters of 31 ≈ 10^9, plenty for 15 minutes and one use.
@@ -1367,9 +1370,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       log(`channel ${request.channel}: ${request.senderLabel} (${request.identity}) knocked`);
     },
     bind: (code, identity, senderLabel) => {
+      const wait = codeAttempts.waitFor(`chat:${identity}`);
+      if (wait !== undefined) return `Too many wrong codes; try again in ${wait} seconds.`;
       const invite = invites.get(code);
       if (invite === undefined || invite.expiresAt < Date.now()) {
         invites.delete(code);
+        if (codeAttempts.failed(`chat:${identity}`)) log(`channel bind: too many wrong codes (${identity}); refusing codes for a while`);
         return "That code is not live — a code works once, until it expires (15 minutes unless the admin chose longer). Ask for a fresh one.";
       }
       // An identity that already belongs to somebody is not re-linkable by code —
@@ -3858,11 +3864,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // because one code for two surfaces is the whole point — a person the owner
         // invited can arrive either way and be the same principal either way.
         if (route === "POST /api/login") {
+          const source = `web:${req.socket.remoteAddress ?? "unknown"}`, wait = codeAttempts.waitFor(source);
+          if (wait !== undefined) { send(res, 429, apiError("code-attempts", { seconds: wait })); return; }
           const body = await readJson(req);
           const code = String(body.code ?? "").trim().toUpperCase();
           const invite = invites.get(code);
           if (invite === undefined || invite.expiresAt < Date.now()) {
             invites.delete(code);
+            if (codeAttempts.failed(source)) log(`web login: too many wrong codes from ${source}; refusing codes for a while`); // never the code
             send(res, 400, {
               ...apiError("code-not-live"),
             });

@@ -10,7 +10,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import markdownit from "markdown-it";
 import { a2uiPath, MARKDOWN_OPTIONS, vendorPath } from "./markdown.ts";
 import { APP_PAGE } from "./page-locale.ts";
@@ -104,14 +107,26 @@ test("the vendored browser build is present", () => {
   assert.ok(path.endsWith("markdown-it.umd.min.js"), path);
 });
 
-test("the ShowUI bundle is looked for in the box's vendor dir first, then the repository's vendor/ (docs/79)", () => {
+test("the ShowUI bundle is looked for in the box's vendor dir, then beside the bundle, then the repository's vendor/ (docs/79)", () => {
   const saved = process.env.AGENTBOX_VENDOR_DIR;
+  const repository = fileURLToPath(new URL("../../vendor/a2ui.js", import.meta.url));
+  // The image's layout: /opt/hostd/hostd.mjs with /opt/hostd/vendor/a2ui.js beside it.
+  const image = mkdtempSync(join(tmpdir(), "a2ui-"));
+  mkdirSync(join(image, "vendor"));
+  writeFileSync(join(image, "vendor", "a2ui.js"), "");
+  const bundle = pathToFileURL(join(image, "hostd.mjs")).href;
   try {
     delete process.env.AGENTBOX_VENDOR_DIR;
-    assert.ok(a2uiPath().endsWith("/vendor/a2ui.js"), a2uiPath());
+    assert.equal(a2uiPath(), repository);
+    // INV-2081: no AGENTBOX_VENDOR_DIR (the Kubernetes organisation pod) — the bundle's own
+    // vendor/ is found, not /vendor/a2ui.js two directories above /opt/hostd.
+    assert.equal(a2uiPath(bundle), join(image, "vendor", "a2ui.js"));
     process.env.AGENTBOX_VENDOR_DIR = "/nonexistent-vendor-dir";
-    assert.ok(a2uiPath().endsWith("/vendor/a2ui.js"), "a missing box copy falls through to the repository's");
+    assert.equal(a2uiPath(), repository, "a missing box copy falls through to the repository's");
+    process.env.AGENTBOX_VENDOR_DIR = join(image, "vendor");
+    assert.equal(a2uiPath(), join(image, "vendor", "a2ui.js"));
   } finally {
     if (saved === undefined) delete process.env.AGENTBOX_VENDOR_DIR; else process.env.AGENTBOX_VENDOR_DIR = saved;
+    rmSync(image, { recursive: true, force: true });
   }
 });
