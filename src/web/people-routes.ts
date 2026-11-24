@@ -102,11 +102,9 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
       if (typeof identity !== "string" || !person.identities.includes(identity))
         return { status: 404, body: apiError("sign-in-unknown") };
       const identities = person.identities.filter(entry => entry !== identity);
-      const currentSession = deps.currentSessionIdentity;
-      if (identity === currentSession || !deps.retiredSignIn(person, identity)) {
+      if (identity === deps.currentSessionIdentity || !deps.retiredSignIn(person, identity)) {
         if (identities.length === 0) return { status: 409, body: apiError("sign-in-last") };
-        if (soleAdmin(roster) === person.id && !(currentSession !== undefined && identities.includes(currentSession)) &&
-          !deps.usableSignIns({ ...person, identities }).length)
+        if (soleAdmin(roster) === person.id && !deps.usableSignIns({ ...person, identities }).length)
           return { status: 409, body: apiError("sign-in-last-admin") };
       }
       principals.save(roster.map(entry => entry.id === person.id ? { ...entry, identities } : entry));
