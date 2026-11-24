@@ -102,6 +102,7 @@ import {
   type Caller,
 } from "./auth.ts";
 import {
+  isInviteBrowserIdentity,
   newWebIdentity,
   readSession,
   SESSION_COOKIE,
@@ -777,17 +778,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const openDesktops = new OpenDesktops();
   const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`), changed: () => openDesktops.recheck() });
   const retiredSignIn = (person: Principal, identity: string): boolean => {
+    const expiresAt = principals.browserSignInExpiresAt(person.id, identity);
+    if (expiresAt !== undefined) return expiresAt <= Date.now();
+    if (isInviteBrowserIdentity(identity)) return false;
     const door = doorOfIdentity(identity);
-    return door === "web" ? (principals.browserSignInExpiresAt(person.id, identity) ?? Infinity) <= Date.now()
-      : !channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity);
+    return !channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity);
   };
   const usableSignIns = (person: Principal) => {
     const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
     const now = Date.now();
-    return person.identities.filter(identity =>
-      principals.hasCurrentIdentity(person.id, identity) &&
-      (identity.startsWith("web:") ? (principals.browserSignInExpiresAt(person.id, identity) ?? 0) > now
-        : doors.some(door => identity.startsWith(door.id + ":"))));
+    return person.identities.filter(identity => {
+      if (!principals.hasCurrentIdentity(person.id, identity)) return false;
+      const expiresAt = principals.browserSignInExpiresAt(person.id, identity);
+      if (expiresAt !== undefined) return expiresAt > now;
+      return !isInviteBrowserIdentity(identity) && doors.some(door => door.id === doorOfIdentity(identity));
+    });
   };
   /** What a task's mandate is checked against now (INV-1457): the principal's role today and the rule set as loaded. */
   const mandateWorld = (): MandateWorld => ({

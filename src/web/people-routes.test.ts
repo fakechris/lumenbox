@@ -9,6 +9,7 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
+import { saveConfig } from "../config.ts";
 import { Principals } from "../host/principals.ts";
 import { inviteMinutes, leavesNoAdmin, peopleRoute } from "./people-routes.ts";
 import { InviteStore } from "./invite-store.ts";
@@ -32,10 +33,17 @@ const login = async (code: string, name: string) => {
 test("the roster keeps an admin; a code says who it is for; a person's own code brings back the same person", async t => {
   const home = mkdtempSync(join(tmpdir(), "agentbox-people-"));
   const previous = process.env.AGENTBOX_HOME;
+  const previousPublicUrl = process.env.AGENTBOX_PUBLIC_URL;
   process.env.AGENTBOX_HOME = home;
+  process.env.AGENTBOX_PUBLIC_URL = "https://people.example";
   let stop: (() => void) | undefined;
   try {
-    stop = await startWebServer({ port: PORT, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {} });
+    stop = await startWebServer({
+      port: PORT, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {},
+      loginFetch: async input => String(input).endsWith("oauth/token")
+        ? Response.json({ access_token: "fixture" })
+        : Response.json({ code: 0, data: { open_id: "ou_ada", name: "Ada" } }),
+    });
 
     // INV-2056: the note and the chosen lifetime travel with the code, and the live list shows both.
     const before = Date.now();
@@ -153,7 +161,7 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.equal((await mcp()).status, 401, "and out of the side door");
 
     t.mock.timers.enable({ apis: ["Date"], now: adaExpiry });
-    const legacyIdentity = "web:legacy-browser";
+    const legacyIdentity = "web:0123456789ab";
     roster.reload();
     roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, legacyIdentity] } : person));
     const renewedAda = (await (await post("/api/channels/invite", { principalId: ada.id })).json()) as Code;
@@ -170,6 +178,23 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.equal((await revokeFresh.json()).code, "sign-in-last-admin");
     assert.equal((await post(revoke, { principalId: ada.id, identity: adaIdentity }, freshHeaders)).status, 200);
 
+    assert.equal((await post("/api/channels/records", { id: "web", type: "feishu" })).status, 200);
+    saveConfig({ env: { WEB_APP_ID: "fixture-app", WEB_APP_SECRET: "fixture-secret" } });
+    const feishuIdentity = "web:ou_ada";
+    roster.reload();
+    const linkedRoster = roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, feishuIdentity] } : person);
+    assert.equal((await post("/api/principals", { principals: linkedRoster })).status, 200);
+    const begin = await fetch(`${BASE}/auth/web`, { redirect: "manual" });
+    assert.equal(begin.status, 302);
+    const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
+    const callback = await fetch(`${BASE}/auth/web/callback?state=${state}&code=fixture`, { redirect: "manual" });
+    assert.equal(callback.status, 302, await callback.clone().text());
+    const feishuHeaders = { "content-type": "application/json", cookie: callback.headers.getSetCookie()[0]!.split(";")[0]! };
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: feishuHeaders })).status, 200);
+    const withFeishu = await (await fetch(`${BASE}/api/channels`, { headers: ui })).json() as typeof classicRoster;
+    assert.deepEqual(withFeishu.principals.find(person => person.id === ada.id)?.usableSignIns, [freshIdentity, feishuIdentity]);
+    assert.equal((await post(revoke, { principalId: ada.id, identity: freshIdentity }, feishuHeaders)).status, 200);
+
     roster.reload();
     roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [oldFeishu] } : person));
     assert.equal((await post(revoke, { principalId: ada.id, identity: oldFeishu })).status, 200);
@@ -180,6 +205,8 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;
     else process.env.AGENTBOX_HOME = previous;
+    if (previousPublicUrl === undefined) delete process.env.AGENTBOX_PUBLIC_URL;
+    else process.env.AGENTBOX_PUBLIC_URL = previousPublicUrl;
     rmSync(home, { recursive: true, force: true });
   }
 });
