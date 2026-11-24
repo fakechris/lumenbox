@@ -70,9 +70,20 @@ try {
     if (width === 480) {
       await page.route("**/desktop/**", route => route.fulfill({ contentType: "text/html", body: "<p>Desktop fixture</p>" }));
       await page.route("**/api/desktop/control", route => route.fulfill({ json: { ok: true } }));
+      const desktopBoxes = async route => {
+        const response = await route.fetch(), result = await response.json();
+        for (const computer of result.boxes) computer.connected = true;
+        await route.fulfill({ response, json: result });
+      };
       for (const deskWidth of [390, 400]) {
         await page.setViewportSize({ width: deskWidth, height: 679 });
-        if (deskWidth === 390) await page.locator("#screen-toggle").click();
+        if (deskWidth === 390) {
+          await page.locator("#screen-toggle").click();
+          await page.locator(".screen-offline").waitFor();
+          assert.equal(await page.locator(".desk .acts button").count(), 0);
+          await page.route("**/api/boxes?*", desktopBoxes);
+          await page.evaluate(() => refresh());
+        }
         await page.locator(".desk .acts button").first().click();
         const note = page.locator(".desk p");
         await note.waitFor();
@@ -82,6 +93,7 @@ try {
         await note.waitFor({ state: "detached" });
       }
       await page.locator("#screen-close").click();
+      await page.unroute("**/api/boxes?*", desktopBoxes);
       await page.setViewportSize({ width, height: 900 });
     }
     if (width < 1000) await page.locator("#back").click();
