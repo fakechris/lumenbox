@@ -4509,7 +4509,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, apiError("token-needs-person", { admins: principals.list().filter(person => person.role === "admin").length }));
             return;
           }
-          const minted = mcpTokens.mint(owner, String(body.label ?? ""));
+          const minted = mcpTokens.mint(owner, String(body.label ?? ""), new Date(), caller.userId === undefined ? "person" : "sign-in");
           log(`mcp token issued to ${owner} (${minted.label})`);
           send(res, 200, { token: minted.token, label: minted.label, createdAt: minted.createdAt });
           return;
