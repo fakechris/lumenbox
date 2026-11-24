@@ -9,6 +9,7 @@
 export const NEXT_CHAT_JS = `
 var chat = { agentId: "", conversation: "main", conversations: [], plan: null, box: "", entries: [], live: null, loading: "", loadedFor: "", request: 0, jump: false, liveSurfaces: {}, expired: {}, find: "", changing: "", tail: 0,
   topicsFor: "", topics: {}, topicLive: {}, topicSeen: {}, topicExtra: [], topicAsked: 0, olderPending: false, focus: "", focusAsked: "" };
+var chatComposer = { key: "", drafts: new Map(), pending: new Set(), notices: new Map() };
 var markdown = window.markdownit ? window.markdownit({ html: false, linkify: true, breaks: true }) : null;
 
 function agentsHere() {
@@ -317,6 +318,7 @@ function renderChat(view) {
   $("view-hint").textContent = agent ? (agent.title || agent.description || "") : "";
   $("composer").hidden = !agent;
   renderModelNotice(); renderWatchOnly();
+  syncChatComposer(agent ? chatTarget() : "");
   $("composer-text").placeholder = agent ? t("ui.next.chat.placeholder", { name: agent.name }) : "";
   if (agent && chat.loading !== chat.agentId && chat.loadedFor !== chat.agentId) loadThread();
   if (chat.loadedFor === chat.agentId || !agent) renderThread(view);
@@ -356,24 +358,74 @@ function addressed(text) {
   return other ? { agent: other, text: text.slice(match[0].length) } : null;
 }
 
+function chatTarget() { return JSON.stringify([chat.agentId, chat.conversation]); }
+
+function sizeChatComposer(input) {
+  input.style.height = "";
+  if (input.value) input.style.height = Math.min(input.scrollHeight, 180) + "px";
+}
+
+function chatDraft(key) {
+  return key === chatComposer.key ? $("composer-text").value : chatComposer.drafts.get(key) || "";
+}
+
+function setChatDraft(key, value) {
+  if (key === chatComposer.key) {
+    var input = $("composer-text");
+    input.value = value; sizeChatComposer(input);
+  } else if (value) chatComposer.drafts.set(key, value);
+  else chatComposer.drafts.delete(key);
+}
+
+function syncChatComposer(key) {
+  if (chatComposer.key !== key) {
+    var previous = chatComposer.key, value = chatDraft(previous), draft = chatDraft(key);
+    chatComposer.key = key; chatComposer.drafts.delete(key);
+    if (previous) setChatDraft(previous, value);
+    setChatDraft(key, draft);
+    $("composer-menu").hidden = true;
+  }
+  renderChatSend();
+}
+
+function renderChatSend() {
+  var key = chatComposer.key, pending = chatComposer.pending.has(key), status = $("composer-send-status");
+  status.textContent = pending ? t("ui.next.chat.sending") : chatComposer.notices.get(key) || "";
+  status.hidden = !status.textContent;
+  $("composer-send").disabled = watchOnly() || pending;
+}
+
 async function sendMessage() {
-  var input = $("composer-text"), text = input.value.trim(), id = chat.agentId;
-  if (!text || !id) return;
-  var to = addressed(text);
-  if (to && to.text) { input.value = to.text; openChat(to.agent.id); sendMessage(); return; }
-  if (!await composerCanSend() || chat.agentId !== id || input.value.trim() !== text) return;
-  // With a card on show the reply is that card's (next-dock-ui.ts); detached, it is an ordinary message, this once.
-  if (need.detached) need.detached = ""; else if (sendReply(text)) return;
-  input.value = ""; input.style.height = "";
-  chat.entries = chat.entries.concat([{ kind: "text", role: "user", text: text }]);
-  chat.live = { text: "", doing: "" }; chat.jump = true;
-  render();
-  postJson("/api/prompt", { agent: id, conversation: chat.conversation, text: text }).catch(function (error) {
-    // Refused, the words are given back and the server's own sentence is shown (INV-2047); a refusal may be a role that changed.
-    chat.live = null; failed(error); loadThread();
-    if (chat.agentId === id && !input.value.trim()) input.value = text;
-    rereadRole();
-  });
+  var key = chatTarget(), draft = chatDraft(key), text = draft.trim();
+  if (!text || !chat.agentId || key !== chatComposer.key || watchOnly() || chatComposer.pending.has(key)) return;
+  var to = addressed(text), agent = to ? to.agent.id : chat.agentId, conversation = to ? "main" : chat.conversation;
+  var stillHere = function () { return next.view === "chat" && chatTarget() === key; };
+  chatComposer.pending.add(key); chatComposer.notices.delete(key); renderChatSend();
+  try {
+    if (navigator.onLine !== false && !to && !await composerCanSend()) return;
+    if (!stillHere() || watchOnly() || chatDraft(key) !== draft) return;
+    if (navigator.onLine === false) { chatComposer.notices.set(key, t("ui.next.chat.sendOffline")); return; }
+    // An explicit @recipient is a new message, not a reply to the card in either conversation.
+    var detached = need.detached;
+    try {
+      var reply = !to && !detached && sendReply(text);
+      await (reply || postJson("/api/prompt", { agent: agent, conversation: conversation, text: to ? to.text : text }));
+    } catch (error) {
+      // A lost response is not proof that the server never got the message.
+      var refused = error.status >= 400 && error.status < 500 && error.status !== 408;
+      chatComposer.notices.set(key, t(refused ? "ui.next.chat.sendRefused" : "ui.next.chat.sendUnconfirmed", { error: error.message }));
+      if (refused) rereadRole();
+      return;
+    }
+    if (!to && stillHere() && need.detached === detached) need.detached = "";
+    if (chatDraft(key) === draft) {
+      setChatDraft(key, "");
+      if (stillHere() && to) openChat(agent);
+    }
+    if (!reply && stillHere()) { chat.jump = true; loadThread(); }
+  } finally {
+    chatComposer.pending.delete(key); renderChatSend();
+  }
 }
 
 /** Live events for the open conversation: words as they come, what it is doing, and a re-read when the turn ends. */
@@ -404,7 +456,7 @@ function chatStart() {
   var input = $("composer-text");
   $("composer-form").addEventListener("submit", function (event) { event.preventDefault(); sendMessage(); });
   input.addEventListener("keydown", function (event) { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); } });
-  input.addEventListener("input", function () { input.style.height = ""; input.style.height = Math.min(input.scrollHeight, 180) + "px"; });
+  input.addEventListener("input", function () { sizeChatComposer(input); });
   // Back is always to the agents: from a conversation, and from the two views that cut across them.
   $("back").addEventListener("click", function () { next.view = "chat"; delete document.body.dataset.open; render(); });
   var asked = new URLSearchParams(location.search).get("agent"), thread = new URLSearchParams(location.search).get("conversation");

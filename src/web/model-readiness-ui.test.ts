@@ -6,12 +6,12 @@ import { NEXT_COMPOSER_JS } from "./next-composer-ui.ts";
 
 test("unconfigured send keeps the draft and shows the Model settings entry point", async () => {
   const nodes = new Map<string, any>();
-  const node = () => ({ children: [] as any[], hidden: true, value: "Hello Ada", style: {},
+  const node = () => ({ children: [] as any[], hidden: true, value: "", style: {}, scrollHeight: 70,
     setAttribute() {}, prepend(child: unknown) { this.children.unshift(child); },
     replaceChildren() { this.children = []; }, appendChild(child: unknown) { this.children.push(child); },
     addEventListener(_type: string, action: () => void) { this.click = action; }, click: () => {} });
   let configured = false, admin = true, posts = 0, opened = "";
-  const context = vm.createContext({ window: {}, Promise, encodeURIComponent,
+  const context = vm.createContext({ window: {}, Promise, encodeURIComponent, navigator: { onLine: true }, next: { view: "chat", agents: {} },
     $: (id: string) => { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); },
     el: (_tag: string, _cls: string, text: string) => ({ ...node(), text }), t: (key: string) => key,
     getJson: async () => ({ configured }), postJson: async () => { posts++; },
@@ -19,7 +19,7 @@ test("unconfigured send keeps the draft and shows the Model settings entry point
     canOperateInstallation: () => admin, settings: { me: null },
     openSettingsPane: (pane: string) => { opened = pane; },
   });
-  vm.runInContext(NEXT_CHAT_JS + NEXT_COMPOSER_JS + '; chat.agentId = "ada";', context);
+  vm.runInContext(NEXT_CHAT_JS + NEXT_COMPOSER_JS + '; chat.agentId = "ada"; syncChatComposer(chatTarget()); $("composer-text").value = "Hello Ada"; loadThread = function () {};', context);
   await vm.runInContext("sendMessage()", context);
   assert.equal(posts, 0); assert.equal(nodes.get("composer-text").value, "Hello Ada");
   const notice = nodes.get("composer").children[0];
