@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { startWebServer } from "./server.ts";
 import { Principals } from "../host/principals.ts";
 import { inviteMinutes, leavesNoAdmin, peopleRoute } from "./people-routes.ts";
+import { sessionCookie, sessionKey } from "./session.ts";
 import { InviteStore } from "./invite-store.ts";
 
 const PORT = 7964;
@@ -130,6 +131,11 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const lastUsable = await post(revoke, { principalId: ada.id, identity: ada.identities[0] }, { ...ui, authorization: "", cookie: adaCookie });
     assert.equal(lastUsable.status, 409);
     assert.equal((await lastUsable.json()).code, "sign-in-last-admin");
+    const retiredSession = { "content-type": "application/json", cookie: sessionCookie(oldFeishu, sessionKey("t0k")).split(";")[0]! };
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: retiredSession })).status, 200);
+    const noFallback = await post(revoke, { principalId: ada.id, identity: ada.identities[0] }, retiredSession);
+    assert.equal(noFallback.status, 409, "a live session on a retired channel is not a usable fallback");
+    assert.equal((await noFallback.json()).code, "sign-in-last-admin");
     assert.equal((await post(revoke, { principalId: ada.id, identity: oldFeishu }, { ...ui, authorization: "", cookie: adaCookie })).status, 200);
 
     // Removing Bob takes him off the roster and signs him out of every browser at once.
@@ -147,6 +153,12 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.equal((await mcp()).status, 401, "and out of the side door");
     roster.reload();
     roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [oldFeishu] } : person));
+    assert.deepEqual((await people()).people.find(row => row.id === ada.id)?.identities, [oldFeishu]);
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: retiredSession })).status, 200);
+    const protectedSignIn = await post(revoke, { principalId: ada.id, identity: oldFeishu }, retiredSession);
+    assert.equal(protectedSignIn.status, 409);
+    assert.equal((await protectedSignIn.json()).code, "sign-in-last");
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: retiredSession })).status, 200, "a refused revocation keeps the current session working");
     assert.equal((await post(revoke, { principalId: ada.id, identity: oldFeishu })).status, 200);
     const remainingAdmin = (await people()).people.find(row => row.id === ada.id)!;
     assert.deepEqual(remainingAdmin.identities, []);
