@@ -541,7 +541,8 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const invited = async () => (await call("/api/people")).data.invites.some((invite: { code: string }) => invite.code === invitation);
     assert.equal(await invited(), true, "failed preflight leaves the member’s invitations intact");
     registry.remove(extra.id, { archive: false });
-    const removed = await removeMember("bob", keepBob);
+    const keptSpare = await create("bob", "Bob’s kept spare", "kept-spare");
+    const removed = await removeMember("bob", { ...keepBob, boxIds: [bob, keptSpare] });
     assert.equal(removed.status, 200, JSON.stringify(removed.data));
     assert.equal(fake.pods.has(resource(bob)), false);
     assert.equal([...fake.pvcs].filter(([name]) => name.startsWith(resource(bob))).length, 3);
@@ -558,6 +559,11 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.equal(sneak.status, 404, JSON.stringify(sneak.data));
     assert.equal([...fake.pvcs].filter(([name]) => name.startsWith(resource(bob))).length, 3, "the kept data is still there");
     principals.reload(); principals.save(principals.list().filter(person => person.id !== "bob"));
+    const spareVolumes = () => [...fake.pvcs.keys()].filter(name => name.startsWith(resource(keptSpare)));
+    assert.equal(spareVolumes().length, 3);
+    const eraseRetained = await call(collection + "/admin", { id: keptSpare, action: "delete", deleteAgents: false, agentIds: [] }, "admin");
+    assert.equal(eraseRetained.status, 200, JSON.stringify(eraseRetained.data));
+    assert.equal(spareVolumes().length, 0, "an admin can delete the kept data");
     assert.equal((await call(collection + "/admin", { id: bob, action: "transfer", recipient: "admin" })).status, 200);
     assert.equal((await call(collection + "/admin", { id: bob, action: "recover" })).status, 200);
     assert.ok(fake.pods.has(resource(bob)));
