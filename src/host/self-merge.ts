@@ -46,6 +46,7 @@ import { withRosterLock } from "./roster-lock.ts";
 import { rulesDir } from "./rules.ts";
 import { tasksPath } from "./tasks.ts";
 import { usageLogPath } from "./usage.ts";
+import { newestByKey } from "./newest-by-key.ts";
 import { vaultPath } from "./vault.ts";
 
 export const MERGE_JOURNAL = "principal-merge.json";
@@ -340,36 +341,11 @@ function writeJournal(home: string, journal: MergeJournal): void {
   writeAtomically(join(home, MERGE_JOURNAL), `${JSON.stringify(journal, null, 2)}\n`);
 }
 
-/** When each identity last wrote through a door: the newest admitted message. */
-function lastSeenByIdentity(home: string): Map<string, string> {
-  const seen = new Map<string, string>();
-  const path = join(home, "messages.jsonl");
-  if (!existsSync(path)) return seen;
-  for (const raw of readFileSync(path, "utf8").split("\n")) {
-    if (raw.trim() === "") continue;
-    try {
-      const line = JSON.parse(raw) as { identity?: unknown; receivedAt?: unknown };
-      if (typeof line.identity !== "string" || typeof line.receivedAt !== "string") continue;
-      if ((seen.get(line.identity) ?? "") < line.receivedAt) seen.set(line.identity, line.receivedAt);
-    } catch { /* a torn line says nothing about anyone */ }
-  }
-  return seen;
-}
+/** When each identity last wrote through a door: the newest admitted message. Read incrementally (newest-by-key.ts, INV-2082). */
+const lastSeenByIdentity = (home: string) => newestByKey(join(home, "messages.jsonl"), "identity", "receivedAt");
 
 /** The newest spend row on each person's behalf. */
-function lastSpendByPrincipal(path: string): Map<string, string> {
-  const seen = new Map<string, string>();
-  if (!existsSync(path)) return seen;
-  for (const raw of readFileSync(path, "utf8").split("\n")) {
-    if (raw.trim() === "") continue;
-    try {
-      const line = JSON.parse(raw) as { principal?: unknown; at?: unknown };
-      if (typeof line.principal !== "string" || typeof line.at !== "string") continue;
-      if ((seen.get(line.principal) ?? "") < line.at) seen.set(line.principal, line.at);
-    } catch { /* as above */ }
-  }
-  return seen;
-}
+const lastSpendByPrincipal = (path: string) => newestByKey(path, "principal", "at");
 
 /** When each person last did something: their newest spend, or the newest message from any of their identities (INV-2054). */
 export function lastActiveByPrincipal(paths: Pick<MergePaths, "home" | "usage">, people: readonly { id: string; identities: readonly string[] }[]): Map<string, string> {

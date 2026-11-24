@@ -2162,7 +2162,7 @@ function savePeople() {
   })
     .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}"); return d; }); })
     .then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
-    .catch(function (error) { $("setpeoplestatus").textContent = error.message; });
+    .catch(function (error) { $("setpeoplestatus").textContent = error.message; renderChannels(); }); // a refused save (the last admin, INV-2082) redraws the roster the server kept
 }
 
 $("setpadd").onclick = function () {

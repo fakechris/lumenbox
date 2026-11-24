@@ -199,7 +199,7 @@ export const SERVER_ERRORS = {
   "err.knock-unknown": ["没有这个 id 的人在等待。", "Nobody with that id is waiting."],
   "err.principals-array": ["principals 必须是数组", "principals must be an array"],
   "err.person-unknown": ["没有这个人：{person}", "No such person: {person}"],
-  "err.last-admin": ["不能移除或降级最后一位管理员：先让另一个人成为管理员。", "The last admin can't be removed or demoted: make someone else an admin first."],
+  "err.last-admin": ["不能移除、降级或全部登出最后一位管理员：先让另一个人成为管理员。", "The last admin can't be removed, demoted or signed out everywhere: make someone else an admin first."],
   "err.person-line-unknown": ["没有这一条", "No such line"],
   "err.person-field": ["field 必须是 {fields} 之一", "field must be one of {fields}"],
   "err.person-nothing-to-add": ["没有可添加的内容：为空，或已经记录过了", "Nothing to add: empty, or already on the record"],
