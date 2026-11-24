@@ -9,7 +9,9 @@ import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
-import { inviteMinutes, leavesNoAdmin } from "./people-routes.ts";
+import { Principals } from "../host/principals.ts";
+import { inviteMinutes, leavesNoAdmin, peopleRoute } from "./people-routes.ts";
+import { InviteStore } from "./invite-store.ts";
 
 const PORT = 7964;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -75,11 +77,60 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.equal(bobAgain.principalId, bob.id);
     assert.equal(bobAgain.name, "Bob");
     assert.equal(bobAgain.role, "viewer", "a person's code carries their role, not the form's");
-    await login(bobAgain.code, "Bob on the laptop");
+    const laptop = await login(bobAgain.code, "Bob on the laptop");
     rows = (await people()).people;
     assert.equal(rows.length, 2);
     assert.equal(rows.find(row => row.id === bob.id)?.identities.length, 2);
     assert.equal((await post("/api/channels/invite", { principalId: "nobody" })).status, 404);
+    const revoke = "/api/principals/revoke-sign-in";
+    const laptopIdentity = rows.find(row => row.id === bob.id)!.identities.find(identity => !bob.identities.includes(identity))!;
+    const revocation = { principalId: bob.id, identity: laptopIdentity };
+    const roster = new Principals();
+    const originalRoster = roster.list();
+    let authorityChecks = 0;
+    const pendingRevocation = await peopleRoute("POST /api/principals/revoke-sign-in", {
+      principals: roster, invites: new InviteStore(), newCode: () => "", publicUrl: undefined,
+      callerId: () => ada.identities[0], refusedAdmin: () => { authorityChecks++; return roster.roleOf(ada.identities[0]!) !== "admin"; },
+      readJson: async () => {
+        new Principals().save(originalRoster.map(person => person.id === ada.id ? { ...person, role: "viewer" } : person));
+        return revocation;
+      },
+      signOut: () => 0, usableSignIns: person => person.identities, retiredSignIn: () => false,
+      planRemoval: () => async () => {}, boxesOf: () => ({ held: 0, quota: null }),
+      lastActive: () => new Map(), doorType: () => undefined, log() {},
+    });
+    assert.equal(authorityChecks, 2);
+    assert.equal(pendingRevocation?.status, 0);
+    assert.equal(new Principals().byId(bob.id)?.identities.length, 2, "a request pending across the demotion cannot revoke a sign-in");
+    roster.save(originalRoster);
+    assert.equal((await post(revoke, revocation, bobHeaders)).status, 403);
+    assert.equal((await post(revoke, { ...revocation, principalId: ada.id })).status, 404);
+    assert.equal((await post(revoke, revocation)).status, 200);
+    assert.equal((await post(revoke, { principalId: bob.id, identity: bob.identities[0] })).status, 409, "a stale row click cannot revoke the last sign-in");
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: { cookie: laptop } })).status, 401);
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 200);
+    const adaAgain = (await (await post("/api/channels/invite", { principalId: ada.id })).json()) as Code;
+    await login(adaAgain.code, "Ada on the laptop");
+    const adaLaptop = (await people()).people.find(row => row.id === ada.id)!.identities.find(identity => !ada.identities.includes(identity))!;
+    assert.equal((await post(revoke, { principalId: ada.id, identity: adaLaptop }, { ...ui, authorization: "", cookie: adaCookie })).status, 200);
+    assert.equal((await people()).people.find(row => row.id === ada.id)?.lastAdmin, true);
+    const oldFeishu = "removed-feishu:ou_ada";
+    assert.equal((await post("/api/channels/records", { id: "removed-feishu", type: "feishu" })).status, 200);
+    roster.reload();
+    roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, oldFeishu] } : person));
+    assert.equal((await post("/api/channels/records/remove", { id: "removed-feishu" })).status, 200);
+    assert.equal((await fetch(`${BASE}/auth/removed-feishu`)).status, 404);
+    const classicRoster = await (await fetch(`${BASE}/api/channels`, { headers: ui })).json() as {
+      principals: (Row & { usableSignIns: string[]; retiredSignIns: string[] })[];
+    };
+    const classicAda = classicRoster.principals.find(person => person.id === ada.id)!;
+    assert.deepEqual(classicAda.identities, [ada.identities[0], oldFeishu]);
+    assert.deepEqual(classicAda.usableSignIns, ada.identities);
+    assert.deepEqual(classicAda.retiredSignIns, [oldFeishu]);
+    const lastUsable = await post(revoke, { principalId: ada.id, identity: ada.identities[0] }, { ...ui, authorization: "", cookie: adaCookie });
+    assert.equal(lastUsable.status, 409);
+    assert.equal((await lastUsable.json()).code, "sign-in-last-admin");
+    assert.equal((await post(revoke, { principalId: ada.id, identity: oldFeishu }, { ...ui, authorization: "", cookie: adaCookie })).status, 200);
 
     // Removing Bob takes him off the roster and signs him out of every browser at once.
     const pending = (await (await post("/api/channels/invite", { principalId: bob.id })).json()) as Code;
@@ -94,6 +145,12 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.ok(!(await people()).invites.some(invite => invite.code === pending.code), "his own codes go with him");
     assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 401);
     assert.equal((await mcp()).status, 401, "and out of the side door");
+    roster.reload();
+    roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [oldFeishu] } : person));
+    assert.equal((await post(revoke, { principalId: ada.id, identity: oldFeishu })).status, 200);
+    const remainingAdmin = (await people()).people.find(row => row.id === ada.id)!;
+    assert.deepEqual(remainingAdmin.identities, []);
+    assert.equal(remainingAdmin.lastAdmin, true, "revoking the only recorded identity does not remove the admin");
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;

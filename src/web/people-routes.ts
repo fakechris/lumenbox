@@ -10,7 +10,7 @@
  */
 import { apiError } from "./api-error.ts";
 import { invitationLink } from "./sign-in.ts";
-import type { Principal, Principals, Role } from "../host/principals.ts";
+import { soleAdmin, type Principal, type Principals, type Role } from "../host/principals.ts";
 import type { Invite } from "../host/invite-redeem.ts";
 import { doorOfIdentity } from "../host/self-merge.ts";
 import type { InviteStore } from "./invite-store.ts";
@@ -39,6 +39,9 @@ export interface PeopleDeps {
   readJson: () => Promise<Record<string, unknown>>;
   /** Every browser the person holds stops being served; returns their new generation. */
   signOut: (principalId: string) => number;
+  usableSignIns: (person: Principal) => readonly string[];
+  retiredSignIn: (person: Principal, identity: string) => boolean;
+  planRemoval: (person: Principal, kept: Principal[], disposition: unknown) => () => Promise<void>;
   /** Personal boxes: the quota that applies to the person (null: none) and how many they hold. */
   boxesOf: (principalId: string) => { quota: number | null; held: number };
   /** When each person last did something: wrote through a door, spent, or opened the app. */
@@ -53,12 +56,14 @@ export interface PeopleDeps {
 type Reply = { status: number; body: unknown };
 
 export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Reply | undefined> {
-  if (!["GET /api/people", "POST /api/principals/remove", "POST /api/principals/logout", "POST /api/channels/invite"].includes(route)) return undefined;
+  const removing = route === "POST /api/principals/remove";
+  const revoking = route === "POST /api/principals/revoke-sign-in";
+  if (!removing && !revoking && !["GET /api/people", "POST /api/principals/logout", "POST /api/channels/invite"].includes(route)) return undefined;
   if (deps.refusedAdmin()) return { status: 0, body: undefined };
   const now = (deps.now ?? Date.now)();
   const { principals, invites } = deps;
   principals.reload();
-  invites.dropWhere(invite => invite.expiresAt < now);
+  if (!removing && !revoking) invites.dropWhere(invite => invite.expiresAt < now);
 
   if (route === "GET /api/people") {
     const people = principals.list(), active = deps.lastActive(people), admins = people.filter(person => person.role === "admin").length;
@@ -85,16 +90,36 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
   }
 
   const body = await deps.readJson();
+  principals.reload();
+  if (deps.refusedAdmin()) return { status: 0, body: undefined };
 
-  if (route === "POST /api/principals/remove") {
+  if (removing || revoking) {
     const roster = principals.list(), person = principals.byId(String(body.principalId ?? ""));
     if (person === undefined) return { status: 404, body: apiError("person-unknown", { person: String(body.principalId ?? "") }) };
+    if (revoking) {
+      const identity = body.identity;
+      if (typeof identity !== "string" || !person.identities.includes(identity))
+        return { status: 404, body: apiError("sign-in-unknown") };
+      const identities = person.identities.filter(entry => entry !== identity);
+      if (!deps.retiredSignIn(person, identity)) {
+        if (identities.length === 0) return { status: 409, body: apiError("sign-in-last") };
+        if (soleAdmin(roster) === person.id && !deps.usableSignIns({ ...person, identities }).length)
+          return { status: 409, body: apiError("sign-in-last-admin") };
+      }
+      principals.save(roster.map(entry => entry.id === person.id ? { ...entry, identities } : entry));
+      return { status: 200, body: { principals: principals.list() } };
+    }
     const kept = roster.filter(entry => entry.id !== person.id);
     if (leavesNoAdmin(roster, kept)) return { status: 409, body: apiError("last-admin") };
+    let dispose: () => Promise<void>;
+    try { dispose = deps.planRemoval(person, kept, body.disposition); }
+    catch (error) { return { status: 409, body: { error: (error as Error).message } }; }
     principals.save(kept);
     deps.signOut(person.id);
     invites.dropWhere(invite => invite.principalId === person.id);
     deps.log(`principal removed: ${person.name} (${person.id}) by ${deps.callerId() ?? "the operator"}`);
+    try { await dispose(); }
+    catch (error) { return { status: 409, body: { error: (error as Error).message } }; }
     return { status: 200, body: { principals: principals.list() } };
   }
 
