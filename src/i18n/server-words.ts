@@ -44,6 +44,7 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "page.recovery.access-removed": ["你的访问权限已被移除", "Your access was removed"],
   "page.recovery.session-expired": ["你的会话已过期", "Your session expired"],
   "page.recovery.sign-in-expired": ["登录二维码已过期", "Your sign-in QR code expired"],
+  "page.recovery.bootstrap-unavailable": ["首位管理员设置不可用", "First administrator setup is unavailable"],
   "page.recovery.contact": ["如果无法重新登录，请联系本安装的管理员。", "If you can't sign in again, contact this installation's administrator."],
   "page.recovery.login": ["前往登录", "Go to sign-in"],
   "page.recovery.desktop": ["在 LumenBox 桌面应用中，切换到个人安装，打开设置 → 组织，断开此组织，然后用组织地址或管理员提供的新邀请链接重新加入。", "In the LumenBox desktop app, switch to your personal installation and open Settings → Organisations. Disconnect this organisation, then rejoin using its address or a fresh invite link from your admin."],

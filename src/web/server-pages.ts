@@ -15,7 +15,7 @@ function escapeHtml(value: string): string {
 const lang = (locale: Locale): string => (locale === "zh" ? "zh-CN" : "en");
 
 export function signInRecoveryPage(
-  reason: "sign-in-required" | "access-removed" | "session-expired" | "sign-in-expired",
+  reason: "sign-in-required" | "access-removed" | "session-expired" | "sign-in-expired" | "bootstrap-unavailable",
   locale: Locale,
   { setup = false, orgView = false } = {},
 ): string {

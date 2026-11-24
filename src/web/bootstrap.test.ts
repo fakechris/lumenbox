@@ -26,6 +26,7 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     stop = await start();
     const setup = async (headers: Record<string, string>) => (await (await fetch(base + "/api/mcp", { headers })).json()).setup;
     assert.deepEqual(await setup({ authorization: "Bearer fixture" }), { admins: 0, bootstrap: true });
+    assert.match(await (await fetch(base + "/login?lang=en")).text(), /href="\/bootstrap">Set up the first administrator/);
     for (const body of ["{", "null", "[]"]) {
       const malformed = await fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(1500) });
       assert.equal(malformed.status, 400);
@@ -79,7 +80,15 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     const roster = new Principals().list();
     assert.equal(roster.length, 1); assert.match(roster[0]!.id, /^fixture:person[01]$/); assert.equal(roster[0]!.role, "admin");
     assert.equal((await begin(code)).status, 400);
-    assert.equal((await fetch(base + "/bootstrap")).status, 404);
+    assert.doesNotMatch(await (await fetch(base + "/login?lang=en")).text(), /href="\/bootstrap"/);
+    const stale = await fetch(base + "/bootstrap?lang=en", { headers: { accept: "text/html" } });
+    assert.equal(stale.status, 404);
+    assert.equal(stale.headers.get("cache-control"), "no-store");
+    assert.match(stale.headers.get("content-type")!, /^text\/html/);
+    assert.match(await stale.text(), /First administrator setup is unavailable[\s\S]+href="\/login">Go to sign-in/);
+    const api = await fetch(base + "/bootstrap", { headers: { accept: "application/json" } });
+    assert.equal(api.status, 404);
+    assert.equal((await api.json()).code, "bootstrap-unavailable");
     assert.equal(logs.some(line => line.includes(code)), false);
     stop(); stop = await start();
     assert.equal((await fetch(base + "/bootstrap")).status, 404);

@@ -96,7 +96,7 @@ import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { clampContract, describeTask, isLive, isTaskStatus, TASK_STATUSES, type Task, type TaskStore } from "./tasks.ts"; import { BlockerError, notReady, parseBlockers } from "./task-deps.ts"; import { citationFor, DEFAULT_REVIEWERS_PER_CLAIM, type VerificationLedger } from "./review-dispatch.ts";
-import { createdTaskVisibility } from "./task-audience.ts";
+import { taskVisibilityNote } from "./task-audience.ts";
 import {
   type BotTemplate,
   describeTemplate,
@@ -5054,7 +5054,7 @@ export async function dispatchTool(
         if (created === undefined) return { text: "A task needs a title.", isError: true };
         const told = context.unrequested === true ? ` ${PROPOSED_INSTEAD}` : tellAssignee(context, created.id, created.title, assigneeId);
         const waits = parent !== undefined && isLive(parent.status) && !(blockedBy ?? []).includes(parent.id) && board.update(parent.id, { blockedBy: [...new Set([...(parent.blockedBy ?? []), created.id])] }, context.agent.id, context.turnId) !== undefined ? ` ${parent.id} now waits on it; it stays open until its pieces are finished, and its assignee is woken then.` : "";
-        return { text: `Created ${describeTask(created, nameOf, board)}.${told}${waits} ${createdTaskVisibility(created, context.agent.id)}` };
+        return { text: `Created ${describeTask(created, nameOf, board)}.${told}${waits} ${taskVisibilityNote(created, context.agent.id, context.registry)}` };
       }
 
       if (action === "propose_close") {
@@ -5082,7 +5082,7 @@ export async function dispatchTool(
         if (taken === undefined) {
           return { text: `No task ${String(input.id ?? "")} on the board.`, isError: true };
         }
-        return { text: `You are on it: ${describeTask(taken.task, nameOf, board)}.` };
+        return { text: `You are on it: ${describeTask(taken.task, nameOf, board)}. ${taskVisibilityNote(taken.task, context.agent.id, context.registry)}` };
       }
 
       if (isDeliveryAction(action)) return deliveryTool(board, input, context);
@@ -5138,8 +5138,7 @@ export async function dispatchTool(
         return {
           text:
             `${describeTask(updated.task, nameOf, board)}.` +
-            (updated.coerced !== undefined ? `\n\n${updated.coerced}` : "") +
-            told,
+            told + (assigneeId !== undefined ? ` ${taskVisibilityNote(updated.task, context.agent.id, context.registry)}` : ""),
         };
       }
 

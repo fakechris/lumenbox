@@ -7360,7 +7360,7 @@ export const LOGIN_HTML = `<!doctype html>
 <div class="card">
   <h1>{{ui.login.sign-in-to-lumenbox}}</h1>
   <p class="sub">{{ui.login.an-admin-gives-you-a}}</p>
-  <p class="note"><a href="/bootstrap">{{ui.login.set-up-the-first-administrator}}</a> {{ui.login.on-a-new-installation}}</p><!--sign-in-doors-->
+  <!--bootstrap-setup--><p class="note"><a href="/bootstrap">{{ui.login.set-up-the-first-administrator}}</a> {{ui.login.on-a-new-installation}}</p><!--/bootstrap-setup--><!--sign-in-doors-->
   <label for="code">{{ui.login.invite-code}}</label>
   <input id="code" autocomplete="off" spellcheck="false" placeholder="4F7KQZ" autofocus>
   <label for="name">{{ui.login.your-name}}</label>

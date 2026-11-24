@@ -5,6 +5,7 @@ import { SurfaceLedger } from "./show-ui.ts";
 import { ResultChecks } from "./result-check-policy.ts";
 import { Claims } from "./claims.ts";
 import { PolicyGate } from "./policy.ts";
+import { planCards } from "./plan-cards.ts";
 /**
  * The episodes that went wrong, as tests.
  *
@@ -4649,10 +4650,31 @@ test("agent suggestions during a user request remain internal until a person com
 
 test("an agent asked to create team work learns when it is actually visible in All work", async () => {
   const tasks = new TaskStore(null), visibility: string[] = [];
+  let reassignedPlanItem: string | undefined, planVisibility: string | undefined;
+  let takingPlan = false;
   const episode = await runEpisode({
-    team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Runner" }], tasks, says: ["Create a shared task Bob can see."],
+    team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Runner", tools: ["Tasks"] }], tasks, says: [],
+    drive: async ({ bus, registry, frontId, say }) => {
+      await say("Create a shared task Bob can see.");
+      const parent = tasks.create({ title: "Audit inventory", requester: "web", assigneeId: frontId, conversation: "main" })!;
+      [reassignedPlanItem] = planCards(tasks).open({ agentId: frontId, parent: "main", taskId: parent.id, plan: { brief: "Audit inventory", items: ["Desk"], prompt: "Review {{item}}" } });
+      assert.ok(reassignedPlanItem);
+      const runner = registry.resolve("Runner").id;
+      assert.equal(tasks.update(reassignedPlanItem, { assigneeId: runner }, frontId)?.task.assigneeId, runner);
+      bus.sendFromUser(runner, "Take the reassigned plan item.");
+      await bus.wake(runner);
+      await bus.idle();
+    },
     script: ({ agent, round, messages }) => {
-      if (agent !== "Ada") return undefined;
+      if (agent !== "Ada") {
+        if (reassignedPlanItem === undefined || planVisibility !== undefined) return undefined;
+        if (!takingPlan) {
+          takingPlan = true;
+          return { call: "Tasks", input: { action: "take", id: reassignedPlanItem } };
+        }
+        planVisibility = JSON.stringify(messages.at(-1)?.content);
+        return { say: "I took the plan item." };
+      }
       if (round) visibility.push(JSON.stringify(messages.at(-1)?.content));
       if (round === 0) return { call: "Tasks", input: { action: "create", title: "Unassigned draft" } };
       if (round === 1) return { call: "Tasks", input: { action: "create", title: "Internal step", assignee: "Runner" } };
@@ -4667,9 +4689,39 @@ test("an agent asked to create team work learns when it is actually visible in A
     assert.match(visibility[1] ?? "", /not a standalone card in All work/);
     assert.match(visibility[2] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
     assert.match(visibility[3] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
+    assert.match(visibility[4] ?? "", /not a standalone card in All work/);
+    assert.ok(visibility.every(result => !result.includes("restricted box")));
+    assert.match(planVisibility ?? "", /You are on it: .*not a standalone card in All work/);
     const adaId = episode.registry.resolve("Ada").id;
     assert.equal(tasks.list().find(task => task.title === "Self-assigned task")?.assigneeId, adaId);
     assert.equal(tasks.list().find(task => task.title === "Unassigned draft")?.assigneeId, adaId);
+  } finally { episode.cleanup(); }
+});
+
+test("assigning a task on a personal box does not make it organisation-wide (INV-2063)", async () => {
+  const tasks = new TaskStore(null), results: string[] = [];
+  const idOf = (title: string) => tasks.list().find(task => task.title === title)?.id;
+  const episode = await runEpisode({
+    team: [{ name: "Nina", tools: ["Tasks"] }], tasks, says: [],
+    drive: async ({ registry, say }) => {
+      registry.updateBox(registry.box.id, { members: ["operator"] });
+      await say("Open a task my organisation can see.");
+    },
+    script: ({ round, messages }) => {
+      if (round) results.push(JSON.stringify(messages.at(-1)?.content));
+      if (round === 0) return { call: "Tasks", input: { action: "create", title: "Draft", parent: "none" } };
+      if (round === 1) return { call: "Tasks", input: { action: "update", id: idOf("Draft"), assignee: "Nina" } };
+      if (round === 2) return { call: "Tasks", input: { action: "create", title: "Assigned", parent: "none", assignee: "Nina" } };
+      if (round === 3) return { call: "Tasks", input: { action: "create", title: "Unclaimed", parent: "none" } };
+      if (round === 4) return { call: "Tasks", input: { action: "take", id: idOf("Unclaimed") } };
+      return { say: "These tasks are local to this box. Use the Shared box for organisation-wide work." };
+    },
+  });
+  try {
+    assert.equal(results.length, 5);
+    for (const result of results) assert.match(result, /restricted box is not organisation-wide[^"]+with an agent on a Shared box/);
+    for (const index of [0, 3]) assert.match(results[index]!, /Unassigned: other signed-in box members cannot see/);
+    for (const index of [1, 2, 4]) assert.match(results[index]!, /members of the assignee’s box, not to people outside that box/);
   } finally { episode.cleanup(); }
 });
 

@@ -35,6 +35,16 @@ const labelled = (text: string, control: Node) => {
 };
 const t = (key: string, args?: Record<string, string>) => tr(key, "en", args);
 
+test("host execution availability uses wrapping guidance instead of a truncated summary", () => {
+  const reason = "Host execution is turned off. An operator enables it in Settings.";
+  const document = { createTextNode: (text: string) => el("#text", "", text) };
+  const context = vm.createContext({ el, t, labelled, document, settings: { me: { role: "admin" } }, reason });
+  vm.runInContext(NEXT_SET_BOXES_JS, context);
+  const form = vm.runInContext("boxSet.config = { hostExec: { unavailableReason: reason } }; hostBlock()", context) as Node;
+  assert.equal(form.querySelector(".guidance")?.textContent, reason);
+  assert.equal(form.querySelector(".why"), undefined);
+});
+
 test("reset explains the real data loss and labels confirmation with the configured name", () => {
   const context = vm.createContext({ el, t, labelled });
   vm.runInContext(NEXT_SET_BOXES_JS, context);
