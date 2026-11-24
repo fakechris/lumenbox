@@ -4759,6 +4759,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // The People list, removing a person, and invitation codes: people-routes.ts (INV-2053, INV-2054, INV-2056, INV-2057).
         const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req), signOut: id => epochs.bump(id),
+          planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, checkBoxResidents, boxResidents),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });
         if (peopleReply !== undefined) { if (peopleReply.status !== 0) send(res, peopleReply.status, peopleReply.body); return; }
@@ -4837,17 +4838,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               identities,
             });
           }
-          if (leavesNoAdmin(principals.list(), roster)) { send(res, 409, apiError("last-admin")); return; } // INV-2053
           principals.reload();
-          if (refusedRole("admin")) return;
-          let dispose: () => Promise<void>;
-          try {
-            dispose = planBoxDispositions(personalBoxes, principals.list(), roster, body.personalBoxes, personalQuota, mayProvision, checkBoxResidents, boxResidents);
+          const previous = principals.list();
+          if (leavesNoAdmin(previous, roster)) { send(res, 409, apiError("last-admin")); return; } // INV-2053
+          if (previous.some(person => !roster.some(next => next.id === person.id))) {
+            send(res, 409, apiError("principals-use-remove")); return;
           }
-          catch (error) { send(res, 409, { error: (error as Error).message }); return; }
           principals.save(roster);
-          try { await dispose(); }
-          catch (error) { send(res, 409, { error: (error as Error).message }); return; }
           log(`principals roster updated (${roster.length} people)`);
           send(res, 200, { principals: principals.list() });
           return;

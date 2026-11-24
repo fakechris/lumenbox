@@ -156,51 +156,40 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
 }
 
 export function planBoxDispositions(
-  boxes: PersonalBoxes, previous: Principal[], roster: Principal[], choices: unknown,
+  boxes: PersonalBoxes, owner: Principal, roster: Principal[], disposition: unknown,
   quota: Deps["quota"], authorize: Deps["authorize"], checkResidents: (ids: string[], deleting: boolean) => void,
   residents: Deps["residents"],
 ): () => Promise<void> {
-  const removed = new Map(previous.filter(person => !roster.some(next => next.id === person.id)).map(person => [person.id, person]));
-  const rows = boxes.inventory().filter(box => removed.has(box.owner) && !box.retained);
-  const selected = choices && typeof choices === "object" && !Array.isArray(choices)
-    ? choices as Record<string, { action?: unknown; recipient?: unknown; boxIds?: unknown; agentIds?: unknown }> : {};
-  const choiceFor = (owner: string) => Object.hasOwn(selected, owner) ? selected[owner] : undefined;
-  for (const owner of removed.keys()) {
-    const ids = rows.filter(box => box.owner === owner).map(box => box.id), choice = choiceFor(owner);
-    if (ids.length && !choice) throw new Error("Choose what to do with the member’s personal computers before removing them.");
-    if (choice) confirmIds(choice.boxIds, ids, changedComputers);
-    if (choice?.action === "delete") confirmIds(choice.agentIds, ids.flatMap(id => residents(id).map(agent => agent.id)), changedAgents);
+  const rows = boxes.list(owner.id), ids = rows.map(box => box.id);
+  const choice = disposition && typeof disposition === "object" && !Array.isArray(disposition)
+    ? disposition as { action?: unknown; recipient?: unknown; boxIds?: unknown; agentIds?: unknown } : undefined;
+  if (choice) confirmIds(choice.boxIds, ids, changedComputers);
+  if (!choice || (choice.action !== "keep" && choice.action !== "transfer" && choice.action !== "delete")) {
+    if (rows.length || disposition !== undefined) throw new Error("Choose what to do with the member’s personal computers before removing them.");
+    return async () => {};
   }
   if (!rows.length) return async () => {};
-  const entries = boxes.quotaEntries(), assigned = new Map<string, number>();
-  const stopping: string[] = [], deleting: string[] = [];
-  const ops = rows.map(box => {
-    const choice = choiceFor(box.owner);
-    if (!choice || !["keep", "transfer", "delete"].includes(String(choice.action))) throw new Error("Choose what to do with the member’s personal computers.");
-    if (box.status === "provisioning" || box.status === "deleting" || box.status === "interrupted") throw new Error("Finish the pending computer operation before removing this person.");
-    const owner = removed.get(box.owner)!;
-    if (choice.action === "transfer") {
-      const recipient = roster.find(person => person.id === choice.recipient && roleAtLeast(person.role, "driver") && person.identities.length > 0);
-      if (!recipient || !authorize(recipient.id)) throw new Error("Choose an eligible team member for the transfer.");
-      if (personalBoxUsesQuota(box.status)) {
-        const held = personalBoxesOf(entries, recipient.id).length + (assigned.get(recipient.id) ?? 0);
-        const limit = quota(recipient.id);
-        if (limit !== undefined && held >= limit) throw new Error("The recipient has no personal box quota available.");
-        assigned.set(recipient.id, (assigned.get(recipient.id) ?? 0) + 1);
-      }
-      return async () => { boxes.transfer(box.id, recipient.id, recipient.name); };
-    }
+  boxes.checkMemberRemoval(owner.id);
+  let apply: (id: string) => Promise<void>;
+  if (choice.action === "transfer") {
+    const recipient = roster.find(person => person.id === choice.recipient && roleAtLeast(person.role, "driver") && person.identities.length > 0);
+    if (!recipient || !authorize(recipient.id)) throw new Error("Choose an eligible team member for the transfer.");
+    const needed = rows.filter(box => personalBoxUsesQuota(box.status)).length;
+    const limit = quota(recipient.id);
+    if (needed && limit !== undefined && personalBoxesOf(boxes.quotaEntries(), recipient.id).length + needed > limit)
+      throw new Error("The recipient has no personal box quota available.");
+    apply = async id => { boxes.transfer(id, recipient.id, recipient.name); };
+  } else {
     const deleteData = choice.action === "delete";
-    (deleteData ? deleting : stopping).push(box.id);
-    return async () => {
-      const result = await boxes.remove(box.owner, box.id, deleteData, { ownerName: owner.name, deleteAgents: deleteData });
+    if (deleteData) confirmIds(choice.agentIds, ids.flatMap(id => residents(id).map(agent => agent.id)), changedAgents);
+    checkResidents(ids, deleteData);
+    apply = async id => {
+      const result = await boxes.remove(owner.id, id, deleteData, { ownerName: owner.name, deleteAgents: deleteData });
       if (result.error) throw new Error(result.error);
     };
-  });
-  if (stopping.length) checkResidents(stopping, false);
-  if (deleting.length) checkResidents(deleting, true);
+  }
   return async () => {
-    const results = await Promise.allSettled(ops.map(operation => operation()));
+    const results = await Promise.allSettled(ids.map(apply));
     if (results.some(result => result.status === "rejected"))
       throw new Error("The member was removed, but some computers still need attention in Computers.");
   };

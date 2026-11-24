@@ -226,6 +226,10 @@ export class PersonalBoxes {
     };
   }
   list(owner: string) { return this.listed(owner).map(row => this.summary(row)); }
+  checkMemberRemoval(owner: string): void {
+    if (this.listed(owner).some(row => row.status === "provisioning" || row.status === "deleting" || this.running(row)))
+      throw new Error("Finish the pending computer operation before removing this person.");
+  }
   inventory() { return this.listed().map(row => this.summary(row)); }
   names(): Map<string, string> {
     return this.read(db => new Map(this.records(db).filter(row => row.status !== "deleted").map(row => [row.id, row.displayName ?? row.name])));

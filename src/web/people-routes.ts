@@ -36,6 +36,7 @@ export interface PeopleDeps {
   refusedAdmin: () => boolean;
   readJson: () => Promise<Record<string, unknown>>;
   signOut: (principalId: string) => void;
+  planRemoval: (person: Principal, kept: Principal[], disposition: unknown) => () => Promise<void>;
   /** Personal boxes: the quota that applies to the person (null: none) and how many they hold. */
   boxesOf: (principalId: string) => { quota: number | null; held: number };
   /** When each person last did something: wrote through a door, spent, or opened the app. */
@@ -55,7 +56,8 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
   const now = (deps.now ?? Date.now)();
   const { principals, invites } = deps;
   principals.reload();
-  for (const [code, invite] of invites) if (invite.expiresAt < now) invites.delete(code);
+  if (route !== "POST /api/principals/remove")
+    for (const [code, invite] of invites) if (invite.expiresAt < now) invites.delete(code);
 
   if (route === "GET /api/people") {
     const people = principals.list(), active = deps.lastActive(people), admins = people.filter(person => person.role === "admin").length;
@@ -84,14 +86,20 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
   const body = await deps.readJson();
 
   if (route === "POST /api/principals/remove") {
+    principals.reload();
     const roster = principals.list(), person = principals.byId(String(body.principalId ?? ""));
     if (person === undefined) return { status: 404, body: apiError("person-unknown", { person: String(body.principalId ?? "") }) };
     const kept = roster.filter(entry => entry.id !== person.id);
     if (leavesNoAdmin(roster, kept)) return { status: 409, body: apiError("last-admin") };
+    let dispose: () => Promise<void>;
+    try { dispose = deps.planRemoval(person, kept, body.disposition); }
+    catch (error) { return { status: 409, body: { error: (error as Error).message } }; }
     principals.save(kept);
     deps.signOut(person.id);
     for (const [code, invite] of invites) if (invite.principalId === person.id) invites.delete(code);
     deps.log(`principal removed: ${person.name} (${person.id}) by ${deps.callerId() ?? "the operator"}`);
+    try { await dispose(); }
+    catch (error) { return { status: 409, body: { error: (error as Error).message } }; }
     return { status: 200, body: { principals: principals.list() } };
   }
 

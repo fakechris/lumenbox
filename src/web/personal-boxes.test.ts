@@ -398,13 +398,15 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
       const response = await fetch(base + path, {
         method: body === undefined ? "GET" : "POST",
         headers: { authorization: "Bearer personal-lifecycle", "content-type": "application/json",
-          ...(member ? { "x-agentbox-user": `web:${member}`, "x-agentbox-role": member === "admin" ? "admin" : "member" } : {}) },
+          ...(member ? { "x-agentbox-user": `web:${member}`, "x-agentbox-role": member === "admin" ? "owner" : "member" } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       return { status: response.status, data: await response.json() };
     };
-    assert.equal((await call("/api/quotas", { personalBoxQuota: 1, personBoxQuotas: { alice: 2, charlie: 2 } })).status, 200);
+    assert.equal((await call("/api/quotas", { personalBoxQuota: 1, personBoxQuotas: { alice: 2, bob: 2, charlie: 2 } })).status, 200);
     const collection = "/api/personal-boxes";
+    const removeMember = (principalId: string, disposition?: unknown, member?: string) =>
+      call("/api/principals/remove", { principalId, disposition }, member);
     const create = async (person: string, name: string, requestId = "first") => {
       const result = await call(collection + "/create", { requestId, name }, person);
       assert.equal(result.status, 200, JSON.stringify(result.data));
@@ -415,25 +417,27 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const bob = await create("bob", "Bob’s computer");
     const charlie = await create("charlie", "Charlie’s computer");
     const dana = await create("dana", "Dana’s computer");
+    const bobSecond = await create("bob", "Bob’s second computer", "second");
     const resource = (id: string) => `personal-${id.slice(4)}`;
     const registry = new AgentRegistry(join(home, "agents"));
     const bea = registry.create({ name: "Bea", boxId: bob });
-    const dee = registry.create({ name: "Dee", boxId: dana });
+    const ben = registry.create({ name: "Ben", boxId: bobSecond });
     principals.save(people.map(person => person.id === "bob" ? { ...person, role: "viewer" } : person));
     assert.equal((await call(collection + "/remove", { id: bob, deleteData: true, deleteAgents: true }, "bob")).status, 403);
     assert.ok(registry.has(bea.id));
     assert.ok(fake.pods.has(resource(bob)));
     principals.save(people);
-    for (const agent of registry.list()) if (agent.id !== bea.id && agent.id !== dee.id) registry.remove(agent.id, { archive: false });
-    const lastAgents = await call("/api/principals", {
-      principals: people.filter(person => person.id !== "bob" && person.id !== "dana"),
-      personalBoxes: { bob: { action: "delete", boxIds: [bob], agentIds: [bea.id] }, dana: { action: "delete", boxIds: [dana], agentIds: [dee.id] } },
-    });
+    for (const agent of registry.list()) if (agent.id !== bea.id && agent.id !== ben.id) registry.remove(agent.id, { archive: false });
+    const deleteBobsBoxes = { action: "delete", boxIds: [bob, bobSecond], agentIds: [bea.id, ben.id] };
+    assert.equal((await removeMember("bob", deleteBobsBoxes, "alice")).status, 403);
+    const lastAgents = await removeMember("bob", deleteBobsBoxes, "admin");
     assert.equal(lastAgents.status, 409);
     assert.match(lastAgents.data.error, /Keep at least one agent/);
-    assert.ok(registry.has(bea.id) && registry.has(dee.id));
-    assert.ok(fake.pods.has(resource(bob)) && fake.pods.has(resource(dana)));
+    assert.ok(registry.has(bea.id) && registry.has(ben.id));
+    assert.ok(fake.pods.has(resource(bob)) && fake.pods.has(resource(bobSecond)));
     assert.equal((await call(collection, undefined, "bob")).status, 200);
+    const dee = registry.create({ name: "Dee", boxId: dana });
+    assert.equal((await call(collection + "/remove", { id: bobSecond, deleteData: true, deleteAgents: true, agentIds: [ben.id] }, "bob")).status, 200);
     const renamed = (await call(collection + "/rename", { id: alice, name: "Desk" }, "alice")).data.boxes[0];
     assert.equal(renamed.name, "Desk");
     assert.equal(renamed.podStatus, "Running", "pod lookup uses the Kubernetes name after rename");
@@ -457,32 +461,38 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.equal(inventory.data.people.find((person: { id: string }) => person.id === "bob").held,
       quota.find((person: { id: string }) => person.id === "bob").held);
 
-    let roster = people.filter(person => person.id !== "bob");
-    assert.equal((await call("/api/principals", { principals: roster })).status, 409);
+    const roster = people.filter(person => person.id !== "bob");
+    const keepBob = { action: "keep", boxIds: [bob] };
+    const bypass = await call("/api/principals", { principals: roster, personalBoxes: { bob: keepBob } });
+    assert.equal(bypass.status, 409);
+    assert.equal(bypass.data.code, "principals-use-remove");
+    const invitation = (await call("/api/channels/invite", { principalId: "bob" })).data.code;
+    assert.ok(invitation);
+    assert.equal((await removeMember("bob")).status, 409);
+    assert.equal((await removeMember("bob", { ...keepBob, action: ["keep"] })).status, 409);
     assert.ok(fake.pods.has(resource(bob)), "removal without a disposition did not stop the pod");
     const extra = registry.create({ name: "New agent", boxId: bob });
     const staleAgents = { id: bob, deleteData: true, deleteAgents: true, agentIds: [bea.id] };
     assert.match((await call(collection + "/remove", staleAgents, "bob")).data.error, /agents on these computers changed/);
     assert.match((await call(collection + "/admin", { ...staleAgents, action: "delete" }, "admin")).data.error, /agents on these computers changed/);
-    const staleBoxes = await call("/api/principals", {
-      principals: roster, personalBoxes: { bob: { action: "delete", boxIds: [], agentIds: [] } },
-    });
+    const staleBoxes = await removeMember("bob", { action: "delete", boxIds: [], agentIds: [] });
     assert.equal(staleBoxes.status, 409);
     assert.match(staleBoxes.data.error, /computers changed/);
-    const staleRemoval = await call("/api/principals", {
-      principals: roster, personalBoxes: { bob: { action: "delete", boxIds: [bob], agentIds: [bea.id] } },
-    });
+    const staleRemoval = await removeMember("bob", { action: "delete", boxIds: [bob], agentIds: [bea.id] });
     assert.equal(staleRemoval.status, 409);
     assert.match(staleRemoval.data.error, /agents on these computers changed/);
     assert.ok(fake.pods.has(resource(bob)) && registry.has(bea.id) && registry.has(extra.id));
     assert.equal((await call(collection, undefined, "bob")).status, 200);
+    const invited = async () => (await call("/api/people")).data.invites.some((invite: { code: string }) => invite.code === invitation);
+    assert.equal(await invited(), true, "failed preflight leaves the member’s invitations intact");
     registry.remove(extra.id, { archive: false });
-    const removed = await call("/api/principals", { principals: roster, personalBoxes: { bob: { action: "keep", boxIds: [bob] } } });
+    const removed = await removeMember("bob", keepBob);
     assert.equal(removed.status, 200, JSON.stringify(removed.data));
     assert.equal(fake.pods.has(resource(bob)), false);
     assert.equal([...fake.pvcs].filter(([name]) => name.startsWith(resource(bob))).length, 3);
     assert.equal(registry.has(bea.id), true);
     assert.deepEqual((await call(collection, undefined, "bob")).status, 403);
+    assert.equal(await invited(), false, "successful removal revokes the member’s invitations");
     const retained = (await admin()).data.boxes.find((box: { id: string }) => box.id === bob);
     assert.equal(retained.ownerName, "Bob");
     assert.equal(retained.orphaned, true);
@@ -492,23 +502,20 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.ok(fake.pods.has(resource(bob)));
     assert.equal((await call(collection, undefined, "admin")).data.boxes[0].agents[0], "Bea");
 
-    roster = roster.filter(person => person.id !== "charlie");
     const spare = await create("charlie", "Charlie’s spare", "spare");
     assert.equal((await call(collection + "/remove", { id: spare, deleteData: false }, "charlie")).status, 200);
     const transfer = { action: "transfer", recipient: "alice", boxIds: [charlie, spare] };
-    assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { charlie: transfer } })).status, 200);
+    assert.equal((await removeMember("charlie", transfer)).status, 200);
     assert.equal((await call(collection, undefined, "alice")).data.held, 2);
     assert.ok(fake.pods.has(resource(charlie)), "transfer retained the original pod and volumes");
     assert.equal((await admin()).data.boxes.find((box: { id: string }) => box.id === spare).owner, "alice");
-    roster = roster.filter(person => person.id !== "dana");
     const erase = { action: "delete", boxIds: [dana], agentIds: [dee.id] };
-    assert.equal((await call("/api/principals", { principals: roster, personalBoxes: { dana: erase } })).status, 200);
+    assert.equal((await removeMember("dana", erase)).status, 200);
     assert.equal(fake.pods.has(resource(dana)), false);
     assert.equal([...fake.pvcs.keys()].some(name => name.startsWith(resource(dana))), false);
     assert.equal(registry.has(dee.id), false);
     assert.equal(row((await admin()).data.boxes, dana), undefined);
-    roster = roster.filter(person => person.id !== "constructor");
-    const removedComputerless = await call("/api/principals", { principals: roster, personalBoxes: {} });
+    const removedComputerless = await removeMember("constructor");
     assert.equal(removedComputerless.status, 200, JSON.stringify(removedComputerless.data));
     assert.equal((await call(collection, undefined, "constructor")).status, 403);
   } finally {

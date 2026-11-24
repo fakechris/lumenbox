@@ -197,6 +197,7 @@ export const SERVER_ERRORS = {
   "err.group-messages": ["groupMessages 必须是 \"all\" 或 \"addressed\"。", "groupMessages must be \"all\" or \"addressed\"."],
   "err.knock-unknown": ["没有这个 id 的人在等待。", "Nobody with that id is waiting."],
   "err.principals-array": ["principals 必须是数组", "principals must be an array"],
+  "err.principals-use-remove": ["请使用成员移除操作，不要从名单中省略成员。", "Use the member removal action instead of omitting a member from the roster."],
   "err.person-unknown": ["没有这个人：{person}", "No such person: {person}"],
   "err.last-admin": ["不能移除或降级最后一位管理员：先让另一个人成为管理员。", "The last admin can't be removed or demoted: make someone else an admin first."],
   "err.person-line-unknown": ["没有这一条", "No such line"],

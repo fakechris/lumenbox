@@ -105,13 +105,22 @@ function personActs(person) {
   var sure = el("button", "act-danger", t("ui.next.team.removeSure", { name: person.name })), keep = el("button", "act", t("ui.next.team.keep"));
   sure.addEventListener("click", function () {
     sure.disabled = true;
-    postJson("/api/principals/remove", { principalId: person.id }).then(function () { removing.id = ""; toast(t("ui.next.team.removed", { name: person.name })); loadPeople(); }, function (error) {
-      removing.id = ""; failed(error); loadPeople();
+    getJson("/api/personal-boxes/admin").then(function (inventory) {
+      sure.disabled = false;
+      if (removing.id !== person.id) return;
+      removeMemberComputerDialog(person, inventory, function (choice) {
+        sure.disabled = true;
+        postJson("/api/principals/remove", { principalId: person.id, disposition: choice || undefined }).then(function () {
+          removing.id = ""; toast(t("ui.next.team.removed", { name: person.name })); loadPeople(); refresh();
+        }, function (error) { removing.id = ""; failed(error); loadPeople(); refresh(); });
+      });
+    }, function (error) {
+      sure.disabled = false; failed(error);
     });
   });
   keep.addEventListener("click", function () { removing.id = ""; render(); });
   var what = el("div", "needbox");
-  what.appendChild(el("div", "", t("ui.next.team.removeWhat", { name: person.name, n: (person.boxes || {}).held || 0 })));
+  what.appendChild(el("div", "", t("ui.next.team.removeWhat", { name: person.name })));
   if (person.self) what.appendChild(el("div", "why", t("ui.next.team.removeSelf")));
   var both = el("div", "acts"); both.appendChild(sure); both.appendChild(keep); what.appendChild(both);
   var whole = el("div", ""); whole.appendChild(acts); whole.appendChild(what);

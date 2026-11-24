@@ -2125,7 +2125,7 @@ function renderPeople() {
     $("setpeople").innerHTML = '<div class="fieldnote" style="margin:0">{{ui.app.nobody-yet-add-a-person}}</div>';
     return;
   }
-  var admins = people.filter(function (p) { return p.role === "admin"; }).length; // the last admin's last sign-in has no Remove (INV-2053)
+  var admins = new Set(people.filter(function (p) { return p.role === "admin"; }).map(function (p) { return p.id; })).size;
   $("setpeople").innerHTML = people.map(function (p, i) {
     var roles = ["viewer", "driver", "admin"].map(function (role) {
       return '<option value="' + role + '"' + (p.role === role ? " selected" : "") + ">" + ({ viewer: "{{ui.role.viewer}}", driver: "{{ui.role.driver}}", admin: "{{ui.role.admin}}" }[role] || role) + "</option>";
@@ -2150,7 +2150,7 @@ document.getElementById("setpeople").addEventListener("change", function (event)
   savePeople();
 });
 
-function savePeople(dispositions) {
+function savePeople() {
   // Regroup rows back into principals by id, so one person's several ids are one entry.
   var byId = {};
   people.forEach(function (p) {
@@ -2161,7 +2161,7 @@ function savePeople(dispositions) {
   (window.rosterFetch || fetch)("/api/principals", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ principals: Object.keys(byId).map(function (k) { return byId[k]; }), personalBoxes: dispositions })
+    body: JSON.stringify({ principals: Object.keys(byId).map(function (k) { return byId[k]; }) })
   })
     .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}"); return d; }); })
     .then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
@@ -2185,12 +2185,17 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   if (idx === null || idx === undefined) return;
   event.preventDefault();
   var person = people[Number(idx)];
-  if (!person) return;
+  if (!person || !window.confirm(t("ui.next.team.removeWhat", { name: person.name }))) return;
   function remove(choice) {
-    people = people.filter(function (entry) { return entry !== person; });
-    renderPeople(); savePeople(choice ? Object.fromEntries([[person.id, choice]]) : undefined);
+    $("setpeoplestatus").textContent = "{{ui.app.saving}}";
+    (window.rosterFetch || fetch)("/api/principals/remove", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ principalId: person.id, disposition: choice || undefined })
+    }).then(function (res) {
+      return res.json().then(function (data) { if (!res.ok) throw new Error(data.error); });
+    }).then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
+      .catch(function (error) { $("setpeoplestatus").textContent = error.message; renderChannels(); });
   }
-  if (people.some(function (entry) { return entry !== person && entry.id === person.id; })) { remove(null); return; }
   fetch("/api/personal-boxes/admin").then(function (res) {
     return res.json().then(function (data) { if (!res.ok) throw new Error(data.error); return data; });
   }).then(function (data) { removeMemberComputerDialog(person, data, remove); })
