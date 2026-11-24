@@ -46,8 +46,26 @@ function startFailure(error: KubernetesError): PersonalBoxStartError {
   if (error instanceof BoxStartError) {
     return new PersonalBoxStartError(detail, error.reason, "Ask an administrator to check the pod's scheduling and container status, then retry.");
   }
+  // A ResourceQuota refuses with 403 too, before RBAC could be the reason: "exceeded quota" when
+  // the namespace is full, "failed quota: <name>: must specify limits.cpu" when the quota covers a
+  // resource the box pod does not declare (INV-2081).
   if (/exceeded quota/i.test(detail)) {
     return new PersonalBoxStartError(detail, "ResourceQuota", "Ask an administrator to free or increase namespace capacity, then retry.");
+  }
+  if (/failed quota|must specify (limits|requests)/i.test(detail)) {
+    return new PersonalBoxStartError(
+      detail,
+      "ResourceQuota",
+      "The namespace's ResourceQuota needs a resource limit or request the box does not set. Ask an administrator to add a LimitRange default for it, then retry.",
+    );
+  }
+  // A LimitRange refuses with 403: "maximum memory usage per Container is 8Gi, but limit is 65Gi".
+  if (/(maximum|minimum) \S+ usage per (container|pod)|limit to request ratio/i.test(detail)) {
+    return new PersonalBoxStartError(
+      detail,
+      "LimitRange",
+      "The box's CPU or memory is outside the namespace's LimitRange. Ask an administrator to align the LimitRange and the box's resources, then retry.",
+    );
   }
   if (/admission|webhook|violates podsecurity/i.test(detail) || error.status === 422) {
     return new PersonalBoxStartError(detail, "AdmissionDenied", "Ask an administrator to check the cluster admission policy, then retry.");
