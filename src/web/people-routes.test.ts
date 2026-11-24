@@ -74,11 +74,20 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.equal(bobAgain.principalId, bob.id);
     assert.equal(bobAgain.name, "Bob");
     assert.equal(bobAgain.role, "viewer", "a person's code carries their role, not the form's");
-    await login(bobAgain.code, "Bob on the laptop");
+    const laptop = await login(bobAgain.code, "Bob on the laptop");
     rows = (await people()).people;
     assert.equal(rows.length, 2);
     assert.equal(rows.find(row => row.id === bob.id)?.identities.length, 2);
     assert.equal((await post("/api/channels/invite", { principalId: "nobody" })).status, 404);
+    const revoke = "/api/principals/revoke-sign-in";
+    const laptopIdentity = rows.find(row => row.id === bob.id)!.identities.find(identity => !bob.identities.includes(identity))!;
+    const revocation = { principalId: bob.id, identity: laptopIdentity };
+    assert.equal((await post(revoke, revocation, bobHeaders)).status, 403);
+    assert.equal((await post(revoke, { ...revocation, principalId: ada.id })).status, 404);
+    assert.equal((await post(revoke, revocation)).status, 200);
+    assert.equal((await post(revoke, { principalId: bob.id, identity: bob.identities[0] })).status, 409, "a stale row click cannot revoke the last sign-in");
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: { cookie: laptop } })).status, 401);
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 200);
 
     // Removing Bob takes him off the roster and signs him out of every browser at once.
     const pending = (await (await post("/api/channels/invite", { principalId: bob.id })).json()) as Code;

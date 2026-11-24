@@ -51,12 +51,14 @@ export interface PeopleDeps {
 type Reply = { status: number; body: unknown };
 
 export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Reply | undefined> {
-  if (route !== "GET /api/people" && route !== "POST /api/principals/remove" && route !== "POST /api/channels/invite") return undefined;
+  const removing = route === "POST /api/principals/remove";
+  const revoking = route === "POST /api/principals/revoke-sign-in";
+  if (route !== "GET /api/people" && !removing && !revoking && route !== "POST /api/channels/invite") return undefined;
   if (deps.refusedAdmin()) return { status: 0, body: undefined };
   const now = (deps.now ?? Date.now)();
   const { principals, invites } = deps;
   principals.reload();
-  if (route !== "POST /api/principals/remove")
+  if (!removing && !revoking)
     for (const [code, invite] of invites) if (invite.expiresAt < now) invites.delete(code);
 
   if (route === "GET /api/people") {
@@ -85,10 +87,19 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
 
   const body = await deps.readJson();
 
-  if (route === "POST /api/principals/remove") {
+  if (removing || revoking) {
     principals.reload();
     const roster = principals.list(), person = principals.byId(String(body.principalId ?? ""));
     if (person === undefined) return { status: 404, body: apiError("person-unknown", { person: String(body.principalId ?? "") }) };
+    if (revoking) {
+      const identity = body.identity;
+      if (typeof identity !== "string" || !person.identities.includes(identity))
+        return { status: 404, body: apiError("sign-in-unknown") };
+      const identities = person.identities.filter(entry => entry !== identity);
+      if (identities.length === 0) return { status: 409, body: apiError("sign-in-last") };
+      principals.save(roster.map(entry => entry.id === person.id ? { ...entry, identities } : entry));
+      return { status: 200, body: { principals: principals.list() } };
+    }
     const kept = roster.filter(entry => entry.id !== person.id);
     if (leavesNoAdmin(roster, kept)) return { status: 409, body: apiError("last-admin") };
     let dispose: () => Promise<void>;

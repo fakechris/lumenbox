@@ -199,6 +199,8 @@ export const SERVER_ERRORS = {
   "err.principals-array": ["principals 必须是数组", "principals must be an array"],
   "err.principals-use-remove": ["请使用成员移除操作，不要从名单中省略成员。", "Use the member removal action instead of omitting a member from the roster."],
   "err.person-unknown": ["没有这个人：{person}", "No such person: {person}"],
+  "err.sign-in-unknown": ["此成员已没有这个登录身份。", "This member no longer has that sign-in."],
+  "err.sign-in-last": ["这是此成员最后一个登录身份。请刷新名单并使用成员移除操作。", "This is the member’s last sign-in. Refresh the roster and use the member removal action."],
   "err.last-admin": ["不能移除或降级最后一位管理员：先让另一个人成为管理员。", "The last admin can't be removed or demoted: make someone else an admin first."],
   "err.person-line-unknown": ["没有这一条", "No such line"],
   "err.person-field": ["field 必须是 {fields} 之一", "field must be one of {fields}"],

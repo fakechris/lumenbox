@@ -2186,27 +2186,29 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   event.preventDefault();
   var person = people[Number(idx)];
   if (!person) return;
-  if (people.some(function (entry) { return entry !== person && entry.id === person.id; })) {
-    if (!window.confirm(t("ui.app.remove-confirm", { name: person.name, identity: person.identity }))) return;
-    people.splice(Number(idx), 1);
-    renderPeople();
-    savePeople();
-    return;
-  }
-  if (!window.confirm(t("ui.next.team.removeWhat", { name: person.name }))) return;
-  function remove(choice) {
+  function postRemoval(path, body) {
     $("setpeoplestatus").textContent = "{{ui.app.saving}}";
-    (window.rosterFetch || fetch)("/api/principals/remove", {
+    (window.rosterFetch || fetch)(path, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ principalId: person.id, disposition: choice || undefined })
+      body: JSON.stringify(body)
     }).then(function (res) {
       return res.json().then(function (data) { if (!res.ok) throw new Error(data.error); });
     }).then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
       .catch(function (error) { $("setpeoplestatus").textContent = error.message; renderChannels(); });
   }
+  if (people.some(function (entry) { return entry !== person && entry.id === person.id; })) {
+    if (window.confirm(t("ui.app.remove-confirm", { name: person.name, identity: person.identity })))
+      postRemoval("/api/principals/revoke-sign-in", { principalId: person.id, identity: person.identity });
+    return;
+  }
+  if (!window.confirm(t("ui.next.team.removeWhat", { name: person.name }))) return;
   fetch("/api/personal-boxes/admin").then(function (res) {
     return res.json().then(function (data) { if (!res.ok) throw new Error(data.error); return data; });
-  }).then(function (data) { removeMemberComputerDialog(person, data, remove); })
+  }).then(function (data) {
+    removeMemberComputerDialog(person, data, function (choice) {
+      postRemoval("/api/principals/remove", { principalId: person.id, disposition: choice || undefined });
+    });
+  })
     .catch(function (error) { $("setpeoplestatus").textContent = error.message; });
 });
 
