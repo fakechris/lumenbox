@@ -2152,7 +2152,7 @@ document.getElementById("setpeople").addEventListener("change", function (event)
 
 function savePeople() {
   // Regroup rows back into principals by id, so one person's several ids are one entry.
-  var byId = {};
+  var byId = Object.create(null);
   people.forEach(function (p) {
     if (!byId[p.id]) byId[p.id] = { id: p.id, name: p.name, role: p.role, identities: [] };
     if (p.identity) byId[p.id].identities.push(p.identity);
@@ -2185,7 +2185,15 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   if (idx === null || idx === undefined) return;
   event.preventDefault();
   var person = people[Number(idx)];
-  if (!person || !window.confirm(t("ui.next.team.removeWhat", { name: person.name }))) return;
+  if (!person) return;
+  if (people.some(function (entry) { return entry !== person && entry.id === person.id; })) {
+    if (!window.confirm(t("ui.app.remove-confirm", { name: person.name, identity: person.identity }))) return;
+    people.splice(Number(idx), 1);
+    renderPeople();
+    savePeople();
+    return;
+  }
+  if (!window.confirm(t("ui.next.team.removeWhat", { name: person.name }))) return;
   function remove(choice) {
     $("setpeoplestatus").textContent = "{{ui.app.saving}}";
     (window.rosterFetch || fetch)("/api/principals/remove", {

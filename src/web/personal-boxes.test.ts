@@ -384,7 +384,7 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
   try {
     const people = ["Admin", "Alice", "Bob", "Charlie", "Dana", "Constructor"].map(name => ({
       id: name.toLowerCase(), name, role: (name === "Admin" ? "admin" : "driver") as "admin" | "driver" | "viewer",
-      identities: [`web:${name.toLowerCase()}`],
+      identities: [`web:${name.toLowerCase()}`, ...(name === "Bob" ? ["extra:bob"] : [])],
     }));
     const principals = new Principals();
     principals.save(people);
@@ -468,6 +468,27 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.equal(bypass.data.code, "principals-use-remove");
     const invitation = (await call("/api/channels/invite", { principalId: "bob" })).data.code;
     assert.ok(invitation);
+    const page = APP_PAGE("en");
+    const savePeople = /function savePeople\(\) \{[\s\S]*?\n}/.exec(page)?.[0];
+    const removeIdentity = /document\.getElementById\("setpeople"\)\.addEventListener\("click",[\s\S]*?\n}\);/.exec(page)?.[0];
+    assert.ok(savePeople && removeIdentity);
+    const rows = people.flatMap(person => person.identities.map(identity => ({ ...person, identity })));
+    const writes: ReturnType<typeof call>[] = [];
+    runInNewContext(savePeople + "\n" + removeIdentity, {
+      people: rows, window: { confirm: () => true }, t: String, $: () => ({}), renderPeople() {}, renderChannels() {},
+      fetch: (path: string, init?: { body?: string }) => {
+        const result = call(path, init?.body === undefined ? undefined : JSON.parse(init.body));
+        writes.push(result);
+        return result.then(({ status, data }) => ({ ok: status === 200, json: async () => data }));
+      },
+      document: { getElementById: () => ({ addEventListener: (_type: string, click: (event: object) => void) => {
+        click({ target: { getAttribute: () => rows.findIndex(row => row.identity === "extra:bob") }, preventDefault() {} });
+      } }) },
+    });
+    const saved = await Promise.all(writes);
+    assert.deepEqual(saved.map(result => result.status), [200], "the classic row action only saves the remaining identities");
+    assert.deepEqual(saved[0]!.data.principals.find((person: { id: string }) => person.id === "bob")?.identities, ["web:bob"]);
+    assert.ok(fake.pods.has(resource(bob)), "revoking one identity did not stop the member’s computer");
     assert.equal((await removeMember("bob")).status, 409);
     assert.equal((await removeMember("bob", { ...keepBob, action: ["keep"] })).status, 409);
     assert.ok(fake.pods.has(resource(bob)), "removal without a disposition did not stop the pod");

@@ -442,7 +442,7 @@ export const UI_APP: Record<string, readonly [zh: string, en: string]> = {
   "ui.app.reloading": ["正在重新加载…", "reloading…"],
   "ui.app.remove": ["移除", "Remove"],
   "ui.app.only-admin": ["唯一的管理员", "The only admin"],
-  "ui.app.remove-confirm": ["从名单里移除 {name} 的登录身份 {identity}？用这个身份的人会立即失去访问；如果这是他唯一的身份，他就不再是成员。他的盒子和任务保留。", "Remove {identity} from {name}? Whoever signs in with it loses access at once; if it is their only sign-in, they are no longer a member. Their boxes and tasks stay."],
+  "ui.app.remove-confirm": ["移除 {name} 的登录身份 {identity}？对方仍是成员，可以使用其他身份登录。", "Remove {identity} from {name}? They remain a member and can still use their other sign-ins."],
   "ui.app.remove-keep-data": ["移除，保留数据", "Remove, keep data"],
   "ui.app.removed-its-adapter-stops-on": ["已移除。它的适配器会在下次重启时停止。", "Removed. Its adapter stops on the next restart."],
   "ui.app.rename": ["重命名", "rename"],
