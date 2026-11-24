@@ -166,6 +166,7 @@ ${renderSettingsTabs()}
     </div>
     <div class="field" data-tier="installation" data-settab="doors">
       <label>{{ui.settings.channels}}</label>
+      <a id="setchbootstrap" href="/bootstrap" hidden>{{ui.channels.bootstrap-pending}}</a>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select id="setchtype" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">
@@ -179,6 +180,7 @@ ${renderSettingsTabs()}
         <input id="setchsecret" type="password" placeholder="{{ui.settings.secret}}" spellcheck="false" autocomplete="off" style="flex:1;min-width:90px">
         <button class="btn sm" id="setchadd">{{ui.settings.add-channel}}</button>
       </div>
+      <div class="fieldnote" id="setchcallback"></div>
       <div class="fieldnote">{{ui.settings.each-row-is-a-channel}}</div>
       <div class="fieldnote" id="setchstatus"></div>
     </div>

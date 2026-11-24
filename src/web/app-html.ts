@@ -28,16 +28,12 @@ import { STRIP_TOKEN_JS } from "./token-url-ui.ts";
  * status as a colored dot plus a word. The tokens below are copied from the design
  * sheet rather than referenced, for the same reason everything else is inline.
  *
- * The embedded script uses string concatenation instead of template literals
- * throughout. It has to: this file is itself a template literal, so an inner
- * "${...}" would be evaluated here rather than shipped to the browser. The deliberate
- * interpolations are the Markdown options, which belong next to the tests that assert
- * what they guarantee, the Settings dialog's markup (settings-dialog-html.ts, so this
- * file's length can shrink); the manual's URL is a bundle word ({{ui.manualUrl}}, from manual-link.ts).
+ * The embedded script uses concatenation to avoid interpolating browser code in this template literal.
  */
 
 import { MARKDOWN_OPTIONS } from "./markdown.ts";
 import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts";
+import { CHANNEL_SETUP_JS } from "./channel-setup-ui.ts";
 
 export const APP_HTML = String.raw`<!doctype html>
 <html lang="{{@lang}}">
@@ -1908,13 +1904,18 @@ function renderMcp() {
     .catch(function () {});
 }
 
+${CHANNEL_SETUP_JS}
+var feishuCallbackTemplate;
+function updateChannelCallback() { channelCallbackHint($("setchcallback"), feishuCallbackTemplate, $("setchtype").value, $("setchid").value); }
+$("setchtype").addEventListener("change", updateChannelCallback);
+$("setchid").addEventListener("input", updateChannelCallback);
 function renderChannels() {
   renderMcp();
   fetch("/api/channels")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      // One row per door record; the adapter statuses decorate them. A record with
-      // no status was added after this process started and opens on the next restart.
+      feishuCallbackTemplate = data.feishuCallbackTemplate; updateChannelCallback();
+      $("setchbootstrap").hidden = !data.bootstrapPending;
       var statuses = {};
       (data.channels || []).forEach(function (ch) { statuses[ch.name] = ch; });
       var agents = data.agents || [];
@@ -1928,9 +1929,8 @@ function renderChannels() {
       $("setchannels").innerHTML = (data.records || []).map(function (rec) {
         var st = statuses[rec.id];
         var cls = st && st.running ? "ok" : st && st.configured ? "bad" : "";
-        var detail = st ? st.detail : rec.credentialsSet
-          ? "{{ui.app.restart-to-connect-this-channel}}"
-          : "{{ui.app.set}} " + rec.envBase + "_APP_ID + _APP_SECRET";
+        var detail = rec.credentialsSet ? (st ? st.detail : "{{ui.app.restart-to-connect-this-channel}}")
+          : "{{ui.next.doors.noCredentials}} · " + (rec.type === "telegram" ? "{{ui.channels.telegram-setup}}" : "{{ui.channels.add-credentials}}");
         return '<div style="display:flex;gap:9px;align-items:center;font-size:13px;flex-wrap:wrap">' +
           '<span class="dot ' + cls + '"></span>' +
           '<span style="min-width:70px">' + esc(rec.name) + "</span>" +

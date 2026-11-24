@@ -32,6 +32,19 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     }
     const code = readFileSync(join(home, "bootstrap-code"), "utf8").trim();
     assert.equal((await fetch(base + "/bootstrap")).status, 200);
+    const page = await (await fetch(base + "/bootstrap?lang=en")).text();
+    assert.match(page, /pane=doors[\s\S]+Add channel[\s\S]+OAuth callback URL[\s\S]+scan the QR code/);
+    assert.ok(page.includes(join(home, "bootstrap-code")));
+    assert.ok(!page.includes(code), "never put the setup code in the page");
+    assert.ok(logs.some(line => line.includes(join(home, "bootstrap-code"))));
+    const doors = async () => (await (await fetch(base + "/api/channels", { headers: { authorization: "Bearer fixture" } })).json());
+    const uninitialized = await doors();
+    assert.equal(uninitialized.bootstrapPending, true);
+    assert.equal(uninitialized.feishuCallbackTemplate, "http://127.0.0.1:7890/auth/CHANNEL_ID/callback");
+    assert.equal(uninitialized.records.find((record: { id: string }) => record.id === "feishu").credentialsSet, false);
+    const expired = await fetch(base + "/auth/fixture/callback?state=lost&code=unused&lang=en", { headers: { accept: "text/html" } });
+    assert.equal(expired.status, 400);
+    assert.match(await expired.text(), /Your sign-in QR code expired[\s\S]+href="\/bootstrap"/);
     const begin = async (bootstrapCode: string) => fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bootstrapCode, identity: "attacker:chosen", role: "admin" }), redirect: "manual" });
     assert.equal((await begin("wrong")).status, 400);
     const refusedStart = await begin(code);
@@ -54,6 +67,7 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     const cookie = winner.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");
     assert.ok(cookie, "bootstrap creates the authenticated admin session");
     assert.deepEqual(await setup({ cookie }), { admins: 1, bootstrap: false });
+    assert.equal((await doors()).bootstrapPending, false);
     const issued = await fetch(base + "/api/mcp/tokens", {
       method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ label: "first editor" }),
     });

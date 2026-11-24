@@ -63,7 +63,7 @@ import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeS
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
 import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
-import { BoxManager, defaultBoxConfig, dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "../box/docker.ts";
+import { BoxManager, defaultBoxConfig, dockerEnvironment, readBoxToken, uiToken, type DockerEnvironmentState } from "../box/docker.ts";
 import { managesLocalDocker, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts"; import { boxHeldDown, releaseBoxDown } from "../box/held-down.ts";
 import { classifyBox, auditNotice } from "../box/access.ts";
 import { boxBackendFromEnvironment, configPath, envNumber } from "../config.ts"; import { SharedBoxStart } from "./shared-box-start.ts"; import { DEFAULT_NAMESPACE } from "../control/kubernetes.ts";
@@ -87,7 +87,7 @@ import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
 import { modelPresets, modelTestError } from "./model-settings.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
+import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { feishuCallbackUrl, invitationLink, loginPageWithDoors, webSignInDoors, wantsHtml } from "./sign-in.ts";
 import {
   authorize,
   callerOf,
@@ -399,7 +399,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Whether a door's credentials exist — in the environment or saved in the config. */
   const channelCredentialsSet = (record: { id: string; type: string }): boolean => {
     const saved = loadConfig().env ?? {};
-    const has = (key: string) => process.env[key] !== undefined || typeof saved[key] === "string";
+    const has = (key: string) => Boolean((process.env[key] ?? saved[key])?.trim());
     const base = channelEnvBase(record.id);
     if (record.type === "telegram") return has("TELEGRAM_BOT_TOKEN");
     if (record.type === "tailmsg") return true;
@@ -786,6 +786,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     ...(orchestrator.policy.rulesHash() !== undefined ? { rulesHash: orchestrator.policy.rulesHash()! } : {}),
   });
   const bootstrap = new BootstrapAdmins(principalsPath(), join(agentboxHome(), "bootstrap-code"));
+  const bootstrapPending = () => { try { return bootstrap.pending(); } catch { return false; } };
   const directoryQuotaContext = (id: string) => directories.membership(
     principals.list().find(person => person.id === id)?.identities ?? [id], directorySources(), Date.now(), identity => principals.hasCurrentIdentity(id, identity));
 
@@ -2946,29 +2947,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Which generation of each person's sign-ins is still good (INV-537).
   const epochs = new SessionEpochs();
 
-  /**
-   * Who may be served at all: the installation token, or a person's own session.
-   *
-   * The token used to be the only answer, which made signing in a way of *getting* the
-   * token: both login paths handed out `agentbox_ui=<token>` beside the session cookie,
-   * so a viewer's browser held the installation's full-power credential and needed only
-   * to send it without the session cookie to be served as the unnamed owner. Roles were
-   * enforced (`refused`) but only on requests that still carried the name.
-   *
-   * Now a session authenticates on its own: signed by a key derived from the token, so
-   * rotating the token still ends every session, and only for an identity the roster
-   * still knows — a person removed from the roster stops being served on their next
-   * request rather than at the end of their cookie's month. The token remains what it
-   * always was for scripts, the CLI and a fresh single-person install.
-   */
-  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision => {
+  /** The operator token or a valid session for someone still on the roster. */
+  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision | { allow: false; reason: "access-removed" | "session-expired" } => {
     const byToken = authorize({ token, host }, request);
     if (byToken.allow) return byToken;
-    const session = readSession(parseCookies(request.cookie).get(SESSION_COOKIE), sessionSecret);
-    if (session === undefined || !principals.isKnown(session.identity)) return byToken;
-    // And the generation an admin may have moved on from (INV-537): signing one person out
-    // everywhere must not mean rotating the token and signing out everybody.
-    if (session.epoch < epochs.of(principals.resolve(session.identity).id)) return byToken;
+    const cookie = parseCookies(request.cookie).get(SESSION_COOKIE);
+    if (cookie === undefined) return byToken;
+    const session = readSession(cookie, sessionSecret);
+    if (session === undefined) return { allow: false, reason: "session-expired" };
+    if (!principals.isKnown(session.identity)) return { allow: false, reason: "access-removed" };
+    if (session.epoch < epochs.of(principals.resolve(session.identity).id)) return { allow: false, reason: "session-expired" };
     return { allow: true, reason: "token" };
   };
 
@@ -3020,19 +3008,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const savedEnv = loadConfig().env ?? {};
     const appId = process.env[`${base}_APP_ID`] ?? savedEnv[`${base}_APP_ID`];
     const appSecret = process.env[`${base}_APP_SECRET`] ?? savedEnv[`${base}_APP_SECRET`];
-    const publicBase = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
+    const redirectUri = feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, channelId);
     if (typeof appId !== "string" || appId === "" || typeof appSecret !== "string" || appSecret === "") {
       send(res, 503, apiError("channel-app-unset", { base }));
       return;
     }
-    if (publicBase === undefined || publicBase === "") {
+    if (redirectUri === undefined) {
       send(res, 503, apiError("public-url-unset"));
       return;
     }
     const lark = process.env.FEISHU_DOMAIN === "lark";
     const accountsHost = lark ? "accounts.larksuite.com" : "accounts.feishu.cn";
     const apiHost = lark ? "open.larksuite.com" : "open.feishu.cn";
-    const redirectUri = `${publicBase}/auth/${channelId}/callback`;
 
     if (parts[2] === undefined) {
       if (bootstrapCode !== undefined && !bootstrap.accepts(bootstrapCode)) {
@@ -3064,7 +3051,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     oauthStates.delete(state);
     if (code === null || pending === undefined || pending.channelId !== channelId || pending.appId !== appId || pending.incarnation !== record.incarnation ||
         Date.now() - pending.at > 10 * 60_000) {
-      send(res, 400, apiError("sign-in-expired"));
+      if (wantsHtml(res.req.headers.accept)) send(res, 400, signInRecoveryPage("sign-in-expired", localeOf(res.req, url), { setup: bootstrapPending() }), "text/html");
+      else send(res, 400, apiError("sign-in-expired"));
       return;
     }
     try {
@@ -3151,7 +3139,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
         res.setHeader("cache-control", "no-store");
         res.setHeader("referrer-policy", "no-referrer");
-        send(res, 200, bootstrapPage(doors, localeOf(req, url)), "text/html");
+        send(res, 200, bootstrapPage(doors, localeOf(req, url), bootstrap.codePath, feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID")), "text/html");
         } catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }
@@ -3235,8 +3223,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return;
       }
       if (!decision.allow && route !== "POST /api/login") {
-        // No WWW-Authenticate: a browser prompt would be the wrong shape for this, and the
-        // token belongs in the URL once rather than typed into a dialog.
+        if (req.method === "GET" && !/^\/api(?:\/|$)/.test(url.pathname) && wantsHtml(req.headers.accept)) {
+          const reason = decision.reason === "access-removed" || decision.reason === "session-expired" ? decision.reason : "sign-in-required";
+          const orgView = /\bLumenBoxOrgView\/1\b/.test(req.headers["user-agent"] ?? "");
+          send(res, 401, signInRecoveryPage(reason, localeOf(req, url), { orgView }), "text/html");
+          return;
+        }
         send(res, 401, {
           error:
             "This UI needs a token. Open it with ?token=… or send an Authorization: Bearer header.",
@@ -4583,10 +4575,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/mcp") {
-          let bootstrapPending = false;
-          try { bootstrapPending = bootstrap.pending(); } catch { /* Unreadable bootstrap cannot offer enrollment. */ }
           send(res, 200, {
-            setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrapPending },
+            setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrapPending() },
             servers: orchestrator.mcp.statuses(),
             budget: TOOL_BUDGET_WARNING,
             extensions: orchestrator.extensions?.current() ?? null,
@@ -4602,6 +4592,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (invite.expiresAt < Date.now()) invites.delete(code);
           }
           send(res, 200, {
+            bootstrapPending: caller.userId === undefined && bootstrapPending(),
+            feishuCallbackTemplate: feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID"),
             channels: channels.list(localeOf(req, url)), // each status in the reader's language (INV-1702)
             // The doors as records (docs/22 §2): what the settings dialog edits.
             // Credentials are reported as present/absent, never as values.
@@ -5206,7 +5198,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return [box.id, { box: box.connected, agent: here.length > 0, agentTurn, review, established: agentTurn && review }];
           }));
           const key = await modelConfigured(orchestrator.provider);
-          send(res, 200, { installationId, ...byBox[installationId], byBox, key, door: channelRecords.some(channelCredentialsSet), search: configuredProviders().length > 0 });
+          send(res, 200, { installationId, ...byBox[installationId], byBox, key, door: channelRecords.some(channelCredentialsSet), search: configuredProviders().length > 0,
+            bootstrapPending: caller.userId === undefined && bootstrapPending() });
           return;
         }
 
@@ -6846,14 +6839,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // anything able to reach it can already drive the agents. That stopped being true when
   // the orchestrator moved into the box, where it binds 0.0.0.0 and only Docker's publish
   // address keeps it local. So a non-loopback bind without a configured token gets one
-  // generated and announced, rather than being served openly.
+  // persisted in the installation state, rather than being served openly.
   const configured = options.token ?? process.env.AGENTBOX_UI_TOKEN;
   let token = configured;
   if (process.env.AGENTBOX_NO_TOKEN === "1") {
     token = undefined;
   } else if (!token && !isLoopback(host)) {
-    token = randomBytes(16).toString("hex");
-    log(`bound to ${host} with no token configured; generated one — open: http://${host}:${options.port}/?token=${token}`);
+    token = uiToken();
+    log(`Operator UI token: read ${join(agentboxHome(), "ui-token")} on the server, then open the installation URL with ?token=<value>.`);
   }
   if (token) holdHostToken(token); // whatever this web answers to is kept out of what agents see (INV-1543)
   /**

@@ -14,10 +14,26 @@ function escapeHtml(value: string): string {
 
 const lang = (locale: Locale): string => (locale === "zh" ? "zh-CN" : "en");
 
-/** GET /bootstrap: the one-use code and a Feishu channel to sign in through. */
-export function bootstrapPage(doors: readonly { id: string; name: string }[], locale: Locale): string {
+export function signInRecoveryPage(
+  reason: "sign-in-required" | "access-removed" | "session-expired" | "sign-in-expired",
+  locale: Locale,
+  { setup = false, orgView = false } = {},
+): string {
   const say = (key: string) => escapeHtml(tr(key, locale));
-  return `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><title>${say("page.bootstrap.title")}</title><body style="font:16px system-ui;max-width:600px;margin:80px auto;padding:20px"><h1>${say("page.bootstrap.title")}</h1><p>${say("page.bootstrap.lead")}</p><form id="bootstrap"><label>${say("page.bootstrap.code")} <input id="code" type="password" autocomplete="off" maxlength="128" required></label><label> ${say("page.bootstrap.channel")} <select id="door">${doors.map(door => `<option value="${escapeHtml(door.id)}">${escapeHtml(door.name)}</option>`).join("")}</select></label><button ${doors.length ? "" : "disabled"}>${say("page.bootstrap.sign-in")}</button></form><p id="status">${doors.length ? say("page.bootstrap.expires") : say("page.bootstrap.no-channel")}</p><script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();var button=this.querySelector('button');button.disabled=true;try{var response=await fetch('/auth/'+encodeURIComponent(document.getElementById('door').value),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}catch(error){document.getElementById('status').textContent=error.message;button.disabled=false;}};</script></body></html>`;
+  const title = say(`page.recovery.${reason}`);
+  const action = orgView ? say("page.recovery.desktop") : `<a href="/login">${say("page.recovery.login")}</a>`;
+  return `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>` +
+    `<body style="font:16px system-ui;max-width:600px;margin:80px auto;padding:20px"><h1>${title}</h1><p>${say("page.recovery.contact")}</p>` +
+    `<p>${action}</p>${setup ? `<p><a href="/bootstrap">${say("page.bootstrap.title")}</a></p>` : ""}</body></html>`;
+}
+
+/** GET /bootstrap: the one-use code and a Feishu channel to sign in through. */
+export function bootstrapPage(doors: readonly { id: string; name: string }[], locale: Locale, codePath: string, callbackTemplate?: string): string {
+  const say = (key: string) => escapeHtml(tr(key, locale));
+  const steps = `<ol><li><a href="/?ui=next&amp;once=1&amp;view=settings&amp;pane=doors">${say("page.bootstrap.operator")}</a> ${say("page.bootstrap.operator-how")}</li>
+<li>${say("page.bootstrap.configure")}</li><li>${say("page.bootstrap.register")} ${callbackTemplate ? `<code>${escapeHtml(callbackTemplate)}</code>` : say("page.bootstrap.public-url")}</li>
+<li>${say("page.bootstrap.scan")} <code>${escapeHtml(codePath)}</code>.</li></ol>`;
+  return `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><title>${say("page.bootstrap.title")}</title><body style="font:16px system-ui;max-width:680px;margin:80px auto;padding:20px"><h1>${say("page.bootstrap.title")}</h1>${steps}<form id="bootstrap"><label>${say("page.bootstrap.code")} <input id="code" type="password" autocomplete="off" maxlength="128" required></label><label> ${say("page.bootstrap.channel")} <select id="door">${doors.map(door => `<option value="${escapeHtml(door.id)}">${escapeHtml(door.name)}</option>`).join("")}</select></label><button ${doors.length ? "" : "disabled"}>${say("page.bootstrap.sign-in")}</button></form><p id="status">${doors.length ? say("page.bootstrap.expires") : say("page.bootstrap.no-channel")}</p><script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();var button=this.querySelector('button');button.disabled=true;try{var response=await fetch('/auth/'+encodeURIComponent(document.getElementById('door').value),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}catch(error){document.getElementById('status').textContent=error.message;button.disabled=false;}};</script></body></html>`;
 }
 
 /** Signed in with the vendor, unknown here: the knock path, as a page a person can act on. */

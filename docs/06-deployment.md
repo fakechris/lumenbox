@@ -124,7 +124,7 @@ and bind the web server where the gate can reach it.
 | --- | --- | --- |
 | `AGENTBOX_HOME` | `~/.agentbox` | State directory |
 | `AGENTBOX_TOKEN` | generated | Box API bearer |
-| `AGENTBOX_UI_TOKEN` | generated when not on loopback | UI secret |
+| `AGENTBOX_UI_TOKEN` | non-loopback: read or create `$AGENTBOX_HOME/ui-token` | Operator UI secret; also derives the browser session signing key |
 | `AGENTBOX_BOXD_URL` | — | Attach to a box instead of using Docker |
 | `AGENTBOX_PROVIDER` / `_MODEL` / `_BASE_URL` / `_KEY_ENV` / `_AUTH` | anthropic | Which endpoint |
 | `ANTHROPIC_API_KEY`, `MINIMAX_CODE_CN_API_KEY`, `AGENTBOX_API_KEY` | — | Model credential |
@@ -148,6 +148,10 @@ and bind the web server where the gate can reach it.
 | `BOXD_SPOOL_KEEP_MB` | 512 | The exec spool's ceiling on top of its one-day age; oldest first, never a file written in the last ten minutes |
 | `BOXD_JOB_OUTPUT_MAX_MB` | 1024 | Output one job may write; past it the job is stopped and its log says why (0 = off). Separately, below max(512 MiB, 5%) free on the work volume, new jobs are refused and jobs that are writing are stopped |
 | `BOXD_SUPERVISE_MS`, `BOXD_MAX_RESTARTS`, `BOXD_RESTART_WINDOW_MS`, `BOXD_BACKOFF_*`, `BOXD_GIVE_UP_EPISODES` | see design | Supervision tuning |
+
+For an organization web server, keep `AGENTBOX_HOME` on a persistent state volume across
+restarts. If you supply `AGENTBOX_UI_TOKEN` from a Kubernetes Secret instead, keep that Secret
+stable across rollouts. Replacing the UI token invalidates existing browser sessions.
 
 **`config.json`** for what is decided once: currently `activityLimit`, and `turnBudget`
 (`{ "calls": 60, "repeats": 3 }`, INV-1354: model calls one turn may make before handing the
@@ -451,4 +455,3 @@ A money ceiling needs a rate for every model used. When one is missing the spend
 than a total, so the relay **refuses and names the model**: a limit that cannot be measured is not a
 limit, and an unpriced model would otherwise walk straight through it. A token ceiling needs no
 rates at all, which is the one to reach for when the rate table is not kept up to date.
-
