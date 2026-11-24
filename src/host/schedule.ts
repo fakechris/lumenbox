@@ -39,6 +39,8 @@ import { mkdirSync } from "node:fs";
 import { appendLine } from "./jsonl.ts"; import { DOCKER_WORK } from "./box-paths.ts";
 import type { DeliverWhen } from "./routine-resolve.ts";
 import type { RunResult } from "./run-result.ts";
+/** How one run ended, as its runner tells it: the result, why, a code, and its own turns' tokens (INV-2153). */
+type RunEnd = { result: RunResult; reason?: string; code?: string; tokens?: number };
 import { NOT_STARTED, readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
 import { upcomingFires } from "./schedule-time.ts";
 import { classifyFailure } from "./failure-taxonomy.ts";
@@ -237,7 +239,8 @@ export interface SchedulerDeps {
    * Only a waiting webhook needs this: the caller is holding an HTTP connection open and the
    * point of waiting is to hand back the answer. Everything else fires and forgets.
    */
-  runAndSay?: (agent: string, prompt: string, toolScope?: readonly string[]) => Promise<string | { result: "failed"; code: string; reason: string }>;
+  /** What the turn said, with its own result and tokens when known (INV-2153); a failed `code` when it never started. */
+  runAndSay?: (agent: string, prompt: string, toolScope?: readonly string[]) => Promise<string | (RunEnd & { said: string }) | { result: "failed"; code: string; reason: string }>;
   /**
    * Starts a turn. Rejecting is fine: the next window is the retry.
    *
@@ -251,7 +254,7 @@ export interface SchedulerDeps {
    * a listener passes no slug, because a listener run is not reconciled, but its results
    * are its own — not one `ad-hoc` history every listener shares.
    */
-  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string, origin?: string) => Promise<void | { result: RunResult; reason?: string; code?: string }>;
+  run: (agent: string, prompt: string, deliver?: string, slug?: string, toolScope?: readonly string[], deliverWhen?: DeliverWhen, identity?: string, origin?: string) => Promise<void | RunEnd>;
   /**
    * Asked before every run (INV-1666): a reason means "not now" — the window is skipped with it and
    * the routine is held until a person resumes it, through the same `skip` / `hold` doors as the
@@ -494,13 +497,13 @@ export class Scheduler {
   private launch(
     skill: { slug: string; name: string; boxId?: string },
     agent: string,
-    start: () => Promise<void | { result: RunResult; reason?: string; code?: string }>,
+    start: () => Promise<void | RunEnd>,
     started: { deliver?: string; manual?: boolean; retry?: number } = {}
   ): Promise<void> {
     if (this.deps.allowed?.(skill) === false) return Promise.resolve();
     this.running.add(skill.slug);
     const startedAt = this.now();
-    let outcome: { result?: RunResult; reason?: string; code?: string } = {};
+    let outcome: Partial<RunEnd> = {};
     this.record(skill.slug, "started", { agent, ...started });
     return start()
       .then(result => { if (result) outcome = result; })
@@ -521,7 +524,8 @@ export class Scheduler {
           ...(outcome.result !== undefined ? { result: outcome.result } : {}),
           ...(outcome.code !== undefined ? { code: outcome.code } : {}), ...(outcome.reason !== undefined ? { reason: outcome.reason.slice(0, 300) } : {}),
           ms: this.now().getTime() - startedAt.getTime(),
-          ...(this.deps.spentSinceAgent !== undefined ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) } : {}),
+          // The run's own turns' tokens when it says (INV-2153); the agent's since the start only for a runner that cannot.
+          ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : this.deps.spentSinceAgent !== undefined ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) } : {}),
         });
         // A turn that never started is not the routine failing: no issue and no Retry, as it is no pause either.
         if (outcome.code !== NOT_STARTED) {
@@ -895,8 +899,11 @@ export class Scheduler {
       await this.launch(skill, agent, async () => {
         try {
           const got = await runAndSay(agent, prompt, skill.allowedTools);
-          if (typeof got !== "string") { failure = `${skill.name} did not run: its agent is busy with an earlier request; send it again later.`; return got; }
-          said = got;
+          if (typeof got === "string") { said = got; return; }
+          if ("code" in got) { failure = `${skill.name} did not run: its agent is busy with an earlier request; send it again later.`; return got; }
+          said = got.said;
+          const { said: _said, ...ended } = got;
+          return ended;
         } catch (error) {
           failure = error instanceof Error ? error.message : String(error);
           throw error;

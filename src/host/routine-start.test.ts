@@ -41,7 +41,7 @@ test("an auto routine's Run now is a real turn; with the chat held it is refused
     const ran = await finished(host, slug);
     assert.equal(calls, 1, "the click started a turn");
     assert.equal(ran?.outcome, "done");
-    assert.equal(host.turns?.endedSince(mia.id, 0).length, 1, "and the turn is on the record the run's result is read from");
+    assert.equal(ran?.tokens, 42, "and its tokens are that turn's");
 
     // An earlier request of the person's is waiting in that chat: nothing else is let in until it is answered.
     const focus = host.bus.workAttention!, work = focus.begin(mia.id, "main", [person("request")])!;
@@ -72,6 +72,46 @@ test("an auto routine's Run now is a real turn; with the chat held it is refused
     clearPause(registry.dirFor(mia.id));
     await host.prompt(mia.id, "thanks");
     assert.equal(calls, 2, "the person's next message is the only turn: the routine did not run late behind it");
+    host.scheduler.stop();
+  } finally {
+    if (previous === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a routine's result and tokens are its own turn's: a neighbouring chat that times out meanwhile neither fails it nor bills it (INV-2153)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "routine-own-turn-")), previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = dir;
+  try {
+    const registry = new AgentRegistry(join(dir, "agents")), mia = registry.create({ name: "Mia" });
+    mkdirSync(standingDir(registry.dirFor(mia.id)), { recursive: true });
+    writeFileSync(join(standingDir(registry.dirFor(mia.id)), "HEARTBEAT.md"), "- [ ] Check the queue\n");
+    let sideOver!: () => void;
+    const sideFailed = new Promise<void>(resolve => { sideOver = resolve; });
+    const said = (text: string) => ({ id: "r", type: "message", role: "assistant", model: "test", content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 90, output_tokens: 10 } }) as never;
+    const host = new Orchestrator({
+      registry, useBox: false, inbox: null, mcp: null, hooks: null, extensions: null,
+      client: fakeModel(async ({ params }) => {
+        const asked = JSON.stringify(params.messages);
+        if (asked.includes("side question")) {
+          // The other chat: 50 tokens, then the provider times out on its next call.
+          if (!asked.includes("tool_result")) return { id: "s", type: "message", role: "assistant", model: "test", content: [{ type: "tool_use", id: "t1", name: "NoSuchTool", input: {} }], stop_reason: "tool_use", stop_sequence: null, usage: { input_tokens: 40, output_tokens: 10 } } as never;
+          setTimeout(sideOver, 0);
+          throw new Error("Request timed out.");
+        }
+        await Promise.race([sideFailed, new Promise(resolve => setTimeout(resolve, 2_000))]); // the routine's turn ends after the other chat failed
+        return said("Queue checked.");
+      }),
+    });
+    const slug = heartbeatSlug(mia.id);
+    assert.deepEqual(await host.scheduler.runNow(slug), { ok: true });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await host.prompt(mia.id, "side question", undefined, { conversation: "side" }).catch(() => {});
+    const ran = await finished(host, slug);
+    assert.equal(ran?.outcome, "done", `the routine's own turn succeeded: ${ran?.reason ?? ""}`);
+    assert.equal(ran?.tokens, 100, "its 100 tokens, not the other chat's 50 as well");
+    assert.equal(ran?.retrying, undefined, "and nothing is retried");
+    assert.equal(host.scheduler.holds.holdOf(slug), undefined);
     host.scheduler.stop();
   } finally {
     if (previous === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous;

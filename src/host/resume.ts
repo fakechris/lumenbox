@@ -514,18 +514,22 @@ export class TurnLedger {
     }
   }
 
-  /** The live file's lines, as written. What `compact()` hands to the archive. */
-  /** How this agent's turns that began since `sinceMs` ended, in order — what a routine's result is read from (INV-1404). */
-  endedSince(agentId: string, sinceMs: number): { how: string; category?: string }[] {
-    const mine = new Set<string>();
+  /**
+   * The turns one message set off, with their resumptions, and how they ended (INV-2153): what a routine's
+   * result and cost are read from. By the message's id rather than by agent and time, so a neighbouring
+   * chat of the same agent that failed meanwhile is not taken for the routine's turn.
+   */
+  turnsOf(messageId: string): { ids: Set<string>; ends: { how: string; category?: string }[] } {
+    const ids = new Set<string>();
     const ends: { how: string; category?: string }[] = [];
     for (const record of this.read()) {
-      if (record.event === "begin" && record.agentId === agentId && Date.parse(record.at) >= sinceMs) mine.add(record.id);
-      else if (record.event === "end" && mine.has(record.id)) ends.push({ how: record.how, ...(record.category !== undefined ? { category: record.category } : {}) });
+      if (record.event === "begin" && (record.causedBy?.includes(messageId) === true || (record.resumeOf !== undefined && ids.has(record.resumeOf)))) ids.add(record.id);
+      else if (record.event === "end" && ids.has(record.id)) ends.push({ how: record.how, ...(record.category !== undefined ? { category: record.category } : {}) });
     }
-    return ends;
+    return { ids, ends };
   }
 
+  /** The live file's lines, as written. What `compact()` hands to the archive. */
   private readLines(): string[] {
     if (this.path === undefined || !existsSync(this.path)) return [];
     try {

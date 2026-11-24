@@ -24,7 +24,7 @@ import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorComm
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { BoxGenerations } from "./box-generation.ts";
 import { writeEvalCase } from "./eval-cases.ts";
-import { routineReason, routineResult } from "./run-result.ts"; import { routineBlocked, routineNotStarted } from "./routine-start.ts"; import { ExceptionLedger, noteJobEnd, noteRoutineEnd, noteTurnEnd } from "./exceptions.ts";
+import { ownRun } from "./run-result.ts"; import { routineBlocked, routineNotStarted } from "./routine-start.ts"; import { ExceptionLedger, noteJobEnd, noteRoutineEnd, noteTurnEnd } from "./exceptions.ts";
 import { learningsDir } from "./learnings.ts";
 import { boxLearningsDir } from "./site-learnings.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
@@ -703,12 +703,11 @@ export class Orchestrator {
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
     run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity, origin) => {
       const scope = { ...(toolScope !== undefined ? { toolScope } : {}), ...(origin !== undefined ? { origin } : {}) }; // origin: a member's reminder, the host's words and not a person's (INV-1878)
-      const startedMs = Date.now();
-      const resultOf = (agentId: string) => routineResult(this.turns?.endedSince(agentId, startedMs) ?? []);
-      const why = (agentId: string) => { const reason = routineReason(this.turns?.endedSince(agentId, startedMs) ?? []); return reason === undefined ? {} : { reason }; }; // the run history's line (INV-1665)
+      // The run is the turns its own message set off (INV-2153): their ends and their tokens, never "this agent since then".
+      const messageId = randomUUID(), own = () => ownRun(this.turns, this.usage, messageId);
       if (deliver === undefined) {
-        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope }); // model-text: routine
-        const ran = this.registry.resolve(agent); return routineNotStarted(this.bus, ran.id, MAIN_CONVERSATION, prompt, ran.profile.name) ?? { result: resultOf(ran.id), ...why(ran.id) };
+        await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, messageId, ...scope }); // model-text: routine
+        const ran = this.registry.resolve(agent); return routineNotStarted(this.bus, ran.id, MAIN_CONVERSATION, prompt, ran.profile.name) ?? own();
       }
       const conversation = conversationIdFor(deliver);
       const record = this.registry.resolve(agent);
@@ -720,14 +719,14 @@ export class Orchestrator {
         steerable: false,
         lane: "background",
         synthetic: true, // model-text: routine
-        conversation,
+        conversation, messageId,
         ...scope,
       });
       await this.settle(); const unstarted = origin !== undefined ? undefined : routineNotStarted(this.bus, agentId, conversation, prompt, record.profile.name); if (unstarted !== undefined) return unstarted;
       const said = this.replySince(agentId, before, conversation).trim();
-      const result = resultOf(agentId);
+      const ended = own(), result = ended.result;
       // The box was reconnected under the run (INV-1476): its result is the old incarnation's and is not delivered.
-      if (this.generations.stale(stamp, `routine ${slug ?? identity ?? "ad-hoc"} delivery`)) return { result, ...why(agentId) };
+      if (this.generations.stale(stamp, `routine ${slug ?? identity ?? "ad-hoc"} delivery`)) return ended;
       // Execute is over. What it said is written down and a resolve step decides whether the chat hears it (INV-776).
       await finishRoutineRun(
         {
@@ -755,15 +754,14 @@ export class Orchestrator {
           log: line => console.error(`[routine] ${line}`),
         }
       );
-      return { result, ...why(agentId) };
+      return ended;
     },
-    // A waiting webhook: the same turn, but the caller is told what came of it.
+    // A waiting webhook: the same turn, but the caller is told what came of it — its own reply, not whatever the main chat said meanwhile (INV-2153).
     runAndSay: async (agent, prompt, toolScope) => {
-      const agentId = this.registry.resolve(agent).id;
-      const before = this.registry.readTranscript(agentId).length;
-      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...(toolScope !== undefined ? { toolScope } : {}) }); // model-text: routine
+      const agentId = this.registry.resolve(agent).id, messageId = randomUUID();
+      await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, messageId, ...(toolScope !== undefined ? { toolScope } : {}) }); // model-text: routine
       await this.settle(); const unstarted = routineNotStarted(this.bus, agentId, MAIN_CONVERSATION, prompt, this.registry.resolve(agent).profile.name); if (unstarted !== undefined) return unstarted;
-      return this.replySince(agentId, before).trim();
+      return { said: this.replyForMessage(agentId, messageId).trim(), ...ownRun(this.turns, this.usage, messageId) };
     },
     // A skill runs on the box its file is in, as that box's first agent; the installation's first agent only when the box has none.
     defaultAgent: boxId =>

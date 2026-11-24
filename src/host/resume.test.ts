@@ -30,9 +30,9 @@ test("a turn that began and never ended is the one that was interrupted", () => 
   const { path, cleanup } = ledgerPath();
   try {
     const ledger = new TurnLedger(path);
-    ledger.begin({ id: "t1", agentId: "ada", about: "write the report" });
+    ledger.begin({ id: "t1", agentId: "ada", about: "write the report", causedBy: ["m1"] });
     ledger.end("t1", "done");
-    ledger.begin({ id: "t2", agentId: "ada", about: "deploy the thing" });
+    ledger.begin({ id: "t2", agentId: "ada", about: "deploy the thing", causedBy: ["m2"] });
     // t2 never ends: the process died here.
 
     // A fresh process reads the file, which is the only reason this is a fact and not a guess.
@@ -43,9 +43,10 @@ test("a turn that began and never ended is the one that was interrupted", () => 
     );
     assert.equal(outstanding[0]?.about, "deploy the thing");
     assert.equal(outstanding[0]?.attempt, 1);
-    // How an agent's turns since a moment ended, for a routine's result (INV-1404): t2 has no end yet.
-    assert.deepEqual(new TurnLedger(path).endedSince("ada", 0), [{ how: "done" }]);
-    assert.deepEqual(new TurnLedger(path).endedSince("bob", 0), []);
+    // The turns one message set off and how they ended, for a routine's result (INV-1404, INV-2153): t2 has no end yet,
+    // and the same agent's other turn is not m2's.
+    assert.deepEqual(new TurnLedger(path).turnsOf("m1"), { ids: new Set(["t1"]), ends: [{ how: "done" }] });
+    assert.deepEqual(new TurnLedger(path).turnsOf("m2"), { ids: new Set(["t2"]), ends: [] });
   } finally {
     cleanup();
   }
