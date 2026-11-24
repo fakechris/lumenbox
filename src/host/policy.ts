@@ -859,11 +859,11 @@ export class PolicyGate {
    * person deciding whether to turn enforcement on can see what it would have cost them: how
    * often they would have been asked, and about what.
    */
-  tierShadow(windowDays = 7): { mode: TierGateMode; since: string; total: number; tools: { tool: string; count: number; recent: string[] }[] } {
+  tierShadow(windowDays = 7, include: (agentId: string) => boolean = () => true): { mode: TierGateMode; since: string; total: number; tools: { tool: string; count: number; recent: string[] }[] } {
     const since = new Date(this.now().getTime() - windowDays * 24 * 60 * 60_000).toISOString();
     const tools = new Map<string, { count: number; recent: string[] }>();
     for (const ask of this.shadowAsks) {
-      if (ask.at < since) continue;
+      if (ask.at < since || !include(ask.agentId)) continue; // a person is shown only the asks of agents they may see (INV-2083)
       const entry = tools.get(ask.tool) ?? { count: 0, recent: [] };
       entry.count += 1;
       entry.recent = [ask.request, ...entry.recent].slice(0, 3);
