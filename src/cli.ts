@@ -943,7 +943,7 @@ async function cmdChat(argv: string[]): Promise<number> {
     process.env.AGENTBOX_MODEL = modelOverride;
   }
   const config = loadConfig(line => err(dim(line)));
-  applyConfigEnv(config);
+  applyConfigEnv(config, line => err(dim(line)));
 
   let provider: ProviderProfile;
   try {
@@ -1228,7 +1228,7 @@ async function cmdWeb(argv: string[]): Promise<number> {
   // The configured default provider and its key, so a restart that forgot the flag
   // does not silently become a different company's model with no credential.
   const webConfig = loadConfig(line => err(dim(line)));
-  applyConfigEnv(webConfig);
+  applyConfigEnv(webConfig, line => err(dim(line)));
 
   const portFlag = flags.get("--port");
   const port = typeof portFlag === "string" ? Number(portFlag) : 7777;

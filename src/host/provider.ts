@@ -409,6 +409,23 @@ export function resolveProvider(name?: string, configuredDefault?: string): Prov
 
   if (process.env.AGENTBOX_MODEL) profile.model = process.env.AGENTBOX_MODEL;
   if (process.env.AGENTBOX_BASE_URL) profile.baseUrl = process.env.AGENTBOX_BASE_URL;
+
+  // Capabilities follow the model, not the endpoint: switching model on the same
+  // provider can gain or lose vision, and getting that wrong is the failure that
+  // does not announce itself.
+  if (chosen === "minimax") {
+    profile.vision = MINIMAX_VISION_MODELS.has(profile.model);
+  }
+  return withInstallationOverrides(profile);
+}
+
+/**
+ * The overrides that hold whichever provider runs: the credential's variable, the output ceiling and
+ * the vision opt-in. Applied to the installation default and to every other preset an agent, a
+ * Settings test or a fallback picks (INV-2084). `AGENTBOX_MODEL` and `AGENTBOX_BASE_URL` are not here:
+ * they name the default's model and endpoint, and on another provider they are wrong (INV-2060).
+ */
+function withInstallationOverrides(profile: ProviderProfile): ProviderProfile {
   /**
    * Which variable holds the credential, overridable for any provider and not just `custom`.
    *
@@ -422,13 +439,6 @@ export function resolveProvider(name?: string, configuredDefault?: string): Prov
   // Keeps the profile's own value when the variable is absent or unreadable, rather than
   // overwriting a working setting with NaN.
   profile.maxTokens = envNumber("AGENTBOX_MAX_TOKENS", profile.maxTokens);
-
-  // Capabilities follow the model, not the endpoint: switching model on the same
-  // provider can gain or lose vision, and getting that wrong is the failure that
-  // does not announce itself.
-  if (chosen === "minimax") {
-    profile.vision = MINIMAX_VISION_MODELS.has(profile.model);
-  }
 
   // An explicit opt-in always wins, so a newly-capable model needs no code change.
   if (process.env.AGENTBOX_VISION === "1") profile.vision = true;
@@ -464,8 +474,9 @@ export function effectiveProviderFor(
 }
 
 export function providerForChoice(name: string, active: ProviderProfile): ProviderProfile {
-  const preset = resolveProviderPreset(name.toLowerCase()) ?? resolveProvider(name);
-  return preset.label === active.label ? active : preset;
+  const preset = resolveProviderPreset(name.toLowerCase());
+  if (!preset) return resolveProvider(name);
+  return preset.label === active.label ? active : withInstallationOverrides(preset);
 }
 
 export class MissingCredentialError extends Error {

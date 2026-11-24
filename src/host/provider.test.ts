@@ -9,7 +9,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeProvider, effectiveProviderFor, effortConfig, effortForKind, providerNames, resolveProvider, type ProviderProfile } from "./provider.ts";
+import { describeProvider, effectiveProviderFor, effortConfig, effortForKind, providerNames, resolveProvider, resolveProviderPreset, type ProviderProfile } from "./provider.ts";
 import { modelConfigured } from "./model-readiness.ts";
 import { buildTools } from "./tools.ts";
 import { buildSystemPrompt } from "./prompt.ts";
@@ -257,6 +257,21 @@ test("effectiveProviderFor: an agent's override wins; no override reuses the def
   const other = effectiveProviderFor({ provider: "minimax", model: "MiniMax-M2" }, fallback);
   assert.equal(other.label, "MiniMax (China)");
   assert.equal(other.model, "MiniMax-M2");
+});
+
+test("an agent's provider override keeps the provider-independent overrides, not the default's model or endpoint (INV-2084)", () => {
+  withEnv({ ...CLEAN, AGENTBOX_VISION: "0", AGENTBOX_MAX_TOKENS: "4000", AGENTBOX_KEY_ENV: "RELAY_TOKEN", AGENTBOX_MODEL: "default-model", AGENTBOX_BASE_URL: "https://default.example" }, () => {
+    const openai = effectiveProviderFor({ provider: "openai" }, resolveProvider("anthropic"));
+    assert.equal(openai.label, "OpenAI");
+    assert.equal(openai.vision, false, "AGENTBOX_VISION=0 holds on an override");
+    assert.equal(openai.maxTokens, 4000);
+    assert.equal(openai.keyEnv, "RELAY_TOKEN");
+    assert.equal(openai.model, resolveProviderPreset("openai")!.model, "the default's model does not leak (INV-2060)");
+    assert.equal(openai.baseUrl, resolveProviderPreset("openai")!.baseUrl, "nor its endpoint");
+  });
+  withEnv({ ...CLEAN, AGENTBOX_VISION: "1" }, () => {
+    assert.equal(effectiveProviderFor({ provider: "deepseek" }, resolveProvider("anthropic")).vision, true, "an opt-in reaches an override too");
+  });
 });
 
 test("the automatic default uses a credentialed preset, not an unconfigured Anthropic or the wrong MiniMax region", () => {
