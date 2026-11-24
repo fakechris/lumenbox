@@ -242,6 +242,7 @@ import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
+import { policyFor } from "./policy-scope.ts";
 import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import { approvedCallNotice } from "../host/approval-notice.ts";
 import {workRootSummary} from "../host/work-root-store.ts";
@@ -3357,6 +3358,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (!boxId && registry.has(id)) { boxId = registry.boxOf(id).id; agentBoxes.set(id, boxId); }
         return boxId !== undefined && mayReadBox(boxId);
       };
+      const seesAgent = (id: string): boolean => callerRole === "admin" || mayReadAgent(id); // an agent's approvals and grants: its box's members, any box for an admin (INV-2083)
       const fileRevision = (path: string): string => {
         try { const stat = statSync(path, { bigint: true }); return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`; }
         catch { return "missing"; }
@@ -3686,17 +3688,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // with it, which is why they are POSTs with no body beyond an id: there is nothing to get
         // wrong, and nothing that reads as a normal instruction.
         if (route === "GET /api/policy") {
-          send(res, 200, {
-            pending: orchestrator.policy.pending(),
-            standing: orchestrator.policy.standingGrants(),
-            // What the side-effect tier gate would have asked about this week (INV-691), so a
-            // person can see the cost of enforcing it before choosing to.
-            tierShadow: orchestrator.policy.tierShadow(),
-            stopped: orchestrator.registry
-              .list()
-              .filter(agent => orchestrator.policy.isStopped(agent.id))
-              .map(agent => agent.id),
-          });
+          send(res, 200, policyFor(orchestrator.policy, orchestrator.registry.list().map(agent => agent.id), seesAgent));
           return;
         }
 
@@ -4578,11 +4570,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/mcp") {
           send(res, 200, {
             setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrapPending() },
-            servers: orchestrator.mcp.statuses(),
+            servers: callerRole === "admin" ? orchestrator.mcp.statuses() : [], // the installation's, so an admin's (INV-2083)
             budget: TOOL_BUDGET_WARNING,
-            extensions: orchestrator.extensions?.current() ?? null,
-            // Never the secrets — only that they exist, whose they are, and when.
-            tokens: mcpTokens.list().map(entry => ({ ...entry, mine: entry.principalId === (caller.userId ?? soleAdmin(principals.list())) })), // unsigned: the one admin's (INV-1681)
+            extensions: callerRole === "admin" ? orchestrator.extensions?.current() ?? null : null,
+            // Never the secrets — only that they exist, whose they are, and when; to anyone but an admin, only their own (INV-2083).
+            // `mine` for nobody signed in is the one admin's (INV-1681).
+            tokens: mcpTokens.list().filter(entry => callerRole === "admin" || entry.principalId === caller.userId)
+              .map(entry => ({ ...entry, mine: entry.principalId === (caller.userId ?? soleAdmin(principals.list())) })),
           });
           return;
         }
@@ -4867,7 +4861,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/policy/revoke") {
           if (refused()) return;
           const body = await readJson(req);
-          const revoked = orchestrator.policy.revokeStanding(String(body.fingerprint ?? ""));
+          const fingerprint = String(body.fingerprint ?? ""), grant = orchestrator.policy.standingGrants().find(item => item.fingerprint === fingerprint);
+          if (grant && !seesAgent(grant.agentId)) { send(res, 403, apiError("role-needed", { need: "admin", role: callerRole })); return; } // another box's grant
+          const revoked = orchestrator.policy.revokeStanding(fingerprint);
           if (!revoked) {
             send(res, 404, apiError("standing-approval-unknown"));
             return;
@@ -5257,6 +5253,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const scope =
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
           const waiting = orchestrator.policy.pending().find(item => item.id === id), parked = orchestrator.approvalIsParked(id);
+          if (waiting && !seesAgent(waiting.agentId)) { send(res, 403, apiError("role-needed", { need: "admin", role: callerRole })); return; } // another box's approval (INV-2083)
           const answered =
             route === "POST /api/approve"
               ? orchestrator.policy.grant(id, "user", scope)
@@ -5566,7 +5563,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "POST /api/restart") {
-          if (refused()) return;
+          if (refusedRole("admin")) return; // the installation's, not a driver's (INV-2083)
           log("restart requested from the UI");
           send(res, 202, { restarting: true });
           setTimeout(() => process.exit(RESTART_EXIT_CODE), 300);

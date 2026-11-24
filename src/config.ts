@@ -18,6 +18,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { MINIMAX_CN_KEY, migrateMinimaxGlobalKey } from "./config-migrations.ts";
 
 export interface AgentboxConfig {
   /**
@@ -735,12 +736,12 @@ function readEnvMap(
  *
  * Only variables the shell did not already set: an exported variable always wins, so a
  * one-off `AGENTBOX_MODEL=... agentbox web` still behaves as typed. Called once at
- * startup by the commands that resolve a provider — by the time this process runs,
- * anything that could change how Node itself starts is already decided, so these values
- * only affect this program's own lookups.
+ * startup by the commands that resolve a provider — by then anything that could change how
+ * Node starts is decided, so these only affect our own lookups. Migrations go first (INV-2079).
  */
-export function applyConfigEnv(config: AgentboxConfig): void {
-  for (const [key, value] of configEnvEntries(config)) {
+export function applyConfigEnv(config: AgentboxConfig, log: (line: string) => void = () => {}): void {
+  const migrated = migrateMinimaxGlobalKey(config, process.env, appliedFromConfig.has(MINIMAX_CN_KEY), env => saveConfig({ env }), log);
+  for (const [key, value] of configEnvEntries(migrated)) {
     if (process.env[key] === undefined) {
       process.env[key] = value;
       appliedFromConfig.add(key);

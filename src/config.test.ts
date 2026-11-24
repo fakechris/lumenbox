@@ -167,6 +167,57 @@ test("the config's env sits under the real environment, never over it", () => {
   }
 });
 
+test("a MiniMax (global) key saved under the China name before #793 moves to the global name once; a global key wins (INV-2079)", () => {
+  const names = ["MINIMAX_CODE_CN_API_KEY", "MINIMAX_CODE_GLOBAL_API_KEY", "AGENTBOX_PROVIDER"] as const;
+  const previous = names.map(name => process.env[name]);
+  const reset = () => { for (const name of names) delete process.env[name]; resetConfigEnvForTests(); };
+  try {
+    // Saved before the upgrade: the global preset's key under the China preset's name.
+    reset();
+    withHome(JSON.stringify({ provider: "minimax-global", env: { MINIMAX_CODE_CN_API_KEY: "old-fixture" } }));
+    const lines: string[] = [];
+    applyConfigEnv(loadConfig(), line => lines.push(line));
+    assert.equal(resolveProvider(undefined, "minimax-global").keyEnv, "MINIMAX_CODE_GLOBAL_API_KEY");
+    assert.equal(process.env.MINIMAX_CODE_GLOBAL_API_KEY, "old-fixture", "the global preset has a key again");
+    assert.equal(loadConfig().env?.MINIMAX_CODE_GLOBAL_API_KEY, "old-fixture", "migrated in the file, once");
+    assert.equal(loadConfig().env?.MINIMAX_CODE_CN_API_KEY, "old-fixture", "the old name is left alone");
+    assert.equal(lines.length, 1);
+    assert.match(lines[0]!, /MINIMAX_CODE_CN_API_KEY/);
+    assert.match(lines[0]!, /MINIMAX_CODE_GLOBAL_API_KEY/);
+    assert.doesNotMatch(lines[0]!, /old-fixture/, "the line names variables, never the value");
+    reset();
+    applyConfigEnv(loadConfig(), line => lines.push(line));
+    assert.equal(lines.length, 1, "nothing left to migrate on the next start");
+
+    // Exported in the shell rather than saved: kept working for this process, the file untouched.
+    reset();
+    withHome(JSON.stringify({ provider: "minimax-global" }));
+    process.env.MINIMAX_CODE_CN_API_KEY = "shell-fixture";
+    applyConfigEnv(loadConfig(), line => lines.push(line));
+    assert.equal(process.env.MINIMAX_CODE_GLOBAL_API_KEY, "shell-fixture");
+    assert.equal(loadConfig().env, undefined, "a shell secret is not copied into the file");
+    assert.doesNotMatch(lines.at(-1)!, /shell-fixture/);
+
+    // Both set: the global one wins and nothing is rewritten.
+    reset();
+    withHome(JSON.stringify({ provider: "minimax-global", env: { MINIMAX_CODE_CN_API_KEY: "cn-fixture", MINIMAX_CODE_GLOBAL_API_KEY: "global-fixture" } }));
+    const quiet: string[] = [];
+    applyConfigEnv(loadConfig(), line => quiet.push(line));
+    assert.equal(process.env.MINIMAX_CODE_GLOBAL_API_KEY, "global-fixture");
+    assert.equal(quiet.length, 0);
+
+    // Another provider: a China key stays a China key.
+    reset();
+    withHome(JSON.stringify({ provider: "minimax", env: { MINIMAX_CODE_CN_API_KEY: "cn-fixture" } }));
+    applyConfigEnv(loadConfig(), line => quiet.push(line));
+    assert.equal(process.env.MINIMAX_CODE_GLOBAL_API_KEY, undefined);
+    assert.equal(quiet.length, 0);
+  } finally {
+    reset();
+    names.forEach((name, index) => { if (previous[index] !== undefined) process.env[name] = previous[index]; });
+  }
+});
+
 test("provider precedence: flag beats env beats config beats default", () => {
   // The failure this ordering prevents: a restart that forgot the flag silently
   // switching to a different company's model with a credential that cannot work.
