@@ -218,6 +218,8 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.composer.modelMissing": ["模型尚未配置，请先添加凭据。", "The model is not configured. Add credentials before sending."],
   "ui.next.composer.modelMissingMember": ["模型尚未配置，请联系管理员。", "The model is not configured. Ask an administrator."],
   "ui.next.composer.modelSettings": ["设置 → 模型", "Settings → Model"],
+  "ui.next.composer.watchOnly": ["你可以观看，不能操作。要让它做事，请找操作者或管理员。", "You can watch, not act. To have it do something, ask a driver or an admin."],
+  "ui.next.composer.roleChanged": ["你的角色已改为{role}。", "Your role is now {role}."],
   "ui.next.composer.noSkill": ["没有匹配的技能", "No skill matches"],
   "ui.next.composer.noAgent": ["这台电脑上没有这个成员", "No agent by that name on this computer"],
   "ui.next.desk.take": ["我来操作", "Take over"],

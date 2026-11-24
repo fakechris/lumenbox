@@ -194,7 +194,7 @@ test("welcome setup uses the latest box result even when setup is the last respo
   const delayedSetup = new Promise<typeof settings.setup>(resolve => { finishSetup = resolve; });
   const drawn: string[][] = [];
   const refresh = pageFunction("refresh", {
-    next: { agents: {} }, settings, boxes, chat: {}, member: {}, panel: {},
+    next: { agents: {} }, settings, boxes, chat: {}, member: {}, panel: {}, rereadRole: () => {},
     getJson: (path: string) => path === "/api/setup" ? delayedSetup : Promise.resolve({ boxes: [{ id: "b1", connected: true }] }),
     render: () => { drawn.push(boxStep().kids.map(node => node.text)); },
     failed: (error: unknown) => { throw error; },
@@ -925,4 +925,27 @@ test("a reload stays on the computer and agent the person was on, and a new sign
   const fresh = { box: "", agentId: "" };
   pageFunction("recallPlace", globals(fresh))();
   assert.deepEqual(fresh, { box: "mine", agentId: "" }, "a computer chosen with no agent on it is a place too");
+});
+
+test("a viewer's composer says they can watch and not act, and takes nothing; nobody else's is shut (INV-2047)", async () => {
+  const nodes: Record<string, { textContent: string; hidden: boolean; disabled: boolean }> = {
+    "composer-watch": { textContent: "", hidden: true, disabled: false },
+    "composer-text": { textContent: "", hidden: false, disabled: false },
+    "composer-send": { textContent: "", hidden: false, disabled: false },
+  };
+  const settings: { me: null | { role?: string } } = { me: null };
+  const watchOnly = pageFunction("watchOnly", { settings }) as () => boolean;
+  const draw = pageFunction("renderWatchOnly", { $: (id: string) => nodes[id], t: (key: string) => key, watchOnly });
+  const canSend = pageFunction("composerCanSend", { watchOnly, refreshModelReadiness: () => Promise.resolve(true) }) as () => Promise<boolean>;
+  draw();
+  assert.equal(nodes["composer-text"]!.disabled, false, "while the role is not yet known, nothing is shut");
+  settings.me = { role: "viewer" };
+  draw();
+  assert.deepEqual([nodes["composer-text"]!.disabled, nodes["composer-send"]!.disabled, nodes["composer-watch"]!.hidden, nodes["composer-watch"]!.textContent],
+    [true, true, false, "ui.next.composer.watchOnly"], "a viewer is told before typing, not after sending");
+  assert.equal(await canSend(), false, "and nothing a viewer typed is sent to be refused");
+  settings.me = { role: "driver" };
+  draw();
+  assert.deepEqual([nodes["composer-text"]!.disabled, nodes["composer-watch"]!.hidden], [false, true], "made a driver, the composer opens");
+  assert.equal(await canSend(), true);
 });
