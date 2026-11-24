@@ -34,12 +34,14 @@ export async function workFileRoute(route: string, url: URL, res: ServerResponse
   }
   try {
     if (listing) {
-      const subfolder = boxId !== null && posix.normalize(path) !== work;
+      // Every listing is the daemon's work-only one, the page's no-boxId call included: a text check
+      // alone let a link inside the work folder list whatever the box can read (INV-2094).
+      const subfolder = posix.normalize(path) !== work;
       if (subfolder && (await client.listDir(work, true)).work_only !== true) {
         deps.send(res, 503, { ...apiError("work-browsing-needs-update"), ...root });
         return true;
       }
-      const dir = await client.listDir(path, boxId !== null);
+      const dir = await client.listDir(path, true);
       if (subfolder && dir.work_only !== true) deps.send(res, 503, { ...apiError("work-browsing-needs-update"), ...root });
       else deps.send(res, 200, { path: dir.path, entries: dir.entries, ...root });
     } else {
