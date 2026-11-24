@@ -267,7 +267,7 @@ test("member provisioning uses canonical owner, rejects injected host options, e
     assert.equal((await request("/api/personal-boxes/retry", { id: box.id }, "web:bob")).status, 409);
     assert.equal(
       (await request("/api/personal-boxes/remove", { id: box.id, deleteData: true }, "web:bob")).status,
-      409,
+      404, // not his: refused at the ownership check every removal now passes (INV-2099)
     );
     assert.equal(
       (await request("/api/boxes/update", { name: box.name, baseUrl: "http://example.invalid" })).status,
@@ -552,6 +552,12 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.equal(retained.ownerName, "Bob");
     assert.equal(retained.orphaned, true);
     assert.equal(retained.status, "detached");
+    // Back on the roster as a viewer, Bob cannot dispose of the computer the admin chose to keep (INV-2099).
+    principals.reload(); principals.save([...principals.list(), { id: "bob", name: "Bob", role: "viewer", identities: ["web:bob"] }]);
+    const sneak = await call(collection + "/remove", { id: bob, deleteData: true, deleteAgents: false }, "bob");
+    assert.equal(sneak.status, 404, JSON.stringify(sneak.data));
+    assert.equal([...fake.pvcs].filter(([name]) => name.startsWith(resource(bob))).length, 3, "the kept data is still there");
+    principals.reload(); principals.save(principals.list().filter(person => person.id !== "bob"));
     assert.equal((await call(collection + "/admin", { id: bob, action: "transfer", recipient: "admin" })).status, 200);
     assert.equal((await call(collection + "/admin", { id: bob, action: "recover" })).status, 200);
     assert.ok(fake.pods.has(resource(bob)));
