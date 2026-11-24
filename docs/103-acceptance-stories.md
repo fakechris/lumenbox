@@ -44,8 +44,9 @@ environment and are never typed into a recording, a file or a result. Fixtures a
 `https://example.com` ("Example Domain"), the tags `LB-PERSONAL-47`, `ORG-SHARED-47`,
 `ALICE-ONLY-47`, `BOB-ONLY-47`.
 
-**Models.** Each story's first step is Settings → Model → Test the connection, then a short
-real turn, recording which model actually answered. A provider failure (401/403/404/400,
+**Models.** A1 and B1 end with the model check, once installation is finished; every other
+story starts with it. The check is Settings → Model → Test the connection, then a short real
+turn, recording which model actually answered. A provider failure (401/403/404/400,
 quota) is recorded as itself; silently switching provider to get a green light is not a pass.
 
 ## Track A: one person, their own machine
@@ -156,13 +157,18 @@ reaches the screen), finished work appears without a reload, and promotion is an
 **Automated:** `src/web/roles.test.ts`.
 
 ### B4 · Private stays private, shared is shared
-**Pass when** neither private box, task, memory or activity is visible to the other person or
-the admin's lists, a shared task an agent promises to share appears on the other person's
-board, and a reload keeps the box the person was in.
+**Pass when** what is inside a personal box (its chats, tasks, memory and activity) is visible
+only to that box's members: not to the other person, and not to an admin who is not a member.
+An admin's view of someone else's personal box is limited to the inventory row (B5) and the
+box's agents' approvals and grants. A shared task an agent promises to share appears on the
+other person's board, and a reload keeps the box the person was in.
+**Automated:** `src/web/personal-boxes.test.ts` (other members' boxes are hidden; the admin
+inventory row is exactly its metadata).
 
 ### B5 · The admin finds a problem and a limit
-**Pass when** every personal box appears on the admin's Computers page with owner, state and
-age, a full cluster quota is named as the reason a box did not start, and quota and holding
+**Pass when** every personal box appears on the admin's Computers page as an inventory row:
+owner, box name, state, pod status, image, age, retention, and the names of its agents, but
+nothing from inside the box (B4). A full cluster quota is named as the reason a box did not start, and quota and holding
 are shown beside the person.
 **Automated:** `src/web/personal-boxes.test.ts`.
 
