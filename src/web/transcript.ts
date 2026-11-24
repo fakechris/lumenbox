@@ -44,6 +44,8 @@ export interface DisplayTool {
   diff?: EditDiff;
   /** The policy gate's verdict on this step and why (INV-1664), joined from its ledger by the call's id. */
   gate?: GateVerdict;
+  /** A colleague asked for a result (INV-2037): who, and whether their answer has come back into this conversation. */
+  delegate?: { to: string; toId?: string; reported: boolean };
 }
 
 /**
@@ -156,6 +158,17 @@ export interface RosterEntry {
   name: string;
 }
 
+/** A colleague asked for a result, named rather than by id; a message sent for information only waits on nobody (INV-2037). */
+function delegateOf(name: string, input: unknown, roster: readonly RosterEntry[]): { delegate?: { to: string; toId?: string; reported: boolean } } {
+  if (name !== "SendToAgent") return {};
+  const args = (input ?? {}) as Record<string, unknown>;
+  if (args.expect_result === false) return {};
+  const raw = String(args.target_id ?? "").trim();
+  if (raw === "") return {};
+  const mate = roster.find(entry => entry.id === raw || entry.name.toLowerCase() === raw.toLowerCase());
+  return { delegate: { to: mate?.name ?? raw, ...(mate !== undefined ? { toId: mate.id } : {}), reported: false } };
+}
+
 /** What the live view shows for a tool call: the argument that identifies the call. */
 function toolDetail(name: string, input: unknown, roster: readonly RosterEntry[]): string {
   const args = (input ?? {}) as Record<string, unknown>;
@@ -166,7 +179,7 @@ function toolDetail(name: string, input: unknown, roster: readonly RosterEntry[]
     // a uuid tells the reader nothing about who that was.
     const target = roster.find(entry => entry.id === String(args.target_id ?? ""));
     const to = target ? target.name : String(args.target_id ?? "someone");
-    return `${to}: ${String(args.text ?? "")}`;
+    return `${to}: ${String(args.message ?? args.text ?? "")}`; // the tool's field is message (INV-2037)
   }
   if (name === "computer") {
     const actions = Array.isArray(args.actions) ? args.actions : [];
@@ -268,6 +281,7 @@ export function toDisplayEntries(
         ...(typeof entry.turnId === "string" && typeof block.id === "string" ? { turnId: entry.turnId, toolUseId: block.id, ...(typeof entry.executionId === "string" ? { executionId: entry.executionId } : {}), ...(typeof entry.attempt === "number" ? { attempt: entry.attempt } : {}) } : {}),
         name: String(block.name ?? "tool"), phrase: activityPhrases(String(block.name ?? "tool"), block.input),
         detail: toolDetail(String(block.name ?? ""), block.input, roster),
+        ...delegateOf(String(block.name ?? ""), block.input, roster),
         ...(block.name === "AskUser" && questionOf(block.input) !== undefined
           ? { question: questionOf(block.input)! }
           : {}),
@@ -389,6 +403,15 @@ export function toDisplayEntries(
     push({ kind: "text", role: "assistant", text, ...(reply === false ? { aside: true as const } : {}), ...stamp(raw) });
   }
 
+  // A colleague's answer is reported once their message has come back into this conversation after the ask (INV-2037).
+  display.forEach((item, index) => {
+    if (item.kind !== "tools") return;
+    for (const tool of item.tools) {
+      const asked = tool.delegate;
+      if (asked === undefined) continue;
+      asked.reported = display.slice(index + 1).some(later => later.kind === "peer" && later.messages.some(message => message.from === asked.to));
+    }
+  });
   return display;
 }
 

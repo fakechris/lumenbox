@@ -120,7 +120,7 @@ test("a wake prompt in a transcript becomes a peer entry; it is part of a reques
   const roster = [{ id: "id-Ada", name: "Ada" }, { id: "id-Bob", name: "Bob" }];
   const entries = [
     { role: "user", fromPerson: true, text: "ask Ada for the figures", at: "t" },
-    { role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: "s1", name: "SendToAgent", input: { target_id: "id-Ada", text: "figures please" } }], at: "t" },
+    { role: "assistant", kind: "blocks", blocks: [{ type: "tool_use", id: "s1", name: "SendToAgent", input: { target_id: "id-Ada", message: "figures please" } }], at: "t" },
     { role: "user", kind: "results", blocks: [{ type: "tool_result", tool_use_id: "s1", content: "sent" }], at: "t" },
     { role: "user", text: buildWakePrompt([inbound("Ada", "over to you")]), at: "t" },
     { role: "assistant", text: "Ada says 42.", at: "t" },
@@ -131,6 +131,10 @@ test("a wake prompt in a transcript becomes a peer entry; it is part of a reques
   assert.deepEqual(display[2], { kind: "peer", messages: [{ from: "Ada", priority: false, text: "over to you" }], at: "t" });
   assert.deepEqual(display[3], { kind: "text", role: "assistant", text: "Ada says 42.", at: "t" }, "the answer the person was waiting for");
   assert.deepEqual(display.slice(4).map(entry => entry.background), [true, true], "a teammate nobody asked, and what the agent did about it, is not this conversation's");
+  const asked = display[1]!.kind === "tools" ? display[1]!.tools[0]!.delegate : undefined;
+  assert.deepEqual(asked, { to: "Ada", toId: "id-Ada", reported: true }, "the ask says whom it waits on, and that the answer came back (INV-2037)");
+  const pending = toDisplayEntries(entries.slice(0, 3), roster)[1]!;
+  assert.equal(pending.kind === "tools" && pending.tools[0]!.delegate?.reported, false, "until it does, it is still waiting");
 });
 
 // 2026-11-13, Chris's own page: three agents' main conversations held a plan he had not asked for, runs of steps,
@@ -187,7 +191,7 @@ test("a message to a teammate is recorded by name, not by id", () => {
           type: "tool_use",
           id: "1",
           name: "SendToAgent",
-          input: { target_id: "id-Bob", text: "please verify r1.txt" },
+          input: { target_id: "id-Bob", message: "please verify r1.txt" },
         },
       ],
       at: "t",
@@ -197,7 +201,7 @@ test("a message to a teammate is recorded by name, not by id", () => {
   const display = toDisplayEntries(entries, [{ id: "id-Bob", name: "Bob" }]);
   assert.deepEqual(display[0], {
     kind: "tools",
-    tools: [{ name: "SendToAgent", phrase: { en: "messaging a teammate", zh: "给队友发消息" }, detail: "Bob: please verify r1.txt" }],
+    tools: [{ name: "SendToAgent", phrase: { en: "messaging a teammate", zh: "给队友发消息" }, detail: "Bob: please verify r1.txt", delegate: { to: "Bob", toId: "id-Bob", reported: false } }],
      at: "t",
   });
 });
