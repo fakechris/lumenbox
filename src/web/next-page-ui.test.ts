@@ -183,9 +183,12 @@ test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an o
 });
 
 test("welcome setup uses the latest box result even when setup is the last response", async () => {
-  const settings = { setup: { installationId: "fresh", box: false } };
+  const settings = { setup: { installationId: "fresh", box: false }, me: { identity: null } };
   const boxes = { list: [], own: "", state: null };
-  const setupCard = pageFunction("setupCard", { settings, next: { agents: {} }, localStorage: { getItem: () => null }, t: String, el: fakeEl });
+  const setupCard = pageFunction("setupCard", {
+    settings, chat: { box: "b1" }, agentsHere: () => [], canOperateInstallation: () => true, canDriveAgents: () => true,
+    localStorage: { getItem: () => null }, t: String, el: fakeEl,
+  });
   const boxStep = () => (setupCard() as Fake).kids[2]!;
   let finishSetup!: (setup: typeof settings.setup) => void;
   const delayedSetup = new Promise<typeof settings.setup>(resolve => { finishSetup = resolve; });
@@ -202,6 +205,127 @@ test("welcome setup uses the latest box result even when setup is the last respo
   finishSetup({ installationId: "fresh", box: true });
   await pending;
   assert.deepEqual(drawn, [["✓", "ui.next.setup.box", "ui.next.box.on"]], "the refresh redraws the card from the new setup response");
+});
+
+test("reopening Boxes settings refreshes its status and preserves the settings route", () => {
+  const boxSet = { config: null as object | null };
+  const writes: unknown[][] = [];
+  let loads = 0;
+  const navigateView = pageFunction("navigateView", {
+    next: {}, settings: {}, settingsPane: (key: unknown) => key, document: { body: { dataset: {} } },
+    writeViewAddress: (...args: unknown[]) => writes.push(args), render() {},
+  });
+  const open = pageFunction("openSettingsPane", {
+    navigateView, boxSet, loadBoxSet: () => { loads++; }, canDriveAgents: () => true, settingsPanes: () => ["boxes"],
+  });
+  open("boxes");
+  assert.equal(loads, 0, "the first render loads the previously unseen pane");
+  boxSet.config = {};
+  open("boxes");
+  assert.equal(loads, 1, "reopening the pane refreshes the cached boxes");
+  assert.deepEqual(writes, [["settings", "boxes"], ["settings", "boxes"]]);
+});
+
+test("member Settings has only personal panes; an installation pane cannot be opened by a deep link", () => {
+  const settings = { pane: "model", me: { role: "driver" } };
+  const fail = () => assert.fail("an installation setting was rendered for a member");
+  const settingPanes = pageFunction("settingsPanes", {
+    canOperateInstallation: () => settings.me.role === "admin", canDriveAgents: () => settings.me.role !== "viewer",
+  });
+  const navigations: string[][] = [];
+  const openSettingsPane = pageFunction("openSettingsPane", {
+    settingsPanes: settingPanes, canDriveAgents: () => settings.me.role !== "viewer",
+    navigateView: (view: string, pane: string) => { navigations.push([view, pane]); settings.pane = pane; },
+  });
+  const renderSettings = pageFunction("renderSettings", {
+    settings, settingsPanes: settingPanes, canOperateInstallation: () => false, openSettingsPane,
+    NATIVE_PANES: { model: fail, mine: () => {} }, renderLongWork: fail, el: fakeEl, t: String,
+  });
+  const view = fakeEl("div");
+  renderSettings(view);
+  assert.deepEqual(view.kids[0]!.kids.map(row => row.kids[0]!.kids[0]!.text), ["ui.pane.mine", "ui.pane.memory"]);
+  openSettingsPane("model");
+  view.kids[0]!.kids[0]!.press!();
+  const mine = fakeEl("div");
+  renderSettings(mine);
+  mine.kids[0]!.press!();
+  settings.me.role = "viewer";
+  openSettingsPane("");
+  assert.deepEqual(navigations, [["settings", "mine"], ["settings", ""]]);
+  const viewer = fakeEl("div");
+  renderSettings(viewer);
+  assert.equal(viewer.kids.length, 0);
+});
+
+test("the member setup checklist counts only the selected box; a viewer gets no operator tasks", () => {
+  const chat = { box: "empty" }, settings = { setup: { installationId: "test", hasPersonalBox: true }, me: { identity: "person", role: "driver" } };
+  const setupCard = pageFunction("setupCard", {
+    settings, chat, canDriveAgents: () => settings.me.role === "driver", canOperateInstallation: () => false,
+    agentsHere: () => chat.box === "shared" ? [{ id: "ada" }] : [], createSetupBox: () => {},
+    localStorage: { getItem: () => null }, t: String, el: fakeEl,
+  }) as () => Fake | null;
+  assert.deepEqual(setupCard()!.kids.slice(1, 3).map(step => step.kids.map(part => part.text)), [
+    ["✓", "ui.next.setup.personalBox"], ["○", "ui.next.setup.agent", "ui.next.setup.go"],
+  ]);
+  chat.box = "shared";
+  assert.equal(setupCard(), null, "the completed steps are no longer in the way");
+  settings.me.role = "viewer";
+  chat.box = "empty";
+  assert.equal(setupCard(), null);
+});
+
+test("a driver with no visible box can start personal-box creation from setup", () => {
+  let created = false;
+  const setupCard = pageFunction("setupCard", {
+    settings: { setup: { installationId: "test", hasPersonalBox: false }, me: { identity: "person" } },
+    chat: { box: "" }, canDriveAgents: () => true, canOperateInstallation: () => false,
+    localStorage: { getItem: () => null }, t: String, el: fakeEl, agentsHere: () => [], createSetupBox: () => { created = true; },
+  }) as () => Fake | null;
+  const card = setupCard();
+  assert.ok(card);
+  assert.deepEqual(card.kids.slice(1, -1).map(step => step.kids[1]!.text), ["ui.next.setup.personalBox"]);
+  card.kids[1]!.kids[2]!.press!();
+  assert.ok(created);
+});
+
+test("creating a personal box from chat clears the previous transcript before refresh renders", async () => {
+  const chat = {
+    box: "shared", agentId: "ada", entries: [{ text: "shared transcript" }], live: { text: "live reply" },
+    liveSurfaces: { form: {} }, loadedFor: "ada", loading: "ada", conversation: "topic", request: 2,
+  };
+  let refreshed = false;
+  const create = pageFunction("createSetupBox", {
+    chat, settings: {}, crypto: { randomUUID: () => "request" }, render: () => {},
+    postJson: async () => ({ boxId: "personal", boxes: [{ id: "personal", status: "ready" }] }),
+    failed: (error: unknown) => { throw error; }, refresh: () => { refreshed = true; },
+  });
+  create();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(refreshed);
+  assert.equal(chat.box, "personal");
+  assert.equal(chat.agentId, "");
+  assert.equal(chat.entries.length, 0);
+  assert.equal(chat.live, null);
+  assert.deepEqual(Object.keys(chat.liveSurfaces), []);
+  assert.equal(chat.loadedFor, "");
+  assert.equal(chat.loading, "");
+  assert.equal(chat.conversation, "main");
+  assert.equal(chat.request, 3, "late progress for the previous agent is ignored");
+});
+
+test("new agent box picker shows the selected box and remembers a changed target", () => {
+  const member = { boxId: "personal" };
+  const pickBox = pageFunction("memberBoxField", {
+    member, el: fakeEl, t: String, boxesKnown: () => [{ id: "shared", name: "Shared" }, { id: "personal", name: "Personal" }],
+  }) as () => Fake;
+  const field = pickBox(), select = field.kids[0]!;
+  assert.equal(field.text, "ui.next.member.box");
+  assert.deepEqual(select.kids.map(option => option.text), ["Shared", "Personal"]);
+  assert.equal(select.value, "personal");
+  select.value = "shared";
+  select.press!();
+  assert.equal(member.boxId, "shared");
+  assert.equal(pickBox().kids[0]!.value, "shared");
 });
 
 test("\"@Bob …\" typed to Ada is said to Bob; a name mid-sentence, an unknown name and the agent's own are not", () => {
@@ -581,6 +705,10 @@ test("the box update's backup is unticked unless the server says otherwise, and 
   };
   const nodes = draw({ state: { runningRef: "fakechris/lumenbox:0.4.3", expectedRef: "fakechris/lumenbox:0.4.4" }, backupByDefault: false });
   const box = nodes.find(node => node.type === "checkbox")!;
+  assert.ok(!nodes.some(node => node.text === "ui.next.boxset.available"), "no update notice without availability");
+  const available = draw({ state: { available: true, needsPull: true }, backupByDefault: false });
+  assert.ok(available.some(node => node.text === "ui.next.boxset.available"), "the available update is announced even if the image needs downloading");
+  assert.ok(available.some(node => node.text === "ui.next.boxset.whenIdle"), "the announcement has an Apply update action in its section");
   assert.equal(box.checked, false, "unticked: an update leaves the volumes alone");
   assert.ok(nodes.some(node => node.text.includes("ui.next.boxset.backupWhy")), "the cost of ticking it is said beside it");
   box.checked = true; box.press!(); // the change event: the choice is kept by the page, not by this checkbox
@@ -772,4 +900,29 @@ test("a row's one line: what the member asks of the person, else what it says it
     assert.ok(MESSAGES.zh[key] && MESSAGES.zh[key] !== MESSAGES.en[key], `${key} in Chinese`);
     assert.doesNotMatch(MESSAGES.en[key]!, /execution|linked|retained|authori[sz]ed|scope/i, key);
   }
+});
+
+test("a reload stays on the computer and agent the person was on, and a new sign-in comes back to them (INV-2064)", () => {
+  const stored = new Map<string, string>();
+  const localStorage = { getItem: (key: string) => stored.get(key) ?? null, setItem: (key: string, value: string) => { stored.set(key, value); } };
+  const location = { href: "http://box/?ui=next&view=work" };
+  const history = { replaceState: (_s: unknown, _t: string, url: URL) => { location.href = String(url); } };
+  const body = { dataset: {} as Record<string, string> };
+  const globals = (chat: Record<string, unknown>, view = "chat") => ({ PLACE_KEY: "lumen-place", next: { view }, chat, localStorage, location, history, document: { body }, JSON, URL });
+  body.dataset.open = "1";
+  pageFunction("rememberPlace", globals({ box: "shared", agentId: "ada" }))();
+  assert.equal(location.href, "http://box/?ui=next&view=work&agent=ada", "an open conversation is named in the address; the rest of the address stays");
+  pageFunction("rememberPlace", globals({ box: "mine", agentId: "aria" }, "work"))();
+  assert.equal(location.href, "http://box/?ui=next&view=work&agent=ada", "another view keeps its own address and does not move the place");
+  delete body.dataset.open;
+  pageFunction("rememberPlace", globals({ box: "shared", agentId: "ada" }))();
+  assert.equal(location.href, "http://box/?ui=next&view=work", "a narrow screen showing the list is not in the conversation, so Back does not reopen it");
+  const signedInAgain = { box: "", agentId: "" };
+  pageFunction("recallPlace", globals(signedInAgain))();
+  assert.deepEqual(signedInAgain, { box: "shared", agentId: "ada" }, "with no address, the remembered computer and agent are where the page opens");
+  assert.equal(body.dataset.open, undefined, "chosen, not opened: a narrow screen still lands on the list");
+  pageFunction("rememberPlace", globals({ box: "mine", agentId: "" }))();
+  const fresh = { box: "", agentId: "" };
+  pageFunction("recallPlace", globals(fresh))();
+  assert.deepEqual(fresh, { box: "mine", agentId: "" }, "a computer chosen with no agent on it is a place too");
 });

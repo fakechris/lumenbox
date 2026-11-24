@@ -27,7 +27,9 @@ function renderModelNotice() {
   if (modelReadiness.agent !== chat.agentId) refreshModelReadiness();
   notice.replaceChildren(); notice.hidden = modelReadiness.configured !== false;
   if (notice.hidden) return;
-  notice.appendChild(el("span", "why", t("ui.next.composer.modelMissing")));
+  var admin = canOperateInstallation();
+  notice.appendChild(el("span", "why", t(admin ? "ui.next.composer.modelMissing" : "ui.next.composer.modelMissingMember")));
+  if (!admin) return;
   var button = el("button", "act", t("ui.next.composer.modelSettings"));
   button.type = "button";
   button.addEventListener("click", function () { openSettingsPane("model"); });

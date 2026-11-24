@@ -166,7 +166,7 @@ export function openRoster(deps: { desktop: boolean; path: string; codePath: str
         ? "Owner created for this computer (desktop app, first start, INV-1685); first-admin bootstrap closed."
         : "upgrade: this desktop installation had nobody on its roster, so its Owner was created and the first-admin bootstrap code it had armed was closed (INV-1685).");
     }
-    if (deps.bootstrap.ensure()) deps.log("First-admin bootstrap is available at /bootstrap; retrieve the code from the local bootstrap-code file (24h, one use).");
+    if (deps.bootstrap.ensure()) deps.log(`First-admin bootstrap is available at /bootstrap; read the one-use code from ${deps.codePath} on the server (expires in 24h).`);
   } catch { deps.log("First-admin bootstrap disabled: repair the local roster/bootstrap state."); }
 }
 

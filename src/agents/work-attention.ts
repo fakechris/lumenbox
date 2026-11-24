@@ -195,8 +195,8 @@ export function whyWaiting(turn: {
   unfinished: boolean;
 }): [string | undefined, WorkWait | undefined] {
   if (turn.lacking !== undefined) return ["required tool unavailable: " + turn.lacking, "capability"];
+  if (turn.how === "waiting_confirmation" || (turn.how === "done" && turn.confirmationPending)) return ["waiting for confirmation", "confirmation"];
   if (turn.how !== "done") return [turn.how, "execution"];
-  if (turn.confirmationPending) return ["waiting for confirmation", "confirmation"];
   if (turn.pendingPeers) return ["waiting for related work", "dependency"];
   if (turn.unfinished) return ["unfinished plan", "plan"];
   return [undefined, undefined];
@@ -495,6 +495,23 @@ export class WorkAttention {
       message.work.generation === current.generation &&
       (message.fromId === "system" || (message.fromId === "user" && message.synthetic) || this.valid(message.work, message.fromId)) &&
       this.valid(message.work, agent)
+    );
+  }
+  /**
+   * A colleague's result for the work this agent is running in this conversation right now (INV-2037).
+   *
+   * A coordinator that asked a colleague and kept its turn open — checking, sleeping, re-reading —
+   * never saw the reply: it queued behind the very turn waiting for it, which ran to its budget while
+   * the answer sat in the queue. Stamped with the agent's own running work by a member the work
+   * admitted, it is the awaited answer, and the running turn reads it at its next round boundary.
+   * A teammate's message about anything else still waits for a turn of its own.
+   */
+  awaitedResult(agent: string, conversation: string, message: InboundMessage): boolean {
+    const work = message.work,
+      current = this.get(agent, conversation);
+    return (
+      !!work && !!current && current.status === "running" && current.id === work.id && work.owner === agent &&
+      work.conversation === conversation && message.fromId !== "user" && this.eligible(agent, conversation, message)
     );
   }
   forId(agent: string, conversation: string, id: string): WorkStamp | undefined {

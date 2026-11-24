@@ -8,7 +8,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -178,6 +178,67 @@ test("a published installation refuses plain HTTP unless somebody says they mean
     }
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("a published web server keeps member sessions across restarts without logging its operator token (INV-2045, INV-2046)", async t => {
+  const { startWebServer } = await import("./server.ts");
+  const home = mkdtempSync(join(tmpdir(), "agentbox-session-restart-"));
+  const set = { AGENTBOX_HOME: home, AGENTBOX_INSECURE: "1", AGENTBOX_UI_TOKEN: undefined, AGENTBOX_NO_TOKEN: undefined, AGENTBOX_PUBLIC_URL: undefined };
+  const previous = Object.fromEntries(Object.keys(set).map(key => [key, process.env[key]]));
+  const env = (values: typeof previous) => {
+    for (const [key, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  };
+  let stop: (() => void) | undefined;
+  t.after(() => { stop?.(); env(previous); rmSync(home, { recursive: true, force: true }); });
+  env(set);
+  const logs: string[] = [];
+  let base = "";
+  const start = async () => startWebServer({
+    port: 0, host: "0.0.0.0", useBox: false, onLog: line => logs.push(line),
+    onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); },
+  });
+  writeFileSync(join(home, "principals.json"), JSON.stringify({ principals: [], installation: { mode: "organisation" } }));
+  stop = await start();
+  const path = join(home, "ui-token");
+  const token = readFileSync(path, "utf8").trim();
+  assert.ok(token);
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  assert.ok(logs.some(line => line.includes(path)));
+  async function joinAs(name: string, role: string) {
+    const invite = await fetch(base + "/api/channels/invite", {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ role }),
+    });
+    assert.equal(invite.status, 200);
+    const { code } = await invite.json() as { code: string };
+    const login = await fetch(base + "/api/login", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name }),
+    });
+    assert.equal(login.status, 200);
+    return login.headers.getSetCookie()[0]!.split(";")[0]!;
+  }
+  const members = [];
+  for (const [name, role] of [["Ana", "admin"], ["Alice", "driver"], ["Bob", "viewer"]] as const) {
+    members.push({ role, cookie: await joinAs(name, role) });
+  }
+  const revoked = await joinAs("Revoked", "driver");
+  const { identity } = await (await fetch(base + "/api/me", { headers: { cookie: revoked } })).json() as { identity: string };
+  const logout = await fetch(base + "/api/principals/logout", {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ principalId: identity }),
+  });
+  assert.equal(logout.status, 200);
+  stop(); stop = await start();
+  assert.ok(readFileSync(path, "utf8").trim() === token, "the saved credential was not replaced");
+  assert.ok(logs.every(line => !line.includes(token)), "the operator credential is never printed");
+  for (const { cookie, role } of members) {
+    const me = await fetch(base + "/api/me", { headers: { cookie } });
+    assert.equal(me.status, 200);
+    assert.equal((await me.json() as { role: string }).role, role);
+  }
+  assert.equal((await fetch(base + "/api/me", { headers: { cookie: revoked } })).status, 401);
 });
 
 test("a login's next is a path on this origin or nothing, as a browser would resolve it (INV-724)", async () => {

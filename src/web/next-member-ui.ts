@@ -4,7 +4,7 @@
  * one is made. Opened from the agent's name; never part of the default surface.
  */
 export const NEXT_MEMBER_JS = `
-var member = { id: "", creating: false, paused: {}, allTools: [], open: "" };
+var member = { id: "", creating: false, boxId: "", paused: {}, allTools: [], open: "" };
 
 function field(labelText, value, multiline) {
   var label = el("label", "", labelText), input = el(multiline ? "textarea" : "input");
@@ -24,6 +24,18 @@ function toolPicker(selected) {
   return { node: box, value: function () { return boxes.filter(function (check) { return check.checked; }).map(function (check) { return check.value; }); } };
 }
 
+function memberBoxField() {
+  var label = el("label", "", t("ui.next.member.box")), pick = el("select"), choices = boxesKnown();
+  if (!choices.some(function (box) { return box.id === member.boxId; })) member.boxId = choices[0] ? choices[0].id : "";
+  choices.forEach(function (box) {
+    var option = el("option", "", box.name); option.value = box.id; pick.appendChild(option);
+  });
+  pick.value = member.boxId;
+  pick.addEventListener("change", function () { member.boxId = pick.value; });
+  label.appendChild(pick);
+  return label;
+}
+
 function renderMember() {
   var inner = $("member-inner"), agent = member.creating ? { name: "", title: "", description: "", tools: null } : next.agents[member.id];
   inner.replaceChildren();
@@ -33,6 +45,7 @@ function renderMember() {
   var tools = toolChoices(agent, member.creating), save = el("button", "act-primary", t(member.creating ? "ui.next.member.create" : "ui.next.settings.save"));
   agentConfigFor(member.creating ? "" : member.id);
   var extra = modelFields(agent), moreBox = el("details", "fold");
+  if (member.creating) { form.appendChild(memberBoxField()); save.disabled = !member.boxId; }
   [name, title, persona].forEach(function (row) { form.appendChild(row.label); });
   moreBox.appendChild(el("summary", "", t("ui.next.config.modelAndTeams")));
   extra.nodes.forEach(function (node) { moreBox.appendChild(node); });
@@ -44,7 +57,7 @@ function renderMember() {
   save.addEventListener("click", function () {
     var body = Object.assign({ name: name.input.value.trim(), title: title.input.value.trim(), description: persona.input.value }, tools.value(), extra.value());
     if (!body.name) { name.input.focus(); return; }
-    var sent = member.creating ? postJson("/api/agents", Object.assign({ boxId: chat.box || undefined }, body)) : postJson("/api/agents/update", Object.assign({ id: member.id }, body));
+    var sent = member.creating ? postJson("/api/agents", Object.assign({ boxId: member.boxId }, body)) : postJson("/api/agents/update", Object.assign({ id: member.id }, body));
     sent.then(function (got) {
       toast(t(member.creating ? "ui.next.member.created" : "ui.next.settings.saved2"));
       var opened = member.creating && got && got.id ? got.id : member.id;
@@ -54,7 +67,7 @@ function renderMember() {
   });
   form.appendChild(save);
   inner.appendChild(form);
-  if (member.creating) { if (shelf.shared) inner.insertBefore(sharedBlock(), inner.firstChild); inner.appendChild(shelfBlock()); return; }
+  if (member.creating) { if (shelf.shared) inner.appendChild(sharedBlock()); inner.appendChild(shelfBlock()); return; }
   var kept = el("div", "setting");
   kept.appendChild(standingFold(agent)); kept.appendChild(historyFold(agent)); kept.appendChild(templateFold(agent));
   inner.appendChild(kept);
@@ -82,7 +95,9 @@ function loadPauses() {
 }
 
 function openMember(agentId) {
+  if (!canDriveAgents()) return;
   member.id = agentId || ""; member.creating = !agentId; member.open = "";
+  member.boxId = chat.box;
   $("member").hidden = false; $("scrim").hidden = false;
   renderMember();
 }

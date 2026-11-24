@@ -33,7 +33,7 @@ function modelFields(agent) {
     provider.replaceChildren(); scope.replaceChildren();
     option(provider, "", t("ui.next.config.default"), !agent.provider);
     (agentConfig.presets || []).forEach(function (preset) {
-      option(provider, preset.name, preset.label + (preset.keyPresent ? "" : " · " + t("ui.next.config.noKey")), preset.name === agent.provider);
+      option(provider, preset.name, preset.label + " · " + modelKeySource(preset), preset.name === agent.provider);
     });
     // A provider this installation no longer lists is still the agent's until somebody changes it.
     if (agent.provider && !(agentConfig.presets || []).some(function (preset) { return preset.name === agent.provider; })) option(provider, agent.provider, agent.provider, true);

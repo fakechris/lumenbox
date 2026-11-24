@@ -19,6 +19,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { TurnLedger } from "./resume.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { AgentBus } from "../agents/bus.ts";
+import { WorkAttention } from "../agents/work-attention.ts";
 import { fakeModel, fakeModelReplying } from "./testing/fake-model.ts";
 import { HookRunner } from "./hooks.ts";
 import type { BoxClient } from "../box/client.ts";
@@ -234,6 +235,26 @@ test("a goal continuation turn: the pursuit's workId, a host inbound entry, unde
     assert.deepEqual(last.tool_choice, { type: "none" }, "no tools on a finish-only turn");
     assert.match(JSON.stringify(last.messages.at(-1)?.content), /\[last round\] You have one response left/);
     assert.equal(reports.at(-1)?.finalText, "做完了 1 和 2；3 还差数据。", "the report carries the words the loop will deliver");
+
+    registry.appendTranscript(ada.id, { role: "user", text: "Keep working on this request.", at: new Date().toISOString(), fromPerson: true });
+    const waiting = stubClient([message([toolUseBlock("AskUser", { question: "Which data should I use?" })], "tool_use"), message([])], { params: [] });
+    const { box } = stubBox();
+    let asked = false;
+    await runTurn(ada, inbound({ ...marker, seq: 3 }, "continue"), new AbortController().signal, {
+      client: waiting.client, registry, bus, box, resolution: undefined, turns,
+      askUser: async () => { asked = true; return "in the app"; }, onGoalTurn: report => reports.push(report),
+    });
+    assert.ok(asked, "the continuation delivered its question");
+    assert.equal(reports.at(-1)?.how, "waiting_confirmation", "a delivered question is neither completion nor empty output");
+
+    const needsSecret = stubClient([message([toolUseBlock("AskSecret", { id: "SERVICE_KEY", description: "Needed for the report." })], "tool_use"), message([])], { params: [] });
+    let requested = false;
+    await runTurn(ada, inbound({ ...marker, seq: 4 }, "continue"), new AbortController().signal, {
+      client: needsSecret.client, registry, bus, box, resolution: undefined, turns,
+      askSecret: () => { requested = true; return "in the app"; }, onGoalTurn: report => reports.push(report),
+    });
+    assert.ok(requested, "the continuation requested the secret");
+    assert.equal(reports.at(-1)?.how, "empty_output", "keep Goal backoff for confirmations the scheduler does not track as questions");
   } finally {
     cleanup();
     rmSync(home, { recursive: true, force: true });
@@ -3343,6 +3364,39 @@ test("acknowledged, ran tools, ended silent: one closing nudge, then the result 
       .filter(entry => entry.role === "assistant" && entry.kind === undefined)
       .map(entry => entry.text);
     assert.deepEqual(said, ["看完了：三个文件，没有问题。"]);
+
+    const needsSecret = stubClient([
+      message([textBlock("I'll check what is needed."), toolUseBlock("AskSecret", { id: "SERVICE_KEY", description: "Needed to connect the service." })], "tool_use"),
+      message([]),
+      message([textBlock("Open the app to supply the service key securely.")]),
+    ], { params: [] });
+    let requested = false;
+    await runTurn(
+      ada,
+      [{ id: "m-connect", fromId: "user", fromName: "user", text: "Connect the service", priority: false, receivedAt: "" }],
+      new AbortController().signal,
+      { client: needsSecret.client, registry, bus, box, resolution: undefined, provider: MINIMAX_PROFILE, askSecret: () => { requested = true; return "in the app"; } }
+    );
+    assert.ok(requested, "the app-only request was shown");
+    assert.equal(needsSecret.capture.params.length, 3, "the acknowledgement path still retries");
+    const instructions = (registry.readTranscript(ada.id) as TranscriptEntry[]).at(-1);
+    assert.ok(instructions && "text" in instructions);
+    assert.equal(instructions.text, "Open the app to supply the service key securely.");
+
+    const focus = new WorkAttention();
+    const request = { id: "m-connect-again", fromId: "user", fromName: "user", text: "Connect another service", priority: false, receivedAt: "" };
+    const work = focus.begin(ada.id, "main", [request]);
+    assert.ok(work);
+    const silent = stubClient([message([textBlock("I'll check what is needed."), toolUseBlock("AskSecret", { id: "OTHER_KEY", description: "Needed to connect the other service." })], "tool_use"), message([]), message([])], { params: [] });
+    const notices: string[] = [];
+    await runTurn(ada, [{ ...request, work }], new AbortController().signal, {
+      client: silent.client, registry, box, resolution: undefined, provider: MINIMAX_PROFILE, askSecret: () => "in the app",
+      bus: new AgentBus(registry, async () => {}, undefined, undefined, false, undefined, focus),
+      onEvent: event => { if (event.type === "text") notices.push(event.delta); },
+    });
+    assert.equal(silent.capture.params.length, 3, "only one attempt to explain the app request");
+    assert.equal(focus.get(ada.id, "main")?.wait, "confirmation", "the app request is still pending");
+    assert.doesNotMatch(notices.join(" "), /model returned no text/);
   } finally {
     cleanup();
   }

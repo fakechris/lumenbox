@@ -19,10 +19,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { boxBackendFromEnvironment } from "../config.ts";
 import { BoxStartError, KubeBoxes, type KubeBoxPlacement } from "../control/kube-box.ts";
-import { kubeApiFromEnvironment, type KubeApi } from "../control/kube-client.ts";
+import { kubeApiFromEnvironment, KubernetesError, type KubeApi } from "../control/kube-client.ts";
 import { DEFAULT_NAMESPACE } from "../control/kubernetes.ts";
 import { type AllocationDecision, staticDecision } from "../control/policy.ts";
-import type { PersonalBoxDriver, PersonalBoxRecord, RecoveredBox } from "../host/personal-boxes.ts";
+import { PersonalBoxStartError, type PersonalBoxDriver, type PersonalBoxRecord, type RecoveredBox } from "../host/personal-boxes.ts";
 import { defaultBoxImage } from "./docker.ts";
 import { PersonalDocker } from "./personal.ts";
 
@@ -38,6 +38,24 @@ export interface KubernetesBoxDriverOptions {
   /** Pinned: the image a box is created with is the image it is recovered with. */
   image: string;
   decision: AllocationDecision;
+  log?: (line: string) => void;
+}
+
+function startFailure(error: KubernetesError): PersonalBoxStartError {
+  const detail = error.message.replace(/\s+/g, " ").trim().slice(0, 500);
+  if (error instanceof BoxStartError) {
+    return new PersonalBoxStartError(detail, error.reason, "Ask an administrator to check the pod's scheduling and container status, then retry.");
+  }
+  if (/exceeded quota/i.test(detail)) {
+    return new PersonalBoxStartError(detail, "ResourceQuota", "Ask an administrator to free or increase namespace capacity, then retry.");
+  }
+  if (/admission|webhook|violates podsecurity/i.test(detail) || error.status === 422) {
+    return new PersonalBoxStartError(detail, "AdmissionDenied", "Ask an administrator to check the cluster admission policy, then retry.");
+  }
+  if (error.status === 401 || error.status === 403) {
+    return new PersonalBoxStartError(detail, "RBAC", "Ask an administrator to check the server's ServiceAccount and namespace permissions, then retry.");
+  }
+  return new PersonalBoxStartError(detail, "KubernetesError", "Ask an administrator to check the Kubernetes API, then retry.");
 }
 
 export class KubernetesBoxDriver implements PersonalBoxDriver {
@@ -55,7 +73,19 @@ export class KubernetesBoxDriver implements PersonalBoxDriver {
   }
 
   async start(record: PersonalBoxRecord): Promise<string> {
-    return (await this.options.boxes.create(this.placement(record))).boxdUrl;
+    const placement = this.placement(record);
+    try {
+      return (await this.options.boxes.create(placement)).boxdUrl;
+    } catch (error) {
+      if (!(error instanceof KubernetesError)) throw error;
+      const failure = startFailure(error);
+      this.options.log?.(`personal box ${record.name}: start failed (${failure.reason}): ${failure.message}`);
+      throw failure;
+    }
+  }
+
+  podStatus(name: string) {
+    return this.options.boxes.podStatus(name);
   }
 
   /** Keep the data: pod and Service go, volumes and Secret stay. Delete it: everything goes. */
@@ -89,7 +119,7 @@ export class KubernetesBoxDriver implements PersonalBoxDriver {
  * The driver a server's provisioned boxes use. The desktop installation is the owner's own
  * machine and its boxes are its own Docker's — never a cluster (route B, INV-1687).
  */
-export function provisionedBoxDriver(desktop: boolean, inject: { api?: KubeApi; env?: NodeJS.ProcessEnv } = {}): PersonalBoxDriver {
+export function provisionedBoxDriver(desktop: boolean, inject: { api?: KubeApi; env?: NodeJS.ProcessEnv; log?: (line: string) => void } = {}): PersonalBoxDriver {
   const settings = boxBackendFromEnvironment(inject.env);
   if (settings.backend === "docker") return new PersonalDocker();
   if (desktop) throw new Error("AGENTBOX_BOX_BACKEND=kubernetes is for a server installation; the desktop app's boxes run on this machine's Docker.");
@@ -108,6 +138,7 @@ export function provisionedBoxDriver(desktop: boolean, inject: { api?: KubeApi; 
   return new KubernetesBoxDriver({
     boxes,
     image,
+    log: inject.log,
     decision: staticDecision({ ...(settings.memory ? { memory: settings.memory } : {}), ...(settings.storage ? { storage: settings.storage } : {}) }),
   });
 }

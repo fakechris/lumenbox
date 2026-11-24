@@ -163,7 +163,8 @@ const identityOf = (entry: unknown): string | undefined =>
     : typeof entry === "object" && entry !== null && typeof (entry as { identity?: unknown }).identity === "string" ? (entry as { identity: string }).identity.trim() || undefined
       : undefined;
 
-const doorOfIdentity = (identity: string) => identity.split(":")[0] ?? identity;
+/** The door an identity came through: its prefix (`feishu`, `dingtalk-sales`, `web`). */
+export const doorOfIdentity = (identity: string) => identity.split(":")[0] ?? identity;
 
 /** Old id → new id, and the `principal:<id>` grant holder form the vault uses. */
 function mapId(map: ReadonlyMap<string, string>, value: string): string {
@@ -368,6 +369,16 @@ function lastSpendByPrincipal(path: string): Map<string, string> {
     } catch { /* as above */ }
   }
   return seen;
+}
+
+/** When each person last did something: their newest spend, or the newest message from any of their identities (INV-2054). */
+export function lastActiveByPrincipal(paths: Pick<MergePaths, "home" | "usage">, people: readonly { id: string; identities: readonly string[] }[]): Map<string, string> {
+  const seen = lastSeenByIdentity(paths.home), spent = lastSpendByPrincipal(paths.usage), active = new Map<string, string>();
+  for (const person of people) {
+    const last = [spent.get(person.id), ...person.identities.map(identity => seen.get(identity))].filter((at): at is string => at !== undefined).sort().at(-1);
+    if (last !== undefined) active.set(person.id, last);
+  }
+  return active;
 }
 
 const mappingOf = (people: readonly RawPrincipal[]) => new Map(people.filter(person => person.id !== OWNER_ID).map(person => [person.id, OWNER_ID] as const));

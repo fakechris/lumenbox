@@ -285,7 +285,7 @@ export class Orchestrator {
    * Every connected box by id (docs/30). The own box is in here too, under `registry.box.id`;
    * an agent reaches exactly one of these, the one its profile names.
    */
-  private readonly boxClients = new Map<string, BoxClient>();
+  private readonly boxClients = new Map<string, BoxClient>(); private readonly boxConnectionErrors = new Map<string, string>();
   private readonly desktopResources = new Map<string, DesktopResources>();
   private readonly resolutions = new Map<string, ResolutionConfig | undefined>();
   private readonly boxAccesses = new Map<string, BoxClass>();
@@ -1208,7 +1208,7 @@ export class Orchestrator {
     if (this.revokedBoxes.has(entry.id)) return { connected: false, detail: `${entry.name}: revoked; a reconnect is refused` }; // the box watch never redials a revoked box
     const injected = this.options.boxClientFor?.(entry);
     if (injected !== undefined) {
-      this.boxClients.set(entry.id, injected);
+      this.boxClients.set(entry.id, injected); this.boxConnectionErrors.delete(entry.id);
       this.attachedHealthy.add(entry.id);
       this.forgetDesktopsOf(entry.id);
       return { connected: true, detail: `${entry.name}: box attached directly` };
@@ -1219,7 +1219,7 @@ export class Orchestrator {
     const token = tokenOf(entry);
     if (token === undefined) {
       const detail = `${entry.name}: no token readable at ${entry.endpoint.tokenFile}`;
-      console.error(`[box] ${detail}`);
+      this.boxConnectionErrors.set(entry.id, "Box credentials are unavailable."); console.error(`[box] ${detail}`);
       return { connected: false, detail };
     }
     try {
@@ -1233,13 +1233,13 @@ export class Orchestrator {
       this.forgetDesktopsOf(entry.id);
       const size = health.resolution ? `${health.resolution.display.width}x${health.resolution.display.height}` : "no display";
       const detail = `${entry.name}: box ready (${size}) via ${provisioner.label}`;
-      console.error(`[box] ${detail}`);
+      this.boxConnectionErrors.delete(entry.id); console.error(`[box] ${detail}`);
       return { connected: true, detail };
     } catch (error) {
       this.boxClients.delete(entry.id);
       this.attachedHealthy.delete(entry.id);
       const detail = `${entry.name}: ${error instanceof Error ? error.message : String(error)}`;
-      console.error(`[box] ${detail}`);
+      this.boxConnectionErrors.set(entry.id, error instanceof Error ? error.message : String(error)); console.error(`[box] ${detail}`);
       return { connected: false, detail };
     }
   }
@@ -1262,7 +1262,7 @@ export class Orchestrator {
   revokeBox(boxId: string): { agentsLiving: number; wasConnected: boolean } {
     const wasConnected = this.boxClients.has(boxId);
     this.revokedBoxes.add(boxId);
-    this.boxClients.delete(boxId);
+    this.boxClients.delete(boxId); this.boxConnectionErrors.delete(boxId);
     this.skillCaches.delete(boxId);
     this.forgetDesktopsOf(boxId);
     return { agentsLiving: this.registry.agentsIn(boxId).length, wasConnected };
@@ -1279,7 +1279,7 @@ export class Orchestrator {
 
   detachBox(nameOrId: string): BoxEntry {
     const entry = this.registry.detachBox(nameOrId);
-    this.boxClients.delete(entry.id);
+    this.boxClients.delete(entry.id); this.boxConnectionErrors.delete(entry.id);
     this.skillCaches.delete(entry.id);
     this.forgetDesktopsOf(entry.id);
     return entry;
@@ -1315,7 +1315,7 @@ export class Orchestrator {
         } catch (error) {
           this.boxClients.delete(entry.id);
           this.forgetDesktopsOf(entry.id);
-          const detail = error instanceof Error ? error.message : String(error);
+          const detail = error instanceof Error ? error.message : String(error); this.boxConnectionErrors.set(entry.id, detail);
           if (this.attachedHealthy.delete(entry.id)) transitions.push({ name: entry.name, connected: false, detail });
         }
       }
@@ -1326,12 +1326,12 @@ export class Orchestrator {
   }
 
   /** Which boxes are reachable right now, for the state panel and `box list`. */
-  boxStatus(): { id: string; name: string; kind: string; connected: boolean; displayFloor: number; agents: number; endpoint?: string; resources?: DesktopResources }[] {
+  boxStatus(): { id: string; name: string; kind: string; connected: boolean; detail?: string; displayFloor: number; agents: number; endpoint?: string; resources?: DesktopResources }[] {
     return this.registry.listBoxes().map(entry => ({
       id: entry.id,
       name: entry.name,
       kind: entry.kind,
-      connected: this.boxClients.has(entry.id),
+      connected: this.boxClients.has(entry.id), ...(this.boxConnectionErrors.has(entry.id) ? { detail: this.boxConnectionErrors.get(entry.id) } : {}),
       displayFloor: entry.displayFloor,
       agents: this.registry.agentsIn(entry.id).length, ...this.generations.statusOf(entry.id),
       ...(this.boxClients.has(entry.id) && this.desktopResources.has(entry.id) ? { resources: this.desktopResources.get(entry.id) } : {}),
@@ -1779,7 +1779,7 @@ export class Orchestrator {
         template,
         self: agent.profile.name, skills: skillsDir(this.boxEntryOf(agent.id)),
         recipePath,
-        ...(options.caller?.userId !== undefined ? { createdBy: options.caller.userId } : {}),
+        ...(options.caller?.userId !== undefined ? { createdBy: this.personName?.(options.caller.userId) ?? options.caller.userId } : {}), // a name, not the raw id (INV-2061)
         pending,
         // This machine's zone is the person's, near enough: the app runs where they sit.
         known: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },

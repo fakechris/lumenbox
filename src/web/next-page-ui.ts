@@ -49,6 +49,7 @@ import { NEXT_NEED_JS } from "./next-need-ui.ts";
 import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
 import { NEXT_LINE_JS } from "./next-line-ui.ts";
 import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
+import { STRIP_TOKEN_JS } from "./token-url-ui.ts";
 
 const STYLE = `
 :root {
@@ -185,9 +186,9 @@ header.bar { position: relative; }
 .picker { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.1); max-height: 280px; overflow: auto; }
 .picker button { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 7px 10px; border-radius: 6px; font-size: 13px; }
 .picker button.on, .picker button:hover { background: var(--bg); }
-.picker > .why { padding: 8px 10px; }
+.picker > .why { padding: 8px 10px; } .box-members { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .desk { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
-.desk .acts { flex-wrap: wrap; } .desk p { margin: 0; }
+.desk .acts { flex-wrap: wrap; } .desk p { margin: 0; white-space: normal; overflow-wrap: anywhere; }
 .desk input { flex: 1; min-width: 120px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; font-size: 13px; }
 .menu button { text-align: left; padding: 8px 10px; border-radius: 6px; font-size: 13px; }
 .menu button:hover { background: var(--bg); }
@@ -366,6 +367,7 @@ export const NEXT_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ui.next.title}}</title>
 <link rel="icon" href="data:,">
+<script>${STRIP_TOKEN_JS}</script>
 <script src="/vendor/markdown-it.js"></script>
 <style>${STYLE}</style>
 </head>
@@ -381,16 +383,17 @@ export const NEXT_HTML = `<!doctype html>
 <nav class="side" aria-label="{{ui.next.nav.label}}">
   <div class="brand"><span class="logo" aria-hidden="true">L</span>{{ui.next.title}}</div>
   <div class="boxes" id="boxes" aria-label="{{ui.next.side.boxes}}"></div>
+  <div id="box-members" hidden></div>
   <div class="box-notice" id="box-notice" hidden></div>
   <button class="needs" id="needs" data-nav="inbox" hidden></button>
-  <h2 class="group">{{ui.next.side.label}}<button id="agent-new" aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
+  <h2 class="group">{{ui.next.side.label}}<button id="agent-new" hidden aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
   <div class="teams" id="teams" hidden></div>
   <div class="agents" id="agents"></div>
   <div class="side-links">
     <button data-nav="work">{{ui.next.side.work}}</button>
     <button data-nav="auto">{{ui.next.side.auto}}</button>
     <button data-nav="boxes">{{ui.next.side.boxes2}}</button>
-    <button data-nav="settings">{{ui.next.side.settings}}</button>
+    <button data-nav="settings" hidden>{{ui.next.side.settings}}</button>
     <div class="side-foot">
       <button id="theme" aria-label="{{ui.next.theme}}" title="{{ui.next.theme}}">◐</button>
       <button id="lang">{{ui.next.lang}}</button>
@@ -405,6 +408,7 @@ export const NEXT_HTML = `<!doctype html>
     <button class="act" id="screen-toggle" aria-pressed="false" hidden>{{ui.next.screen.toggle}}</button>
     <button class="act" id="thread-more" aria-label="{{ui.next.thread.more}}" title="{{ui.next.thread.more}}" hidden>⋯</button>
     <div class="menu" id="thread-menu" hidden>
+      <button id="thread-agent">{{ui.next.thread.agent}}</button>
       <button id="thread-find">{{ui.next.thread.find}}</button>
       <button id="thread-export">{{ui.next.thread.export}}</button>
       <button id="thread-link">{{ui.next.thread.link}}</button>

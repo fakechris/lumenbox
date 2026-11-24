@@ -475,6 +475,7 @@ function hostCredentialArgs(): string[] {
   const names = [
     "ANTHROPIC_API_KEY",
     "MINIMAX_CODE_CN_API_KEY",
+    "MINIMAX_CODE_GLOBAL_API_KEY",
     "AGENTBOX_API_KEY",
     "AGENTBOX_BASE_URL",
     "AGENTBOX_MODEL",

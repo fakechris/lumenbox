@@ -8,7 +8,7 @@
 
 export const UI_PAGE: Record<string, readonly [zh: string, en: string]> = {
   "ui.login.an-admin-gives-you-a": ["管理员会给你一个邀请码 — 与在聊天中使用的是同一个。", "An admin gives you a code — the same one that works in chat."],
-  "ui.login.codes-last-15-minutes-and": ["邀请码 15 分钟内有效，且只能用一次。你在这里能做什么，取决于管理员给你的角色，而不是邀请码。", "Codes last 15 minutes and work once. What you may do here comes from the role the admin gave you, not from the code."],
+  "ui.login.codes-last-15-minutes-and": ["邀请码只能用一次，在管理员设定的有效期内有效（默认 15 分钟）。你在这里能做什么，取决于管理员给你的角色，而不是邀请码。", "A code works once, until the time the admin set (15 minutes unless they chose longer). What you may do here comes from the role the admin gave you, not from the code."],
   "ui.login.enter-the-code-you-were": ["请输入你拿到的邀请码。", "Enter the code you were given."],
   "ui.login.how-your-work-should-be": ["你的工作用什么名字署名", "How your work should be signed"],
   "ui.login.invite-code": ["邀请码", "Invite code"],

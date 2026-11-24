@@ -55,6 +55,87 @@ import { auditConversation } from "./audit-context.ts";
 import { evidenceDigest } from "./review-dispatch.ts";
 import { approvedCallNotice } from "./approval-notice.ts";
 import { ExceptionLedger, noteTurnEnd } from "./exceptions.ts";
+import type { TranscriptEntry } from "./turn.ts";
+import { workReading } from "./work-reading.ts";
+
+for (const recovers of [true, false]) {
+  test(`empty reply after successful tools (INV-2032, ${recovers ? "recovers" : "explains how to retry"})`, async t => {
+    const greeting = "Hello! I'm Ada. How can I help?";
+    const events: string[] = [];
+    const tasks = new TaskStore(null);
+    const trigger = DEFAULT_POLICY.triggerTokens;
+    const envTrigger = process.env.AGENTBOX_COMPACT_AT_TOKENS;
+    t.after(() => {
+      DEFAULT_POLICY.triggerTokens = trigger;
+      if (envTrigger === undefined) delete process.env.AGENTBOX_COMPACT_AT_TOKENS;
+      else process.env.AGENTBOX_COMPACT_AT_TOKENS = envTrigger;
+    });
+    const episode = await runEpisode({
+      team: [{ name: "Ada", tools: ["read_file", "list_dir"] }],
+      says: ["Hi Ada!"],
+      tasks,
+      files: { "/home/box/work/welcome.txt": "Welcome" },
+      onEvent: event => { if (event.type === "text") events.push(event.delta); },
+      script: ({ round, messages, offered }) => {
+        if (round === 0) return { call: "read_file", input: { path: "/home/box/work/welcome.txt" } };
+        if (round === 1) return { call: "list_dir", input: { path: "/home/box/work" } };
+        if (round === 2) {
+          if (!recovers) {
+            // Force the context rebuild between the empty response and the closing request.
+            process.env.AGENTBOX_COMPACT_AT_TOKENS = "1";
+            DEFAULT_POLICY.triggerTokens = 1;
+          }
+          return undefined;
+        }
+        if (recovers && round === 4) {
+          assert.deepEqual(offered, [], "the malformed-reply retry is still text-only");
+          assert.match(JSON.stringify(messages), /Do not call tools\. Reply in plain text/);
+          return { say: greeting };
+        }
+        assert.equal(round, 3, "only one closing nudge");
+        const tail = messages.slice(messages.findLastIndex(message => message.role === "assistant") + 1);
+        const blocks = tail.flatMap(message => typeof message.content === "string" ? [] : message.content);
+        const result = blocks.find(block => block.type === "tool_result");
+        const nudge = blocks.find(block => block.type === "text" && /answer them now/.test(block.text));
+        assert.ok(result?.type === "tool_result" && !result.is_error, "the successful tool result remains paired");
+        assert.ok(nudge?.type === "text" && /answer them now/.test(nudge.text), "the retry asks for a reply");
+        assert.deepEqual(offered, [], "the recovery request can only reply");
+        return recovers ? { call: "list_dir", input: { path: "/home/box/work" }, saying: '<tool_call>\n{"name":"list_dir","arguments":{}}\n</tool_call>' } : undefined;
+      },
+    });
+    try {
+      assert.equal(episode.score.rounds, recovers ? 5 : 4);
+      assert.deepEqual(episode.score.trail, recovers ? ["Ada:read_file", "Ada:list_dir", "Ada:list_dir"] : ["Ada:read_file", "Ada:list_dir"]);
+      assert.deepEqual(episode.score.refusals, []);
+      const transcript = episode.registry.readTranscript(episode.registry.resolve("Ada").id) as TranscriptEntry[];
+      assert.equal(transcript.filter(entry => "kind" in entry && entry.kind === "results").length, 2, "the unsolicited repeat never ran");
+      const last = transcript.at(-1);
+      assert.ok(last?.role === "assistant" && "text" in last);
+      if (recovers) {
+        assert.equal(last.text, greeting);
+      } else {
+        assert.match(last.text, /model returned no text.*Ask again/);
+        assert.equal(last.host, true);
+        assert.ok(events.includes(last.text), "the watcher receives the actionable reason");
+        const task = tasks.list().find(row => row.workRoot?.automatic);
+        assert.ok(task, "the web request has an obligation card");
+        const reading = workReading(task, {
+          checks: new ResultChecks().snapshot(task),
+          stage: { active: false, questionPending: false, undelivered: false },
+        });
+        assert.equal(reading.phase, "waiting");
+        assert.equal(reading.blocker?.kind, "empty_output", "the card must explain that a new reply requires asking again");
+        const withQuestion = workReading(task, {
+          checks: new ResultChecks().snapshot(task),
+          stage: { active: false, questionPending: true, undelivered: false },
+        });
+        assert.equal(withQuestion.blocker?.kind, "confirmation", "an open question takes priority over a recorded empty reply");
+      }
+    } finally {
+      episode.cleanup();
+    }
+  });
+}
 
 test("a host approval notice wakes a member to retry the unexecuted call without a second card (INV-1990)", async () => {
   const { PolicyGate } = await import("./policy.ts");
@@ -300,10 +381,20 @@ test("a foreground command finishing later returns to its waiting user work; an 
 
 test("a question awaiting the user's choice retains work without requiring a todo list (INV-1797)", async () => {
   const {WorkAttention} = await import("../agents/work-attention.ts"); const focus = new WorkAttention();
+  let modelCalls = 0;
+  const notices: string[] = [];
   const episode = await runEpisode({workAttention:focus,team:[{name:"Mia"},{name:"Zed"}],says:[],
-    script:({round,opened})=>opened.includes("Unrelated audit")?{say:"Noted."}:round===0?{call:"AskUser",input:{question:"Which installation directory?"}}:{say:"Waiting for your choice."},
+    onEvent: event => { if (event.type === "text") notices.push(event.delta); },
+    script:({round,opened})=>{
+      if (opened.includes("Unrelated audit")) return {say:"Noted."};
+      modelCalls++;
+      return round===0?{call:"AskUser",input:{question:"Which installation directory?"},saying:"I can help you install it."}:undefined;
+    },
     drive:async({bus,registry,frontId})=>{bus.sendFromUser(frontId,"Install the package");await bus.wake(frontId);await bus.idle();
       assert.equal(focus.get(frontId,"main")!.status,"waiting");
+      assert.equal(focus.get(frontId,"main")!.wait,"confirmation");
+      assert.equal(modelCalls,2,"the open question needs no closing nudge");
+      assert.doesNotMatch(notices.join(" "), /model returned no text/);
       bus.send({fromId:registry.resolve("Zed").id,toId:frontId,text:"Unrelated audit",priority:true});await bus.idle();
       assert.equal(bus.heldCount(frontId),0); assert.equal(focus.get(frontId,"main")!.status,"waiting","the question is still the person's to answer");
     }});
@@ -4676,6 +4767,43 @@ test("a person's request ends when its result is delivered, and 不对，重做 
   } finally { episode.cleanup(); }
 });
 
+test("a delivered file, sent back for a revision and delivered again, is back in review with both files, not left doing (INV-2035)", async () => {
+  // v0.4.7 acceptance: a member delivered a report, the person asked in its conversation for the date to be added, the revised
+  // file was on the task — and the task sat in doing with no Accept anywhere: the resubmission was refused as evidence already
+  // submitted, because the evidence version did not count the files handed over.
+  const dir = mkdtempSync(join(tmpdir(), "agentbox-revise-scenario-"));
+  const tasks = new TaskStore(join(dir, "tasks.jsonl")), path = "/home/box/work/q3.md";
+  let target = "", step = 0;
+  const steps = [
+    { call: "write_file", input: { path, content: "# Q3\nRevenue grew 12%.\n" } },
+    { call: "DeliverFile", input: { path, note: "The Q3 summary", task_id: "TASK" } },
+    { call: "Tasks", input: { action: "submit", id: "TASK", evidence: [`${path} — the summary`] } },
+    { say: "Q3 summary delivered." },
+    { call: "Tasks", input: { action: "update", id: "TASK", status: "doing", note: "the person asked for the date" } },
+    { call: "write_file", input: { path, content: "# Q3 (2026-11-23)\nRevenue grew 12%.\n" } },
+    { call: "DeliverFile", input: { path, note: "The Q3 summary, dated", task_id: "TASK" } },
+    { call: "Tasks", input: { action: "submit", id: "TASK", note: "Added the date.", evidence: [`${path} — the summary`] } },
+    { say: "Added the date and delivered it again." },
+  ];
+  const episode = await runEpisode({
+    team: [{ name: "Ada" }], tasks, says: [],
+    script: () => JSON.parse(JSON.stringify(steps[step++] ?? { say: "Done." }).replaceAll('"TASK"', JSON.stringify(target))),
+    drive: async ({ bus, frontId }) => {
+      target = tasks.create({ title: "Write the Q3 summary", requester: "person", assigneeId: frontId, conversation: "main" })!.id;
+      tasks.update(target, { status: "doing" }, frontId);
+      bus.sendFromUser(frontId, "Write the Q3 summary as a file."); await bus.wake(frontId); await bus.idle();
+      assert.equal(tasks.get(target)!.status, "review", "the first delivery was submitted");
+      bus.sendFromUser(frontId, "加上日期"); await bus.wake(frontId); await bus.idle();
+    },
+  });
+  try {
+    const task = tasks.get(target)!;
+    assert.deepEqual(episode.score.refusals, []);
+    assert.equal(task.status, "review", JSON.stringify(task.history));
+    assert.deepEqual(task.deliverables?.map(item => item.note), ["The Q3 summary", "The Q3 summary, dated"]);
+  } finally { episode.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("an agent in a Docker box writes a git hook and a postinstall: a person is asked first and nothing lands; a version bump just lands; at L2 it is refused (INV-1861)", async () => {
   const { PolicyGate } = await import("./policy.ts");
   const { TaskStore } = await import("./tasks.ts");
@@ -5632,4 +5760,41 @@ test("an agent finds what a teammate decided in another conversation, reads it b
   } finally {
     episode.cleanup();
   }
+});
+
+test("delegated, colleague reported, coordinator converges (INV-2037)", async () => {
+  // Ada asked Rex to check example.com's title and then kept her turn open, checking in a loop instead
+  // of ending it. Rex reported in seconds; Ada never read it and ran to her turn budget, and the operator
+  // had to fetch Rex's answer by hand. The report must reach the turn that is waiting on it.
+  const { WorkAttention } = await import("../agents/work-attention.ts");
+  const focus = new WorkAttention();
+  let adaCalls = 0, sawReport = -1, rexDone = -1;
+  const episode = await runEpisode({
+    workAttention: focus, team: [{ name: "Ada" }, { name: "Rex" }], says: [],
+    script: ({ agent, messages }) => {
+      const text = JSON.stringify(messages);
+      if (agent === "Rex") {
+        if (!text.includes("curl")) return { call: "bash", input: { command: "curl -s https://example.com | grep -o '<title>.*</title>'" } };
+        rexDone = adaCalls;
+        return { say: "REX_REPORT: the title of example.com is \"Example Domain\"." };
+      }
+      adaCalls++;
+      if (text.includes("REX_REPORT")) { if (sawReport < 0) sawReport = adaCalls; return { say: "Combined brief: example.com is titled \"Example Domain\" — Rex and I agree." }; }
+      if (adaCalls === 1) return { call: "SendToAgent", input: { target_id: "Rex", message: "Independently check the title of example.com and tell me." } };
+      return { call: "bash", input: { command: `sleep 5 # waiting for Rex, check ${adaCalls}` } };
+    },
+    drive: async ({ bus, registry, frontId }) => {
+      bus.sendFromUser(frontId, "Ask Rex to independently check example.com's title, then the two of you combine into one brief.");
+      await bus.wake(frontId); await bus.idle();
+      assert.ok(rexDone > 0, "Rex reported");
+      assert.ok(sawReport > 0, "Ada read Rex's report");
+      assert.ok(sawReport - rexDone <= 3, `Ada read Rex's report within a round or two of it landing, not after ${sawReport - rexDone} more calls`);
+      const said = JSON.stringify(registry.readTranscript(frontId));
+      assert.match(said, /Combined brief/);
+      assert.doesNotMatch(said, /turn budget|model calls/i, "Ada's wait ended by itself, not at the budget");
+      assert.equal(focus.get(frontId, "main")!.status, "answered");
+      assert.equal(focus.get(frontId, "main")!.awaiting.length, 0);
+    },
+  });
+  episode.cleanup();
 });

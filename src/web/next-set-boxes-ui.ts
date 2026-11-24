@@ -12,12 +12,17 @@ function loadBoxSet() {
   getJson("/api/config").then(function (got) { boxSet.config = got; boxSet.error = ""; }, function (error) { boxSet.config = {}; boxSet.error = error.message; })
     .then(function () { if (next.view === "settings") render(); });
   var also = function (path, keep) { getJson(path).then(function (got) { keep(got); if (next.view === "settings") render(); }, function () {}); };
-  also("/api/boxes", function (got) { boxSet.list = got; });
-  also("/api/box/limits", function (got) { boxSet.limits = got; });
-  also("/api/box/image", function (got) {
-    boxSet.image = got;
-    // An update in progress is watched until it ends, and only while this pane is the one shown.
-    if (got.running && next.view === "settings" && settings.pane === "boxes") boxSet.timer = setTimeout(loadBoxSet, 3000);
+  also("/api/boxes?lang={{@locale}}", function (got) {
+    boxSet.list = got;
+    if (got.backend === "kubernetes") {
+      also("/api/personal-boxes", function (personal) { boxSet.personal = personal; });
+    } else {
+      also("/api/box/limits", function (limits) { boxSet.limits = limits; });
+      also("/api/box/image", function (image) {
+        boxSet.image = image;
+        if (image.running && next.view === "settings" && settings.pane === "boxes") boxSet.timer = setTimeout(loadBoxSet, 3000);
+      });
+    }
   });
   loadBoxMore();
 }
@@ -33,6 +38,7 @@ function imageBlock() {
   if (!boxSet.image) return null;
   var box = el("section", "setting"), image = boxSet.image, state = image.state || {}, acts = el("div", "acts"), backup = el("input"), keep = el("label", "tool");
   box.appendChild(el("h2", "group", t("ui.next.boxset.image")));
+  if (state.available && !image.running) box.appendChild(el("p", "needbox", t("ui.next.boxset.available")));
   box.appendChild(fact(t("ui.next.boxset.running"), state.runningRef || "—"));
   box.appendChild(fact(t("ui.next.boxset.expected"), (state.expectedRef || "—") + " · " + t("ui.next.boxset.image." + imageWord(image.state))));
   if (image.last) box.appendChild(el("p", "why", t("ui.next.boxset.last", { outcome: image.last.outcome, when: new Date(image.last.at).toLocaleString() }) + (image.last.detail ? " · " + image.last.detail : "")));
@@ -127,10 +133,11 @@ function attachBlock() {
   if (!boxSet.list) return null;
   var box = el("section", "setting"), list = boxSet.list.boxes || [], own = boxSet.list.own;
   box.appendChild(el("h2", "group", t("ui.next.boxset.attached")));
-  list.forEach(function (machine) {
-    var line = el("div", "fact"), text = el("span", ""), acts = el("span", "acts");
+  list.filter(function (machine) { return boxSet.list.backend !== "kubernetes" || (machine.id !== own && machine.kind !== "kubernetes"); }).forEach(function (machine) {
+    var line = el("div", "fact"), text = el("div", ""), acts = el("span", "acts");
     text.appendChild(el("b", "", machine.name));
-    text.appendChild(el("div", "why", [machine.kind, t(machine.connected ? "ui.next.box.on" : "ui.next.box.off"), t("ui.next.boxset.agents", { n: machine.agents || 0 }), machine.membersLabel || ""].filter(Boolean).join(" · ")));
+    text.appendChild(el("div", "why", [machine.kind, t(machine.connected ? "ui.next.box.on" : "ui.next.box.off"), t("ui.next.boxset.agents", { n: machine.agents || 0 })].filter(Boolean).join(" · ")));
+    if (machine.membersLabel) text.appendChild(boxMembers(machine));
     if (settings.me && settings.me.role === "admin") {
       var open = el("button", "act", t("ui.next.boxset.everyone"));
       open.addEventListener("click", function () { postJson("/api/boxes/update", { name: machine.name, members: "everyone" }).then(loadBoxSet, failed); });
@@ -164,9 +171,27 @@ function attachBlock() {
   return box;
 }
 
+function clusterBlock() {
+  var section = el("section", "setting"), personal = boxSet.personal;
+  section.appendChild(fact(t("ui.next.boxset.backend"), "Kubernetes"));
+  section.appendChild(fact(t("ui.next.boxset.namespace"), boxSet.list.namespace));
+  section.appendChild(el("h2", "group", t("ui.next.boxset.personalPods")));
+  if (personal && !personal.boxes.length) section.appendChild(el("p", "why", t("ui.next.boxset.noPersonalPods")));
+  if (personal) personal.boxes.forEach(function (box) {
+    section.appendChild(fact(box.name, [box.podStatus, box.status === "unreachable" ? t("ui.next.box.off") : box.status].filter(Boolean).join(" · ")));
+    if (box.error || box.status === "unreachable") section.appendChild(el("p", "why", box.error || podUnreachable(box.connectionError)));
+    if (["failed", "unreachable", "interrupted"].includes(box.status)) {
+      section.appendChild(personalBoxRetry(box.id, loadBoxSet));
+    }
+  });
+  return section;
+}
+
 function renderBoxesPane(view) {
   if (boxSet.config === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadBoxSet(); return; }
   if (boxSet.error) view.appendChild(el("p", "why", boxSet.error));
-  [imageBlock(), limitsAndResetBlock(), hostBlock(), attachBlock(), quotaBlock(), nodesBlock(), diagnosticsBlock()].forEach(function (block) { if (block) view.appendChild(block); });
+  var backend = boxSet.list && boxSet.list.backend;
+  var blocks = backend === "kubernetes" ? [clusterBlock()] : backend ? [imageBlock(), limitsAndResetBlock(), hostBlock()] : [];
+  blocks.concat([attachBlock(), quotaBlock(), nodesBlock(), diagnosticsBlock()]).forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;
