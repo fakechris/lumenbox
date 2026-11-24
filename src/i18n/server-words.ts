@@ -67,5 +67,7 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   // A desktop frame before noVNC answers.
   "page.desktop.title": ["桌面", "desktop"],
   "page.desktop.starting": ["桌面正在启动…", "Desktop is starting…"],
+  "page.desktop.failed": ["无法打开桌面", "Could not open the desktop"],
+  "page.desktop.retry": ["重试", "Retry"],
   "page.desktop.box-down": ["box 暂时不可用。用 agentbox box up 启动它。", "The box is not available. Start it with agentbox box up."],
 };

@@ -2759,7 +2759,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             try {
               reason = String((JSON.parse(body) as { error?: unknown }).error ?? body);
             } catch { /* not JSON; the text is the reason */ }
-            sendDesktopWaiting(res, reason);
+            sendDesktopWaiting(res, reason, status === 404);
           });
           return;
         }
@@ -2802,8 +2802,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     req.pipe(upstream);
   }
 
-  function sendDesktopWaiting(res: ServerResponse, reason: string): void {
-    const page = desktopWaitingPage(reason, requestLocaleOf(res.req));
+  function sendDesktopWaiting(res: ServerResponse, reason: string, loading?: boolean): void {
+    const page = desktopWaitingPage(reason, requestLocaleOf(res.req), loading);
     res.writeHead(503, {
       "content-type": "text/html; charset=utf-8",
       "content-length": Buffer.byteLength(page),
@@ -2944,6 +2944,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       "cache-control": "no-store",
     });
     res.end(payload);
+  }
+
+  function oauthCallbackUrl(req: IncomingMessage): string {
+    const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim() || "http";
+    return `${proto}://${req.headers.host ?? "localhost"}/oauth/callback`;
   }
 
   async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -3435,8 +3440,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const agent = registry.agentsIn(desktop.boxId ?? registry.box.id)
               .find(entry => registry.displayIndexFor(entry.id) === Number(page[1]));
             if (agent && !desktopPagesReady.has(agent.id)) {
-              void prepareDesktopPage(agent.id);
-              sendDesktopWaiting(res, desktopPageErrors.get(agent.id) ?? "");
+              const error = desktopPageErrors.get(agent.id);
+              if (error === undefined) void prepareDesktopPage(agent.id);
+              else desktopPageErrors.delete(agent.id);
+              sendDesktopWaiting(res, error ?? "");
               return;
             }
           }
@@ -4319,7 +4326,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // whoever the admin named, and is never returned by any route.
         if (route === "GET /api/connectors") {
           if (refusedRole("admin")) return;
-          send(res, 200, { providers: oauth.providers(localeOf(req, url)), connected: oauth.connected() });
+          send(res, 200, { providers: oauth.providers(localeOf(req, url)), connected: oauth.connected(), redirectUri: oauthCallbackUrl(req) });
           return;
         }
 
@@ -4335,8 +4342,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           };
           try {
             if (route === "POST /api/connectors/begin") {
-              const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim() || "http";
-              const redirectUri = `${proto}://${req.headers.host ?? "localhost"}/oauth/callback`;
+              const redirectUri = oauthCallbackUrl(req);
               const scopes = typeof body.scopes === "string" ? body.scopes.split(/[\s,]+/).filter(Boolean) : undefined;
               const started = oauth.begin({ ...input, redirectUri, ...(scopes !== undefined ? { scopes } : {}) });
               log(`connectors: ${input.provider} authorization started`);

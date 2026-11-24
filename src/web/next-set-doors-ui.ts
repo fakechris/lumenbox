@@ -116,12 +116,27 @@ function connectorsBlock() {
   });
   if (!providers.length) return box;
   var locale = "{{@locale}}", which = selectOf(providers.map(function (provider) { return [provider.id, (locale === "zh" && provider.titleZh) || provider.title]; }), providers[0].id);
-  var clientId = el("input"), clientSecret = el("input"), grant = el("input"), how = el("p", "why"), go = el("button", "act", t("ui.next.doors.connect"));
+  var clientId = el("input"), clientSecret = el("input"), grant = el("input"), go = el("button", "act", t("ui.next.doors.connect"));
+  var how = el("p", "guidance"), callback = el("div", "connector-callback");
+  callback.appendChild(el("div", "guidance", t("ui.next.doors.callback")));
+  callback.appendChild(el("code", "card-code", data.redirectUri || ""));
+  if (navigator.clipboard) {
+    var copy = el("button", "act", t("ui.next.doors.copyCallback"));
+    copy.addEventListener("click", function () {
+      navigator.clipboard.writeText(data.redirectUri).then(function () { toast(t("ui.next.msg.copied")); }, failed);
+    });
+    callback.appendChild(copy);
+  }
   clientSecret.type = "password"; clientSecret.autocomplete = "off"; grant.placeholder = t("ui.next.doors.grantPlaceholder");
-  var follow = function () { var chosen = providers.filter(function (provider) { return provider.id === which.value; })[0] || {}; how.textContent = (locale === "zh" && chosen.setupZh) || chosen.setup || ""; };
+  var selected = function () { return providers.find(function (provider) { return provider.id === which.value; }) || {}; };
+  var follow = function () {
+    var chosen = selected();
+    how.textContent = (locale === "zh" && chosen.setupZh) || chosen.setup || "";
+    callback.hidden = chosen.kind !== "authorization_code" || !data.redirectUri;
+  };
   which.addEventListener("change", follow); follow();
   go.addEventListener("click", function () {
-    var chosen = providers.filter(function (provider) { return provider.id === which.value; })[0] || {};
+    var chosen = selected();
     if (!clientId.value.trim() || !clientSecret.value.trim()) { (clientId.value.trim() ? clientSecret : clientId).focus(); return; }
     var body = { provider: chosen.id, clientId: clientId.value.trim(), clientSecret: clientSecret.value.trim(), grant: grant.value.trim() };
     postJson(chosen.kind === "authorization_code" ? "/api/connectors/begin" : "/api/connectors/connect", body).then(function (got) {
@@ -130,7 +145,8 @@ function connectorsBlock() {
       loadDoors();
     }, function (error) { clientSecret.value = ""; failed(error); });
   });
-  [labelled(t("ui.next.doors.service"), which), how, labelled(t("ui.next.doors.clientId"), clientId), labelled(t("ui.next.doors.clientSecret"), clientSecret),
+  [labelled(t("ui.next.doors.service"), which), how, callback,
+    labelled(t("ui.next.doors.clientId"), clientId), labelled(t("ui.next.doors.clientSecret"), clientSecret),
     labelled(t("ui.next.doors.grant"), grant), go].forEach(function (node) { box.appendChild(node); });
   return box;
 }

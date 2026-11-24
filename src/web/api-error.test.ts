@@ -48,6 +48,7 @@ test("Settings speaks the reader's language: prompt parts, connector setup, the 
       const parts = await read("/api/prompt-parts", lang);
       assert.equal(parts.parts.find((p: { key: string }) => p.key === "conduct").title, part, `${lang}: a prompt part's title`);
       const connectors = await read("/api/connectors", lang);
+      assert.equal(connectors.redirectUri, `http://127.0.0.1:${port}/oauth/callback`);
       assert.match(connectors.providers.find((p: { id: string }) => p.id === "feishu").setup, setup, `${lang}: a connector's setup line`);
       const catalog = await read("/api/catalog", lang);
       assert.match(catalog.experts.find((e: { slug: string }) => e.slug === "designer").summary, summary, `${lang}: a catalog line`);

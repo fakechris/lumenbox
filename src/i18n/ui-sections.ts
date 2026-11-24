@@ -14,6 +14,8 @@ export const UI_SECTIONS: Record<string, readonly [zh: string, en: string]> = {
   "ui.channels.telegram-setup": ["在服务器上设置 TELEGRAM_BOT_TOKEN。", "Set TELEGRAM_BOT_TOKEN on the server."],
   "ui.channels.callback": ["在飞书应用中登记此 OAuth 回调地址：", "Register this OAuth callback URL in the Feishu app:"],
   "ui.channels.callback-missing": ["在服务器上设置 AGENTBOX_PUBLIC_URL 后，这里会显示飞书 OAuth 回调地址。", "Set AGENTBOX_PUBLIC_URL on the server to see the Feishu OAuth callback URL here."],
+  "ui.next.doors.callback": ["授权回调地址", "Authorization callback URL"],
+  "ui.next.doors.copyCallback": ["复制回调地址", "Copy callback URL"],
   "ui.mcp.sign-in": ["请以有驾驶员或管理员权限的身份登录后再签发个人 token。如果尚未加入，请让安装的管理员添加你；若没有管理员且初始化不可用，请让安装的维护者修复本地名单或初始化状态。", "Sign in as a driver or administrator to issue a personal token. Ask an installation administrator to add you if needed. If there are no administrators and setup is unavailable, ask the installation operator to repair the local roster or bootstrap state."],
   "ui.agent-pause.agents": ["Agent", "Agents"],
   "ui.agent-pause.background-job-s-stopped": ["个后台运行已停止。", "background job(s) stopped."],
