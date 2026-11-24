@@ -67,7 +67,7 @@ ${renderSettingsTabs()}
       <div class="fieldnote">{{ui.settings.the-prompt-parts-every-agent}}</div>
       <div id="setparts"></div>
     </div>
-    <div class="field" data-tier="installation" data-settab="memory">
+    <div class="field" data-tier="personal" data-settab="memory">
       <label>{{ui.settings.memory}}</label>
       <div class="fieldnote" style="margin:0">{{ui.settings.what-each-agent-has-kept}}</div>
       <div id="setmemstate" class="fieldnote" style="margin:4px 0 0"></div>
@@ -80,12 +80,13 @@ ${renderSettingsTabs()}
     <div class="field" data-tier="installation" id="setboxwrap" data-settab="boxes">
       <label>{{ui.settings.box}}</label>
       <div class="fieldnote" id="setboxstate" style="margin:0"></div>
-      <div id="setboxactions" style="display:none">
+      <div id="setboxactions" data-operator style="display:none">
         <button class="btn sm" id="setboxup">{{ui.settings.start-the-box}}</button>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
       <input id="setboximage" placeholder="{{ui.settings.image-override-e-g-mirror}}" spellcheck="false" style="margin-top:8px">
-      <div class="fieldnote" style="margin-top:4px">{{ui.settings.what-docker-pulls-when-this}}</div>
+      <div id="setboximagenote" class="fieldnote" style="margin-top:4px">{{ui.settings.what-docker-pulls-when-this}}</div>
+      <div id="setclusterpods" class="fieldnote"></div>
     </div>
     <div class="field" data-tier="installation" data-settab="boxes">
       <label>{{ui.settings.personal-box-allocation-limits}}</label>
@@ -111,7 +112,7 @@ ${renderSettingsTabs()}
       <div class="fieldnote">{{ui.settings.every-machine-this-installation-drives}}</div>
       <div class="fieldnote" id="setboxesstatus"></div>
     </div>
-    <div class="field" data-tier="installation" data-settab="boxes">
+    <div class="field" data-tier="installation" data-settab="boxes" data-docker-box>
       <label>{{ui.settings.host-execution}}</label>
       <label class="radio"><input type="checkbox" id="sethostenabled">
         {{ui.settings.let-agents-run-commands-on}}</label>
@@ -120,7 +121,7 @@ ${renderSettingsTabs()}
         <code>claude</code> {{ui.settings.or}} <code>git</code>{{ui.settings.every-host-command-still-stops}}</div>
       <div class="fieldnote" id="sethoststatus"></div>
     </div>
-    <div class="field" data-tier="installation" data-settab="boxes">
+    <div class="field" data-tier="installation" data-settab="boxes" data-docker-box>
       <label>{{ui.settings.startup-item}}</label>
       <label class="radio"><input type="checkbox" id="setstartupitem">
         {{ui.settings.launch-lumenbox-automatically-on-system}}</label>
@@ -165,6 +166,7 @@ ${renderSettingsTabs()}
     </div>
     <div class="field" data-tier="installation" data-settab="doors">
       <label>{{ui.settings.channels}}</label>
+      <a id="setchbootstrap" href="/bootstrap" hidden>{{ui.channels.bootstrap-pending}}</a>
       <div id="setchannels" style="display:flex;flex-direction:column;gap:6px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select id="setchtype" style="height:38px;border-radius:var(--radius-input);border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 8px">
@@ -178,6 +180,7 @@ ${renderSettingsTabs()}
         <input id="setchsecret" type="password" placeholder="{{ui.settings.secret}}" spellcheck="false" autocomplete="off" style="flex:1;min-width:90px">
         <button class="btn sm" id="setchadd">{{ui.settings.add-channel}}</button>
       </div>
+      <div class="fieldnote" id="setchcallback"></div>
       <div class="fieldnote">{{ui.settings.each-row-is-a-channel}}</div>
       <div class="fieldnote" id="setchstatus"></div>
     </div>
@@ -255,9 +258,9 @@ ${renderSettingsTabs()}
     </div>
     <div class="fieldnote" id="setstatus"></div>
     <div class="actions">
-      <button class="btn" id="settest">{{ui.settings.test-connection}}</button>
-      <button class="btn accent" id="setsaverestart">{{ui.settings.save-restart}}</button>
-      <button class="btn" id="setsave">{{ui.settings.save}}</button>
+      <button class="btn" id="settest" data-operator>{{ui.settings.test-connection}}</button>
+      <button class="btn accent" id="setsaverestart" data-operator>{{ui.settings.save-restart}}</button>
+      <button class="btn" id="setsave" data-operator>{{ui.settings.save}}</button>
       <button class="btn ghost" id="setcancel">{{ui.settings.cancel}}</button>
     </div>
   </div>

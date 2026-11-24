@@ -26,6 +26,8 @@ function threadStart() {
   var menu = $("thread-menu");
   $("thread-more").addEventListener("click", function (event) { event.stopPropagation(); menu.hidden = !menu.hidden; });
   document.addEventListener("click", function () { menu.hidden = true; });
+  // Its model, team and files: the same panel the name in the title opens, which nobody could guess (INV-2066).
+  $("thread-agent").addEventListener("click", function () { if (chat.agentId) openMember(chat.agentId); });
   $("thread-find").addEventListener("click", function () { $("find").hidden = false; $("find-text").focus(); });
   $("find-text").addEventListener("input", function () { chat.find = $("find-text").value.trim().toLowerCase(); render(); });
   $("find-text").addEventListener("keydown", function (event) { if (event.key === "Escape") closeFind(); });

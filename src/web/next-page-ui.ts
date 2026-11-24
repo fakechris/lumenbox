@@ -387,7 +387,7 @@ export const NEXT_HTML = `<!doctype html>
   <div id="box-members" hidden></div>
   <div class="box-notice" id="box-notice" hidden></div>
   <button class="needs" id="needs" data-nav="inbox" hidden></button>
-  <h2 class="group">{{ui.next.side.label}}<button id="agent-new" aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
+  <h2 class="group">{{ui.next.side.label}}<button id="agent-new" hidden aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
   <div class="teams" id="teams" hidden></div>
   <div class="agents" id="agents"></div>
   <div class="side-links">
@@ -395,7 +395,7 @@ export const NEXT_HTML = `<!doctype html>
     <button data-nav="files">{{ui.next.nav.files}}</button>
     <button data-nav="auto">{{ui.next.side.auto}}</button>
     <button data-nav="boxes">{{ui.next.side.boxes2}}</button>
-    <button data-nav="settings">{{ui.next.side.settings}}</button>
+    <button data-nav="settings" hidden>{{ui.next.side.settings}}</button>
     <div class="side-foot">
       <button id="theme" aria-label="{{ui.next.theme}}" title="{{ui.next.theme}}">◐</button>
       <button id="lang">{{ui.next.lang}}</button>
@@ -410,6 +410,7 @@ export const NEXT_HTML = `<!doctype html>
     <button class="act" id="screen-toggle" aria-pressed="false" hidden>{{ui.next.screen.toggle}}</button>
     <button class="act" id="thread-more" aria-label="{{ui.next.thread.more}}" title="{{ui.next.thread.more}}" hidden>⋯</button>
     <div class="menu" id="thread-menu" hidden>
+      <button id="thread-agent">{{ui.next.thread.agent}}</button>
       <button id="thread-find">{{ui.next.thread.find}}</button>
       <button id="thread-export">{{ui.next.thread.export}}</button>
       <button id="thread-link">{{ui.next.thread.link}}</button>

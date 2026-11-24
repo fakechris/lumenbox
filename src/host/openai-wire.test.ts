@@ -280,6 +280,36 @@ test("the stream shim assembles deltas and fires the engine's progress signals",
   }
 });
 
+test("OpenAI GPT-5 and GPT-6 use completion tokens on both request paths without changing legacy models or compatible endpoints", async t => {
+  const cases = [
+    ["https://api.openai.com/v1", "gpt-6.1-terra", "max_completion_tokens", "none"],
+    ["https://api.openai.com/v1", "gpt-6-luna", "max_completion_tokens", "none"],
+    ["https://api.openai.com/v1", "gpt-5.1", "max_completion_tokens"],
+    ["https://api.openai.com/v1", "gpt-4.1", "max_tokens"],
+    ["https://compatible.example/v1", "gpt-6-luna", "max_tokens"],
+  ] as const;
+  const fetch = t.mock.method(globalThis, "fetch", async (_url: string, init: RequestInit) => {
+    const request = JSON.parse(String(init.body));
+    return request.stream
+      ? new Response("data: [DONE]\n\n")
+      : Response.json({ choices: [] });
+  });
+  for (const [baseURL, model, field, reasoningEffort] of cases) {
+    const client = new OpenAIWireClient({ baseURL });
+    const params = { model, max_tokens: 32, messages: [{ role: "user" as const, content: "hi" }] };
+    await client.messages.create(params);
+    await client.messages.stream({
+      ...params, tools: [{ name: "noop", input_schema: { type: "object" } }],
+    }).finalMessage();
+    for (const { arguments: [, init] } of fetch.mock.calls.slice(-2)) {
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request[field], 32, model);
+      assert.equal(request[field === "max_tokens" ? "max_completion_tokens" : "max_tokens"], undefined, model);
+      assert.equal(request.reasoning_effort, request.stream ? reasoningEffort : undefined, model);
+    }
+  }
+});
+
 test("a vendor error arrives with the status and the vendor's own words", async () => {
   const server = createServer((_req, res) => {
     res.writeHead(401, { "content-type": "application/json" });

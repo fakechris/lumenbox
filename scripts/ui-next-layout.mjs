@@ -167,7 +167,7 @@ try {
   });
   assert.ok(redeemed.ok(), "the other browser can redeem the invite");
   await invite.waitFor({ state: "hidden", timeout: 8000 });
-  await deepLink.getByText(/^Invited colleague · /).waitFor();
+  await deepLink.locator(".person-row strong", { hasText: "Invited colleague" }).waitFor();
   assert.equal(deepLink.url(), teamUrl, "the invite updates without navigating away");
   await guest.close();
   await admin.close();

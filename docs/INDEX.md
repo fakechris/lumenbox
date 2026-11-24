@@ -23,7 +23,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [02-product](02-product.md) | Product | current | 2026-11-06 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-11-19 |
 | [04-design](04-design.md) | Design | current | 2026-11-19 |
-| [05-data](05-data.md) | Data | current | 2026-11-21 |
+| [05-data](05-data.md) | Data | current | 2026-11-23 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-11-06 |
 | [101-speaking-unprompted](101-speaking-unprompted.md) | Speaking unprompted: what a member says to a person nobody asked it to say | current | 2026-11-20 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |

@@ -36,10 +36,15 @@ export interface VerificationRecord {
   at: string;
 }
 
-/** The digest of what a reviewer is judging; evidence that changes changes it, which retires every record under the old one. */
-export function evidenceDigest(task: Pick<Task, "id" | "title" | "description" | "contract" | "history">): string {
+/**
+ * The digest of what a reviewer is judging; evidence that changes changes it, which retires every record under the old one.
+ * The files handed over are evidence too (INV-2035): a revised file under the same evidence lines is a new result, so its
+ * submission is not refused as one already made. Counted only when there are any, so a task without files keeps its digest.
+ */
+export function evidenceDigest(task: Pick<Task, "id" | "title" | "description" | "contract" | "history" | "deliverables">): string {
   const evidence = [...task.history].reverse().find(change => change.evidence !== undefined && change.evidence.length > 0)?.evidence ?? [];
-  const body = JSON.stringify([task.id, task.title, task.description ?? "", task.contract?.acceptance ?? "", evidence]);
+  const files = (task.deliverables ?? []).map(item => item.sha256);
+  const body = JSON.stringify([task.id, task.title, task.description ?? "", task.contract?.acceptance ?? "", evidence, ...(files.length > 0 ? [files] : [])]);
   return createHash("sha256").update(body).digest("hex").slice(0, 16);
 }
 
