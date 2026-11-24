@@ -50,3 +50,17 @@ export function describeRunResult(counts: RunCounts): string {
   if (counts.result === "failed") return `failed (none of ${counts.notDoneCount} done)`;
   return `partial (${counts.doneCount} done, ${counts.notDoneCount} not done)`;
 }
+
+/**
+ * How one routine run came out and what it cost, from the turns its own message set off (INV-2153) — the
+ * ledger's ends for the result and its line (INV-1665), the usage log's rows of those turns for the tokens.
+ */
+export function ownRun(
+  turns: { turnsOf(messageId: string): { ids: Set<string>; ends: { how: string; category?: string }[] } } | undefined,
+  usage: { spentByTurns(turnIds: ReadonlySet<string>): number },
+  messageId: string
+): { result: RunResult; reason?: string; tokens: number } {
+  const { ids, ends } = turns?.turnsOf(messageId) ?? { ids: new Set<string>(), ends: [] };
+  const reason = routineReason(ends);
+  return { result: routineResult(ends), ...(reason !== undefined ? { reason } : {}), tokens: usage.spentByTurns(ids) };
+}

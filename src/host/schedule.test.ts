@@ -958,12 +958,14 @@ test("nobody writing pauses a due routine across a restart; turning it on by han
 test("a waiting webhook whose turn never started is told it did not run, and three of them do not pause it", async () => {
   const dir = mkdtempSync(join(tmpdir(), "webhook-unstarted-"));
   try {
+    let started = false;
     const hook = { slug: "intake", name: "Intake", path: "/p", webhook: true };
     const ended: string[] = [];
     const scheduler = new Scheduler({
       due: async () => [], hooked: async () => [hook], defaultAgent: () => "ada",
       run: async () => {}, path: join(dir, "schedules.jsonl"), log: () => {},
-      runAndSay: async () => ({ result: "failed", code: NOT_STARTED, reason: "its turn did not start: Ada is waiting on an earlier request in this chat (secret plan)" }),
+      runAndSay: async () => started ? { said: "Filed.", result: "done", tokens: 100 } : { result: "failed", code: NOT_STARTED, reason: "its turn did not start: Ada is waiting on an earlier request in this chat (secret plan)" },
+      spentSinceAgent: () => 150, // the agent's other chat billed meanwhile: not this run's (INV-2153)
       finished: skill => { ended.push(skill.slug); },
     });
     for (let call = 0; call < 3; call++) {
@@ -976,6 +978,10 @@ test("a waiting webhook whose turn never started is told it did not run, and thr
     }
     assert.equal(scheduler.holds.holdOf(hook.slug), undefined, "not the routine's failure: no pause");
     assert.deepEqual(ended, [], "and no issue with a Retry");
+    started = true;
+    assert.deepEqual(await scheduler.fireWebhook(hook.slug, "payload", undefined, { wait: true }), { ok: true, said: "Filed." });
+    assert.equal(scheduler.runs(hook.slug)[0]?.outcome, "done");
+    assert.equal(scheduler.runs(hook.slug)[0]?.tokens, 100, "a run that started is billed its own turn's tokens");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

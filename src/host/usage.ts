@@ -373,6 +373,16 @@ export class UsageLog {
     return total;
   }
 
+  /** The billed tokens of these turns (INV-2153): a routine run's cost, by its turns' ids rather than its agent's clock. */
+  spentByTurns(turnIds: ReadonlySet<string>): number {
+    let total = 0;
+    for (const record of this.since(0, Number.MAX_SAFE_INTEGER)) {
+      if (record.turnId === undefined || !turnIds.has(record.turnId)) continue;
+      total += record.inputTokens + record.outputTokens + record.cacheReadTokens + record.cacheWriteTokens;
+    }
+    return total;
+  }
+
   /**
    * Whether anything has been dropped from the front of this file.
    *
