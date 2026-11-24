@@ -496,13 +496,17 @@ test("where the host recorded who said a message, that decides; the text's openi
       ["peer", "", true], ["text", "assistant", true],
     ], "the person's paste is theirs, the host's plain words are an audit, and a teammate counts only with a request behind it");
     assert.equal(new HeardRecord(dir).get("ada", "m-mate")?.speaker.by, "teammate", "and the record outlives the process");
-    heard.note("ada", "feishu-oc_1", [message("m-chat", {}), message("m-daily", { synthetic: true })], () => false);
+    heard.note("ada", "feishu-oc_1", [message("m-chat", {}), message("m-daily", { synthetic: true }), message("m-born", { synthetic: true })], () => false);
     const labelled = toDisplayEntries([
       { role: "user", text: "整理一下周报", causedBy: ["m-chat"], at },
       { role: "user", text: "[scheduled] This turn was started by a timer: market check", causedBy: ["m-daily"], at },
+      { role: "user", text: "[first run] You were just created by Alice and nobody has said anything yet", causedBy: ["m-born"], at },
+      { role: "assistant", text: "Hi Alice, I'm Aria.", at },
     ], [], () => undefined, true, id => heard.get("ada", id));
-    assert.deepEqual(labelled.map(entry => entry.kind === "text" ? [entry.role, entry.source] : [entry.kind]), [["user", "feishu"], ["user", "routine"]],
-      "a request says where it came from when it was not typed here, and a routine's brief is the request it opened");
+    assert.deepEqual(labelled.map(entry => entry.kind === "text" ? [entry.role, entry.source] : [entry.kind]), [["user", "feishu"], ["user", "routine"], ["trigger"], ["assistant", undefined]],
+      "a request says where it came from when it was not typed here, and a routine's brief is the request it opened; " +
+      "the harness's own cue for a first turn is a quiet row, not a brief somebody wrote (INV-2061)");
+    assert.equal(labelled[3]!.background === true, false, "and the hello it asked for is said to the person");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

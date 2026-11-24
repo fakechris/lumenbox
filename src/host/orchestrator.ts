@@ -1779,7 +1779,7 @@ export class Orchestrator {
         template,
         self: agent.profile.name, skills: skillsDir(this.boxEntryOf(agent.id)),
         recipePath,
-        ...(options.caller?.userId !== undefined ? { createdBy: options.caller.userId } : {}),
+        ...(options.caller?.userId !== undefined ? { createdBy: this.personName?.(options.caller.userId) ?? options.caller.userId } : {}), // a name, not the raw id (INV-2061)
         pending,
         // This machine's zone is the person's, near enough: the app runs where they sit.
         known: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
