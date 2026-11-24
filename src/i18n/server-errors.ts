@@ -92,6 +92,7 @@ export const SERVER_ERRORS = {
   "err.desktop-start-failed": ["桌面没能启动。等 box 准备好后再试。", "Could not start the desktop. Retry when the box is ready."],
   "err.watchdog-query-failed": ["查询 xwatchdog 失败：{detail}", "Failed to query xwatchdog: {detail}"],
   "err.browse-outside-work": ["只能浏览 {dir} 及其下级目录。", "Only {dir} and below can be browsed."],
+  "err.work-browsing-needs-update": ["请更新 box 后再浏览工作目录的子文件夹。", "Update the box to browse subfolders in its work folder."],
   "err.handover-outside-work": ["只能交出 {dir} 下的文件。", "Only files under {dir} can be handed over."],
   "err.upload-outside-work": ["上传只能放到 {dir} 下。", "Uploads only land under {dir}."],
   "err.bundle-unknown": ["没有 bundle {bundle}；bundle 在 bundles.json 里定义，不会按模板名新建。", "No bundle {bundle}; a bundle is defined in bundles.json, never created from a template's name."],

@@ -10,13 +10,90 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { AgentRegistry } from "../agents/registry.ts";
 import { BOXES_FILENAME } from "../box/boxes.ts";
+import { AttachedBoxProvisioner } from "../box/provisioner.ts";
+import { Principals } from "../host/principals.ts";
+import { BOXD_PROTOCOL } from "../protocol/index.ts";
 import { startWebServer } from "./server.ts";
 
 /** A port the OS hands out; one per server, so the second never races the first one's close. */
 const freePort = () => new Promise<number>((resolve, reject) => {
   const probe = createServer().listen(0, "127.0.0.1", () => { const address = probe.address(); probe.close(() => (typeof address === "object" && address !== null ? resolve(address.port) : reject(new Error("no port")))); });
+});
+
+test("Files lists and downloads from the requested box for its members only", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-scoped-files-"));
+  const previous = { home: process.env.AGENTBOX_HOME, gateway: process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY };
+  process.env.AGENTBOX_HOME = home;
+  process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
+  const calls: string[] = [];
+  let legacy = false;
+  const boxd = createHttpServer(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/health") { res.end(JSON.stringify({ protocol: BOXD_PROTOCOL })); return; }
+    if (req.url !== "/fs/list" && req.url !== "/fs/download") { res.writeHead(404).end("{}"); return; }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const input = JSON.parse(Buffer.concat(chunks).toString()) as { path: string; work_only?: true };
+    const privateBox = req.headers.authorization === "Bearer private-fixture";
+    if (input.work_only || req.url === "/fs/download") calls.push(`${privateBox ? "private" : "default"}:${req.url}:${input.path}`);
+    if (req.url === "/fs/list") {
+      res.end(JSON.stringify({ path: input.path, work_only: legacy ? undefined : input.work_only, entries: [{ name: "alice-47.md", type: "file", size: 10 }] }));
+    } else {
+      res.end(JSON.stringify({ path: input.path, media_type: "text/markdown", base64: Buffer.from("ALICE-ONLY").toString("base64") }));
+    }
+  });
+  let stop: (() => void) | undefined;
+  try {
+    const boxPort = await freePort();
+    await new Promise<void>(resolve => boxd.listen(boxPort, "127.0.0.1", resolve));
+    const boxUrl = `http://127.0.0.1:${boxPort}`;
+    new Principals().save([
+      { id: "alice", name: "Alice", role: "driver", identities: ["web:alice"] },
+      { id: "bob", name: "Bob", role: "viewer", identities: ["web:bob"] },
+    ]);
+    const registry = new AgentRegistry(join(home, "agents"));
+    const tokenFile = join(home, "private.token"), work = "/srv/alice/work";
+    writeFileSync(tokenFile, "private-fixture");
+    registry.attachBox({ id: "alice-box", name: "Alice’s box", kind: "host", members: ["alice"],
+      workDir: work, endpoint: { baseUrl: boxUrl, tokenFile }, displayFloor: 10, createdAt: new Date().toISOString() });
+    const port = await freePort();
+    stop = await startWebServer({ port, host: "127.0.0.1", token: "t0k", onLog: () => {},
+      boxProvisioner: new AttachedBoxProvisioner({ baseUrl: boxUrl, token: "default-fixture" }) });
+    const get = (path: string, who: string) => fetch(`http://127.0.0.1:${port}${path}`, { headers: {
+      authorization: "Bearer t0k", "x-agentbox-user": `web:${who}`, "x-agentbox-role": who === "alice" ? "member" : "viewer",
+    } });
+    const list = "/api/files?boxId=alice-box", download = "/api/file?boxId=alice-box&path=" + encodeURIComponent(work + "/alice-47.md");
+    assert.doesNotMatch(await (await get("/api/boxes", "bob")).text(), /alice-box/);
+    assert.equal((await get(list, "bob")).status, 403);
+    assert.equal((await get(download, "bob")).status, 403);
+    assert.equal((await get(list + "&dir=" + encodeURIComponent(work + "/../outside"), "alice")).status, 403);
+    assert.deepEqual(calls, []);
+    const listing = await get(list, "alice");
+    assert.equal(listing.status, 200);
+    assert.deepEqual(await listing.json(), { path: work, root: work, entries: [{ name: "alice-47.md", type: "file", size: 10 }] });
+    const file = await get(download, "alice");
+    assert.equal(file.status, 200);
+    assert.match(file.headers.get("content-disposition") ?? "", /^attachment; filename="alice-47.md"/);
+    assert.equal(await file.text(), "ALICE-ONLY");
+    assert.deepEqual(calls, [`private:/fs/list:${work}`, `private:/fs/download:${work}/alice-47.md`]);
+    const subfolder = list + "&dir=" + encodeURIComponent(work + "/reports");
+    assert.equal((await get(subfolder, "alice")).status, 200);
+    assert.deepEqual(calls.splice(2), [`private:/fs/list:${work}`, `private:/fs/list:${work}/reports`]);
+    legacy = true;
+    const refused = await get(subfolder, "alice");
+    assert.equal(refused.status, 503);
+    assert.equal((await refused.json()).code, "work-browsing-needs-update");
+    assert.deepEqual(calls.splice(2), [`private:/fs/list:${work}`], "never send the subfolder path to a legacy daemon");
+  } finally {
+    stop?.();
+    boxd.close();
+    if (previous.home === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous.home;
+    if (previous.gateway === undefined) delete process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY; else process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = previous.gateway;
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("the file routes refuse what is outside the default box's own work directory, and name it", async () => {

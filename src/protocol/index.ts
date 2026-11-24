@@ -495,12 +495,12 @@ export interface WriteFileResult {
 }
 
 export interface ListDirRequest {
-  path: string;
+  path: string; work_only?: boolean;
 }
 
 export interface DirEntry {
   name: string;
-  type: "file" | "directory" | "symlink" | "other";
+  type: "file" | "directory" | "symlink" | "other"; target_in_work?: boolean; target_type?: "file" | "directory";
   size: number;
   /**
    * Last modified, ISO 8601.
@@ -513,7 +513,7 @@ export interface DirEntry {
 
 export interface ListDirResult {
   path: string;
-  entries: DirEntry[];
+  entries: DirEntry[]; work_only?: true;
 }
 
 export interface HealthResult {

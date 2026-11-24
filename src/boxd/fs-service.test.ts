@@ -13,7 +13,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +23,7 @@ const ROOT = mkdtempSync(join(tmpdir(), "agentbox-work-"));
 const OUTSIDE = mkdtempSync(join(tmpdir(), "agentbox-outside-"));
 process.env.AGENTBOX_WORK_DIR = ROOT;
 
-const { uploadFile } = await import("./fs-service.ts");
+const { uploadFile, listDir } = await import("./fs-service.ts");
 
 const base64 = (text: string) => Buffer.from(text).toString("base64");
 
@@ -29,6 +31,77 @@ test("an upload lands where it says it does", async () => {
   const result = await uploadFile({ path: join(ROOT, "notes.txt"), base64: base64("hello") });
   assert.equal(result.size, 5);
   assert.equal(readFileSync(join(ROOT, "notes.txt"), "utf8"), "hello");
+});
+
+test("work-folder listings cannot follow an outside link or a swapped directory", async t => {
+  const reports = join(ROOT, "reports");
+  mkdirSync(reports);
+  writeFileSync(join(reports, "brief.md"), "brief");
+  const outside = join(ROOT, "linked-directory");
+  symlinkSync(OUTSIDE, outside);
+  const listed = await listDir({ path: reports, work_only: true });
+  assert.equal(listed.work_only, true);
+  assert.deepEqual(listed.entries.map(entry => entry.name), ["brief.md"]);
+  await assert.rejects(listDir({ path: outside, work_only: true }), /outside/);
+  assert.equal((await listDir({ path: outside })).path, outside, "the agent tool still follows its own filesystem policy");
+  writeFileSync(join(OUTSIDE, "private-listing.txt"), "outside");
+  const originalReaddir = fs.readdir;
+  const swap = t.mock.method(fs, "readdir", (directory: string) => {
+    renameSync(reports, join(ROOT, "previous-reports"));
+    symlinkSync(OUTSIDE, reports);
+    return originalReaddir(directory);
+  });
+  syncBuiltinESMExports();
+  try {
+    if (process.platform === "linux") {
+      assert.deepEqual((await listDir({ path: reports, work_only: true })).entries, listed.entries);
+    } else {
+      await assert.rejects(listDir({ path: reports, work_only: true }), /outside/);
+    }
+    assert.equal(swap.mock.callCount(), 1);
+  } finally {
+    swap.mock.restore();
+    syncBuiltinESMExports();
+  }
+  const aliases = join(ROOT, "previous-reports");
+  mkdirSync(join(aliases, "archive"));
+  writeFileSync(join(aliases, "archive", "old.md"), "archive");
+  symlinkSync("archive", join(aliases, "archive-link"));
+  symlinkSync("brief.md", join(aliases, "latest.md"));
+  symlinkSync(join(OUTSIDE, "private-listing.txt"), join(aliases, "outside.md"));
+  symlinkSync("missing.md", join(aliases, "broken.md"));
+  const scoped = await listDir({ path: aliases, work_only: true });
+  assert.deepEqual(scoped.entries.filter(entry => entry.type === "symlink").map(entry => [entry.name, entry.target_in_work, entry.target_type]), [
+    ["archive-link", true, "directory"], ["broken.md", false, undefined], ["latest.md", true, "file"], ["outside.md", false, undefined],
+  ]);
+  assert.deepEqual((await listDir({ path: join(aliases, "archive-link"), work_only: true })).entries.map(entry => entry.name), ["old.md"]);
+
+  const fallback = join(ROOT, "fallback");
+  mkdirSync(fallback);
+  writeFileSync(join(fallback, "expected.md"), "original");
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+  try {
+    assert.deepEqual((await listDir({ path: fallback, work_only: true })).entries.map(entry => entry.name), ["expected.md"]);
+    const resolved = realpathSync(fallback);
+    const replace = t.mock.method(fs, "readdir", (directory: string) => {
+      assert.equal(directory, resolved);
+      renameSync(fallback, join(ROOT, "previous-fallback"));
+      mkdirSync(fallback);
+      writeFileSync(join(fallback, "replacement.md"), "replacement");
+      return originalReaddir(directory);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(listDir({ path: fallback, work_only: true }), /changed during listing/);
+      assert.equal(replace.mock.callCount(), 1);
+    } finally {
+      replace.mock.restore();
+      syncBuiltinESMExports();
+    }
+  } finally {
+    Object.defineProperty(process, "platform", platform);
+  }
 });
 
 test("an upload will not write through a link that leaves the work directory", async () => {
