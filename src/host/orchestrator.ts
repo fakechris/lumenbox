@@ -762,7 +762,7 @@ export class Orchestrator {
       const agentId = this.registry.resolve(agent).id;
       const before = this.registry.readTranscript(agentId).length;
       await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...(toolScope !== undefined ? { toolScope } : {}) }); // model-text: routine
-      await this.settle();
+      await this.settle(); const unstarted = routineNotStarted(this.bus, agentId, MAIN_CONVERSATION, prompt, this.registry.resolve(agent).profile.name); if (unstarted !== undefined) return unstarted;
       return this.replySince(agentId, before).trim();
     },
     // A skill runs on the box its file is in, as that box's first agent; the installation's first agent only when the box has none.
