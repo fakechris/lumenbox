@@ -9,6 +9,12 @@
 export const NEXT_SETTINGS_JS = `
 var settings = { long: null, routines: null, setup: null, pane: "", me: null };
 
+function canOperateInstallation() { return !!settings.me && settings.me.role === "admin"; }
+function canDriveAgents() { return canOperateInstallation() || (!!settings.me && settings.me.role === "driver"); }
+function settingsPanes() {
+  return canOperateInstallation() ? SETTING_PANES.concat(shellPanes()) : canDriveAgents() ? ["mine", "memory"] : [];
+}
+
 function numberField(labelText, value, min, max) {
   var label = el("label", "", labelText), input = el("input");
   input.type = "number"; input.min = String(min); input.max = String(max); input.step = "1"; input.value = String(value);
@@ -17,18 +23,44 @@ function numberField(labelText, value, min, max) {
 }
 
 function settingsPane(key) { return Object.hasOwn(NATIVE_PANES, key) ? key : ""; }
-function openSettingsPane(key) { navigateView("settings", key); }
+function openSettingsPane(key) {
+  if (!canDriveAgents() || (key && settingsPanes().indexOf(key) < 0)) return;
+  if (key === "boxes" && boxSet.config !== null) loadBoxSet();
+  navigateView("settings", key);
+}
 
 function renderSettings(view) {
-  // Who is asking decides what can be changed; asked once.
-  if (settings.me === null) { settings.me = {}; getJson("/api/me").then(function (got) { settings.me = got || {}; if (next.view === "settings") render(); }, function () {}); }
-  if (settings.pane && NATIVE_PANES[settings.pane]) {
+  var panes = settingsPanes(), admin = canOperateInstallation();
+  if (panes.indexOf(settings.pane) >= 0) {
     var back = el("button", "file", "‹ " + t("ui.next.side.settings") + " · " + t("ui.pane." + settings.pane));
     back.addEventListener("click", function () { openSettingsPane(""); });
     view.appendChild(back);
     NATIVE_PANES[settings.pane](view);
     return;
   }
+  if (!panes.length) return;
+  if (admin) renderLongWork(view);
+  var more = el("div", "list");
+  if (admin) more.appendChild(el("h2", "group", t("ui.next.settings.more")));
+  panes.forEach(function (key) {
+    var row = el("button", "row"), body = el("span", "body");
+    body.appendChild(el("div", "title", t("ui.pane." + key)));
+    body.appendChild(el("div", "why", t("ui.pane." + key + ".about")));
+    row.appendChild(body);
+    row.addEventListener("click", function () { openSettingsPane(key); });
+    more.appendChild(row);
+  });
+  view.appendChild(more);
+  if (!admin) return;
+  var status = el("button", "row"), body = el("span", "body");
+  body.appendChild(el("div", "title", t("ui.next.side.system")));
+  body.appendChild(el("div", "why", t("ui.next.system.open")));
+  status.appendChild(body);
+  status.addEventListener("click", function () { system.state = null; navigateView("system"); });
+  more.appendChild(status);
+}
+
+function renderLongWork(view) {
   if (!settings.long) {
     getJson("/api/long-work").then(function (got) { settings.long = got; if (next.view === "settings") render(); }, failed);
     return;
@@ -57,23 +89,6 @@ function renderSettings(view) {
   own.appendChild(save); own.open = !!settings.long.custom;
   long.appendChild(own);
   view.appendChild(long);
-  var more = el("div", "list");
-  more.appendChild(el("h2", "group", t("ui.next.settings.more")));
-  SETTING_PANES.concat(shellPanes()).forEach(function (key) {
-    var row = el("button", "row"), body = el("span", "body");
-    body.appendChild(el("div", "title", t("ui.pane." + key)));
-    body.appendChild(el("div", "why", t("ui.pane." + key + ".about")));
-    row.appendChild(body);
-    row.addEventListener("click", function () { openSettingsPane(key); });
-    more.appendChild(row);
-  });
-  view.appendChild(more);
-  var status = el("button", "row"), body = el("span", "body");
-  body.appendChild(el("div", "title", t("ui.next.side.system")));
-  body.appendChild(el("div", "why", t("ui.next.system.open")));
-  status.appendChild(body);
-  status.addEventListener("click", function () { system.state = null; navigateView("system"); });
-  more.appendChild(status);
 }
 
 var SETTING_PANES = ["model", "boxes", "doors", "team", "mine", "memory", "supervision", "guests"];
@@ -87,27 +102,54 @@ var NATIVE_PANES = {
  * needs before it can, each with the button that opens the place to do it. Gone once the first work
  * has been done and looked at, or when the person closes it.
  */
+function createSetupBox() {
+  if (settings.creatingBox) return;
+  settings.boxRequest = settings.boxRequest || crypto.randomUUID();
+  settings.creatingBox = true; render();
+  postJson("/api/personal-boxes/create", { requestId: settings.boxRequest }).then(function (got) {
+    var box = (got.boxes || []).find(function (row) { return row.id === got.boxId; });
+    if (!box || box.status !== "ready") throw new Error(box && box.error || t("ui.next.box.off"));
+    settings.boxRequest = ""; chat.box = box.id; chat.agentId = "";
+    chat.entries = []; chat.live = null; chat.liveSurfaces = {}; chat.plan = null;
+    chat.conversation = "main"; chat.loading = ""; chat.loadedFor = ""; chat.request++;
+    chat.find = ""; chat.focus = "";
+  }).catch(failed).finally(function () { settings.creatingBox = false; refresh(); });
+}
+
 function setupCard() {
   var state = settings.setup;
-  if (!state || state.established || localStorage.getItem("lumen-setup-closed:" + state.installationId) === "1") return null;
-  var steps = [
+  if (!state || !canDriveAgents()) return null;
+  var admin = canOperateInstallation(), here = state.byBox ? state.byBox[chat.box] || {} : state;
+  var bootstrap = admin && state.bootstrapPending, card = el("div", "card-plain");
+  if (bootstrap) {
+    var link = el("a", "act", t("ui.channels.bootstrap-pending"));
+    link.href = "/bootstrap"; card.appendChild(link);
+  }
+  if (!chat.box && (admin || state.hasPersonalBox !== false)) return bootstrap ? card : null;
+  var who = settings.me.identity || "operator";
+  var storageKey = "lumen-setup-closed:" + state.installationId + ":" + who + ":" + chat.box;
+  if ((admin && here.established) || localStorage.getItem(storageKey) === "1") return bootstrap ? card : null;
+  var agent = agentsHere().length > 0, steps = admin ? [
     { key: "key", done: state.key, open: function () { openSettingsPane("model"); } },
-    { key: "box", done: state.box, open: function () { openSettingsPane("boxes"); } },
-    { key: "agent", done: state.agentTurn || Object.keys(next.agents).length > 0, open: function () { openMember(""); } },
+    { key: "box", done: here.box, open: function () { openSettingsPane("boxes"); } },
+    { key: "agent", done: agent, open: function () { openMember(""); } },
     { key: "door", done: state.door, optional: true, open: function () { openSettingsPane("doors"); } },
-  ];
-  var card = el("div", "card-plain"), close = el("button", "act", t("ui.next.act.close"));
+  ] : chat.box ? [{ key: "agent", done: agent, open: function () { openMember(""); } }] : [];
+  if (!admin && state.hasPersonalBox !== undefined) steps.unshift({ key: "personalBox", done: state.hasPersonalBox, open: createSetupBox });
+  if (!admin && steps.every(function (step) { return step.done; })) return null;
+  var close = el("button", "act", t("ui.next.act.close"));
   card.appendChild(el("div", "card-head", t("ui.next.setup.title")));
   steps.forEach(function (step) {
     var row = el("div", "setup-step"), go = el("button", "act", t("ui.next.setup.go"));
     row.appendChild(el("span", step.done ? "setup-done" : "setup-todo", step.done ? "✓" : "○"));
     row.appendChild(el("span", "body", t("ui.next.setup." + step.key) + (step.optional ? " " + t("ui.next.setup.optional") : "")));
     if (step.key === "box") row.appendChild(el("span", step.done ? "chip-run" : "chip", t(step.done ? "ui.next.box.on" : "ui.next.box.off")));
+    go.disabled = step.key === "personalBox" && !!settings.creatingBox;
     go.addEventListener("click", step.open);
     if (!step.done) row.appendChild(go);
     card.appendChild(row);
   });
-  close.addEventListener("click", function () { localStorage.setItem("lumen-setup-closed:" + state.installationId, "1"); render(); });
+  close.addEventListener("click", function () { localStorage.setItem(storageKey, "1"); render(); });
   card.appendChild(close);
   return card;
 }

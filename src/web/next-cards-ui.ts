@@ -87,9 +87,11 @@ function credentialsCard(need, agent) {
   (need.items || []).filter(function (item) { return item.state !== "present"; }).forEach(function (item) {
     box.appendChild(el("div", "", item.id + " — " + item.why));
   });
-  var link = el("button", "act", t("ui.next.card.credentialsOpen"));
-  link.addEventListener("click", function () { openSettingsPane("team"); });
-  box.appendChild(link);
+  if (canOperateInstallation()) {
+    var link = el("button", "act", t("ui.next.card.credentialsOpen"));
+    link.addEventListener("click", function () { openSettingsPane("team"); });
+    box.appendChild(link);
+  }
   return box;
 }
 

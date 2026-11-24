@@ -63,10 +63,10 @@ import { isStandingName, readStanding, STANDING_BYTE_CAP, STANDING_FILES, writeS
 import { isRecoveryCommand, recoverTask } from "../host/task-recovery.ts";
 import { isRetryCommand, retryLastAnswer } from "../host/retry-recovery.ts";
 import type { BusEvent } from "../agents/bus.ts";
-import { BoxManager, defaultBoxConfig, dockerEnvironment, readBoxToken, type DockerEnvironmentState } from "../box/docker.ts";
+import { BoxManager, defaultBoxConfig, dockerEnvironment, readBoxToken, uiToken, type DockerEnvironmentState } from "../box/docker.ts";
 import { managesLocalDocker, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts"; import { boxHeldDown, releaseBoxDown } from "../box/held-down.ts";
 import { classifyBox, auditNotice } from "../box/access.ts";
-import { configPath, envNumber } from "../config.ts";
+import { boxBackendFromEnvironment, configPath, envNumber } from "../config.ts"; import { SharedBoxStart } from "./shared-box-start.ts"; import { DEFAULT_NAMESPACE } from "../control/kubernetes.ts";
 import { JEV_SETTINGS_JS, jevSettings, jevSettingsChange } from "./jev-settings.ts";
 import { defaultSupervisionLog, supervisionRoute } from "./supervision-routes.ts"; import { calibrationRoute } from "./calibration-routes.ts"; // Settings → Supervision → calibration (INV-1773)
 import { SUPERVISION_JS } from "./supervision-ui.ts";
@@ -81,11 +81,13 @@ import { IdempotencyStore } from "./idempotency.ts";
 import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
-import { describeProvider, hasCredential, PRESET_MODELS, providerConfigured, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
+import { describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
+import { modelConfigured } from "../host/model-readiness.ts";
 import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
+import { modelPresets, modelTestError } from "./model-settings.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage } from "./server-pages.ts"; import { invitationLink, loginPageWithDoors, webSignInDoors } from "./sign-in.ts";
+import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { feishuCallbackUrl, invitationLink, loginPageWithDoors, webSignInDoors, wantsHtml } from "./sign-in.ts";
 import {
   authorize,
   callerOf,
@@ -398,7 +400,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   /** Whether a door's credentials exist — in the environment or saved in the config. */
   const channelCredentialsSet = (record: { id: string; type: string }): boolean => {
     const saved = loadConfig().env ?? {};
-    const has = (key: string) => process.env[key] !== undefined || typeof saved[key] === "string";
+    const has = (key: string) => Boolean((process.env[key] ?? saved[key])?.trim());
     const base = channelEnvBase(record.id);
     if (record.type === "telegram") return has("TELEGRAM_BOT_TOKEN");
     if (record.type === "tailmsg") return true;
@@ -415,8 +417,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const fontCache = new Map<string, Buffer>();
   /** Asked once: the answer cannot change while this process runs. */
   const build = buildInfo();
-  /** One docker bring-up at a time; a second click joins the first via the events. */
-  let boxUpInFlight = false;
+  const backend = boxBackendFromEnvironment(), kubernetes = backend.backend === "kubernetes";
   const events = new SseReplay<OutboundEvent>();
 
   /**
@@ -464,6 +465,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   const provisioner = (() => {
     try {
+      if (kubernetes) return options.boxProvisioner?.kind === "attached" ? options.boxProvisioner : resolveBoxProvisioner(() => ({
+        kind: "kubernetes", label: "Kubernetes", boxName: registry.box.name, endpoint: async () => undefined,
+        connect: async () => { throw new Error(tr("err.shared-box-kubernetes", "en")); },
+      }));
       return options.boxProvisioner ?? resolveBoxProvisioner();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
@@ -477,6 +482,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } satisfies BoxProvisioner;
     }
   })();
+  const withBoxBackend = (box: ReturnType<Orchestrator["boxStatus"]>[number]) =>
+    kubernetes && box.id === registry.box.id ? { ...box, kind: provisioner.kind } : box;
 
   /**
    * Answers owed to a chat, so one that was earned while the process died still arrives.
@@ -780,6 +787,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     ...(orchestrator.policy.rulesHash() !== undefined ? { rulesHash: orchestrator.policy.rulesHash()! } : {}),
   });
   const bootstrap = new BootstrapAdmins(principalsPath(), join(agentboxHome(), "bootstrap-code"));
+  const bootstrapPending = () => { try { return bootstrap.pending(); } catch { return false; } };
   const directoryQuotaContext = (id: string) => directories.membership(
     principals.list().find(person => person.id === id)?.identities ?? [id], directorySources(), Date.now(), identity => principals.hasCurrentIdentity(id, identity));
 
@@ -794,7 +802,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); },
     detach: id => { orchestrator.detachBox(id); }, residents: id => registry.agentsIn(id).length,
-    driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true),
+    driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
   }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
 
   {
@@ -2398,13 +2406,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   providerRests.on(event => { const text = restNotice(event); log(text); broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); }); // once when a plan runs out, once when it is back (INV-1577)
   const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), wake: id => { void orchestrator.bus.wake(id); }, interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: id => orchestrator.boxFor(id), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "user", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); const spendLimits = new SpendLimits({ ledger: () => todaysRows(orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), new Date()), rates: () => configuredRates(), pause: (id, why) => agentPauses.pause(id, "LumenBox (spend limit)", why), resume: (id, by) => agentPauses.resume(id, by), isPaused: id => agentPauses.pauseOf(id) !== undefined, nameOf: id => registry.tryGet(id)?.profile.name ?? id, log, notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } }, join(agentboxHome(), "spend-limits.jsonl")); orchestrator.spendLimits = spendLimits; setInterval(() => { void spendLimits.sweep().catch(error => log(`spend limits: ${error instanceof Error ? error.message : String(error)}`)); }, 60_000).unref(); // INV-1554 // model-text: pause-resume // INV-1615 orchestrator.questionsOpen = () => questions.list(); orchestrator.pausedForSpend = () => spendLimits.pausedForSpend(); orchestrator.personName = id => (principals.byId(id) ?? principals.resolve(id)).name; orchestrator.orgKnowledge.mode = () => boxRegistrationModeAt(principalsPath(), options.desktop === true); // the desktop app with no installation field is personal: it never writes L1 (INV-1726)
   orchestrator.orgKnowledge.isAdmin = id => id === undefined || principals.roleOf(id) === "admin"; orchestrator.orgKnowledge.notify = (owner, notice) => { const text = tr("org.unverified-notice", resolveLocale({}), { ...notice, by: principals.byId(notice.by)?.name ?? notice.by }); log(`organisation knowledge: told ${owner} that ${notice.id} was marked unverified`); for (const identity of principals.byId(owner)?.identities ?? []) { const adapter = identity.split(":")[0] ?? ""; if (adapter !== "" && adapter !== "web") void channels.push(adapter, identity, text); } }; // the roster says who is an Admin; an owner is told on their own channels (INV-1730) // the row's "waiting on you" readers (INV-1625); the person's name for the record (INV-1653)
-  void boxUpdate.check();
+  if (!kubernetes) void boxUpdate.check();
   // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
   // image, in their chats and on the attention page; the update itself is Settings → Boxes → Apply update, or "upgrade" in reply —
   // both run the one shared sequence in box-update.ts (wait for work in flight, recreate keeping the volumes, verify, go back).
   let upgradeToldAbout: string | undefined;
   const upgradeTimer = setInterval(() => {
     void (async () => {
+      if (kubernetes) return;
       const state = await boxUpdate.check();
       if (state?.available !== true) { upgradeWaiting = undefined; return; } // updated since: "upgrade" has nothing to start
       if (upgradeToldAbout === state.expectedRef) return;
@@ -2442,7 +2451,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   teachWatch.unref();
 
   // The local box's half of the watch (INV-1550): reconnect, tell admins, stop turns that can only fail, start a box nobody meant to stop.
-  const ownDocker = options.useBox !== false && managesLocalDocker(), ownManager = () => new BoxManager(defaultBoxConfig());
+  const ownDocker = !kubernetes && options.useBox !== false && managesLocalDocker(), ownManager = () => new BoxManager(defaultBoxConfig());
   const keeper = new BoxKeeper({ client: () => orchestrator.boxClient(), connect: () => orchestrator.connectBox(), log, recreating: () => boxUpdate.view().running === true, observe: (state, detail) => { if (state === "down") orchestrator.exceptions.failed({ kind: "box", subject: registry.box.id, reason: detail }); else orchestrator.exceptions.succeeded({ kind: "box", subject: registry.box.id }); }, // INV-1741
     ...(ownDocker ? { container: { name: defaultBoxConfig().containerName, status: () => ownManager().status(), start: async () => { await ownManager().up({ onOutput: () => {} }); } } } : {}),
     heldDown: () => boxHeldDown(defaultBoxConfig().containerName), agentsOnBox: () => registry.list().filter(agent => registry.boxOf(agent.id).id === registry.box.id).map(agent => agent.id),
@@ -2454,10 +2463,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     void orchestrator.checkAttachedBoxes().then(transitions => {
       for (const change of transitions) {
         log(change.connected ? `box ${change.name} is back: ${change.detail}` : `box ${change.name} stopped answering: ${change.detail}`);
-        broadcast({ type: "error", boxId: registry.boxByName(change.name)?.id ?? "", message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
+        const boxId = registry.boxByName(change.name)?.id ?? "";
+        broadcast({ type: "error", boxId, message: change.connected ? `Box ${change.name} is back.` : `Box ${change.name} stopped answering: ${change.detail}` });
+        if (kubernetes && boxId) broadcast({ type: "box_status", boxId });
       }
     }).catch(() => {});
-    void keeper.tick().then(state => {
+    if (!kubernetes || provisioner.kind === "attached") void keeper.tick().then(state => {
       const changed = state.connected !== box.connected; box = state;
       if (changed) broadcast({ type: "box_status", boxId: registry.box.id });
     }).catch(error => log(`box watch: ${error instanceof Error ? error.message : String(error)}`));
@@ -2483,6 +2494,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Mutable: the UI can bring the box up after this server started without one.
   for (const id of connectCodes.revokedBoxIds()) orchestrator.revokeBox(id); // revoked stays revoked across a restart: nothing redials it (INV-1697)
   let box = await orchestrator.connectBox();
+  const sharedStart = new SharedBoxStart({ kubernetes, current: () => box, broadcast, up: async onOutput => {
+    releaseBoxDown(defaultBoxConfig().containerName);
+    await ownManager().up({ onOutput });
+    box = await orchestrator.connectBox();
+    return box;
+  } });
   log(box.connected ? `box: ${box.detail}` : `box: unavailable — ${box.detail}`);
 
   // What the settings page says about Docker while no box is connected (INV-855). Without
@@ -2930,29 +2947,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Which generation of each person's sign-ins is still good (INV-537).
   const epochs = new SessionEpochs();
 
-  /**
-   * Who may be served at all: the installation token, or a person's own session.
-   *
-   * The token used to be the only answer, which made signing in a way of *getting* the
-   * token: both login paths handed out `agentbox_ui=<token>` beside the session cookie,
-   * so a viewer's browser held the installation's full-power credential and needed only
-   * to send it without the session cookie to be served as the unnamed owner. Roles were
-   * enforced (`refused`) but only on requests that still carried the name.
-   *
-   * Now a session authenticates on its own: signed by a key derived from the token, so
-   * rotating the token still ends every session, and only for an identity the roster
-   * still knows — a person removed from the roster stops being served on their next
-   * request rather than at the end of their cookie's month. The token remains what it
-   * always was for scripts, the CLI and a fresh single-person install.
-   */
-  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision => {
+  /** The operator token or a valid session for someone still on the roster. */
+  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision | { allow: false; reason: "access-removed" | "session-expired" } => {
     const byToken = authorize({ token, host }, request);
     if (byToken.allow) return byToken;
-    const session = readSession(parseCookies(request.cookie).get(SESSION_COOKIE), sessionSecret);
-    if (session === undefined || !principals.isKnown(session.identity)) return byToken;
-    // And the generation an admin may have moved on from (INV-537): signing one person out
-    // everywhere must not mean rotating the token and signing out everybody.
-    if (session.epoch < epochs.of(principals.resolve(session.identity).id)) return byToken;
+    const cookie = parseCookies(request.cookie).get(SESSION_COOKIE);
+    if (cookie === undefined) return byToken;
+    const session = readSession(cookie, sessionSecret);
+    if (session === undefined) return { allow: false, reason: "session-expired" };
+    if (!principals.isKnown(session.identity)) return { allow: false, reason: "access-removed" };
+    if (session.epoch < epochs.of(principals.resolve(session.identity).id)) return { allow: false, reason: "session-expired" };
     return { allow: true, reason: "token" };
   };
 
@@ -3004,19 +3008,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const savedEnv = loadConfig().env ?? {};
     const appId = process.env[`${base}_APP_ID`] ?? savedEnv[`${base}_APP_ID`];
     const appSecret = process.env[`${base}_APP_SECRET`] ?? savedEnv[`${base}_APP_SECRET`];
-    const publicBase = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
+    const redirectUri = feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, channelId);
     if (typeof appId !== "string" || appId === "" || typeof appSecret !== "string" || appSecret === "") {
       send(res, 503, apiError("channel-app-unset", { base }));
       return;
     }
-    if (publicBase === undefined || publicBase === "") {
+    if (redirectUri === undefined) {
       send(res, 503, apiError("public-url-unset"));
       return;
     }
     const lark = process.env.FEISHU_DOMAIN === "lark";
     const accountsHost = lark ? "accounts.larksuite.com" : "accounts.feishu.cn";
     const apiHost = lark ? "open.larksuite.com" : "open.feishu.cn";
-    const redirectUri = `${publicBase}/auth/${channelId}/callback`;
 
     if (parts[2] === undefined) {
       if (bootstrapCode !== undefined && !bootstrap.accepts(bootstrapCode)) {
@@ -3048,7 +3051,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     oauthStates.delete(state);
     if (code === null || pending === undefined || pending.channelId !== channelId || pending.appId !== appId || pending.incarnation !== record.incarnation ||
         Date.now() - pending.at > 10 * 60_000) {
-      send(res, 400, apiError("sign-in-expired"));
+      if (wantsHtml(res.req.headers.accept)) send(res, 400, signInRecoveryPage("sign-in-expired", localeOf(res.req, url), { setup: bootstrapPending() }), "text/html");
+      else send(res, 400, apiError("sign-in-expired"));
       return;
     }
     try {
@@ -3135,7 +3139,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
         res.setHeader("cache-control", "no-store");
         res.setHeader("referrer-policy", "no-referrer");
-        send(res, 200, bootstrapPage(doors, localeOf(req, url)), "text/html");
+        send(res, 200, bootstrapPage(doors, localeOf(req, url), bootstrap.codePath, feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID")), "text/html");
         } catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }
@@ -3223,8 +3227,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return;
       }
       if (!decision.allow && route !== "POST /api/login") {
-        // No WWW-Authenticate: a browser prompt would be the wrong shape for this, and the
-        // token belongs in the URL once rather than typed into a dialog.
+        if (req.method === "GET" && !/^\/api(?:\/|$)/.test(url.pathname) && wantsHtml(req.headers.accept)) {
+          const reason = decision.reason === "access-removed" || decision.reason === "session-expired" ? decision.reason : "sign-in-required";
+          const orgView = /\bLumenBoxOrgView\/1\b/.test(req.headers["user-agent"] ?? "");
+          send(res, 401, signInRecoveryPage(reason, localeOf(req, url), { orgView }), "text/html");
+          return;
+        }
         send(res, 401, {
           error:
             "This UI needs a token. Open it with ?token=… or send an Authorization: Bearer header.",
@@ -3267,6 +3275,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // turned a tenant's owner into a viewer on their first click (2026-09-08, k8s).
       const assertedByGateway =
         gatewayCaller.userId !== undefined && gatewayCaller.role !== undefined;
+      const callerRole: Role = caller.userId === undefined ? "admin" : assertedByGateway ? gatewayCaller.role! : principals.roleOf(caller.userId);
 
       const refused = (agentId?: string): boolean => {
         // Whoever the session says this is, their authority is the roster's answer —
@@ -3334,12 +3343,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // One vocabulary (INV-537): the gateway's words were translated in `callerOf`, so
         // what arrives here is already `viewer | driver | admin` — or nothing, which is the
         // operator holding the installation's own credential.
-        const role: Role =
-          caller.userId === undefined
-            ? "admin"
-            : assertedByGateway && caller.role !== undefined
-              ? caller.role
-              : principals.roleOf(caller.userId);
+        const role = callerRole;
         if (roleAtLeast(role, need)) return false;
         send(res, 403, {
           ...apiError("role-needed", { need, role }),
@@ -3749,10 +3753,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           principals.reload();
           const identity = caller.userId;
           if (!identity || !principals.isKnown(identity)) { send(res, 403, apiError("personal-box-sign-in")); return; }
-          const view = (owner: string) => ({ boxes: personalBoxes.list(owner),
+          const view = async (owner: string) => ({ boxes: (await personalBoxes.listWithPodStatus(owner)).map(row => {
+              const box = kubernetes && row.status === "ready" ? orchestrator.boxStatus().find(box => box.id === row.id) : undefined;
+              return kubernetes && row.status === "ready" && !box?.connected ? { ...row, status: "unreachable", connectionError: box?.detail } : row;
+            }),
             quota: personalQuotaFor(owner, loadConfig(), directoryQuotaContext(owner)) ?? null,
             held: personalBoxesOf(personalBoxes.quotaEntries(), owner).length });
-          if (route === "GET /api/personal-boxes") { send(res, 200, view(principals.resolve(identity).id)); return; }
+          if (route === "GET /api/personal-boxes") { send(res, 200, await view(principals.resolve(identity).id)); return; }
           if (!["POST /api/personal-boxes/create", "POST /api/personal-boxes/retry", "POST /api/personal-boxes/remove"].includes(route)) { send(res, 404, apiError("personal-box-action-unknown")); return; }
           const body = await readJson(req);
           principals.reload();
@@ -3771,7 +3778,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               const entry = registry.boxById(record.id);
               if (entry) await orchestrator.reconnectBox(entry);
             }
-            send(res, 200, { ...view(owner), boxId: record.id });
+            send(res, 200, { ...await view(owner), boxId: record.id });
           } catch (error) { send(res, 409, { error: error instanceof Error ? error.message : "Personal box operation failed." }); }
           return;
         }
@@ -3829,10 +3836,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             caller.userId === undefined ? principals.list().find(person => person.id === soleAdmin(principals.list())) : principals.resolve(caller.userId);
           send(res, 200, {
             identity: caller.userId ?? null,
-            name: principal?.name ?? null, label: roleLabel(principals.installation(), principal?.id, caller.userId === undefined ? "admin" : (principal?.role ?? "viewer")),
+            name: principal?.name ?? null, label: roleLabel(principals.installation(), principal?.id, callerRole),
             // No identity at all is the direct operator: the token holder, unrestricted,
             // exactly as this UI has always behaved.
-            role: caller.userId === undefined ? "admin" : (principal?.role ?? "viewer"),
+            role: callerRole,
             // How this person arranges the list, wherever they open it from (INV-121).
             preferences: preferences.get(caller.userId),
           });
@@ -4381,19 +4388,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // an agent the caller could not open.
         if (route === "GET /api/memory") {
           if (refused()) return;
-          const known: Caller =
-            !assertedByGateway && caller.userId !== undefined && !roleAtLeast(principals.roleOf(caller.userId), "driver")
-              ? { ...caller, role: "viewer" }
-              : caller;
-          // What this caller may open: the role, and then the boxes they are in (INV-540
-          // retired the per-agent check; INV-538 is what replaced it). A summary must
-          // never name an agent the caller could not open.
-          const myBoxes = (agent: { id: string }): boolean =>
-            known.userId === undefined || mayEnterBox(registry.boxOf(agent.id), principals.resolve(known.userId).id);
-          const visible = registry
-            .list()
-            .filter(agent => agent.profile.hidden !== true && refusalToDrive(known) === undefined && myBoxes(agent));
-          const boxes = registry.listBoxes().filter(box => mayReadBox(box.id)).map(box => ({ id: box.id, name: box.name }));
+          const visible = registry.list().filter(agent => agent.profile.hidden !== true && mayReadAgent(agent.id));
+          const boxes = registry.listBoxes().filter(box => mayReadBox(box.id)).map(box => ({
+            id: box.id, name: box.name,
+            owner: box.members !== "everyone" && box.members.length === 1 ? principals.byId(box.members[0]!)?.name : undefined,
+          }));
           send(res, 200, { boxes, agents: memoryAdmin.summary(visible) });
           return;
         }
@@ -4404,6 +4403,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           if (refused(agentId)) return;
+          if (!mayReadAgent(agentId)) { send(res, 403, apiError("box-not-yours")); return; }
           send(res, 200, { agent: agentId, ...memoryAdmin.detail(agentId) });
           return;
         }
@@ -4579,10 +4579,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "GET /api/mcp") {
-          let bootstrapPending = false;
-          try { bootstrapPending = bootstrap.pending(); } catch { /* Unreadable bootstrap cannot offer enrollment. */ }
           send(res, 200, {
-            setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrapPending },
+            setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrapPending() },
             servers: orchestrator.mcp.statuses(),
             budget: TOOL_BUDGET_WARNING,
             extensions: orchestrator.extensions?.current() ?? null,
@@ -4598,6 +4596,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (invite.expiresAt < Date.now()) invites.delete(code);
           }
           send(res, 200, {
+            bootstrapPending: caller.userId === undefined && bootstrapPending(),
+            feishuCallbackTemplate: feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID"),
             channels: channels.list(localeOf(req, url)), // each status in the reader's language (INV-1702)
             // The doors as records (docs/22 §2): what the settings dialog edits.
             // Credentials are reported as present/absent, never as values.
@@ -5078,7 +5078,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             ...CATALOG_EXPERTS.map(entry => ({ kind: "expert", slug: entry.slug, name: entry.name, title: entry.title, summary: summaryIn(entry, localeOf(req, url)), domain: entry.domain })),
             ...CATALOG_CREWS.map(crew => ({ kind: "crew", slug: crew.slug, name: crew.name, title: "", summary: summaryIn(crew, localeOf(req, url)), domain: crew.domain, members: crew.members })),
           ];
-          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)) });
+          send(res, 200, { mine, imported, catalog, marketplace, boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(withBoxBackend) });
           return;
         }
         // Stamp: one template, one box, one new agent (or a crew's several). Wraps the two
@@ -5169,25 +5169,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, { created: [{ id: imported.agent.id, name: imported.agent.profile.name }] });
           return;
         }
-        // The Set up card's four facts (docs/39 §4): a box answered, an agent had a turn, a
-        // door is configured, a task reached review. Read, never stored.
+        // Setup progress belongs to the selected box; installation controls belong to the admin.
         if (route === "GET /api/setup") {
-          const boxes = orchestrator.boxStatus();
-          const agentTurn = registry.list().some(agent => registry.readTranscript(agent.id).length > 0);
-          const door = channelRecords.some(record => channelCredentialsSet(record));
-          const review = (orchestrator.tasks?.list() ?? []).some(task => task.status === "review" || task.status === "done");
-          // The key is the other thing the welcome note promises, so it grades on the card
-          // too (INV-857): a saved provider or any credential in the environment means the
-          // first message will not die on "no key".
-          const key = providerConfigured(
-            loadConfig().provider,
-            providerNames().map(name => resolveProvider(name))
-          );
-          // Optional, so it is a fact and not a gate: without a search key the WebSearch
-          // tool is withheld entirely and web questions degrade to the box's browser —
-          // a state the card names rather than leaves to be discovered mid-task.
-          const search = configuredProviders().length > 0;
-          send(res, 200, { installationId: registry.box.id, established: agentTurn && review, key, box: boxes.some(box => box.connected), agentTurn, door, review, search });
+          const installationId = registry.box.id;
+          if (callerRole !== "admin") {
+            const identity = caller.userId;
+            const member = callerRole === "driver" && identity && principals.isKnown(identity) ? principals.resolve(identity).id : undefined;
+            const hasPersonalBox = member && principals.installation().mode === "organisation" ? personalBoxesOf(registry.listBoxes(), member).length > 0 : undefined;
+            send(res, 200, { installationId, hasPersonalBox }); return;
+          }
+          const agents = registry.list().filter(agent => mayReadAgent(agent.id) && !agent.profile.hidden);
+          const reviewed = new Set((orchestrator.tasks?.list() ?? []).filter(task => task.status === "review" || task.status === "done").map(task => task.assigneeId));
+          const byBox = Object.fromEntries(orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(box => {
+            const here = agents.filter(agent => registry.boxOf(agent.id).id === box.id);
+            const agentTurn = here.some(agent => registry.readTranscript(agent.id).length > 0), review = here.some(agent => reviewed.has(agent.id));
+            return [box.id, { box: box.connected, agent: here.length > 0, agentTurn, review, established: agentTurn && review }];
+          }));
+          const key = await modelConfigured(orchestrator.provider);
+          send(res, 200, { installationId, ...byBox[installationId], byBox, key, door: channelRecords.some(channelCredentialsSet), search: configuredProviders().length > 0,
+            bootstrapPending: caller.userId === undefined && bootstrapPending() });
           return;
         }
 
@@ -5385,13 +5385,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // finishes on the pair it started with. The host door, the startup item and the box
         // image still wait for a restart, and the reply says which it was.
         if (route === "GET /api/config") {
+          if (callerRole !== "admin") {
+            send(res, 200, { presets: modelPresets(orchestrator.provider).map(({ name, label, models }) => ({ name, label, models })) });
+            return;
+          }
           const config = loadConfig();
           const live = orchestrator.provider;
+          const presets = modelPresets(live);
           send(res, 200, {
             current: describeProvider(live),
             // What is in force right now, and which of the file's variables the shell overrides
             // (INV-1268): a saved model that the page cannot make effective says so.
             effective: {
+              provider: presets.find(preset => preset.label === live.label)?.name ?? null,
+              configured: await modelConfigured(live),
               label: live.label,
               model: live.model,
               vision: live.vision,
@@ -5416,20 +5423,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               unavailableReason: hostRunner.unavailableReason() ?? null, // from the live runner, what an agent would reach
             },
             // Whether a credential is present is worth showing; the credential is not.
-            presets: providerNames().map(name => {
-              const profile = resolveProvider(name);
-              return {
-                name,
-                label: profile.label,
-                model: profile.model,
-                models: PRESET_MODELS[name] ?? [],
-                keyEnv: profile.keyEnv,
-                keyPresent:
-                  process.env[profile.keyEnv] !== undefined ||
-                  (profile.keyEnv === "ANTHROPIC_API_KEY" &&
-                    process.env.ANTHROPIC_AUTH_TOKEN !== undefined),
-              };
-            }),
+            presets,
             // The search providers in the same shape as the model presets: which key each
             // reads, and whether this installation has one. A capability that degrades
             // silently reads as covered (absences.ts), and the page is where a person
@@ -5466,10 +5460,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
           // The key is stored under the variable the chosen provider reads, and only
           // there: the UI cannot write arbitrary environment variables.
-          const chosenName =
-            (typeof providerValue === "string" ? providerValue.toLowerCase() : undefined) ??
-            loadConfig().provider ??
-            "anthropic";
           const key = field(body.key);
           // Host execution: a whole object or nothing. Enabling without a working
           // directory is refused here rather than saved and failed later.
@@ -5506,7 +5496,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           else if (body.vision === "off") envChange.AGENTBOX_VISION = "0";
           else if (body.vision === "auto") envChange.AGENTBOX_VISION = null;
           if (body.summaryModel !== undefined) envChange.AGENTBOX_SUMMARY_MODEL = field(body.summaryModel) ?? null;
-          if (key !== undefined && key !== null) envChange[resolveProvider(chosenName).keyEnv] = key;
+          if (key !== undefined && key !== null) {
+            const name = typeof providerValue === "string" ? providerValue : loadConfig().provider;
+            const profile = name ? providerForChoice(name, orchestrator.provider) : orchestrator.provider;
+            envChange[profile.keyEnv] = key;
+          }
           // The search key, under the chosen provider's variable — the same one-variable
           // rule as the model key, so the page still cannot write arbitrary variables.
           // An empty choice ("none") clears whichever of the three is set, because a key
@@ -5591,7 +5585,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // to go find a terminal is the product giving up. The docker output streams to
         // every connected page as events, because an image pull is minutes long and a
         // silent minutes-long button is indistinguishable from a broken one.
-        const boxUpdated = await boxUpdateRoute(route, boxUpdate, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); // Apply update / reset (INV-1538)
+        const boxUpdated = kubernetes ? undefined : await boxUpdateRoute(route, boxUpdate, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); // Apply update / reset (INV-1538)
         if (boxUpdated !== undefined) { if (boxUpdated.status !== 0) send(res, boxUpdated.status, boxUpdated.body); return; }
         const pushRoute = await pushBudgetRoute(route, pushBudget, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (pushRoute !== undefined) { if (pushRoute.status !== 0) send(res, pushRoute.status, pushRoute.body); return; } // INV-1576
         const teamReview = await teamMemoryReviewRoute(route, { registry, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (teamReview !== undefined) { if (teamReview.status !== 0) send(res, teamReview.status, teamReview.body); return; } // INV-1581
@@ -5604,46 +5598,23 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const byName = () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"); const issues = await exceptionRoute(route, { ledger: orchestrator.exceptions, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayRead: id => id === undefined || mayReadAgent(id), refused: id => (id === undefined ? refusedRole("admin") : refused(id)), by: byName, titleOf: id => orchestrator.tasks?.get(id)?.title, retry: exceptionRetryDeps({ ledger: orchestrator.exceptions, prompt: (id, text, conversation) => orchestrator.prompt(id, text, undefined, { conversation, lane: "user", origin: "host:retry", steerable: false }), boxFor: id => orchestrator.boxFor(id), ownerOf: id => registry.boxOwnerTokenFor(id), watch: job => orchestrator.jobWatch.watch(job), by: byName, redeliver: async chatKey => { const door = channels.adapterFor(chatKey); if (door?.sendToChat === undefined) throw new Error(`no door can send to ${chatKey}`); return outboxSender.retry(chatKey, { sendToChat: (key, text) => door.sendToChat!(key, text) }); }, runRoutine: slug => orchestrator.scheduler.runNow(slug), reconnectBox: () => keeper.tick().then(state => { box = state; return state; }), notReady: id => { const task = orchestrator.tasks?.get(id); return task === undefined || orchestrator.tasks === undefined ? undefined : notReady(task, orchestrator.tasks); } }) }); if (issues !== undefined) { if (issues.status !== 0) send(res, issues.status, issues.body); return; } /* the Issues view (INV-1741) */ const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } const guestsRoute = await guestRoute(route, guestDesk, { query: () => url.searchParams, send: (chatKey, text) => channels.tryPushToChat(chatKey, text, { kind: "notice", about: "a guest answer an Admin approved" }), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), installationMode: () => principals.installation().mode, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (guestsRoute !== undefined) { if (guestsRoute.status !== 0) send(res, guestsRoute.status, guestsRoute.body); return; } /* INV-1708 */ const installed = installationRoute(route, { principals }); if (installed !== undefined) { send(res, installed.status, installed.body); return; } const merging = await mergeRoute(route, { paths: mergePaths, desktop: options.desktop === true, doorType: door => channelRecords.find(record => record.id === door)?.type, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name : "the operator"), log }); if (merging !== undefined) { if (merging.status !== 0) send(res, merging.status, merging.body); return; } // "these are all me" (INV-1698) // INV-1554, INV-1615, INV-1664, INV-1669
         const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => events.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
         const rest = await providerRestRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, rests: providerRests, quotaLine: locale => quotaStatusLine(Date.now(), locale), locale: localeOf(req, url) }); if (rest !== undefined) { if (rest.status !== 0) send(res, rest.status, rest.body); return; } // INV-1577
-        const fallbacks = await fallbackRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, names: () => loadConfig().fallbackProviders ?? [], save: names => { saveConfig({ fallbackProviders: names }); }, presets: () => providerNames().map(name => { const profile = resolveProvider(name); return { name, label: profile.label, model: profile.model, hasKey: hasCredential(profile) }; }), usage: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER) }); if (fallbacks !== undefined) { if (fallbacks.status !== 0) send(res, fallbacks.status, fallbacks.body); return; } // INV-1578
+        const fallbacks = await fallbackRoute(route, {
+          refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>,
+          names: () => loadConfig().fallbackProviders ?? [], save: names => { saveConfig({ fallbackProviders: names }); },
+          presets: () => modelPresets(orchestrator.provider).map(({ name, label, model, keyPresent, keySource }) => ({ name, label, model, hasKey: keyPresent, keySource })),
+          usage: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER),
+        }); if (fallbacks !== undefined) { if (fallbacks.status !== 0) send(res, fallbacks.status, fallbacks.body); return; } // INV-1578
         if (route === "POST /api/box/up") {
-          if (refused()) return;
-          if (boxUpInFlight) {
-            send(res, 409, apiError("box-starting"));
-            return;
-          }
-          if (box.connected) {
-            send(res, 200, { ok: true, detail: box.detail });
-            return;
-          }
-          boxUpInFlight = true; releaseBoxDown(defaultBoxConfig().containerName); // a person asked for it up (INV-1550)
-          send(res, 202, { starting: true });
-          void (async () => {
-            try {
-              const manager = new BoxManager(defaultBoxConfig());
-              await manager.up({
-                onOutput: line => broadcast({ type: "box_setup", line }),
-              });
-              box = await orchestrator.connectBox();
-              broadcast({
-                type: "box_setup",
-                line: box.connected ? `ready — ${box.detail}` : `failed — ${box.detail}`,
-                done: true,
-                ok: box.connected,
-              });
-            } catch (error) {
-              const detail = error instanceof Error ? error.message : String(error);
-              broadcast({ type: "box_setup", line: `failed — ${detail}`, done: true, ok: false });
-            } finally {
-              boxUpInFlight = false;
-            }
-          })();
+          if (refusedRole("admin")) return;
+          const start = sharedStart.request();
+          send(res, start.status, start.body);
           return;
         }
 
         // One real round trip against the endpoint before anything is saved: "invalid
         // api key" from the vendor beats a saved config that fails at the next restart.
         if (route === "POST /api/config/test") {
-          if (refused()) return;
+          if (refusedRole("admin")) return;
           const body = await readJson(req);
           const name = typeof body.provider === "string" ? body.provider.toLowerCase() : "";
           if (!providerNames().includes(name)) {
@@ -5651,7 +5622,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
-            const profile = resolveProvider(name);
+            const profile = { ...providerForChoice(name, orchestrator.provider) };
             if (typeof body.model === "string" && body.model.trim() !== "") {
               profile.model = body.model.trim();
             }
@@ -5665,10 +5636,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const result = await testProvider(profile, key);
             send(res, 200, result);
           } catch (error) {
-            send(res, 200, {
-              ok: false,
-              error: error instanceof Error ? error.message : String(error),
-            });
+            send(res, 200, { ok: false, ...modelTestError(name, error) });
           }
           return;
         }
@@ -5787,7 +5755,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const midnight = new Date();
           midnight.setHours(0, 0, 0, 0);
           send(res, 200, {
-            provider: describeProvider(orchestrator.provider),
+            provider: callerRole === "admin" ? describeProvider(orchestrator.provider) : undefined,
             build,
             usageToday: caller.userId === undefined ? orchestrator.usage.totalsSince(midnight.getTime()) : orchestrator.usage.sum(orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER).filter(record => Date.parse(record.at) >= midnight.getTime() && mayReadAgent(record.agentId))),
             // Broken out by person, with a readable name where the id is a principal.
@@ -5806,6 +5774,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             box: {
               ...box,
               ok: box.connected,
+              own: registry.box.id,
+              starting: sharedStart.starting,
+              backend: backend.backend,
+              ...(kubernetes ? { namespace: backend.namespace ?? DEFAULT_NAMESPACE } : {}),
               ...auditedClass(classifyBox(provisioner.boxName, loadConfig(), registry.box.name)),
               // Only while there is no box to describe, and only for a Docker box: an
               // attached box's health is a network question, not a Docker question.
@@ -5817,7 +5789,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             allTools: ALL_TOOLS,
             // Every box this installation drives, own first (docs/30). An agent's row names its
             // box and its desktop path is on that box.
-            boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)),
+            boxes: orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(withBoxBackend),
             agents: registry.list().filter(record => mayReadBox(registry.boxOf(record.id).id)).map(record => {
               const index = registry.displayIndexFor(record.id);
               const boxEntry = registry.boxOf(record.id);
@@ -6007,12 +5979,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // Only the boxes this person is in (INV-538). A box somebody is not a member of
           // is not theirs to see the name of: a list that shows it and refuses to open it
           // tells them it exists, which is the one thing a members set is for.
-          const mine = (boxId: string): boolean =>
-            caller.userId === undefined ||
-            mayEnterBox(registry.listBoxes().find(entry => entry.id === boxId) ?? { members: "everyone" }, principals.resolve(caller.userId).id);
           // Registered boxes carry their lifecycle state and version (INV-434).
           const nameOfPrincipal = (id: string): string => principals.list().find(person => person.id === id)?.name ?? id;
-          const boxes = orchestrator.boxStatus().filter(box => mine(box.id)).map(box => {
+          const boxes = orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(status => {
+            const box = withBoxBackend(status);
             const entry = registry.listBoxes().find(candidate => candidate.id === box.id);
             const membership =
               entry === undefined
@@ -6020,10 +5990,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 : { members: entry.members, membersLabel: membersLabel(entry, nameOfPrincipal, localeOf(req, url)) };
             const registration = connectCodes.registrationOf(box.id);
             return registration === undefined
-              ? { ...box, ...membership }
+              ? { ...box, ...membership, ...(kubernetes && personalBoxes.manages(box.id) ? { kind: "kubernetes" } : {}) }
               : { ...box, ...membership, ...nodeOfBox(connectCodes, box.id), state: connectCodes.stateOf(box.id, box.connected), ...(registration.version !== undefined ? { version: registration.version } : {}), lastSeenAt: registration.lastSeenAt };
           });
-          send(res, 200, { boxes, own: registry.box.id });
+          send(res, 200, { boxes, own: registry.box.id, backend: backend.backend, ...(kubernetes ? { namespace: backend.namespace ?? DEFAULT_NAMESPACE } : {}) });
           return;
         }
 
@@ -6141,6 +6111,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           let tokenFile = typeof body.tokenFile === "string" ? body.tokenFile.trim() : "";
           try {
             const existing = registry.boxByName(name);
+            if (existing && mayReadBox(existing.id) && personalBoxes.manages(existing.id)) { send(res, 409, apiError("personal-box-managed")); return; }
+            if (refusedRole("admin")) return;
             if (existing === undefined) {
               send(res, 404, apiError("box-named-unknown", { name }));
               return;
@@ -6153,7 +6125,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
                 : Array.isArray(body.members)
                   ? (body.members as unknown[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
                   : undefined;
-            if (members !== undefined && refusedRole("admin")) return;
             const unconfined = members === undefined ? undefined : await nodeMembersRefusal(connectCodes, existing, members, async () => (await orchestrator.boxClientById(existing.id)?.health(3000))?.confinement); if (unconfined !== undefined) { send(res, unconfined.status, unconfined.body); return; } // INV-1697
             if (members !== undefined) {
               const allocationError = personalAllocationRefusal(personalBoxes.quotaEntries(), existing, members, loadConfig(), Array.isArray(members) && members[0] ? directoryQuotaContext(members[0]) : undefined);
@@ -6186,6 +6157,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           try {
             const target = registry.boxByName(String(body.name ?? "")) ?? registry.boxById(String(body.name ?? ""));
+            if (target && mayReadBox(target.id) && personalBoxes.manages(target.id)) { send(res, 409, apiError("personal-box-remove")); return; }
+            if (refusedRole("admin")) return;
             if (target && personalBoxes.manages(target.id)) { send(res, 409, apiError("personal-box-remove")); return; }
             const entry = orchestrator.detachBox(String(body.name ?? ""));
             log(`detached box ${entry.name} (${entry.id})`);
@@ -6854,14 +6827,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // anything able to reach it can already drive the agents. That stopped being true when
   // the orchestrator moved into the box, where it binds 0.0.0.0 and only Docker's publish
   // address keeps it local. So a non-loopback bind without a configured token gets one
-  // generated and announced, rather than being served openly.
+  // persisted in the installation state, rather than being served openly.
   const configured = options.token ?? process.env.AGENTBOX_UI_TOKEN;
   let token = configured;
   if (process.env.AGENTBOX_NO_TOKEN === "1") {
     token = undefined;
   } else if (!token && !isLoopback(host)) {
-    token = randomBytes(16).toString("hex");
-    log(`bound to ${host} with no token configured; generated one — open: http://${host}:${options.port}/?token=${token}`);
+    token = uiToken();
+    log(`Operator UI token: read ${join(agentboxHome(), "ui-token")} on the server, then open the installation URL with ?token=<value>.`);
   }
   if (token) holdHostToken(token); // whatever this web answers to is kept out of what agents see (INV-1543)
   /**

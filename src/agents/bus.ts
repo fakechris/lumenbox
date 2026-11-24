@@ -576,6 +576,8 @@ export class AgentBus {
    * User messages only, deliberately. A teammate's message is new work that deserves
    * its own turn and its own causal record — that behaviour is pinned by the race
    * catalog — while the user talking to a turn already in flight is steering it.
+   * The one teammate message it does take is a result for the very work it is running
+   * (`WorkAttention.awaitedResult`, INV-2037): the answer the turn waits on, not new work.
    * Taken messages are marked started in the durable inbox exactly as a drain marks
    * them: whoever consumes a message owns that bookkeeping.
    */
@@ -583,9 +585,11 @@ export class AgentBus {
     const queue = this.pending.get(agentId) ?? [];
     const taken = queue.filter(
       message =>
-        (message.conversation ?? MAIN_CONVERSATION) === conversation && isSteering(message) &&
+        (message.conversation ?? MAIN_CONVERSATION) === conversation && (
+          (this.active.has(workerKey(agentId, conversation)) && message.fromId !== SYSTEM_SENDER && this.registry.has(message.fromId) &&
+            this.workAttention?.awaitedResult(agentId, conversation, message) === true) || (isSteering(message) &&
         (!this.userWork || message.work?.id===this.active.get(workerKey(agentId,conversation))?.workId) &&
-        message.principalId === this.active.get(workerKey(agentId, conversation))?.principalId
+        message.principalId === this.active.get(workerKey(agentId, conversation))?.principalId))
     );
     if (taken.length === 0) return [];
     const work = this.workAttention?.begin(agentId, conversation, taken);

@@ -33,8 +33,15 @@ export interface RecoveredBox {
 export interface PersonalBoxDriver {
   start(record: PersonalBoxRecord): Promise<string>;
   remove(record: PersonalBoxRecord, deleteData: boolean): Promise<void>;
+  podStatus?(name: string): Promise<string>;
   /** Bring a ready box back after this server restarted. Docker's restart policy needs no help, so optional. */
   recover?(record: PersonalBoxRecord): Promise<RecoveredBox>;
+}
+export class PersonalBoxStartError extends Error {
+  constructor(message: string, readonly reason: string, readonly nextStep: string) {
+    super(message);
+    this.name = "PersonalBoxStartError";
+  }
 }
 /** The platform's reason when a driver gave one, else the error's kind. */
 function reasonOf(error: unknown): { stateReason: string; stateMessage: string } {
@@ -203,6 +210,13 @@ export class PersonalBoxes {
   private allowed(owner: string): void {
     if (!this.options.authorize(owner)) throw new Error("Personal box permission revoked");
   }
+  async listWithPodStatus(owner: string) {
+    const boxes = this.list(owner);
+    const status = this.options.driver.podStatus?.bind(this.options.driver);
+    return status === undefined ? boxes : Promise.all(boxes.map(async box => ({
+      ...box, podStatus: await status(box.name).catch(() => "Unavailable"),
+    })));
+  }
   private reserve(db: DatabaseSync, row: PersonalBoxRecord): void {
     this.allowed(row.owner);
     const quota = this.options.quota(row.owner);
@@ -301,6 +315,9 @@ export class PersonalBoxes {
         });
       } catch (error) {
         Object.assign(row, reasonOf(error), { stateChangedAt: new Date().toISOString() });
+        const detail = error instanceof PersonalBoxStartError
+          ? `${error.reason}: ${row.stateMessage}. ${error.nextStep}`
+          : undefined;
         this.transaction((db) => {
           row.status = "deleting";
           row.deleteData = false;
@@ -312,7 +329,7 @@ export class PersonalBoxes {
           this.transaction((db) => {
             row.status = "failed";
             delete row.worker;
-            row.error = `Start failed or permission changed (${row.stateReason}). Retry or remove the box; retained data is preserved.`;
+            row.error = detail ?? `Start failed or permission changed (${row.stateReason}). Retry or remove the box; retained data is preserved.`;
             this.save(db, row);
           });
         } catch {
@@ -320,7 +337,7 @@ export class PersonalBoxes {
             row.status = "deleting";
             row.deleteData = false;
             delete row.worker;
-            row.error = "Cleanup incomplete. Retry cleanup before allocating another box.";
+            row.error = [detail, "Cleanup incomplete. Retry cleanup before allocating another box."].filter(Boolean).join(" ");
             this.save(db, row);
           });
         }

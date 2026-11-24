@@ -158,8 +158,8 @@ export function managesLocalDocker(provisioner: BoxProvisioner = resolveBoxProvi
   return provisioner instanceof DockerBoxProvisioner;
 }
 
-export function resolveBoxProvisioner(): BoxProvisioner {
+export function resolveBoxProvisioner(fallback: () => BoxProvisioner = () => new DockerBoxProvisioner()): BoxProvisioner {
   const url = process.env.AGENTBOX_BOXD_URL?.trim();
   if (url) return new AttachedBoxProvisioner({ baseUrl: url });
-  return new DockerBoxProvisioner();
+  return fallback();
 }
