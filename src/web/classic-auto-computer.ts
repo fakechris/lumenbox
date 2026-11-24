@@ -14,4 +14,14 @@ function renderAutoComputer() {
 $("autocomputers").addEventListener("click", function (event) {
   if (myRole === "admin") { event.preventDefault(); openSettings("boxes"); }
 });
+document.getElementById("autonew").addEventListener("click", function (e) {
+  e.preventDefault();
+  if (!boxState.connected && !autoCreateOpen) return;
+  autoCreateOpen = !autoCreateOpen;
+  $("autocreate").style.display = autoCreateOpen ? "" : "none";
+  if (autoCreateOpen) {
+    $("autoagent").innerHTML = '<option value="">{{ui.app.first-agent}}</option>';
+  }
+  renderAutoComputer();
+});
 `;

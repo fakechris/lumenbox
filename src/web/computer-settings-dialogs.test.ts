@@ -4,7 +4,7 @@ import vm from "node:vm";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
 import { NEXT_SET_BOXES_JS } from "./next-set-boxes-ui.ts";
 import { NEXT_SET_DOORS_JS } from "./next-set-doors-ui.ts";
-import { UI_NEXT } from "../i18n/ui-next.ts";
+import { tr } from "../i18n/messages.ts";
 import { OAUTH_PROVIDERS } from "../host/oauth.ts";
 
 class Node {
@@ -33,8 +33,7 @@ const labelled = (text: string, control: Node) => {
   label.appendChild(control);
   return label;
 };
-const t = (key: string, args: Record<string, string> = {}) =>
-  (UI_NEXT[key]?.[1] ?? key).replace(/\{(\w+)\}/g, (_, name: string) => args[name] ?? "");
+const t = (key: string, args?: Record<string, string>) => tr(key, "en", args);
 
 test("reset explains the real data loss and labels confirmation with the configured name", () => {
   const context = vm.createContext({ el, t, labelled });
