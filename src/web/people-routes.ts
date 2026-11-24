@@ -4,14 +4,16 @@
  * removing a person, and the invitation codes — for a new person, or a sign-in code bound to one already
  * on the roster, so the person who comes back is the same principal with the same boxes and agents.
  *
- * The roster always keeps an admin: removing the last one, or saving a roster without one, is refused
- * here rather than trusted to the page, because one click on the wrong row cannot be undone.
+ * The roster always keeps an admin: removing the last one, saving a roster without one, or signing the last
+ * one out everywhere is refused here rather than trusted to the page, because one click on the wrong row cannot
+ * be undone — a signed-out last admin has nobody left to make them a code (INV-2082).
  */
 import { apiError } from "./api-error.ts";
 import { invitationLink } from "./sign-in.ts";
 import { soleAdmin, type Principal, type Principals, type Role } from "../host/principals.ts";
 import type { Invite } from "../host/invite-redeem.ts";
 import { doorOfIdentity } from "../host/self-merge.ts";
+import type { InviteStore } from "./invite-store.ts";
 
 /** A live code: who it admits (or links), what the admin wrote it is for, and until when. */
 export interface PendingInvite extends Invite { note?: string }
@@ -31,11 +33,12 @@ export function leavesNoAdmin(before: readonly Pick<Principal, "role">[], after:
 
 export interface PeopleDeps {
   principals: Principals;
-  invites: Map<string, PendingInvite>;
+  invites: InviteStore;
   newCode: () => string;
   refusedAdmin: () => boolean;
   readJson: () => Promise<Record<string, unknown>>;
-  signOut: (principalId: string) => void;
+  /** Every browser the person holds stops being served; returns their new generation. */
+  signOut: (principalId: string) => number;
   usableSignIns: (person: Principal) => readonly string[];
   retiredSignIn: (person: Principal, identity: string) => boolean;
   planRemoval: (person: Principal, kept: Principal[], disposition: unknown) => () => Promise<void>;
@@ -55,13 +58,12 @@ type Reply = { status: number; body: unknown };
 export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Reply | undefined> {
   const removing = route === "POST /api/principals/remove";
   const revoking = route === "POST /api/principals/revoke-sign-in";
-  if (route !== "GET /api/people" && !removing && !revoking && route !== "POST /api/channels/invite") return undefined;
+  if (!removing && !revoking && !["GET /api/people", "POST /api/principals/logout", "POST /api/channels/invite"].includes(route)) return undefined;
   if (deps.refusedAdmin()) return { status: 0, body: undefined };
   const now = (deps.now ?? Date.now)();
   const { principals, invites } = deps;
   principals.reload();
-  if (!removing && !revoking)
-    for (const [code, invite] of invites) if (invite.expiresAt < now) invites.delete(code);
+  if (!removing && !revoking) invites.dropWhere(invite => invite.expiresAt < now);
 
   if (route === "GET /api/people") {
     const people = principals.list(), active = deps.lastActive(people), admins = people.filter(person => person.role === "admin").length;
@@ -78,8 +80,8 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
           lastAdmin: person.role === "admin" && admins === 1,
           self: person.id === self,
         })),
-        invites: [...invites.entries()].map(([code, invite]) => ({
-          code, role: invite.role, expiresAt: invite.expiresAt,
+        invites: invites.list().map(invite => ({
+          ...(invite.code !== undefined ? { code: invite.code } : {}), role: invite.role, expiresAt: invite.expiresAt,
           ...(invite.principalId !== undefined ? { principalId: invite.principalId, name: principals.byId(invite.principalId)?.name } : {}),
           ...(invite.note !== undefined ? { note: invite.note } : {}),
         })),
@@ -114,11 +116,23 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
     catch (error) { return { status: 409, body: { error: (error as Error).message } }; }
     principals.save(kept);
     deps.signOut(person.id);
-    for (const [code, invite] of invites) if (invite.principalId === person.id) invites.delete(code);
+    invites.dropWhere(invite => invite.principalId === person.id);
     deps.log(`principal removed: ${person.name} (${person.id}) by ${deps.callerId() ?? "the operator"}`);
     try { await dispose(); }
     catch (error) { return { status: 409, body: { error: (error as Error).message } }; }
     return { status: 200, body: { principals: principals.list() } };
+  }
+
+  // Signing one person out of everywhere (INV-537): their generation moves on, and every browser and tab they
+  // left signed in stops being served on its next request. Nobody else is touched, which is why an admin will
+  // use it instead of rotating the token. Never the last admin: nobody would be left to let them back in.
+  if (route === "POST /api/principals/logout") {
+    const principalId = String(body.principalId ?? "").trim(), roster = principals.list(), person = roster.find(entry => entry.id === principalId);
+    if (person === undefined) return { status: 404, body: apiError("person-unknown", { person: principalId }) };
+    if (leavesNoAdmin(roster, roster.filter(entry => entry.id !== person.id))) return { status: 409, body: apiError("last-admin") };
+    const epoch = deps.signOut(person.id);
+    deps.log(`signed out everywhere: ${person.name} (generation ${epoch})`);
+    return { status: 200, body: { name: person.name, epoch } };
   }
 
   // A code for somebody on the roster links a new door to them: same human, another phone, or back after
