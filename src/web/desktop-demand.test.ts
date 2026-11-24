@@ -16,6 +16,7 @@ test("web startup and state reads leave 12 desktops dormant; authenticated page 
   process.env.AGENTBOX_HOME = home;
   const starts: { index: number; owner: string }[] = [];
   const running = new Set<number>();
+  const reclaiming = new Set<number>();
   const mirrored = new Set<string>();
   const daemon = createServer(async (req, res) => {
     let raw = "";
@@ -31,6 +32,7 @@ test("web startup and state reads leave 12 desktops dormant; authenticated page 
     }
     if (req.url?.startsWith("/vnc/")) {
       const index = Number(req.url.split("/")[2]);
+      if (reclaiming.has(index)) { res.statusCode = 503; res.end(JSON.stringify({ error: "Desktop is being reclaimed; retry the open request." })); return; }
       res.statusCode = running.has(index) ? 200 : 404;
       res.setHeader("content-type", "text/html");
       res.end(running.has(index) ? "<html>desktop ready</html>" : "not running"); return;
@@ -73,6 +75,11 @@ test("web startup and state reads leave 12 desktops dormant; authenticated page 
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.match(page, /desktop ready/);
+    reclaiming.add(index); // boxd is tearing the desktop down to reopen it: a pause, not a failure.
+    const reclaimed = await (await fetch(path, { headers })).text();
+    assert.match(reclaimed, /http-equiv="refresh"/, "a desktop being reclaimed reloads until it is back");
+    assert.match(reclaimed, /data-desktop-state="starting"/);
+    reclaiming.clear();
     assert.deepEqual(starts.map(entry => entry.index), [index]);
     assert.equal(starts[0]!.owner, registry.boxOwnerTokenFor(agents[4]!.id));
     running.clear(); // Recreated daemon/container, same URL, no remembered desktop.

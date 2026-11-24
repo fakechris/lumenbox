@@ -2770,7 +2770,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             try {
               reason = String((JSON.parse(body) as { error?: unknown }).error ?? body);
             } catch { /* not JSON; the text is the reason */ }
-            sendDesktopWaiting(res, reason, status === 404);
+            sendDesktopWaiting(res, reason, status === 404 || status === 503); // not started yet, or boxd reopening it: both pass
           });
           return;
         }
