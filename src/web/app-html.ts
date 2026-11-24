@@ -1965,7 +1965,7 @@ function renderChannels() {
       people = []; window.installation = data.installation; window.rosterPeople = data.principals || []; // Owner or Admin (INV-1685): read by ownerBadge and afterPeople in installation-ui.ts
       (data.principals || []).forEach(function (p) {
         (p.identities.length ? p.identities : [""]).forEach(function (identity) {
-          people.push({ id: p.id, name: p.name, role: p.role, identity: identity });
+          people.push({ id: p.id, name: p.name, role: p.role, identity: identity, usableSignIn: (p.usableSignIns || []).includes(identity) });
         });
       });
       renderPeople(); if (window.afterPeople) window.afterPeople(); // the Owner's own code and "these are all me" (INV-1698)
@@ -2120,8 +2120,8 @@ $("setinvite").onclick = function () {
     .catch(function () { $("setinviteout").textContent = "{{ui.app.failed}}"; });
 };
 
-function hasOtherSignIn(person) {
-  return people.some(function (entry) { return entry !== person && entry.id === person.id && entry.identity; });
+function hasOtherSignIn(person, usableOnly) {
+  return people.some(function (entry) { return entry !== person && entry.id === person.id && entry.identity && (!usableOnly || entry.usableSignIn); });
 }
 
 function renderPeople() {
@@ -2137,8 +2137,9 @@ function renderPeople() {
     var owner = window.ownerBadge && window.ownerBadge(p);
     var roleControl = owner || '<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>";
     var remove = '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>';
-    var removeControl = hasOtherSignIn(p) ? remove : owner ? "" :
-      p.role === "admin" && admins === 1 ? '<span class="fieldnote" style="margin:0">{{ui.app.only-admin}}</span>' : remove;
+    var lastAdmin = p.role === "admin" && admins === 1;
+    var removeControl = hasOtherSignIn(p, lastAdmin) ? remove : owner ? "" :
+      lastAdmin ? '<span class="fieldnote" style="margin:0">{{ui.app.only-admin}}</span>' : remove;
     return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
       '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +

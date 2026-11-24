@@ -770,6 +770,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // identity that used to be a bare channel grant becomes a driver principal, so a
   // person's existing access survives the upgrade rather than being silently revoked.
   const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`) });
+  const usableSignIns = (person: Principal) => {
+    const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
+    return person.identities.filter(identity =>
+      principals.hasCurrentIdentity(person.id, identity) &&
+      (identity.startsWith("web:") || doors.some(door => identity.startsWith(door.id + ":"))));
+  };
   /** What a task's mandate is checked against now (INV-1457): the principal's role today and the rule set as loaded. */
   const mandateWorld = (): MandateWorld => ({
     mayDrive: id => roleAtLeast(principals.list().find(person => person.id === id)?.role ?? principals.roleOf(id), "driver"),
@@ -4574,7 +4580,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               .list()
               .filter(record => record.profile.hidden !== true)
               .map(record => ({ id: record.id, name: record.profile.name })),
-            principals: principals.list(), installation: principals.installation(),
+            principals: principals.list().map(person => ({ ...person, usableSignIns: usableSignIns(person) })), installation: principals.installation(),
             knocks: [...knocks.values()],
             invites: [...invites.entries()].map(([code, invite]) => ({
               code,
@@ -4747,7 +4753,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
         // The People list, removing a person, and invitation codes: people-routes.ts (INV-2053, INV-2054, INV-2056, INV-2057).
         const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req), signOut: id => epochs.bump(id),
-          planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, checkBoxResidents, boxResidents),
+          usableSignIns, planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, checkBoxResidents, boxResidents),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });
         if (peopleReply !== undefined) { if (peopleReply.status !== 0) send(res, peopleReply.status, peopleReply.body); return; }

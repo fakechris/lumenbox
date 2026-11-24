@@ -93,7 +93,7 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
         new Principals().save(originalRoster.map(person => person.id === ada.id ? { ...person, role: "viewer" } : person));
         return revocation;
       },
-      signOut() {}, planRemoval: () => async () => {}, boxesOf: () => ({ held: 0, quota: null }),
+      signOut() {}, usableSignIns: person => person.identities, planRemoval: () => async () => {}, boxesOf: () => ({ held: 0, quota: null }),
       lastActive: () => new Map(), doorType: () => undefined, log() {},
     });
     assert.equal(authorityChecks, 2);
@@ -111,6 +111,18 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const adaLaptop = (await people()).people.find(row => row.id === ada.id)!.identities.find(identity => !ada.identities.includes(identity))!;
     assert.equal((await post(revoke, { principalId: ada.id, identity: adaLaptop }, { ...ui, authorization: "", cookie: adaCookie })).status, 200);
     assert.equal((await people()).people.find(row => row.id === ada.id)?.lastAdmin, true);
+    const oldFeishu = "removed-feishu:ou_ada";
+    roster.reload();
+    roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, oldFeishu] } : person));
+    assert.equal((await fetch(`${BASE}/auth/removed-feishu`)).status, 404);
+    const classicRoster = await (await fetch(`${BASE}/api/channels`, { headers: ui })).json() as { principals: (Row & { usableSignIns: string[] })[] };
+    const classicAda = classicRoster.principals.find(person => person.id === ada.id)!;
+    assert.deepEqual(classicAda.identities, [ada.identities[0], oldFeishu]);
+    assert.deepEqual(classicAda.usableSignIns, ada.identities);
+    const lastUsable = await post(revoke, { principalId: ada.id, identity: ada.identities[0] }, { ...ui, authorization: "", cookie: adaCookie });
+    assert.equal(lastUsable.status, 409);
+    assert.equal((await lastUsable.json()).code, "sign-in-last-admin");
+    assert.equal((await post(revoke, { principalId: ada.id, identity: oldFeishu }, { ...ui, authorization: "", cookie: adaCookie })).status, 200);
 
     // Removing Bob takes him off the roster and signs him out of every browser at once.
     const pending = (await (await post("/api/channels/invite", { principalId: bob.id })).json()) as Code;

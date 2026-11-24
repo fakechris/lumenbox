@@ -9,7 +9,7 @@
  */
 import { apiError } from "./api-error.ts";
 import { invitationLink } from "./sign-in.ts";
-import type { Principal, Principals, Role } from "../host/principals.ts";
+import { soleAdmin, type Principal, type Principals, type Role } from "../host/principals.ts";
 import type { Invite } from "../host/invite-redeem.ts";
 import { doorOfIdentity } from "../host/self-merge.ts";
 
@@ -36,6 +36,7 @@ export interface PeopleDeps {
   refusedAdmin: () => boolean;
   readJson: () => Promise<Record<string, unknown>>;
   signOut: (principalId: string) => void;
+  usableSignIns: (person: Principal) => readonly string[];
   planRemoval: (person: Principal, kept: Principal[], disposition: unknown) => () => Promise<void>;
   /** Personal boxes: the quota that applies to the person (null: none) and how many they hold. */
   boxesOf: (principalId: string) => { quota: number | null; held: number };
@@ -98,6 +99,8 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
         return { status: 404, body: apiError("sign-in-unknown") };
       const identities = person.identities.filter(entry => entry !== identity);
       if (identities.length === 0) return { status: 409, body: apiError("sign-in-last") };
+      if (soleAdmin(roster) === person.id && !deps.usableSignIns({ ...person, identities }).length)
+        return { status: 409, body: apiError("sign-in-last-admin") };
       principals.save(roster.map(entry => entry.id === person.id ? { ...entry, identities } : entry));
       return { status: 200, body: { principals: principals.list() } };
     }

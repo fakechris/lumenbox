@@ -473,12 +473,16 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const removeIdentity = /document\.getElementById\("setpeople"\)\.addEventListener\("click",[\s\S]*?\n}\);/.exec(page)?.[0];
     assert.ok(removeIdentity);
     const rows = people.flatMap(person => person.identities.map(identity => ({ ...person, identity })));
-    const adminRow = rows.find(row => row.id === "admin")!;
+    const adminRow = { ...rows.find(row => row.id === "admin")!, usableSignIn: true };
     const classicRows = { innerHTML: "" };
     const classic = { people: [adminRow], window: {}, esc: String, $: () => classicRows };
     runInNewContext(renderPeople + "\nrenderPeople()", classic);
     assert.doesNotMatch(classicRows.innerHTML, /data-remove=/, "the only admin’s last sign-in still cannot be removed");
-    classic.people.push({ ...adminRow, identity: "extra:admin" });
+    classic.people.push({ ...adminRow, identity: "removed-feishu:ou_admin", usableSignIn: false });
+    runInNewContext(renderPeople + "\nrenderPeople()", classic);
+    assert.deepEqual([...classicRows.innerHTML.matchAll(/data-remove="(\d+)"/g)].map(match => match[1]), ["1"],
+      "the only admin can revoke the retired identity but not the remaining usable sign-in");
+    classic.people[1] = { ...adminRow, identity: "web:extra-admin" };
     runInNewContext(renderPeople + "\nrenderPeople()", classic);
     assert.deepEqual([...classicRows.innerHTML.matchAll(/data-remove="(\d+)"/g)].map(match => match[1]), ["0", "1"],
       "the only admin can choose either sign-in to revoke without leaving the roster");
