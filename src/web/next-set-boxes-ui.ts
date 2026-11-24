@@ -181,12 +181,7 @@ function clusterBlock() {
     section.appendChild(fact(box.name, [box.podStatus, box.status === "unreachable" ? t("ui.next.box.off") : box.status].filter(Boolean).join(" · ")));
     if (box.error || box.status === "unreachable") section.appendChild(el("p", "why", box.error || podUnreachable(box.connectionError)));
     if (["failed", "unreachable", "interrupted"].includes(box.status)) {
-      var retry = el("button", "act", t("ui.next.boxset.retryConnection"));
-      retry.addEventListener("click", function () {
-        retry.disabled = true;
-        postJson("/api/personal-boxes/retry", { id: box.id }).then(function () { loadBoxSet(); refreshSoon(); }, function (error) { retry.disabled = false; failed(error); });
-      });
-      section.appendChild(retry);
+      section.appendChild(personalBoxRetry(box.id, loadBoxSet));
     }
   });
   return section;

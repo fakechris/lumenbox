@@ -46,6 +46,19 @@ function podUnreachable(detail) {
   return t("ui.next.box.podUnreachable", { why: detail || t("ui.next.box.healthPending") });
 }
 
+function personalBoxRetry(id, onRetried) {
+  var retry = el("button", "act", t("ui.next.boxset.retryConnection"));
+  retry.addEventListener("click", function () {
+    retry.disabled = true;
+    return postJson("/api/personal-boxes/retry", { id: id }).then(function () {
+      retry.disabled = false;
+      if (onRetried) onRetried();
+      refreshSoon();
+    }, function (error) { retry.disabled = false; failed(error); });
+  });
+  return retry;
+}
+
 /** Why this installation's own computer is not there, in words a person can act on. */
 function boxWhy(box) {
   var docker = boxes.state && boxes.state.docker;
@@ -70,6 +83,8 @@ function boxNotice() {
       var settingsLink = el("button", "act", t("ui.next.box.podSettings"));
       settingsLink.addEventListener("click", function () { openSettingsPane("boxes"); });
       strip.appendChild(settingsLink);
+    } else if (canDriveAgents()) {
+      strip.appendChild(personalBoxRetry(box.id));
     }
     return;
   }

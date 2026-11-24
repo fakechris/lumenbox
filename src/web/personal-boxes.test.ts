@@ -113,16 +113,36 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   const subtitles: string[] = [];
   const buttons: string[] = [];
   const notice: string[] = [];
-  const node = { appendChild() {}, addEventListener() {}, dataset: {}, replaceChildren() {} };
-  const strip = { ...node, replaceChildren: (...children: { value: string }[]) => notice.push(...children.map(child => child.value)) };
-  runInNewContext(NEXT_BOXES_JS + "\nObject.assign(boxes, input); renderBoxes(view); boxNotice();", {
+  const node = { appendChild() {}, dataset: {}, replaceChildren() {} };
+  const strip = {
+    ...node,
+    replaceChildren: (...children: { value: string }[]) => notice.splice(0, notice.length, ...children.map(child => child.value)),
+    appendChild: (child: { value: string }) => notice.push(child.value),
+  };
+  const chat = { box: computers.data.own };
+  let retry: (() => Promise<void>) | undefined;
+  let refreshes = 0;
+  const drawNotice: () => void = runInNewContext(NEXT_BOXES_JS + "\nObject.assign(boxes, input); renderBoxes(view); boxNotice(); boxNotice;", {
     input: { list: computers.data.boxes, own: computers.data.own, state: state.data.box },
-    view: node, initial: String, t: String, canOperateInstallation: () => false, chat: { box: computers.data.own },
+    view: node, initial: String, t: String, canOperateInstallation: () => false, canDriveAgents: () => true, chat,
+    refreshSoon: () => { refreshes++; }, failed: assert.fail,
+    postJson: async (path: string, body: { id: string }) => {
+      assert.equal(path, "/api/personal-boxes/retry");
+      assert.equal(body.id, personal.data.boxId);
+      const response = await request(path, "web:alice", body);
+      assert.equal(response.status, 200);
+      assert.equal(response.data.boxId, personal.data.boxId);
+    },
     $: (id: string) => id === "box-notice" ? strip : node,
     el: (tag: string, style: string, value: string) => {
       if (style === "why") subtitles.push(value);
       if (tag === "button") buttons.push(value);
-      return { ...node, dataset: {}, value };
+      return {
+        ...node, dataset: {}, value,
+        addEventListener: (event: string, action: () => Promise<void>) => {
+          if (event === "click" && value === "ui.next.boxset.retryConnection") retry = action;
+        },
+      };
     },
   });
   assert.match(subtitles[computers.data.boxes.findIndex((row: { id: string }) => row.id === computers.data.own)] ?? "", /^kubernetes · /);
@@ -130,6 +150,14 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.ok(subtitles.includes("ui.next.box.sharedKubernetes"));
   assert.deepEqual(notice, ["ui.next.box.sharedKubernetes"]);
   assert.ok(!buttons.includes("ui.next.box.start"));
+  const otherComputers = await request("/api/boxes", "web:bob");
+  assert.ok(!otherComputers.data.boxes.some((row: { id: string }) => row.id === personal.data.boxId));
+  chat.box = personal.data.boxId;
+  drawNotice();
+  assert.deepEqual(notice, ["ui.next.box.podUnreachable", "ui.next.boxset.retryConnection"]);
+  assert.ok(retry, "the driver can retry the unreachable personal box without opening admin settings");
+  await retry();
+  assert.equal(refreshes, 1);
 
   const shelf = await request("/api/templates/shelf", "web:alice");
   const shelfPage = page.slice(page.indexOf("function openShelf("), page.indexOf('$("shelfopen").onclick'));
