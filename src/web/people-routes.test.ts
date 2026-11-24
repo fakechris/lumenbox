@@ -88,6 +88,11 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.equal((await post(revoke, { principalId: bob.id, identity: bob.identities[0] })).status, 409, "a stale row click cannot revoke the last sign-in");
     assert.equal((await fetch(`${BASE}/api/me`, { headers: { cookie: laptop } })).status, 401);
     assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 200);
+    const adaAgain = (await (await post("/api/channels/invite", { principalId: ada.id })).json()) as Code;
+    await login(adaAgain.code, "Ada on the laptop");
+    const adaLaptop = (await people()).people.find(row => row.id === ada.id)!.identities.find(identity => !ada.identities.includes(identity))!;
+    assert.equal((await post(revoke, { principalId: ada.id, identity: adaLaptop }, { ...ui, authorization: "", cookie: adaCookie })).status, 200);
+    assert.equal((await people()).people.find(row => row.id === ada.id)?.lastAdmin, true);
 
     // Removing Bob takes him off the roster and signs him out of every browser at once.
     const pending = (await (await post("/api/channels/invite", { principalId: bob.id })).json()) as Code;

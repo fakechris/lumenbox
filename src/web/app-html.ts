@@ -2120,6 +2120,10 @@ $("setinvite").onclick = function () {
     .catch(function () { $("setinviteout").textContent = "{{ui.app.failed}}"; });
 };
 
+function hasOtherSignIn(person) {
+  return people.some(function (entry) { return entry !== person && entry.id === person.id && entry.identity; });
+}
+
 function renderPeople() {
   if (!people.length) {
     $("setpeople").innerHTML = '<div class="fieldnote" style="margin:0">{{ui.app.nobody-yet-add-a-person}}</div>';
@@ -2130,11 +2134,15 @@ function renderPeople() {
     var roles = ["viewer", "driver", "admin"].map(function (role) {
       return '<option value="' + role + '"' + (p.role === role ? " selected" : "") + ">" + ({ viewer: "{{ui.role.viewer}}", driver: "{{ui.role.driver}}", admin: "{{ui.role.admin}}" }[role] || role) + "</option>";
     }).join("");
+    var owner = window.ownerBadge && window.ownerBadge(p);
+    var roleControl = owner || '<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>";
+    var remove = '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>';
+    var removeControl = hasOtherSignIn(p) ? remove : owner ? "" :
+      p.role === "admin" && admins === 1 ? '<span class="fieldnote" style="margin:0">{{ui.app.only-admin}}</span>' : remove;
     return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
       '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +
-      ((window.ownerBadge && window.ownerBadge(p)) || ('<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>" +
-      (p.role === "admin" && admins === 1 ? '<span class="fieldnote" style="margin:0">{{ui.app.only-admin}}</span>' : '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>'))) + "</div>";
+      roleControl + removeControl + "</div>";
   }).join("");
 }
 
@@ -2196,7 +2204,7 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
     }).then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
       .catch(function (error) { $("setpeoplestatus").textContent = error.message; renderChannels(); });
   }
-  if (people.some(function (entry) { return entry !== person && entry.id === person.id; })) {
+  if (hasOtherSignIn(person)) {
     if (window.confirm(t("ui.app.remove-confirm", { name: person.name, identity: person.identity })))
       postRemoval("/api/principals/revoke-sign-in", { principalId: person.id, identity: person.identity });
     return;

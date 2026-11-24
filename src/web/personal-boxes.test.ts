@@ -469,13 +469,23 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const invitation = (await call("/api/channels/invite", { principalId: "bob" })).data.code;
     assert.ok(invitation);
     const page = APP_PAGE("en");
+    const renderPeople = page.slice(page.indexOf("function hasOtherSignIn("), page.indexOf("// A role changed in place"));
     const removeIdentity = /document\.getElementById\("setpeople"\)\.addEventListener\("click",[\s\S]*?\n}\);/.exec(page)?.[0];
     assert.ok(removeIdentity);
     const rows = people.flatMap(person => person.identities.map(identity => ({ ...person, identity })));
+    const adminRow = rows.find(row => row.id === "admin")!;
+    const classicRows = { innerHTML: "" };
+    const classic = { people: [adminRow], window: {}, esc: String, $: () => classicRows };
+    runInNewContext(renderPeople + "\nrenderPeople()", classic);
+    assert.doesNotMatch(classicRows.innerHTML, /data-remove=/, "the only admin’s last sign-in still cannot be removed");
+    classic.people.push({ ...adminRow, identity: "extra:admin" });
+    runInNewContext(renderPeople + "\nrenderPeople()", classic);
+    assert.deepEqual([...classicRows.innerHTML.matchAll(/data-remove="(\d+)"/g)].map(match => match[1]), ["0", "1"],
+      "the only admin can choose either sign-in to revoke without leaving the roster");
     const revokePath = "/api/principals/revoke-sign-in";
     assert.equal((await call(revokePath, { principalId: "bob", identity: "old:bob" })).status, 200);
     const writes: ReturnType<typeof call>[] = [];
-    runInNewContext(removeIdentity, {
+    runInNewContext(renderPeople + "\n" + removeIdentity, {
       people: rows, window: { confirm: () => true }, t: String, $: () => ({}), renderChannels() {},
       fetch: (path: string, init?: { body?: string }) => {
         assert.equal(path, revokePath);
