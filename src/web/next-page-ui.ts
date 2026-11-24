@@ -50,7 +50,7 @@ import { NEXT_NEED_JS } from "./next-need-ui.ts";
 import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
 import { NEXT_LINE_JS } from "./next-line-ui.ts";
 import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
-import { STRIP_TOKEN_JS } from "./token-url-ui.ts";
+import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts";
 
 const STYLE = `
 :root {
@@ -369,7 +369,7 @@ export const NEXT_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ui.next.title}}</title>
 <link rel="icon" href="data:,">
-<script>${STRIP_TOKEN_JS}</script>
+<script>${STRIP_TOKEN_JS}${SIGN_IN_AGAIN_JS}</script>
 <script src="/vendor/markdown-it.js"></script>
 <style>${STYLE}</style>
 </head>
