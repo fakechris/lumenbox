@@ -13,7 +13,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { APP_PAGE, NEXT_PAGE } from "./page-locale.ts";
+import { SIGN_IN_AGAIN_JS } from "./token-url-ui.ts";
 /** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
 const APP_HTML = APP_PAGE("en");
 
@@ -76,4 +78,41 @@ test("the whole inline page script parses — a syntax error breaks every featur
   const close = APP_HTML.indexOf("</script>", open);
   const js = APP_HTML.slice(open + "<script>".length, close);
   assert.doesNotThrow(() => new Function(js), "the page script must parse");
+});
+
+test("INV-2081: an API 401 reloads either page once into the server's sign-in recovery page", async () => {
+  for (const page of [NEXT_PAGE("en"), APP_HTML]) {
+    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
+    const first = scripts.findIndex(script => script.includes("function watchSignIn("));
+    assert.ok(first >= 0 && !scripts.slice(0, first).some(script => /\bfetch\(/.test(script)), "installed before the page's first request");
+  }
+  const load = (stamp?: string) => {
+    const store = new Map(stamp === undefined ? [] : [["lumenbox.signInReload", stamp]]);
+    const reloads: number[] = [];
+    let status = 200;
+    const window: Record<string, unknown> = { fetch: (input: string) => Promise.resolve({ url: "http://h" + input, status }) };
+    const sessionStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value) };
+    const location = { href: "http://h/", reload: () => reloads.push(1) };
+    vm.runInNewContext(SIGN_IN_AGAIN_JS, { window, sessionStorage, location, URL, Date, Number, String, Promise });
+    const fetch = window.fetch as (input: string) => Promise<{ status: number }>;
+    return { fetch, reloads, store, answer: (next: number) => { status = next; } };
+  };
+  const settled = (promise: Promise<unknown>) => Promise.race([promise.then(() => "arrived"), new Promise(done => setTimeout(() => done("held"), 20))]);
+
+  const page = load();
+  assert.equal(await settled(page.fetch("/api/agents")), "arrived", "an answered request passes through");
+  page.answer(401);
+  assert.equal(await settled(page.fetch("/api/agents")), "held", "the 401 never reaches the caller's toast");
+  assert.equal(await settled(page.fetch("/api/work")), "held");
+  assert.equal(page.reloads.length, 1, "a burst of 401s reloads once");
+  assert.ok(page.store.has("lumenbox.signInReload"));
+  const other = load();
+  other.answer(401);
+  assert.equal(await settled(other.fetch("/vendor/a2ui.js")), "arrived", "only the API's 401 is the sign-in ending");
+  assert.equal(other.reloads.length, 0);
+
+  const again = load(String(Date.now()));
+  again.answer(401);
+  assert.equal(await settled(again.fetch("/api/agents")), "arrived", "straight back to a 401 after the reload: the error shows, no loop");
+  assert.equal(again.reloads.length, 0);
 });

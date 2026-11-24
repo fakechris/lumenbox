@@ -20,7 +20,7 @@
 
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
@@ -63,14 +63,19 @@ export function vendorPath(): string {
 /**
  * The ShowUI bundle (docs/79): built from src/ by `npm run build:vendor` into vendor/,
  * not resolved from node_modules. Same precedence as the Markdown build — the box's
- * copy first, then the repository's. Returned whether or not it exists, so the caller's
- * read says what is missing.
+ * copy first, then the one beside the bundle (the image ships it at
+ * /opt/hostd/vendor/a2ui.js, next to hostd.mjs, and a server started without
+ * AGENTBOX_VENDOR_DIR — the Kubernetes organisation deployment — must still find it),
+ * then the repository's. Returned whether or not it exists, so the caller's read says
+ * what is missing. `moduleUrl` is this module's URL; a test passes a bundle's.
  */
-export function a2uiPath(): string {
+export function a2uiPath(moduleUrl: string = import.meta.url): string {
   const dir = process.env.AGENTBOX_VENDOR_DIR;
   if (dir) {
     const copied = join(dir, "a2ui.js");
     if (existsSync(copied)) return copied;
   }
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "..", "vendor", "a2ui.js");
+  const bundled = fileURLToPath(new URL("./vendor/a2ui.js", moduleUrl));
+  if (existsSync(bundled)) return bundled;
+  return fileURLToPath(new URL("../../vendor/a2ui.js", moduleUrl));
 }

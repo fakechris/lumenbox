@@ -105,6 +105,10 @@ test("a box that cannot start says why, removes its secret and keeps its volumes
 test("INV-2052: namespace quota, admission, RBAC, and Pending give the member and operator distinct diagnostics", async () => {
   const cases = [
     ["ResourceQuota", "exceeded quota: pods=3", "namespace capacity"],
+    // INV-2081: Kubernetes's own 403 wording for a quota and a LimitRange, which are not RBAC.
+    ["ResourceQuota", 'pods "x" is forbidden: failed quota: compute: must specify limits.cpu', "LimitRange default"],
+    ["LimitRange", 'pods "x" is forbidden: maximum memory usage per Container is 8Gi, but limit is 65Gi', "LimitRange and the box's resources"],
+    ["LimitRange", 'pods "x" is forbidden: minimum cpu usage per Container is 100m, but request is 50m', "LimitRange and the box's resources"],
     ["AdmissionDenied", "admission webhook denied the request", "admission policy"],
     ["RBAC", "serviceaccount cannot create resource pods", "ServiceAccount"],
     ["ContainerCreating", undefined, "scheduling and container status"],
