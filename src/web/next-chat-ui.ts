@@ -214,13 +214,18 @@ function drawEntries(target, entries, between, conversation) {
     if (entry.at) lastAt = entry.at;
     if (entry.kind === "tools") {
       (entry.tools || []).forEach(function (tool) { if (tool.question && tool.result === undefined) lastAsk = tool; });
+      // A colleague asked for a result is a line of its own, not a folded step: whom it waits on, and whether they answered.
+      (entry.tools || []).forEach(function (tool) {
+        if (!tool.delegate || tool.isError) return;
+        flush(); target.appendChild(delegateRow(tool.delegate));
+      });
       (entry.tools || []).forEach(function (tool) {
         if (!tool.surface || tool.isError) return;
         flush();
         target.appendChild(feedSurface(tool.surface.surfaceId, tool.surface.title, tool.surface.messages || [], true, conversation));
         drawn[tool.surface.surfaceId] = true;
       });
-      steps = steps.concat((entry.tools || []).filter(function (tool) { return !tool.question && !(tool.surface && !tool.isError); }));
+      steps = steps.concat((entry.tools || []).filter(function (tool) { return !tool.question && !((tool.surface || tool.delegate) && !tool.isError); }));
       return;
     }
     if (entry.kind === "text" && entry.role === "user") lastAsk = null; // answered by what was said next
@@ -236,6 +241,19 @@ function drawEntries(target, entries, between, conversation) {
   });
   flush();
   return { lastAsk: lastAsk, drawn: drawn };
+}
+
+/** A colleague asked for a result (INV-2037): waiting or answered, and one click to their side of it. */
+function delegateRow(asked) {
+  var row = el("div", "sent"), mate = asked.toId && next.agents[asked.toId];
+  row.appendChild(el("div", "why", t(asked.reported ? "ui.next.chat.delegateReported" : "ui.next.chat.delegateWaiting", { name: asked.to })));
+  if (mate) {
+    var open = el("button", "act", t("ui.next.chat.delegateOpen", { name: asked.to }));
+    open.type = "button"; open.style.alignSelf = "flex-start";
+    open.addEventListener("click", function () { openChat(asked.toId); });
+    row.appendChild(open);
+  }
+  return row;
 }
 
 /** The agent's one conversation: what was said here, with its topics in other chats set among it by time. */
@@ -298,7 +316,7 @@ function renderChat(view) {
   $("view-title").textContent = agent ? agent.name : t("ui.next.nav.chat"); $("view-title").title = agent ? t("ui.next.thread.agent") : "";
   $("view-hint").textContent = agent ? (agent.title || agent.description || "") : "";
   $("composer").hidden = !agent;
-  renderModelNotice();
+  renderModelNotice(); renderWatchOnly();
   $("composer-text").placeholder = agent ? t("ui.next.chat.placeholder", { name: agent.name }) : "";
   if (agent && chat.loading !== chat.agentId && chat.loadedFor !== chat.agentId) loadThread();
   if (chat.loadedFor === chat.agentId || !agent) renderThread(view);
@@ -350,7 +368,12 @@ async function sendMessage() {
   chat.entries = chat.entries.concat([{ kind: "text", role: "user", text: text }]);
   chat.live = { text: "", doing: "" }; chat.jump = true;
   render();
-  postJson("/api/prompt", { agent: id, conversation: chat.conversation, text: text }).catch(function (error) { chat.live = null; failed(error); loadThread(); });
+  postJson("/api/prompt", { agent: id, conversation: chat.conversation, text: text }).catch(function (error) {
+    // Refused, the words are given back and the server's own sentence is shown (INV-2047); a refusal may be a role that changed.
+    chat.live = null; failed(error); loadThread();
+    if (chat.agentId === id && !input.value.trim()) input.value = text;
+    rereadRole();
+  });
 }
 
 /** Live events for the open conversation: words as they come, what it is doing, and a re-read when the turn ends. */

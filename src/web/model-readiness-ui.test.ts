@@ -16,7 +16,7 @@ test("unconfigured send keeps the draft and shows the Model settings entry point
     el: (_tag: string, _cls: string, text: string) => ({ ...node(), text }), t: (key: string) => key,
     getJson: async () => ({ configured }), postJson: async () => { posts++; },
     addressed: () => null, need: {}, sendReply: () => false, render: () => {},
-    canOperateInstallation: () => admin,
+    canOperateInstallation: () => admin, settings: { me: null },
     openSettingsPane: (pane: string) => { opened = pane; },
   });
   vm.runInContext(NEXT_CHAT_JS + NEXT_COMPOSER_JS + '; chat.agentId = "ada";', context);

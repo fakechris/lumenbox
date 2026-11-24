@@ -158,6 +158,7 @@ h2.group:first-child { margin-top: 0; }
 .composer { flex: none; padding: 10px 24px 16px; }
 .composer form { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea { flex: 1; min-height: 44px; max-height: 180px; resize: none; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; }
+.composer textarea:disabled, .composer button:disabled { opacity: .45; cursor: not-allowed; } /* a viewer: shut, and looking it (INV-2047) */
 .ask { align-self: flex-start; max-width: 82%; background: var(--warn-soft); border-radius: 14px; padding: 10px 14px; }
 .ask .acts { margin-top: 8px; flex-wrap: wrap; }
 .plan { align-self: stretch; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 9px 14px; font-size: 13px; }
@@ -431,6 +432,7 @@ export const NEXT_HTML = `<!doctype html>
   <div class="composer" id="composer" hidden>
     <div class="picker" id="composer-menu" hidden></div>
     <div class="reply-to" id="reply-to" hidden></div>
+    <div class="why" id="composer-watch" role="status" hidden></div>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
   </div>
 </main>
