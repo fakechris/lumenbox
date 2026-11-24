@@ -14,9 +14,12 @@ export const SETUP_GUIDE_JS = String.raw`
 /** First-use guidance is separate from current connectivity (INV-1795). */
 var guideForced = false, setupDismissed = {};
 function refreshSetup() {
+  var card = $("setupcard");
+  if (!card || (myRole !== "admin" && myRole !== "driver")) return;
+  var selected = currentBox;
   return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
-    var card = $("setupcard");
-    if (!card) return;
+    if (selected !== currentBox) return;
+    if (!selected && (myRole !== "driver" || s.hasPersonalBox !== false)) { card.style.display = "none"; return; }
     // Each step also names the command that does the same thing (INV-542): an
     // installation run on a server has no window to click in, and the person setting it
     // up over ssh was reading a page that assumed a mouse.
@@ -31,18 +34,22 @@ function refreshSetup() {
       searchSkipped = localStorage.getItem("lumen-skip-search") === "1";
       doorSkipped = localStorage.getItem("lumen-skip-door") === "1";
     } catch (error) {}
-    var storageKey = "lumen-setup-closed:" + s.installationId;
-    var established = !!s.established;
+    var storageKey = "lumen-setup-closed:" + s.installationId + ":" + (myIdentity || "operator") + ":" + selected;
+    var here = (s.byBox && s.byBox[selected]) || {}, established = !!here.established;
     var dismissed = setupDismissed[storageKey];
     try { dismissed = dismissed || localStorage.getItem(storageKey) === "1"; } catch (error) {}
-    var steps = [
+    var steps = myRole === "admin" ? [
       { done: s.key, head: t("ui.setup.key"), sub: t("ui.setup.keyWhy"), act: t("ui.setup.keyAct"), cli: "{{ui.app.settings-model}}", go: function () { openSettings("model"); } },
-      { done: s.box || established, head: t("ui.setup.box"), sub: t(established && !s.box ? "ui.setup.boxOffline" : "ui.setup.boxWhy"), act: t(established ? "ui.setup.boxManage" : "ui.setup.boxAct"), cli: established ? "" : "agentbox box up", go: function () { openSettings("boxes"); } },
-      { done: s.agentTurn, head: t("ui.setup.agent"), sub: t("ui.setup.agentWhy"), act: t("ui.setup.agentAct"), cli: "agentbox agent new <name>", go: openShelf },
+      { done: here.box || established, head: t("ui.setup.box"), sub: t(established && !here.box ? "ui.setup.boxOffline" : "ui.setup.boxWhy"), act: t(established ? "ui.setup.boxManage" : "ui.setup.boxAct"), cli: established ? "" : "agentbox box up", go: function () { openSettings("boxes"); } },
+      { done: here.agent, head: t("ui.setup.agent"), sub: t("ui.setup.agentWhy"), act: t("ui.setup.agentAct"), cli: "agentbox agent new <name>", go: function () { openShelf(selected); } },
       { done: s.search || searchSkipped, skip: "search", head: t("ui.setup.search"), sub: t("ui.setup.searchWhy"), act: t("ui.setup.searchAct"), cli: "{{ui.app.settings-model}}", go: function () { openSettings("model"); } },
       { done: s.door || doorSkipped, skip: "door", head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "{{ui.app.settings-channels-no-cli-yet}}", go: function () { openSettings("doors"); } },
-      { done: s.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "{{ui.app.agentbox-chat}} <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
-    ];
+      { done: here.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "{{ui.app.agentbox-chat}} <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
+    ] : selected ? [{ done: agents.some(function (agent) { return agent.boxId === selected && !agent.hidden; }), head: t("ui.next.setup.agent"), sub: "", act: t("ui.setup.agentAct"), go: function () { openShelf(selected); } }] : [];
+    if (myRole === "driver" && s.hasPersonalBox !== undefined) steps.unshift({
+      done: s.hasPersonalBox, head: t("ui.next.setup.personalBox"), sub: "", act: t("ui.next.setup.go"),
+      go: function () { openShelf(selected); $("personalcreate").focus(); },
+    });
     if ((established || dismissed || steps.every(function (x) { return x.done; })) && !guideForced) { card.style.display = "none"; return; }
     card.style.display = "";
     card.innerHTML = '<div class="setup-guide">' +
@@ -70,7 +77,6 @@ function refreshSetup() {
     };
   }).catch(function () {});
 }
-refreshSetup();
 setInterval(refreshSetup, 30000);
 $("guidebtn").onclick = function () { guideForced = true; refreshSetup(); };
 

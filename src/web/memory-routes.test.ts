@@ -55,9 +55,11 @@ test("memory is browsed by what the caller may drive, changed with a version, re
     // A1: an agent in a box Dana is not a member of is not in her summary, and not
     // openable by name. Before INV-540 this was a per-agent flag; authority lives on the
     // box, so the box answers it.
-    const summary = (await (await call("/api/memory", dana)).json()) as { agents: { agentId: string; live: number }[] };
+    const summary = (await (await call("/api/memory", dana)).json()) as { agents: { agentId: string; boxId: string; live: number }[]; boxes: { id: string; name: string }[] };
     assert.deepEqual(summary.agents.map(a => a.agentId), [ada]);
     assert.equal(summary.agents[0]?.live, 1);
+    assert.deepEqual(summary.boxes, [{ id: registry.box.id, name: registry.box.name }]);
+    assert.equal(summary.agents[0]?.boxId, summary.boxes[0]?.id, "the UI can label each agent's box");
     assert.equal((await call(`/api/memory/agent?agent=${secret}`, dana)).status, 403);
     assert.equal((await call("/api/memory/change", dana, { agent: secret, scope: "own", key: "private thing", version: "x" })).status, 403);
     assert.equal((await call("/api/memory/source", dana, { agent: secret, action: "preview", source: "message:region" })).status, 403);

@@ -19,6 +19,18 @@ export type SignInDoor = { id: string; name: string };
 /** Where `LOGIN_HTML` takes its doors: replaced by nothing when there are none. */
 export const SIGN_IN_DOORS_MARKER = "<!--sign-in-doors-->";
 
+export function wantsHtml(accept: string | undefined): boolean {
+  return (accept ?? "").split(",").some(value => {
+    const [type, ...params] = value.trim().toLowerCase().split(";");
+    return type?.trim() === "text/html" && !params.some(param => /^\s*q\s*=\s*0(?:\.0*)?\s*$/.test(param));
+  });
+}
+
+export function feishuCallbackUrl(publicUrl: string | undefined, channelId: string): string | undefined {
+  const base = publicUrl?.trim().replace(/\/+$/, "");
+  return base ? `${base}/auth/${channelId}/callback` : undefined;
+}
+
 /**
  * The doors a person may sign in through on the web: Feishu doors whose app is set, and only on an
  * installation with a public address — the vendor sends the person back to it, so without one the
