@@ -169,7 +169,11 @@ export async function boxUpdateRoute(route: string, service: BoxUpdateService, d
       if (apply !== undefined) await setCpuLimit(container, apply).catch((error: unknown) => { notApplied = `Saved; the running box did not take it (${error instanceof Error ? error.message : String(error)}). It applies when the box is next created.`; });
     }
     const live = await cpuLimitOf(container).catch(() => undefined);
-    return { status: 200, body: { engine: engine ?? null, limit: live ?? null, chosen: fromEnv ?? loadConfig().boxCpus ?? null, fromEnvironment: fromEnv !== undefined, default: engine !== undefined ? defaultCpusFor(engine) : null, ...(notApplied !== undefined ? { notApplied } : {}) } };
+    return { status: 200, body: {
+      container, engine: engine ?? null, limit: live ?? null, chosen: fromEnv ?? loadConfig().boxCpus ?? null,
+      fromEnvironment: fromEnv !== undefined, default: engine !== undefined ? defaultCpusFor(engine) : null,
+      ...(notApplied !== undefined ? { notApplied } : {}),
+    } };
   }
   if (route === "POST /api/box/reset") {
     if (deps.refusedAdmin()) return { status: 0, body: null };

@@ -251,6 +251,7 @@ ${AGENT_ROW_STYLE}
   .toolchip.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
   .fieldnote { font-size: 12px; color: var(--muted); line-height: 1.6; }
   .fieldnote:empty { display: none; }
+  #setconnsetup { white-space: pre-line; overflow-wrap: anywhere; }
   .modal .actions { display: flex; gap: 10px; padding-top: 2px; }
 
   #shell { flex: 1; min-height: 0; display: flex; }
@@ -825,6 +826,7 @@ ${AGENT_ROW_STYLE}
   #recordings a { margin-right: 10px; }
   /* One line, because it sits between the desktop and the activity feed. */
   #clipbar { display: flex; gap: 6px; align-items: center; }
+  #desktopactions[hidden], #clipbar[hidden] { display: none; }
   #clipbar b { font-family: var(--font-mono); font-size: 11px; }
   #clipbar input {
     flex: 1; min-width: 0; padding: 4px 9px; border-radius: var(--radius-input);
@@ -991,7 +993,7 @@ ${WORK_ATTENTION_HTML}
       <a href="#" id="tabauto" class="tab">{{ui.page.automations}}</a>
       <a href="#" id="tabaudit" class="tab">{{ui.page.audit}}</a>
     </span>
-    <span class="headactions" id="desktopactions">
+    <span class="headactions" id="desktopactions" hidden>
       <a id="rec" href="#" title="{{ui.page.record-this-desktop}}">&#9679;</a>
       <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">{{ui.page.take-over}}</a>
       <a id="handback" href="#" class="btn sm" style="text-decoration:none;display:none" title="{{ui.page.give-the-desktop-back-to}}">{{ui.page.hand-back}}</a>
@@ -1006,7 +1008,7 @@ ${WORK_ATTENTION_HTML}
     <div class="bar" id="desktopstart"><button class="btn" id="opendesktop" type="button">{{ui.page.open-desktop}}</button><span> {{ui.page.starts-when-you-need-it}}</span></div>
     <div class="desktopwrap"><iframe id="vnc" title="{{ui.page.box-desktop}}"></iframe></div>
     <div class="bar" id="recordings" style="display:none"></div>
-    <div class="bar" id="clipbar">
+    <div class="bar" id="clipbar" hidden>
       <b>{{ui.page.clipboard}}</b>
       <input id="cliptext" placeholder="{{ui.page.text-to-paste-into-the}}" spellcheck="false">
       <button id="clipin" class="btn sm" title="{{ui.page.put-this-on-the-boxs}}">&rarr; box</button>
@@ -1663,7 +1665,7 @@ function renderConnectors() {
         select.innerHTML = connProviders.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.title) + "</option>"; }).join("");
         select.onchange = function () {
           var p = connProviders.filter(function (x) { return x.id === select.value; })[0];
-          $("setconnsetup").textContent = p ? p.setup : "";
+          $("setconnsetup").textContent = p ? p.setup + (p.kind === "authorization_code" && data.redirectUri ? "\\n" + data.redirectUri : "") : "";
         };
         select.onchange();
       }
@@ -3776,6 +3778,7 @@ function showDesktop(id) {
   var requested = openedDesktops.has(id);
   $("desktopstart").style.display = requested ? "none" : "";
   if (!requested || $("desktopview").style.display === "none") {
+    setDesktopControls(false);
     frame.removeAttribute("src");
     frame.removeAttribute("srcdoc");
     frame.removeAttribute("data-offline");
@@ -3802,6 +3805,7 @@ function showDesktop(id) {
     // attached agent's name. The state refresh calls back here every few seconds, so the
     // real desktop takes over as soon as the box is connected again.
     $("full").style.display = "none";
+    setDesktopControls(false);
     if (frame.getAttribute("data-offline") !== agent.boxId) {
       frame.removeAttribute("src");
       frame.setAttribute("srcdoc", desktopOfflineDoc(box.name));
@@ -3820,6 +3824,7 @@ function showDesktop(id) {
   // Only reload when it is a different desktop: re-setting src restarts noVNC and
   // flashes "Connecting…", so switching back and forth must not thrash it.
   if (frame.getAttribute("src") !== embeddedUrl) {
+    setDesktopControls(false);
     frame.removeAttribute("data-offline");
     frame.removeAttribute("srcdoc");
     // A browser keeps the old document visible until the new one commits, so between two
@@ -3829,7 +3834,12 @@ function showDesktop(id) {
     frame.setAttribute("src", embeddedUrl);
   }
 }
-$("vnc").onload = function () { this.style.opacity = ""; };
+function setDesktopControls(ready) { $("desktopactions").hidden = $("clipbar").hidden = !ready; }
+$("vnc").onload = function () {
+  this.style.opacity = "";
+  var doc = this.contentDocument;
+  setDesktopControls(!this.hasAttribute("data-offline") && !!doc && doc.URL !== "about:blank" && !doc.documentElement.dataset.desktopState);
+};
 
 /** The document the pane shows for a box that is not connected: black like the desktop, no picture. */
 function desktopOfflineDoc(boxName) {

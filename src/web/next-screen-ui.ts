@@ -84,6 +84,23 @@ function filesBlock() {
   return box;
 }
 
+function offlineScreen(box) {
+  var state = el("section", "screen-offline"), actions = el("div", "acts");
+  state.appendChild(el("h2", "group", t("ui.next.screen.offline")));
+  state.appendChild(el("p", "", t("ui.next.screen.offlineNote", { name: box.name })));
+  if (box.id === boxes.own && canOperateInstallation() && !(boxes.state && boxes.state.backend === "kubernetes")) {
+    var start = el("button", "act-primary", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
+    start.disabled = boxes.starting;
+    start.addEventListener("click", startBox);
+    actions.appendChild(start);
+    if (boxes.failed) state.appendChild(el("p", "", t("ui.next.box.failed", { why: boxes.failed })));
+  }
+  var computers = el("button", "act", t("ui.next.screen.computers"));
+  computers.addEventListener("click", function () { screen2.open = false; navigateView("boxes"); });
+  actions.appendChild(computers); state.appendChild(actions);
+  return state;
+}
+
 function renderScreen() {
   var pane = $("screen"), agent = next.agents[chat.agentId], body = $("screen-body");
   var shown = screen2.open && next.view === "chat" && !!agent;
@@ -93,13 +110,22 @@ function renderScreen() {
   if (!shown) { body.replaceChildren(); return; }
   document.querySelectorAll("[data-screen]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.screen === screen2.tab)); });
   if (screen2.tab === "files") { body.replaceChildren(filesBlock()); return; }
+  var box = boxById(agent.boxId);
+  if (box && box.connected === false) { body.replaceChildren(offlineScreen(box)); return; }
   // The frame is kept while it shows the same desktop: setting it again restarts the connection.
   var frame = body.querySelector("iframe"), wanted = agent.desktopUrl ? agent.desktopUrl + "&embedded=1" : "";
   if (!wanted) { body.replaceChildren(el("p", "empty", t("ui.next.screen.none"))); return; }
   if (!frame || frame.getAttribute("src") !== wanted) {
     frame = el("iframe"); frame.setAttribute("src", wanted); frame.title = t("ui.next.screen.desktop");
     var full = el("a", "why", t("ui.next.screen.full")); full.href = agent.desktopUrl; full.target = "_blank"; full.rel = "noopener";
-    body.replaceChildren(frame, full, el("div", "desk"));
+    var controls = el("div", "screen-controls");
+    controls.hidden = true;
+    controls.appendChild(full); controls.appendChild(el("div", "desk"));
+    frame.addEventListener("load", function () {
+      var doc = frame.contentDocument;
+      controls.hidden = !doc || doc.URL === "about:blank" || !!doc.documentElement.dataset.desktopState;
+    });
+    body.replaceChildren(frame, controls);
   }
   body.querySelector(".desk").replaceWith(deskControls(agent));
 }

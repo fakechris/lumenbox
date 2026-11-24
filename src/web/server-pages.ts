@@ -57,17 +57,20 @@ export function oauthResultPage(result: { provider: string } | { why: string }, 
 
 /**
  * The page a desktop iframe shows until noVNC answers: the desktop's own black, one
- * quiet line, and a reload every two seconds. Standing in for an error response from
- * boxd, so the frame never renders raw JSON or text.
+ * quiet line and a reload every two seconds during startup; a retry when it fails.
  */
-export function desktopWaitingPage(reason: string, locale: Locale = "en"): string {
+export function desktopWaitingPage(reason: string, locale: Locale = "en", loading = reason === ""): string {
   return (
-    `<!doctype html><html lang="${lang(locale)}"><head><meta charset="utf-8">` +
-    `<meta http-equiv="refresh" content="2"><title>${escapeHtml(tr("page.desktop.title", locale))}</title>` +
-    "<style>html,body{margin:0;height:100%;background:#000;color:#8a8a8a;" +
+    `<!doctype html><html lang="${lang(locale)}" data-desktop-state="${loading ? "starting" : "failed"}"><head><meta charset="utf-8">` +
+    (loading ? '<meta http-equiv="refresh" content="2">' : "") +
+    `<title>${escapeHtml(tr("page.desktop.title", locale))}</title>` +
+    "<style>html,body{margin:0;height:100%;background:#000;color:#ddd;" +
     "font:13px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}" +
     "body{display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;box-sizing:border-box}" +
-    "small{display:block;margin-top:8px;color:#555}</style></head>" +
-    `<body><div>${escapeHtml(tr("page.desktop.starting", locale))}<small>${escapeHtml(reason)}</small></div></body></html>`
+    "small{display:block;margin:8px 0;color:#aaa;overflow-wrap:anywhere}a{display:inline-block;color:inherit;padding:6px}</style></head>" +
+    `<body><div>${escapeHtml(tr(loading ? "page.desktop.starting" : "page.desktop.failed", locale))}` +
+    (reason ? `<small>${escapeHtml(reason)}</small>` : "") +
+    (loading ? "" : `<a href="">${escapeHtml(tr("page.desktop.retry", locale))}</a>`) +
+    "</div></body></html>"
   );
 }

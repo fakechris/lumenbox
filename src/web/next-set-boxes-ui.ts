@@ -83,16 +83,18 @@ function limitsAndResetBlock() {
     if (limits2.fromEnvironment) box.appendChild(el("p", "why", t("ui.next.boxset.cpusFromEnv")));
     if (limits2.notApplied) box.appendChild(el("p", "why", limits2.notApplied));
   }
-  // Starting the box over throws away everything in it that is not in its work folder: its name must be typed.
+  var name = limits2 && limits2.container;
+  if (!name) return box;
   var fold = el("details", "fold"), body = el("div", "fold-body"), typed = el("input"), reset = el("button", "act-danger", t("ui.next.boxset.reset"));
   fold.appendChild(el("summary", "", t("ui.next.boxset.resetTitle")));
-  body.appendChild(el("p", "why", t("ui.next.boxset.resetNote")));
-  typed.placeholder = t("ui.next.boxset.resetPlaceholder");
+  body.appendChild(el("p", "guidance", t("ui.next.boxset.resetNote")));
+  typed.autocomplete = "off"; typed.spellcheck = false;
   reset.addEventListener("click", function () {
     if (!typed.value.trim()) { typed.focus(); return; }
     postJson("/api/box/reset", { confirm: typed.value.trim() }).then(function () { toast(t("ui.next.boxset.resetStarted")); loadBoxSet(); }, failed);
   });
-  body.appendChild(typed); body.appendChild(reset); fold.appendChild(body); box.appendChild(fold);
+  body.appendChild(labelled(t("ui.next.boxset.resetLabel", { name: name }), typed));
+  body.appendChild(reset); fold.appendChild(body); box.appendChild(fold);
   return box;
 }
 
