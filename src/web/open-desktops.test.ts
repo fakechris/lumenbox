@@ -98,6 +98,13 @@ test("removing a person or signing them out closes the desktops they have open; 
     await within(upstreamClosed[0]!, "Bob's connection to the box daemon");
     assert.ok(await stillOpen(caraScreen.socket), "nobody else's screen is touched");
 
+    // Taken off the box's members while still on the roster: the box is no longer his to watch.
+    const bobAgain = await openDesktop(await signIn("bob"));
+    const narrowed = await post("/api/boxes/update", { name: registry.defaultBox().name, members: ["cara"] });
+    assert.equal(narrowed.status, 200, await narrowed.text());
+    await within(bobAgain.closed, "Bob's desktop after the box stopped being his");
+    assert.ok(await stillOpen(caraScreen.socket), "a member who stays keeps her screen");
+
     // Cara's token comes from her browser's sign-in, and the box is for Bob and Cara by name.
     const minted = await post("/api/mcp/tokens", { label: "Cara's IDE" }, { "content-type": "application/json", cookie: caraCookie });
     const { token } = (await minted.json()) as { token: string };

@@ -793,8 +793,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const person = principals.list().find(person => person.id === owner);
       return !personalBoxesStopping && person !== undefined && person.identities.length > 0 && roleAtLeast(person.role, "driver") && directoryQuotaContext(owner).eligible;
     },
-    attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); },
-    detach: id => { orchestrator.detachBox(id); }, residents: id => registry.agentsIn(id).length,
+    attach: entry => { if (registry.boxById(entry.id)) registry.updateBox(entry.id, { endpoint: entry.endpoint, members: entry.members }); else registry.attachBox(entry); openDesktops.recheck(); },
+    detach: id => { orchestrator.detachBox(id); openDesktops.recheck(); }, residents: id => registry.agentsIn(id).length,
     driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
   }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
 
@@ -6049,6 +6049,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               ...(members !== undefined ? { members } : {}),
             });
             if (members !== undefined) {
+              openDesktops.recheck(); // who may stay on its open desktops changed too (INV-2071)
               log(`box ${name} is now for ${members === "everyone" ? "everyone" : members.map(id => principals.list().find(person => person.id === id)?.name ?? id).join(", ")}`);
             }
             log(`box ${name} moved to ${result.box.endpoint?.baseUrl ?? "(no endpoint)"}: ${result.detail}`);
@@ -6067,7 +6068,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             if (target && mayReadBox(target.id) && personalBoxes.manages(target.id)) { send(res, 409, apiError("personal-box-remove")); return; }
             if (refusedRole("admin")) return;
             if (target && personalBoxes.manages(target.id)) { send(res, 409, apiError("personal-box-remove")); return; }
-            const entry = orchestrator.detachBox(String(body.name ?? ""));
+            const entry = orchestrator.detachBox(String(body.name ?? "")); openDesktops.recheck();
             log(`detached box ${entry.name} (${entry.id})`);
             send(res, 200, { ok: true, box: entry });
           } catch (error) {
