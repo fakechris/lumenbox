@@ -132,6 +132,29 @@ try {
     assert.equal(await page.locator("#setupcard").isVisible(), false);
     setup.installationId = "another-installation"; await page.evaluate(() => refreshSetup());
     assert.equal(await page.locator("#setupcard").isVisible(), true);
+    if (lang === "en") {
+      await page.locator("[data-setup-close]").click();
+      await page.setViewportSize({ width: 1280, height: 841 });
+      await page.route("**/api/state", async route => {
+        const response = await route.fetch(), state = await response.json();
+        state.box.connected = true;
+        await route.fulfill({ response, json: state });
+      });
+      await page.route("**/api/automations", route => route.request().method() === "POST"
+        ? route.fulfill({ status: 503, json: { code: "no-box", error: "The computer is offline." } }) : route.continue());
+      await page.evaluate(() => refresh());
+      await page.locator("#tabauto").click();
+      await page.locator("#autonew").click();
+      await page.locator("#autoname").fill("Retained automation");
+      await page.locator("#autobody").fill("Keep this draft when the computer disconnects.");
+      await page.locator('#autopresets button[data-cron="0 * * * *"]').click();
+      await page.locator("#autosave").click();
+      await page.locator("#autocomputer").waitFor({ state: "visible" });
+      assert.equal(await page.locator("#autoname").inputValue(), "Retained automation");
+      await page.locator("#autosave").click({ trial: true });
+      await page.locator("#autocancel").click();
+      await page.locator("#autocreate").waitFor({ state: "hidden" });
+    }
     assert.deepEqual(errors, []);
     await context.close();
   }

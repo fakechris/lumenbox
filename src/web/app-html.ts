@@ -1050,7 +1050,7 @@ ${WORK_ATTENTION_HTML}
       <a href="#" id="autorefresh" class="dim" style="font-size:12px">{{ui.page.refresh}}</a>
     </div>
     ${CLASSIC_AUTO_COMPUTER_HTML}
-    <div id="autocreate" style="display:none;padding:16px;border-bottom:1px solid var(--border)">
+    <div id="autocreate" style="display:none;overflow-y:auto;padding:16px;border-bottom:1px solid var(--border)">
       <div style="display:flex;flex-direction:column;gap:12px">
         <!-- Name -->
         <div>
