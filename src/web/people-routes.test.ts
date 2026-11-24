@@ -207,6 +207,17 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.deepEqual(withFeishu.principals.find(person => person.id === ada.id)?.usableSignIns, [freshIdentity, feishuIdentity]);
     assert.equal((await post(revoke, { principalId: ada.id, identity: freshIdentity }, feishuHeaders)).status, 200);
 
+    // INV-2138: links from before INV-2090 carry no expiry. The browser Ada is in now has proven its link works, so she can cut off a lost laptop's.
+    const lostLaptop = "web:fedcba987654";
+    roster.reload();
+    roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [lostLaptop, legacyIdentity] } : person));
+    const legacySession = { "content-type": "application/json", cookie: sessionCookie(legacyIdentity, sessionKey("t0k")).split(";")[0]! };
+    assert.equal((await fetch(`${BASE}/api/me`, { headers: legacySession })).status, 200);
+    const ownUndated = await post(revoke, { principalId: ada.id, identity: legacyIdentity }, legacySession);
+    assert.equal(ownUndated.status, 409, "the other undated link is not known to work");
+    assert.equal((await ownUndated.json()).code, "sign-in-last-admin");
+    assert.equal((await post(revoke, { principalId: ada.id, identity: lostLaptop }, legacySession)).status, 200, "the lost laptop's link can be revoked");
+
     roster.reload();
     roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [oldFeishu] } : person));
     assert.deepEqual((await people()).people.find(row => row.id === ada.id)?.identities, [oldFeishu]);

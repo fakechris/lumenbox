@@ -10,6 +10,7 @@
  */
 import { apiError } from "./api-error.ts";
 import { invitationLink } from "./sign-in.ts";
+import { isInviteBrowserIdentity } from "./session.ts";
 import { soleAdmin, type Principal, type Principals, type Role } from "../host/principals.ts";
 import type { Invite } from "../host/invite-redeem.ts";
 import { doorOfIdentity } from "../host/self-merge.ts";
@@ -104,7 +105,10 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
       const identities = person.identities.filter(entry => entry !== identity);
       if (identity === deps.currentSessionIdentity || !deps.retiredSignIn(person, identity)) {
         if (identities.length === 0) return { status: 409, body: apiError("sign-in-last") };
-        if (soleAdmin(roster) === person.id && !deps.usableSignIns({ ...person, identities }).length)
+        // The browser making this request proves its own invite link works, recorded expiry or not (INV-2138); a session on a removed channel proves nothing about signing in again.
+        const current = deps.currentSessionIdentity;
+        const liveHere = current !== undefined && identities.includes(current) && isInviteBrowserIdentity(current);
+        if (soleAdmin(roster) === person.id && !liveHere && !deps.usableSignIns({ ...person, identities }).length)
           return { status: 409, body: apiError("sign-in-last-admin") };
       }
       principals.save(roster.map(entry => entry.id === person.id ? { ...entry, identities } : entry));
