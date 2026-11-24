@@ -57,10 +57,13 @@ test("an auto routine's Run now is a real turn; with the chat held it is refused
 
     // Slipped past the check (the chat is busy, not yet waiting): the message is not let in, so the run fails with why and is taken back.
     focus.settle(work, "running");
-    assert.deepEqual(await host.scheduler.runNow(slug), { ok: true });
-    const unstarted = await finished(host, slug);
-    assert.equal(unstarted?.outcome, "failed");
-    assert.match(unstarted?.reason ?? "", /its turn did not start: Mia did not take it up \(busy with other work in this chat\)/);
+    for (let click = 0; click < 3; click++) {
+      assert.deepEqual(await host.scheduler.runNow(slug), { ok: true });
+      const unstarted = await finished(host, slug);
+      assert.equal(unstarted?.outcome, "failed");
+      assert.match(unstarted?.reason ?? "", /its turn did not start: Mia did not take it up \(busy with other work in this chat\)/);
+    }
+    assert.equal(host.scheduler.holds.holdOf(slug), undefined, "a turn that never started is not the routine's failure: three of them do not pause it");
     focus.settle(work, "answered");
     writePause(registry.dirFor(mia.id), { by: "chris", at: new Date().toISOString(), reason: "on leave" });
     const paused = await host.scheduler.runNow(slug);

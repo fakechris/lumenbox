@@ -102,6 +102,8 @@ export interface RoutineHold {
 }
 
 export const DEFAULT_PAUSE_AFTER = 3;
+/** A run whose turn never started (INV-2036): failed, with why, but not the routine's failure, so it never counts toward a pause. */
+export const NOT_STARTED = "turn_not_started";
 
 /**
  * Folds one routine's ledger lines into runs, newest first. A `started` with no `finished` after
@@ -156,7 +158,7 @@ export class RoutineHolds {
   /** Replays one ledger line; the same rules as live, so a restart lands where the process left off. */
   replay(record: RunRecord): void {
     if (record.event === "pause-after" && record.pauseAfter !== undefined) this.pauseAfter = record.pauseAfter;
-    else if (record.event === "finished" && record.retrying === undefined) this.noteFinished(record.slug, record.result, record.reason, record.at, false);
+    else if (record.event === "finished" && record.retrying === undefined) this.noteFinished(record.slug, record.result, record.reason, record.at, false, record.code);
     else if (record.event === "held") this.holds.set(record.slug, { at: record.at, by: record.by ?? "host", code: record.code ?? "held", reason: record.reason ?? "" });
     else if (record.event === "resumed") this.release(record.slug);
   }
@@ -165,7 +167,8 @@ export class RoutineHolds {
    * A run finished. Returns the hold it caused, when this failure was the K-th in a row and the
    * routine is not already held — the caller writes it down and says it.
    */
-  noteFinished(slug: string, result: RunResult | undefined, reason: string | undefined, at: string, live = true): RoutineHold | undefined {
+  noteFinished(slug: string, result: RunResult | undefined, reason: string | undefined, at: string, live = true, code?: string): RoutineHold | undefined {
+    if (code === NOT_STARTED) return undefined;
     if (result !== "failed") {
       this.streaks.delete(slug);
       return undefined;

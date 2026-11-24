@@ -1,6 +1,6 @@
 import { AGENT_MESSAGE_MAX_LENGTH, type AgentBus } from "../agents/bus.ts";
 import { clampMessage } from "../agents/registry.ts";
-import type { RoutineReason } from "./routine-runs.ts";
+import { NOT_STARTED, type RoutineReason } from "./routine-runs.ts";
 
 type Attention = Pick<AgentBus, "workAttention" | "pauseOf">;
 
@@ -27,10 +27,10 @@ export function routineNotStarted(
   conversation: string,
   prompt: string,
   name: string
-): { result: "failed"; reason: string } | undefined {
+): { result: "failed"; code: typeof NOT_STARTED; reason: string } | undefined {
   const queued = clampMessage(prompt, AGENT_MESSAGE_MAX_LENGTH); // as the bus admitted it
   const unstarted = bus.dropAdmissionsWhere((at, message, owner) => owner === agentId && at === conversation && message.synthetic === true && message.text === queued);
   if (unstarted === 0) return undefined;
   const why = routineBlocked(bus, agentId, conversation, name)?.text ?? `${name} did not take it up (busy with other work in this chat)`;
-  return { result: "failed", reason: `its turn did not start: ${why}` };
+  return { result: "failed", code: NOT_STARTED, reason: `its turn did not start: ${why}` };
 }
