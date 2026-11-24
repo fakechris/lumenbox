@@ -128,10 +128,10 @@ function laterButton(taskId, done) {
  */
 function sayNeed(row, text) {
   var name = agentName(row.assigneeId);
-  postJson("/api/tasks/update", { id: row.id, note: text }).then(function () {
+  return postJson("/api/tasks/update", { id: row.id, note: text }).then(function () {
     need.refusing = "";
     toast(t("ui.next.done.sent", { name: name })); render(); if (panel.taskId === row.id) loadPanel(); refreshSoon();
-  }, failed);
+  });
 }
 
 /**
@@ -155,7 +155,7 @@ function needInto(box, row, listed) {
     why.placeholder = t("ui.next.need.whyNot");
     no.addEventListener("click", function () {
       var reason = why.value.trim();
-      sayNeed(row, (options[1] || t("ui.next.act.deny")) + (reason ? t("ui.next.need.say.reason", { reason: reason }) : ""));
+      sayNeed(row, (options[1] || t("ui.next.act.deny")) + (reason ? t("ui.next.need.say.reason", { reason: reason }) : "")).catch(failed);
     });
     back.addEventListener("click", function () { need.refusing = ""; render(); if (panel.taskId === row.id) renderPanel(); });
     box.appendChild(why); acts.appendChild(no); acts.appendChild(back); box.appendChild(acts);
@@ -163,19 +163,19 @@ function needInto(box, row, listed) {
   }
   if (family === "act") {
     var did = el("button", "act-primary", t("ui.next.need.done")), skip = el("button", "act", t("ui.next.need.skip"));
-    did.addEventListener("click", function () { sayNeed(row, t("ui.next.need.say.done")); });
-    skip.addEventListener("click", function () { sayNeed(row, t("ui.next.need.say.skip")); });
+    did.addEventListener("click", function () { sayNeed(row, t("ui.next.need.say.done")).catch(failed); });
+    skip.addEventListener("click", function () { sayNeed(row, t("ui.next.need.say.skip")).catch(failed); });
     acts.appendChild(did); acts.appendChild(skip);
   } else if (family === "release") {
     // The two outcomes in the agent's words where it named them ("Send it", "Don't send"); the plain pair where it did not.
     var yes = el("button", "act-primary", options[0] || t("ui.next.act.approve")), refuse = el("button", "act", options[1] || t("ui.next.act.deny"));
-    yes.addEventListener("click", function () { sayNeed(row, options[0] || t("ui.next.act.approve")); });
+    yes.addEventListener("click", function () { sayNeed(row, options[0] || t("ui.next.act.approve")).catch(failed); });
     refuse.addEventListener("click", function () { need.refusing = row.id; render(); if (panel.taskId === row.id) renderPanel(); });
     acts.appendChild(yes); acts.appendChild(refuse);
   } else {
     options.forEach(function (option) {
       var pick = el("button", "act", option);
-      pick.addEventListener("click", function () { sayNeed(row, option); });
+      pick.addEventListener("click", function () { sayNeed(row, option).catch(failed); });
       acts.appendChild(pick);
     });
   }

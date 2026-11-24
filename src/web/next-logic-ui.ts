@@ -20,7 +20,7 @@ function nextStateOf(row: { status: string; reading?: { phase: string; blocker?:
   if (phase === "queued") return { key: "queued", tone: "run" };
   if (blocker === "empty_output") return { key: "noReply", tone: "need" };
   // Waiting on a tool or after a failure is stuck; waiting on the person is theirs to answer.
-  if (blocker === "capability" || blocker === "failed" || blocker === "interrupted") return { key: "stuck", tone: "stuck" };
+  if (["capability", "failed", "interrupted", "model_auth_rejected"].includes(blocker)) return { key: "stuck", tone: "stuck" };
   if (phase === "needs" || blocker === "confirmation") return { key: "answer", tone: "need" };
   // A request between two slices of its own is still being worked on.
   if (blocker === "execution" && row.status === "doing") return { key: "running", tone: "run" };

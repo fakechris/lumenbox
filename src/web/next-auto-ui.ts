@@ -6,29 +6,49 @@
  * to do, who does it, and what starts it. The routes are the classic page's.
  */
 export const NEXT_AUTO_JS = `
-var auto = { creating: false, createdSlug: "", open: "", runs: null, trigger: "schedule", read: 0, poll: 0 };
+var auto = { draft: null, saving: false, problem: null, createdSlug: "", open: "", runs: null, trigger: "schedule", read: 0, poll: 0 };
 // minute hour day month weekday, as the scheduler reads it
 var AUTO_TIMES = [["hourly", "0 * * * *"], ["daily", "0 9 * * *"], ["weekdays", "0 9 * * 1-5"], ["monday", "0 9 * * 1"]];
 
 function reloadAuto() { settings.routines = null; render(); }
 
+function autoComputerNotice(lost) {
+  var notice = el("section", lost ? "" : "setting");
+  if (lost) { notice.setAttribute("role", "alert"); notice.style.marginTop = "12px"; }
+  notice.appendChild(el("h2", "group", t(lost ? "ui.auto.computerLost" : "ui.auto.needsComputer")));
+  notice.appendChild(el("p", "note", t(lost ? "ui.auto.computerRetry" : "ui.auto.computerHelp")));
+  var computers = el("button", "act", t("ui.auto.openComputers"));
+  computers.addEventListener("click", function () { navigateView("boxes"); });
+  notice.appendChild(computers);
+  return notice;
+}
+
 function autoForm() {
-  var form = el("section", "setting"), name = field(t("ui.next.auto.name"), ""), what = field(t("ui.next.auto.what"), "", true);
-  var who = el("select"), kind = el("select"), when = el("select"), custom = field(t("ui.next.auto.cron"), ""), match = field(t("ui.next.auto.match"), "");
+  var draft = auto.draft;
+  var form = el("section", "setting"), name = field(t("ui.next.auto.name"), draft.name), what = field(t("ui.next.auto.what"), draft.body, true);
+  var who = el("select"), kind = el("select"), when = el("select");
+  var custom = field(t("ui.next.auto.cron"), draft.cron), match = field(t("ui.next.auto.match"), draft.match);
   var pick = function (labelText, select) { var label = el("label", "", labelText); label.appendChild(select); return label; };
   var option = function (select, value, text) { var node = el("option", "", text); node.value = value; select.appendChild(node); };
   option(who, "", t("ui.next.auto.anyone"));
   (settings.runnerAgents || []).forEach(function (name) { option(who, name, name); });
+  who.value = draft.agent;
   ["schedule", "webhook", "message"].forEach(function (value) { option(kind, value, t("ui.next.auto.kind." + value)); });
   AUTO_TIMES.forEach(function (pair) { option(when, pair[1], t("ui.next.auto.time." + pair[0])); });
   option(when, "", t("ui.next.auto.time.custom"));
+  when.value = draft.when;
   kind.value = auto.trigger;
   var whenLabel = pick(t("ui.next.auto.when"), when), show = function () {
     whenLabel.hidden = kind.value !== "schedule"; custom.label.hidden = kind.value !== "schedule" || when.value !== ""; match.label.hidden = kind.value !== "message";
   };
-  kind.addEventListener("change", function () { auto.trigger = kind.value; show(); });
-  when.addEventListener("change", show);
+  var remember = function () {
+    Object.assign(draft, { name: name.input.value, body: what.input.value, agent: who.value, when: when.value, cron: custom.input.value, match: match.input.value });
+    auto.trigger = kind.value; show();
+  };
+  form.addEventListener("input", remember);
+  form.addEventListener("change", remember);
   var save = el("button", "act-primary", t("ui.next.member.create")), cancel = el("button", "act", t("ui.next.auto.cancel")), acts = el("div", "acts");
+  save.disabled = cancel.disabled = auto.saving;
   save.addEventListener("click", function () {
     var body = { name: name.input.value.trim(), body: what.input.value.trim(), triggerType: kind.value };
     if (kind.value === "schedule") {
@@ -37,14 +57,21 @@ function autoForm() {
     }
     if (kind.value === "message") body.match = match.input.value.trim();
     if (who.value) body.agent = who.value;
-    save.disabled = true;
+    auto.saving = save.disabled = cancel.disabled = true;
     postJson("/api/automations", body).then(function (result) {
-      auto.creating = false; auto.createdSlug = result.slug; reloadAuto();
-    }, function (error) { save.disabled = false; failed(error); });
+      auto.saving = false; auto.draft = auto.problem = null; auto.createdSlug = result.slug; reloadAuto();
+    }, function (error) { auto.saving = false; auto.problem = error; if (next.view === "auto") render(); });
   });
-  cancel.addEventListener("click", function () { auto.creating = false; render(); });
+  cancel.addEventListener("click", function () { auto.draft = auto.problem = null; render(); });
   [name.label, what.label, pick(t("ui.next.auto.who"), who), pick(t("ui.next.auto.starts"), kind), whenLabel, custom.label, match.label].forEach(function (node) { form.appendChild(node); });
   acts.appendChild(save); acts.appendChild(cancel); form.appendChild(acts);
+  if (auto.problem) {
+    if (auto.problem.data && auto.problem.data.code === "no-box") form.appendChild(autoComputerNotice(true));
+    else {
+      var problem = el("p", "note bad", auto.problem.message);
+      problem.setAttribute("role", "alert"); form.appendChild(problem);
+    }
+  }
   show();
   return form;
 }
@@ -61,8 +88,8 @@ function autoRuns(routine) {
   var busy = (auto.runs.runs || []).some(function (run) { return run.outcome === "running"; });
   clearTimeout(auto.poll);
   auto.poll = setTimeout(function () {
-    if (auto.open !== routine.slug || next.view !== "auto" || auto.creating) return;
-    getJson("/api/schedules/runs?slug=" + encodeURIComponent(routine.slug) + "&limit=10").then(function (got) { if (auto.open === routine.slug && next.view === "auto" && !auto.creating) { auto.runs = got; render(); } }, function () {});
+    if (auto.open !== routine.slug || next.view !== "auto" || auto.draft) return;
+    getJson("/api/schedules/runs?slug=" + encodeURIComponent(routine.slug) + "&limit=10").then(function (got) { if (auto.open === routine.slug && next.view === "auto" && !auto.draft) { auto.runs = got; render(); } }, function () {});
   }, busy ? 3000 : 15000);
   if (auto.runs.hold) box.appendChild(el("p", "why", auto.runs.hold.code === "idle_owner" ? t("ui.next.auto.heldIdle") : t("ui.next.auto.held", { reason: auto.runs.hold.reason || "" })));
   if (!(auto.runs.runs || []).length) box.appendChild(el("p", "why", t("ui.next.auto.noRuns")));
@@ -92,10 +119,15 @@ function renderAuto(view) {
     }, function (error) { if (read === auto.read) failed(error); });
     return;
   }
-  if (auto.creating) view.appendChild(autoForm());
+  if (auto.draft) view.appendChild(autoForm());
+  else if (!boxes.state) view.appendChild(el("p", "why", t("ui.next.auto.checkingComputer")));
+  else if (!boxes.state.connected) view.appendChild(autoComputerNotice(false));
   else {
     var add = el("button", "act", t("ui.next.auto.new"));
-    add.addEventListener("click", function () { auto.creating = true; render(); });
+    add.addEventListener("click", function () {
+      auto.draft = { name: "", body: "", agent: "", when: AUTO_TIMES[0][1], cron: "", match: "" };
+      render();
+    });
     view.appendChild(add);
   }
   if (settings.routines.length === 0) { view.appendChild(el("p", "empty", t("ui.next.auto.empty"))); return; }

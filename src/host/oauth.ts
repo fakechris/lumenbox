@@ -58,9 +58,10 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     apiBase: "https://api.github.com",
     apiHeaders: { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
     defaultScopes: ["repo", "read:org"],
-    setup: "github.com/settings/developers → OAuth Apps → New → callback URL is this app's /oauth/callback. Enable expiring user tokens to get refresh tokens.",
+    setup: "Go to github.com/settings/developers → OAuth Apps → New OAuth App. Use the authorization callback URL below. " +
+      "If GitHub offers expiring user tokens, enable them to get refresh tokens. Then enter the app’s Client ID and Client Secret here.",
     titleZh: "GitHub",
-    setupZh: "github.com/settings/developers → OAuth Apps → New → 回调地址填本应用的 /oauth/callback。打开 expiring user tokens 才能拿到 refresh token。",
+    setupZh: "前往 github.com/settings/developers → OAuth Apps → New OAuth App，填写下方的授权回调地址。如有 expiring user tokens 选项，请启用以获取刷新令牌。然后在这里填入应用的 Client ID 和 Client Secret。",
   },
   {
     id: "feishu",

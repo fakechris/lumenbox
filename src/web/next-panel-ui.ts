@@ -19,6 +19,19 @@ function updateTask(change, done) {
   postJson("/api/tasks/update", Object.assign({ id: panel.taskId }, change)).then(function () { toast(done); loadPanel(); refreshSoon(); }, failed);
 }
 
+function modelAuthBlock(task) {
+  if (task.reading?.blocker?.kind !== "model_auth_rejected" || nextStateOf(task).key !== "stuck") return null;
+  var admin = canOperateInstallation(), box = el("div", "needbox");
+  box.appendChild(el("b", "", t("ui.wr.blocker.model_auth_rejected")));
+  box.appendChild(el("div", "", t(admin ? "ui.next.panel.modelAuthAdmin" : "ui.next.panel.modelAuthMember")));
+  if (admin) {
+    var acts = el("div", "acts"), button = el("button", "act-primary", t("ui.next.composer.modelSettings"));
+    button.addEventListener("click", function () { if (canOperateInstallation()) { closePanel(); openSettingsPane("model"); } });
+    acts.appendChild(button); box.appendChild(acts);
+  }
+  return box;
+}
+
 /** What the person is asked on this work, with the buttons that answer it. */
 function needBlock(task) {
   var stage = task.stage || "", box = el("div", "needbox"), acts = el("div", "acts"), last = (task.history || [])[task.history.length - 1] || {};
@@ -216,7 +229,8 @@ function renderPanel() {
     if (task.description.length > 600) { var fold = el("details", "fold"); fold.appendChild(el("summary", "", t("ui.next.panel.askedFold"))); fold.appendChild(asked); inner.appendChild(fold); }
     else inner.appendChild(asked);
   }
-  [needBlock(task), resultBlock(task), progressBlock(task), processBlock(task), dependsBlock(task), manageBlock(task), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
+  [modelAuthBlock(task), needBlock(task), resultBlock(task), progressBlock(task), processBlock(task),
+    dependsBlock(task), manageBlock(task), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
 }
 
 function loadPanel() {

@@ -202,6 +202,10 @@ header.bar { position: relative; }
 .screen > header .x { margin-left: auto; font-size: 20px; color: var(--muted); width: 28px; }
 .screen-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .screen-body iframe { flex: 1; min-height: 320px; width: 100%; border: 0; border-radius: 10px; background: #000; }
+.screen-offline { margin: auto; max-width: 360px; padding: 16px; text-align: center; overflow-wrap: anywhere; }
+.screen-offline p { color: var(--soft); }
+.screen-offline .acts { justify-content: center; flex-wrap: wrap; }
+.screen-controls { display: grid; gap: 8px; }
 .files { display: flex; flex-direction: column; }
 .files .file { width: 100%; text-align: left; background: none; cursor: pointer; }
 .setting { max-width: 640px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
@@ -296,7 +300,12 @@ button.fact { width: 100%; text-align: left; }
 #panel-inner .fold-body select, #panel-inner .fold-body input { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
 .fact .bad { color: var(--bad); } .fact .warn { color: var(--warn); } .fact code { font-size: 12px; overflow-wrap: anywhere; text-align: right; }
 button.link { text-align: left; font-weight: 600; text-decoration: underline; text-decoration-color: var(--border-strong); }
-.setting .fold-body > input { width: 100%; max-width: 320px; }
+.setting .fold-body > input, .setting .fold-body label > input { width: 100%; max-width: 320px; }
+.setting .guidance, .setting .fold-body label { color: var(--soft); font-size: 13px; overflow-wrap: anywhere; }
+.setting .guidance { margin: 0; line-height: 1.5; }
+.connector-callback { display: grid; justify-items: start; gap: 6px; margin: 10px 0 14px; }
+.connector-callback code { width: 100%; }
+.connector-callback[hidden] + label { margin-top: 12px; }
 .files img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); }
 .files pre.raw { max-height: none; }
 .setting > label select, .setting > label input { width: 100%; max-width: 420px; }
@@ -433,6 +442,7 @@ export const NEXT_HTML = `<!doctype html>
     <div class="picker" id="composer-menu" hidden></div>
     <div class="reply-to" id="reply-to" hidden></div>
     <div class="why" id="composer-watch" role="status" hidden></div>
+    <div class="reply-to" id="composer-send-status" role="status" hidden></div>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
   </div>
 </main>
@@ -474,7 +484,7 @@ function postJson(path, body) {
   return fetch(path, { method: "POST", headers: { "content-type": "application/json", "accept-language": "{{@locale}}" }, body: JSON.stringify(body) }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (data) {
       // A refusal carries what the server said beside its words: "saved, but not in effect" is still a save.
-      if (!res.ok) { var problem = new Error(data && data.error ? data.error : String(res.status)); problem.data = data || {}; throw problem; }
+      if (!res.ok) { var problem = new Error(data && data.error ? data.error : String(res.status)); problem.data = data || {}; problem.status = res.status; throw problem; }
       // What was typed has been sent: the next redraw shows what the server holds (render in next-views-ui.ts).
       document.querySelectorAll("#view [data-edited]").forEach(function (node) { delete node.dataset.edited; });
       return data;

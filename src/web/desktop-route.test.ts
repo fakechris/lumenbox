@@ -49,10 +49,18 @@ test("a desktop that is not up yet is shown as a page, never as JSON", () => {
   // Before the display exists boxd answers the page request with a JSON error. Passed
   // through, Chromium rendered it in its JSON viewer — a white box with a "Pretty-print"
   // checkbox — and the frame's src never changed, so the pane stayed that way.
-  const page = desktopWaitingPage('Desktop 3 is not running. Ensure it first. <script>');
+  const page = desktopWaitingPage('Desktop 3 is not running. Ensure it first. <script>', "en", true);
   assert.match(page, /^<!doctype html>/);
   assert.match(page, /http-equiv="refresh" content="2"/);
   assert.match(page, /Desktop 3 is not running/);
   assert.doesNotMatch(page, /<script>/);
   assert.match(page, /background:#000/);
+});
+
+test("a failed desktop replaces the starting state and offers retry without polling", () => {
+  const page = desktopWaitingPage("Cannot start the desktop. Check the box connection and retry.");
+  assert.match(page, /data-desktop-state="failed"/);
+  assert.match(page, /Could not open the desktop/);
+  assert.match(page, /<a href="">Retry<\/a>/);
+  assert.doesNotMatch(page, /Desktop is starting|http-equiv="refresh"/);
 });

@@ -14,6 +14,7 @@ import { MCP_TOKEN_JS } from "./mcp-token-ui.ts";
 import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts";
 import { PERSONAL_BOX_DIALOG_JS } from "./personal-box-dialog-ui.ts";
 import { PERSONAL_BOX_CLASSIC_JS } from "./personal-box-classic-ui.ts";
+import { CLASSIC_AUTO_COMPUTER_HTML, CLASSIC_AUTO_COMPUTER_JS } from "./classic-auto-computer.ts";
 
 /**
  * The web UI, as a single inlined document.
@@ -251,6 +252,7 @@ ${AGENT_ROW_STYLE}
   .toolchip.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
   .fieldnote { font-size: 12px; color: var(--muted); line-height: 1.6; }
   .fieldnote:empty { display: none; }
+  #setconnsetup { white-space: pre-line; overflow-wrap: anywhere; }
   .modal .actions { display: flex; gap: 10px; padding-top: 2px; }
 
   #shell { flex: 1; min-height: 0; display: flex; }
@@ -825,6 +827,7 @@ ${AGENT_ROW_STYLE}
   #recordings a { margin-right: 10px; }
   /* One line, because it sits between the desktop and the activity feed. */
   #clipbar { display: flex; gap: 6px; align-items: center; }
+  #desktopactions[hidden], #clipbar[hidden] { display: none; }
   #clipbar b { font-family: var(--font-mono); font-size: 11px; }
   #clipbar input {
     flex: 1; min-width: 0; padding: 4px 9px; border-radius: var(--radius-input);
@@ -991,7 +994,7 @@ ${WORK_ATTENTION_HTML}
       <a href="#" id="tabauto" class="tab">{{ui.page.automations}}</a>
       <a href="#" id="tabaudit" class="tab">{{ui.page.audit}}</a>
     </span>
-    <span class="headactions" id="desktopactions">
+    <span class="headactions" id="desktopactions" hidden>
       <a id="rec" href="#" title="{{ui.page.record-this-desktop}}">&#9679;</a>
       <a id="full" href="#" target="_blank" rel="noopener" class="btn sm" style="text-decoration:none">{{ui.page.take-over}}</a>
       <a id="handback" href="#" class="btn sm" style="text-decoration:none;display:none" title="{{ui.page.give-the-desktop-back-to}}">{{ui.page.hand-back}}</a>
@@ -1006,7 +1009,7 @@ ${WORK_ATTENTION_HTML}
     <div class="bar" id="desktopstart"><button class="btn" id="opendesktop" type="button">{{ui.page.open-desktop}}</button><span> {{ui.page.starts-when-you-need-it}}</span></div>
     <div class="desktopwrap"><iframe id="vnc" title="{{ui.page.box-desktop}}"></iframe></div>
     <div class="bar" id="recordings" style="display:none"></div>
-    <div class="bar" id="clipbar">
+    <div class="bar" id="clipbar" hidden>
       <b>{{ui.page.clipboard}}</b>
       <input id="cliptext" placeholder="{{ui.page.text-to-paste-into-the}}" spellcheck="false">
       <button id="clipin" class="btn sm" title="{{ui.page.put-this-on-the-boxs}}">&rarr; box</button>
@@ -1043,10 +1046,11 @@ ${WORK_ATTENTION_HTML}
   <div id="autoview" style="display:none;flex:1;min-height:0;flex-direction:column">
     <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
       <span class="dim" id="autostate" style="flex:1;font-size:12px"></span>
-      <a href="#" id="autonew" class="dim" style="font-size:12px">{{ui.page.new}}</a>
+      <a href="#" id="autonew" class="dim" style="display:none;font-size:12px">{{ui.next.auto.new}}</a>
       <a href="#" id="autorefresh" class="dim" style="font-size:12px">{{ui.page.refresh}}</a>
     </div>
-    <div id="autocreate" style="display:none;padding:16px;border-bottom:1px solid var(--border)">
+    ${CLASSIC_AUTO_COMPUTER_HTML}
+    <div id="autocreate" style="display:none;overflow-y:auto;padding:16px;border-bottom:1px solid var(--border)">
       <div style="display:flex;flex-direction:column;gap:12px">
         <!-- Name -->
         <div>
@@ -1663,7 +1667,7 @@ function renderConnectors() {
         select.innerHTML = connProviders.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.title) + "</option>"; }).join("");
         select.onchange = function () {
           var p = connProviders.filter(function (x) { return x.id === select.value; })[0];
-          $("setconnsetup").textContent = p ? p.setup : "";
+          $("setconnsetup").textContent = p ? p.setup + (p.kind === "authorization_code" && data.redirectUri ? "\n" + data.redirectUri : "") : "";
         };
         select.onchange();
       }
@@ -3776,6 +3780,7 @@ function showDesktop(id) {
   var requested = openedDesktops.has(id);
   $("desktopstart").style.display = requested ? "none" : "";
   if (!requested || $("desktopview").style.display === "none") {
+    setDesktopControls(false);
     frame.removeAttribute("src");
     frame.removeAttribute("srcdoc");
     frame.removeAttribute("data-offline");
@@ -3802,6 +3807,7 @@ function showDesktop(id) {
     // attached agent's name. The state refresh calls back here every few seconds, so the
     // real desktop takes over as soon as the box is connected again.
     $("full").style.display = "none";
+    setDesktopControls(false);
     if (frame.getAttribute("data-offline") !== agent.boxId) {
       frame.removeAttribute("src");
       frame.setAttribute("srcdoc", desktopOfflineDoc(box.name));
@@ -3820,6 +3826,7 @@ function showDesktop(id) {
   // Only reload when it is a different desktop: re-setting src restarts noVNC and
   // flashes "Connecting…", so switching back and forth must not thrash it.
   if (frame.getAttribute("src") !== embeddedUrl) {
+    setDesktopControls(false);
     frame.removeAttribute("data-offline");
     frame.removeAttribute("srcdoc");
     // A browser keeps the old document visible until the new one commits, so between two
@@ -3829,7 +3836,12 @@ function showDesktop(id) {
     frame.setAttribute("src", embeddedUrl);
   }
 }
-$("vnc").onload = function () { this.style.opacity = ""; };
+function setDesktopControls(ready) { $("desktopactions").hidden = $("clipbar").hidden = !ready; }
+$("vnc").onload = function () {
+  this.style.opacity = "";
+  var doc = this.contentDocument;
+  setDesktopControls(!this.hasAttribute("data-offline") && !!doc && doc.URL !== "about:blank" && !doc.documentElement.dataset.desktopState);
+};
 
 /** The document the pane shows for a box that is not connected: black like the desktop, no picture. */
 function desktopOfflineDoc(boxName) {
@@ -4616,6 +4628,7 @@ function refresh() {
     allTools = state.allTools || allTools;
     $("model").innerHTML = state.provider ? "<b>" + esc(state.provider) + "</b>" : "";
     boxState = state.box;
+    renderAutoComputer();
     var cluster = state.box.backend === "kubernetes";
     dockerState = state.box.docker || null;
     if (cluster) renderClusterBoxStatus();
@@ -5411,17 +5424,8 @@ document.getElementById("autolist").addEventListener("click", function (e) {
 });
 
 
-// The form toggle
-var autoCreateOpen = false;
-document.getElementById("autonew").addEventListener("click", function (e) {
-  e.preventDefault();
-  autoCreateOpen = !autoCreateOpen;
-  $("autocreate").style.display = autoCreateOpen ? "" : "none";
-  if (autoCreateOpen) {
-    // populate agent dropdown
-    $("autoagent").innerHTML = '<option value="">{{ui.app.first-agent}}</option>';
-  }
-});
+var autoCreateOpen = false, autoComputerLost = false;
+${CLASSIC_AUTO_COMPUTER_JS}
 
 // Track selected trigger and cron
 var autoTrigger = "schedule";
@@ -5512,14 +5516,17 @@ $("autosave").addEventListener("click", function () {
   .then(function (result) {
     $("autosave").disabled = false;
     if (!result.ok) {
+      autoComputerLost = result.data.code === "no-box";
+      renderAutoComputer();
       $("autoerror").textContent = result.data.error || "{{ui.app.something-went-wrong}}";
-      $("autoerror").style.display = "";
+      $("autoerror").style.display = autoComputerLost ? "none" : "";
       return;
     }
     // Success: reset form, close it, refresh the list
     resetAutoForm();
     autoCreateOpen = false;
     $("autocreate").style.display = "none";
+    renderAutoComputer();
     refreshAutomations();
   })
   .catch(function () {
@@ -5534,9 +5541,11 @@ $("autocancel").addEventListener("click", function () {
   resetAutoForm();
   autoCreateOpen = false;
   $("autocreate").style.display = "none";
+  renderAutoComputer();
 });
 
 function resetAutoForm() {
+  autoComputerLost = false;
   $("autoname").value = "";
   $("autobody").value = "";
   $("automatch").value = "";
