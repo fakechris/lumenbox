@@ -265,7 +265,8 @@ test("an agent's provider override keeps the provider-independent overrides, not
     assert.equal(openai.label, "OpenAI");
     assert.equal(openai.vision, false, "AGENTBOX_VISION=0 holds on an override");
     assert.equal(openai.maxTokens, 4000);
-    assert.equal(openai.keyEnv, "RELAY_TOKEN");
+    assert.equal(openai.keyEnv, "OPENAI_API_KEY", "the default's credential never goes to another provider's endpoint");
+    assert.equal(resolveProvider("anthropic").keyEnv, "RELAY_TOKEN", "the installation's own provider still takes it");
     assert.equal(openai.model, resolveProviderPreset("openai")!.model, "the default's model does not leak (INV-2060)");
     assert.equal(openai.baseUrl, resolveProviderPreset("openai")!.baseUrl, "nor its endpoint");
   });

@@ -416,16 +416,6 @@ export function resolveProvider(name?: string, configuredDefault?: string): Prov
   if (chosen === "minimax") {
     profile.vision = MINIMAX_VISION_MODELS.has(profile.model);
   }
-  return withInstallationOverrides(profile);
-}
-
-/**
- * The overrides that hold whichever provider runs: the credential's variable, the output ceiling and
- * the vision opt-in. Applied to the installation default and to every other preset an agent, a
- * Settings test or a fallback picks (INV-2084). `AGENTBOX_MODEL` and `AGENTBOX_BASE_URL` are not here:
- * they name the default's model and endpoint, and on another provider they are wrong (INV-2060).
- */
-function withInstallationOverrides(profile: ProviderProfile): ProviderProfile {
   /**
    * Which variable holds the credential, overridable for any provider and not just `custom`.
    *
@@ -436,6 +426,16 @@ function withInstallationOverrides(profile: ProviderProfile): ProviderProfile {
    * thinking off and produced an agent that could not see its own screen.
    */
   if (process.env.AGENTBOX_KEY_ENV) profile.keyEnv = process.env.AGENTBOX_KEY_ENV;
+  return withInstallationOverrides(profile);
+}
+
+/**
+ * The overrides that hold whichever provider runs: the output ceiling and the vision opt-in. Applied to
+ * the installation default and to every other preset an agent, a Settings test or a fallback picks
+ * (INV-2084). `AGENTBOX_MODEL` and `AGENTBOX_BASE_URL` are not here: they name the default's model and
+ * endpoint, and on another provider they are wrong (INV-2060).
+ */
+function withInstallationOverrides(profile: ProviderProfile): ProviderProfile {
   // Keeps the profile's own value when the variable is absent or unreadable, rather than
   // overwriting a working setting with NaN.
   profile.maxTokens = envNumber("AGENTBOX_MAX_TOKENS", profile.maxTokens);
@@ -476,6 +476,7 @@ export function effectiveProviderFor(
 export function providerForChoice(name: string, active: ProviderProfile): ProviderProfile {
   const preset = resolveProviderPreset(name.toLowerCase());
   if (!preset) return resolveProvider(name);
+  // Not AGENTBOX_KEY_ENV: it names the default's (often a relay's) credential, which must never reach another provider's endpoint.
   return preset.label === active.label ? active : withInstallationOverrides(preset);
 }
 
