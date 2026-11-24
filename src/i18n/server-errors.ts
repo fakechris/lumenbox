@@ -44,6 +44,7 @@ export const SERVER_ERRORS = {
   "err.body-invalid": ["请求体无法读取。", "Invalid request body."],
   "err.bootstrap-code-malformed": ["验证码格式不对。", "Invalid bootstrap code."],
   "err.role-needed": ["这一步需要 {need} 角色，你是 {role}。请找管理员。", "This needs the {need} role; you are {role}. Ask an admin."],
+  "err.code-attempts": ["试错的次数太多了，请 {seconds} 秒后再试。", "Too many wrong codes; try again in {seconds} seconds."],
   "err.code-not-live": ["这个码已失效：码只能用一次，过了有效期（通常 15 分钟）也不能再用。", "That code is not live — a code works once, and only until it expires (15 minutes unless the admin chose longer)."],
   "err.invite-person-gone": ["这个码是给一位已经不在本安装上的人生成的。", "That code was made for someone no longer on this installation."],
   "err.merge-confirm-needed": ["请确认预览：从 GET /api/installation/merge 取得 digest，再发送 { confirm: true, digest }。", "Confirm the preview: send { confirm: true, digest } from GET /api/installation/merge."],
