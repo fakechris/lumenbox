@@ -20,7 +20,11 @@ import { agentboxHome } from "../config.ts";
 export class SessionEpochs {
   private epochs = new Map<string, number>();
 
-  constructor(private readonly path: string = join(agentboxHome(), "session-epochs.json")) {
+  constructor(
+    private readonly path: string = join(agentboxHome(), "session-epochs.json"),
+    /** After every bump, so what the person already has open can be asked again (INV-2071). */
+    private readonly bumped: (principalId: string) => void = () => {},
+  ) {
     this.reload();
   }
 
@@ -48,6 +52,7 @@ export class SessionEpochs {
     const next = this.of(principalId) + 1;
     this.epochs.set(principalId, next);
     this.save();
+    this.bumped(principalId);
     return next;
   }
 

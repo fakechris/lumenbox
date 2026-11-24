@@ -13,10 +13,13 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import type { Principals } from "../host/principals.ts";
 
 export interface StoredToken {
   hash: string;
   principalId: string;
+  /** What `principalId` is: a sign-in (absent on tokens older than the field) or a roster id, minted with nobody signed in. */
+  via?: "sign-in" | "person";
   label: string;
   createdAt: string;
 }
@@ -57,18 +60,37 @@ export class McpTokenStore {
   }
 
   /** A new token for a person; the secret is in the answer and nowhere else. */
-  mint(principalId: string, label: string, now: Date = new Date()): { token: string; label: string; createdAt: string } {
+  mint(principalId: string, label: string, now: Date = new Date(), via: "sign-in" | "person" = "sign-in"): { token: string; label: string; createdAt: string } {
     const token = `lmbx_${randomBytes(24).toString("hex")}`;
-    const entry: StoredToken = { hash: hashOf(token), principalId, label: label.trim().slice(0, 60) || "unnamed", createdAt: now.toISOString() };
+    const entry: StoredToken = { hash: hashOf(token), principalId, via, label: label.trim().slice(0, 60) || "unnamed", createdAt: now.toISOString() };
     this.tokens.push(entry);
     this.save();
     return { token, label: entry.label, createdAt: entry.createdAt };
   }
 
   principalFor(presented: string | undefined): string | undefined {
+    return this.entryFor(presented)?.principalId;
+  }
+
+  private entryFor(presented: string | undefined): StoredToken | undefined {
     if (presented === undefined || presented === "" || this.readOnly) return undefined;
     const hash = hashOf(presented);
-    return this.tokens.find(entry => sameHash(entry.hash, hash))?.principalId;
+    return this.tokens.find(entry => sameHash(entry.hash, hash));
+  }
+
+  /**
+   * Who a token acts as (INV-2074): the doors inside judge the person, not the sign-in. A token
+   * from a sign-in is whoever holds that sign-in now, and nobody once nobody does, even when the
+   * sign-in is also somebody's roster id (a person who joined by invite). One minted for a roster
+   * id is that person while they are on the roster. An older token without `via` is a roster id
+   * only when it cannot be a sign-in (no door prefix).
+   */
+  personFor(presented: string | undefined, principals: Pick<Principals, "byId" | "isKnown" | "resolve">): string | undefined {
+    const entry = this.entryFor(presented);
+    if (entry === undefined) return undefined;
+    const id = entry.principalId;
+    if (entry.via === "person" || (entry.via === undefined && !id.includes(":"))) return principals.byId(id)?.id;
+    return principals.isKnown(id) ? principals.resolve(id).id : undefined;
   }
 
   /** Revoke the one made at `createdAt` that `may` allows; false when none matches. */
