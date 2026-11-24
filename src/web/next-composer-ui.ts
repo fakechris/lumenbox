@@ -7,12 +7,12 @@ export const NEXT_COMPOSER_JS = `
 var composer = { skills: null, rows: [], at: 0, kind: "" };
 var modelReadiness = { agent: "", configured: null, request: 0, notice: null };
 
-function refreshModelReadiness() {
-  var id = chat.agentId, request = ++modelReadiness.request;
-  modelReadiness.agent = id; modelReadiness.configured = null;
+function refreshModelReadiness(agent) {
+  var id = agent || chat.agentId, owner = chat.agentId, request = ++modelReadiness.request;
+  modelReadiness.agent = owner; modelReadiness.configured = null;
   if (!id) return Promise.resolve(true);
   return getJson("/api/model-readiness?agent=" + encodeURIComponent(id)).then(function (got) {
-    if (request === modelReadiness.request) { modelReadiness.configured = got.configured; renderModelNotice(); }
+    if (request === modelReadiness.request && owner === chat.agentId) { modelReadiness.configured = got.configured; renderModelNotice(); }
     return got.configured !== false;
   }, function () { return true; });
 }
@@ -36,9 +36,9 @@ function renderModelNotice() {
   notice.appendChild(button);
 }
 
-function composerCanSend() {
+function composerCanSend(agent) {
   if (watchOnly()) return Promise.resolve(false);
-  return refreshModelReadiness();
+  return refreshModelReadiness(agent);
 }
 
 /** A viewer watches (INV-2047). Read off the role the server gave, so nothing is shut while it is not yet known. */

@@ -13,6 +13,7 @@ import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_FILES_JS } from "./next-files-ui.ts";
 import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
+import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
 
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
@@ -308,14 +309,18 @@ function chatComposerTest() {
   const nodes = { "composer-text": input, "composer-menu": { hidden: false }, "composer-send-status": status, "composer-send": send };
   const posts: Array<{ path: string; body: unknown; accept: () => void; reject: (e: Error) => void }> = [];
   const postJson = (path: string, body: unknown) => new Promise<void>((accept, reject) => posts.push({ path, body, accept, reject }));
-  const next = { view: "chat", agents: { ada: { id: "ada", name: "Ada" }, rex: { id: "rex", name: "Rex" } } };
+  const rows: Array<{ id: string; assigneeId: string }> = [];
+  const need = { detached: "", page: {} };
+  const next = { view: "chat", agents: { ada: { id: "ada", name: "Ada" }, rex: { id: "rex", name: "Rex" } }, rows };
   const context = vm.createContext({
     window: {}, next, navigator, $: (id: keyof typeof nodes) => nodes[id],
-    need: {}, watchOnly: () => false, composerCanSend: async () => true, sendReply: () => false, rereadRole: () => {},
+    need, watchOnly: () => false, composerCanSend: async () => true, rereadRole: () => {},
+    waitsOnPerson: () => true, pendingCards: () => [],
+    sayNeed: (row: { id: string }, text: string) => postJson("/api/tasks/update", { id: row.id, note: text }),
     postJson,
     t: (key: string, args?: { error: string }) => args?.error && key.endsWith("sendRefused") ? key + ": " + args.error : key,
   });
-  vm.runInContext(NEXT_CHAT_JS, context);
+  vm.runInContext(NEXT_CHAT_JS + NEXT_DOCK_JS, context);
   const chat = context.chat as { agentId: string; conversation: string; entries: unknown[]; live: unknown; jump: boolean };
   const go = (id: string, conversation = "main") => {
     chat.agentId = id; chat.conversation = conversation;
@@ -327,9 +332,10 @@ function chatComposerTest() {
   context.loadThread = () => loaded.push(chat.agentId);
   context.openChat = open;
   const press = () => vm.runInContext("sendMessage()", context) as Promise<void>;
-  const withCard = () => { context.sendReply = (text: string) => postJson("/api/tasks/update", { id: "card", note: text }); };
+  const withCard = (id = "card", assigneeId = "ada") => rows.push({ id, assigneeId });
+  const replyTarget = () => vm.runInContext("replyTarget()", context) as { id: string } | null;
   go("ada");
-  return { input, status, send, navigator, posts, chat, go, press, settle, loaded, withCard };
+  return { input, status, send, navigator, posts, chat, go, press, settle, loaded, withCard, need, replyTarget };
 }
 
 test("drafts follow the exact agent and conversation, including explicit @ routing (INV-2106)", async () => {
@@ -344,7 +350,7 @@ test("drafts follow the exact agent and conversation, including explicit @ routi
   f.go("ada"); assert.equal(f.input.value, "Only for Ada");
   f.go("ada", "other"); assert.equal(f.input.value, "A different conversation");
   f.go("ada"); f.input.value = "@Rex A message for Rex";
-  const message = f.press();
+  const message = f.press(); await f.settle();
   assert.deepEqual(JSON.parse(JSON.stringify(f.posts[0]!.body)), { agent: "rex", conversation: "main", text: "A message for Rex" });
   f.posts[0]!.accept(); await message;
   assert.equal(f.chat.agentId, "rex");
@@ -416,6 +422,19 @@ test("a refused reply to a waiting card uses the same draft and delivery status 
   assert.equal(f.input.value, "The file is ready");
   assert.equal(f.status.textContent, "ui.next.chat.sendRefused: Cannot update the card");
   assert.equal(f.chat.live, null);
+  f.need.detached = "card";
+  const detached = f.press(); await f.settle();
+  assert.equal(f.posts[1]!.path, "/api/prompt");
+  f.posts[1]!.reject(Object.assign(new Error("Cannot start new work"), { status: 409 })); await detached;
+  f.withCard("rex-card", "rex"); f.go("rex");
+  assert.equal(f.replyTarget()?.id, "rex-card");
+  f.input.value = "Reply for Rex's card";
+  const other = f.press(); await f.settle();
+  assert.equal(f.posts[2]!.path, "/api/tasks/update");
+  assert.deepEqual(f.posts[2]!.body, { id: "rex-card", note: "Reply for Rex's card" });
+  f.posts[2]!.accept(); await other;
+  f.go("ada"); assert.equal(f.input.value, "The file is ready");
+  assert.equal(f.replyTarget(), null, "the first card remains detached for its unsent draft");
 });
 
 /** One function out of the page's own script, run with the globals it reads. */

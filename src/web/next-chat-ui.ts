@@ -402,13 +402,13 @@ async function sendMessage() {
   var stillHere = function () { return next.view === "chat" && chatTarget() === key; };
   chatComposer.pending.add(key); chatComposer.notices.delete(key); renderChatSend();
   try {
-    if (navigator.onLine !== false && !to && !await composerCanSend()) return;
+    if (navigator.onLine !== false && !await composerCanSend(agent)) return;
     if (!stillHere() || watchOnly() || chatDraft(key) !== draft) return;
     if (navigator.onLine === false) { chatComposer.notices.set(key, t("ui.next.chat.sendOffline")); return; }
     // An explicit @recipient is a new message, not a reply to the card in either conversation.
     var detached = need.detached;
     try {
-      var reply = !to && !detached && sendReply(text);
+      var reply = !to && sendReply(text);
       await (reply || postJson("/api/prompt", { agent: agent, conversation: conversation, text: to ? to.text : text }));
     } catch (error) {
       // A lost response is not proof that the server never got the message.
@@ -417,7 +417,7 @@ async function sendMessage() {
       if (refused) rereadRole();
       return;
     }
-    if (!to && stillHere() && need.detached === detached) need.detached = "";
+    if (!to && !reply && stillHere() && need.detached === detached) need.detached = "";
     if (chatDraft(key) === draft) {
       setChatDraft(key, "");
       if (stillHere() && to) openChat(agent);

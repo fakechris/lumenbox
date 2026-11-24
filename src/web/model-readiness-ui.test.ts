@@ -11,11 +11,14 @@ test("unconfigured send keeps the draft and shows the Model settings entry point
     replaceChildren() { this.children = []; }, appendChild(child: unknown) { this.children.push(child); },
     addEventListener(_type: string, action: () => void) { this.click = action; }, click: () => {} });
   let configured = false, admin = true, posts = 0, opened = "";
-  const context = vm.createContext({ window: {}, Promise, encodeURIComponent, navigator: { onLine: true }, next: { view: "chat", agents: {} },
+  const checked: string[] = [];
+  const context = vm.createContext({ window: {}, Promise, encodeURIComponent, navigator: { onLine: true },
+    next: { view: "chat", agents: { rex: { id: "rex", name: "Rex" } } },
     $: (id: string) => { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); },
     el: (_tag: string, _cls: string, text: string) => ({ ...node(), text }), t: (key: string) => key,
-    getJson: async () => ({ configured }), postJson: async () => { posts++; },
-    addressed: () => null, need: {}, sendReply: () => false, render: () => {},
+    getJson: async (path: string) => { checked.push(path); return { configured: configured && !path.endsWith("=rex") }; },
+    postJson: async () => { posts++; },
+    need: {}, sendReply: () => false, render: () => {},
     canOperateInstallation: () => admin, settings: { me: null },
     openSettingsPane: (pane: string) => { opened = pane; },
   });
@@ -29,6 +32,17 @@ test("unconfigured send keeps the draft and shows the Model settings entry point
   await vm.runInContext("refreshModelReadiness()", context);
   assert.deepEqual(notice.children.map((child: { text: string }) => child.text), ["ui.next.composer.modelMissingMember"]);
   configured = true;
+  nodes.get("composer-text").value = "@Rex Hello Rex";
+  await vm.runInContext("sendMessage()", context);
+  assert.equal(checked.at(-1), "/api/model-readiness?agent=rex");
+  assert.equal(posts, 0); assert.equal(nodes.get("composer-text").value, "@Rex Hello Rex");
+  assert.deepEqual(notice.children.map((child: { text: string }) => child.text), ["ui.next.composer.modelMissingMember"]);
+  admin = true; opened = "";
+  await vm.runInContext("sendMessage()", context);
+  assert.equal(posts, 0); assert.equal(nodes.get("composer-text").value, "@Rex Hello Rex");
+  assert.deepEqual(notice.children.map((child: { text: string }) => child.text), ["ui.next.composer.modelMissing", "ui.next.composer.modelSettings"]);
+  notice.children[1].click(); assert.equal(opened, "model");
+  nodes.get("composer-text").value = "Hello Ada";
   await vm.runInContext("sendMessage()", context);
   assert.equal(posts, 1); assert.equal(nodes.get("composer-text").value, ""); assert.equal(notice.hidden, true);
   nodes.get("composer-text").value = "";
