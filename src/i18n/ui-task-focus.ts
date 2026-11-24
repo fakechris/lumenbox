@@ -9,6 +9,7 @@ export const UI_TASK_FOCUS: Record<string, readonly [string, string]> = {
   "ui.wr.blocker.execution": ["本轮未完成工作，需要继续执行。", "This execution did not finish the work; continuation is needed."],
   "ui.wr.blocker.empty_output": ["模型没有回复，本轮已结束。请再问一次。", "The turn ended without a reply from the model. Ask again."],
   "ui.wr.blocker.failed": ["执行失败，请查看执行过程后决定如何继续。", "Execution failed. Inspect the process before deciding how to continue."],
+  "ui.wr.blocker.model_auth_rejected": ["模型供应商拒绝了已配置的凭据。", "The model provider rejected the configured credentials."],
   "ui.wr.progress": ["现在的进展与依据", "Current progress and evidence"],
   "ui.wr.hostContext": ["系统提供的执行上下文", "Host execution context"],
   "ui.wr.phase.proposal": ["等待确认的提案", "Proposal awaiting commitment"],

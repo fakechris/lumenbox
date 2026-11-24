@@ -16,6 +16,27 @@ import { NEXT_FILES_JS } from "./next-files-ui.ts";
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
 
+test("rejected model credentials stay Stuck and offer the right next step for the role (INV-2108)", () => {
+  const task = { status: "doing", reading: { phase: "waiting", blocker: { kind: "model_auth_rejected", tools: [] } } };
+  const calls: string[] = [];
+  let admin = false;
+  const modelAuthBlock = pageFunction("modelAuthBlock", {
+    canOperateInstallation: () => admin, nextStateOf: nextLogic.nextStateOf, el: fakeEl, t: (key: string) => key,
+    closePanel: () => calls.push("closed"), openSettingsPane: (pane: string) => calls.push(pane),
+  }) as (task: unknown) => Fake | null;
+  assert.equal(nextLogic.nextStateOf(task).key, "stuck");
+  const member = modelAuthBlock(task)!;
+  assert.deepEqual(member.kids.map(node => node.text), ["ui.wr.blocker.model_auth_rejected", "ui.next.panel.modelAuthMember"]);
+  admin = true;
+  const operator = modelAuthBlock(task)!;
+  assert.equal(operator.kids[1]!.text, "ui.next.panel.modelAuthAdmin");
+  const button = operator.kids[2]!.kids[0]!;
+  assert.equal(button.text, "ui.next.composer.modelSettings");
+  button.press!();
+  assert.deepEqual(calls, ["closed", "model"]);
+  assert.equal(modelAuthBlock({ ...task, reading: { phase: "waiting", blocker: { kind: "failed" } } }), null);
+});
+
 test("work process distinguishes delivered files from a task metadata update failure", () => {
   const node = (tag: string, cls = "", text = "") => ({
     tag, cls, text, kids: [] as unknown[],

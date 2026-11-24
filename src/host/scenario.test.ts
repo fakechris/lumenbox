@@ -58,6 +58,34 @@ import { ExceptionLedger, noteTurnEnd } from "./exceptions.ts";
 import type { TranscriptEntry } from "./turn.ts";
 import { workReading } from "./work-reading.ts";
 
+test("a rejected provider key leaves a safe, specific work blocker (INV-2108)", async () => {
+  for (const status of [401, 400, 200]) {
+    const tasks = new TaskStore(null);
+    const episode = await runEpisode({
+      team: [{ name: "Ada" }],
+      says: ["Reply with exactly: hello."],
+      tasks,
+      script: () => {
+        if (status !== 200) throw Object.assign(new Error("provider response with credential details"), { status });
+        return { say: "hello" };
+      },
+    });
+    try {
+      const task = tasks.list().find(row => row.workRoot?.automatic);
+      assert.ok(task);
+      const reading = workReading(task, {
+        checks: new ResultChecks().snapshot(task),
+        stage: { active: false, questionPending: false, undelivered: false },
+      });
+      assert.equal(reading.blocker?.kind, status === 401 ? "model_auth_rejected" : status === 400 ? "failed" : undefined);
+      assert.doesNotMatch(JSON.stringify(reading), /provider response with credential details/);
+      if (status === 200) assert.equal(task.status, "done");
+    } finally {
+      episode.cleanup();
+    }
+  }
+});
+
 for (const recovers of [true, false]) {
   test(`empty reply after successful tools (INV-2032, ${recovers ? "recovers" : "explains how to retry"})`, async t => {
     const greeting = "Hello! I'm Ada. How can I help?";

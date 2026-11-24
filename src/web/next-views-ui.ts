@@ -322,7 +322,11 @@ function renderOpenedView() {
 }
 
 function nextStart() {
-  getJson("/api/me").then(function (got) { settings.me = got || {}; render(); if (canDriveAgents()) landSharedTemplate(); }, function () {});
+  getJson("/api/me").then(function (got) {
+    settings.me = got || {}; render();
+    if (panel.taskId && panel.task) renderPanel();
+    if (canDriveAgents()) landSharedTemplate();
+  }, function () {});
   document.querySelectorAll("[data-nav]").forEach(function (button) {
     button.addEventListener("click", function () { navigateView(button.dataset.nav); });
   });

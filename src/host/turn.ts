@@ -4,7 +4,7 @@ import { taskHoldsAttention } from "./task-attention.ts";
 import { POPPY_TOOLS } from "./poppy-tools.ts";
 import { needsComputer } from "./tool-capabilities.ts";
 import { SIDE_TURN_NOTE, sideTurnBudget } from "../agents/side-work.ts";
-import { whyWaiting, workHistoryConversation, workRegistry } from "../agents/work-attention.ts";
+import { MODEL_AUTH_REJECTED, whyWaiting, workHistoryConversation, workRegistry } from "../agents/work-attention.ts";
 import { progressContext as openProgressContext, selectedProgressBinding } from "./progress-admission.ts";
 import { admittedTaskBinding, takenTaskBinding, hasAdmittedTask } from "./execution-binding.ts";
 import { observeExecution, observedReplay } from "./execution-observer.ts";
@@ -47,7 +47,7 @@ import type { McpFace } from "./mcp-face.ts";
 import type { ModelRelay } from "./model-relay.ts";
 import type { AcpDelegates } from "./acp-delegate.ts";
 import type { DelegateSessions } from "./delegate-sessions.ts";
-import { classifyFailureOf, keepFirstSpecific, type FailureCategory } from "./failure-taxonomy.ts";
+import { classifyFailureOf, classifyStructuredFailureOf, keepFirstSpecific, type FailureCategory } from "./failure-taxonomy.ts";
 import { visibleTo, type Skill } from "./skills.ts";
 import {
   classifyLimit,
@@ -1554,14 +1554,13 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
   /** The quote gate fires at most once: it is a check, not a negotiation. */
   let quotesChecked = false;
 
-  let ended = false;
-  let endedHow: string | undefined;
+  let ended = false, endedHow: string | undefined;
   let stoppedBy: GoalTurnReport["stopReason"]; let spendWarning: string | undefined; let spendHit: Extract<SpendVerdict, { kind: "hit_wake" | "hit_day" }> | undefined; // stoppedBy: set when the turn stopped itself, so it ends "incomplete", not "done" (INV-1404); the agent's spend lines (INV-1615): a reminder due, or a line reached
   let lastFinalText: string | undefined, sentBack: string | undefined; // sentBack: an answer a gate held for another look (sent-back.ts)
   /** The whole turn's spend, for a goal's budget (INV-772). */
   const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   // The first specific failure class this turn saw, kept across retries (INV-1235): filed under what first went wrong, not the last wrapper.
-  let failureSeen: FailureCategory | undefined;
+  let failureSeen: FailureCategory | undefined, modelAuthRejected = false;
   const noteFailureClass = (error: unknown): FailureCategory => {
     failureSeen = keepFirstSpecific(failureSeen, classifyFailureOf(error));
     return failureSeen;
@@ -1577,7 +1576,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
       const unfinished = registry.readDurableState(agent.id, conversation).todos?.some(item => item.status !== "done") || !answering && taskHoldsAttention(deps.tasks?.get(taskBinding?.taskId ?? work.taskId ?? ""), conversation);
       const unavailable = bus.workAttention.get(work.owner, work.conversation)?.unavailable?.[0];
       const pendingPeers = (deps.policy?.pending().filter(item=>item.returnTo?.work.id===work.id).length??0) + (bus.workAttention.byId(work.id)?.awaiting.length ?? 0) + bus.relatedPending(agent.id, work) + (deps.pendingWork?.open().filter(item => item.workId === workId && item.kind !== "reminder" && item.kind !== "command").length ?? 0);
-      const [reason, wait] = whyWaiting({ lacking: blockedCapability ?? unavailable?.tool, how, confirmationPending, pendingPeers: pendingPeers > 0, unfinished: !!unfinished });
+      const [reason, wait] = whyWaiting({ lacking: blockedCapability ?? unavailable?.tool, how: modelAuthRejected ? MODEL_AUTH_REJECTED : how, confirmationPending, pendingPeers: pendingPeers > 0, unfinished: !!unfinished });
       bus.workAttention.settle(work, wait === undefined ? "answered" : "waiting", reason, wait);
       // A request answered in its own turn closes its card (INV-1822): the board's own rule for a turn
       // ending, which the chat door applied and the web door never reached. A turn that put up a card
@@ -2627,6 +2626,7 @@ ${outcome.text}`;
       console.error(
         `[turn] ${agent.profile.name}: giving up on round ${round}: ${recoveries.exhausted ? "cumulative retry limit reached" : retry.reason}`
       );
+      modelAuthRejected = classifyStructuredFailureOf(error) === "auth";
       throw recoveries.exhausted ? new Error("The cumulative model recovery allowance is exhausted; progress is partial.", { cause: error }) : error;
     }
 
