@@ -28,16 +28,12 @@ import { STRIP_TOKEN_JS } from "./token-url-ui.ts";
  * status as a colored dot plus a word. The tokens below are copied from the design
  * sheet rather than referenced, for the same reason everything else is inline.
  *
- * The embedded script uses string concatenation instead of template literals
- * throughout. It has to: this file is itself a template literal, so an inner
- * "${...}" would be evaluated here rather than shipped to the browser. The deliberate
- * interpolations are the Markdown options, which belong next to the tests that assert
- * what they guarantee, the Settings dialog's markup (settings-dialog-html.ts, so this
- * file's length can shrink); the manual's URL is a bundle word ({{ui.manualUrl}}, from manual-link.ts).
+ * The embedded script uses concatenation to avoid interpolating browser code in this template literal.
  */
 
 import { MARKDOWN_OPTIONS } from "./markdown.ts";
 import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts";
+import { CHANNEL_SETUP_JS } from "./channel-setup-ui.ts";
 
 export const APP_HTML = String.raw`<!doctype html>
 <html lang="{{@lang}}">
@@ -262,7 +258,7 @@ ${AGENT_ROW_STYLE}
   #shell { flex: 1; min-height: 0; display: flex; }
   /* The box bar: one tab per box, above everything, because switching a box switches the
      whole page (docs/39 §1). Hidden with one box — a bar of one tab says nothing. */
-  .settab-off { display: none !important; }
+  .settab-off, [data-docker-box][hidden] { display: none !important; }
   body:not([data-role="admin"]) [data-operator] { display: none !important; }
   #boxbar { display: none; align-items: center; gap: 6px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface); }
   #boxbar.many { display: flex; }
@@ -1908,13 +1904,18 @@ function renderMcp() {
     .catch(function () {});
 }
 
+${CHANNEL_SETUP_JS}
+var feishuCallbackTemplate;
+function updateChannelCallback() { channelCallbackHint($("setchcallback"), feishuCallbackTemplate, $("setchtype").value, $("setchid").value); }
+$("setchtype").addEventListener("change", updateChannelCallback);
+$("setchid").addEventListener("input", updateChannelCallback);
 function renderChannels() {
   renderMcp();
   fetch("/api/channels")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      // One row per door record; the adapter statuses decorate them. A record with
-      // no status was added after this process started and opens on the next restart.
+      feishuCallbackTemplate = data.feishuCallbackTemplate; updateChannelCallback();
+      $("setchbootstrap").hidden = !data.bootstrapPending;
       var statuses = {};
       (data.channels || []).forEach(function (ch) { statuses[ch.name] = ch; });
       var agents = data.agents || [];
@@ -1928,9 +1929,8 @@ function renderChannels() {
       $("setchannels").innerHTML = (data.records || []).map(function (rec) {
         var st = statuses[rec.id];
         var cls = st && st.running ? "ok" : st && st.configured ? "bad" : "";
-        var detail = st ? st.detail : rec.credentialsSet
-          ? "{{ui.app.restart-to-connect-this-channel}}"
-          : "{{ui.app.set}} " + rec.envBase + "_APP_ID + _APP_SECRET";
+        var detail = rec.credentialsSet ? (st ? st.detail : "{{ui.app.restart-to-connect-this-channel}}")
+          : "{{ui.next.doors.noCredentials}} · " + (rec.type === "telegram" ? "{{ui.channels.telegram-setup}}" : "{{ui.channels.add-credentials}}");
         return '<div style="display:flex;gap:9px;align-items:center;font-size:13px;flex-wrap:wrap">' +
           '<span class="dot ' + cls + '"></span>' +
           '<span style="min-width:70px">' + esc(rec.name) + "</span>" +
@@ -2224,15 +2224,16 @@ function renderBoxes() {
   return fetch("/api/boxes?lang={{@locale}}")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      var boxes = data.boxes || [];
-      $("setboxes").innerHTML = boxes.map(function (b, i) {
+      var boxes = (data.boxes || []).filter(function (b) { return data.backend !== "kubernetes" || (b.id !== data.own && b.kind !== "kubernetes"); });
+      $("setboxes").innerHTML = boxes.map(function (b) {
+        var own = b.id === data.own;
         var where = b.kind === "docker" ? "{{ui.app.docker-on-this-machine}}" : esc(b.endpoint || "{{ui.app.attached}}");
         return '<div style="display:flex;gap:8px;align-items:center;font-size:12.5px">' +
           '<span class="dot" style="width:8px;height:8px;background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
-          '<b>' + esc(b.name) + "</b>" + (i === 0 ? ' <span class="dim">{{ui.app.own}}</span>' : "") +
+          '<b>' + esc(b.name) + "</b>" + (own ? ' <span class="dim">{{ui.app.own}}</span>' : "") +
           '<span class="dim" style="flex:1">' + where + " {{ui.app.displays-from}}" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "{{ui.plural.s}}") + (b.connected ? "" : " {{ui.app.not-connected-2}}") + "</span>" +
           (myRole === "admin" ? '<button class="btn sm ghost" data-members-box="' + esc(b.name) + '" title="' + esc(b.membersLabel || "") + '">{{ui.app.members}}</button>' : "") +
-          (i === 0 ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">{{ui.app.detach}}</button>") +
+          (own ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">{{ui.app.detach}}</button>") +
           "</div>" +
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
@@ -2311,7 +2312,15 @@ $("setboxes").addEventListener("click", function (e) {
 
 function renderBoxSection() {
   renderBoxes();
-  if (boxState.ok) {
+  var cluster = boxState.backend === "kubernetes";
+  document.querySelectorAll("[data-docker-box], #setboximage, #setboximagenote").forEach(function (node) { node.hidden = cluster; });
+  $("setboxup").disabled = !!boxState.starting;
+  if (cluster) {
+    $("setboxstate").textContent = t("ui.next.boxset.backend") + ": Kubernetes · " + t("ui.next.boxset.namespace") + ": " + boxState.namespace + ". " + t("ui.next.box.sharedKubernetes");
+    fetch("/api/personal-boxes").then(function (r) { return r.json(); }).then(function (data) {
+      $("setclusterpods").textContent = (data.boxes || []).map(function (b) { return b.name + " · " + (b.podStatus || b.status) + (b.status === "unreachable" ? " · " + personalBoxError(b) : ""); }).join(" | ");
+    }).catch(function () {});
+  } else if (boxState.ok) {
     $("setboxstate").textContent = "{{ui.app.running-2}} " + boxState.detail;
   } else if (dockerState && dockerState.state === "no-binary") {
     // The machine has no docker command at all. Say what a box is, name the two things to install, and link them — the old error told the reader to run docker version, which
@@ -2324,7 +2333,7 @@ function renderBoxSection() {
   } else {
     $("setboxstate").textContent = "{{ui.app.not-running-agents-have-no}}";
   }
-  $("setboxactions").style.display = boxState.ok ? "none" : "";
+  $("setboxactions").style.display = boxState.ok || cluster ? "none" : "";
 }
 
 /**
@@ -2337,7 +2346,7 @@ function maybeOnboard() {
   fetch("/api/config")
     .then(function (r) { return r.json(); })
     .then(function (data) {
-      if (!(data.effective && data.effective.configured) || !boxState.ok) {
+      if (!(data.effective && data.effective.configured) || (!boxState.ok && boxState.backend !== "kubernetes")) {
         openSettings();
         $("setwelcome").style.display = "";
         // First run has one sensible ending: save and restart, so what was typed is what runs. A second, weaker button beside it invites the save that does not take effect, and
@@ -2365,7 +2374,7 @@ $("setboxup").onclick = function () {
       if (d.error) $("setboxlog").textContent += d.error + "\n";
     })
     .catch(function (error) { $("setboxlog").textContent += error.message + "\n"; })
-    .then(function () { $("setboxup").disabled = false; });
+    .then(function () { refresh().then(renderBoxSection); });
 };
 
 /** The approvals that hold until revoked, with the one action that ends each. */
@@ -2859,10 +2868,12 @@ function renderBoxBar() {
   bar.className = many ? "many" : "";
   if (!many) return;
   bar.innerHTML = boxesSeen.map(function (b) {
+    var kind = b.kind === "docker" || b.kind === "kubernetes" ? b.kind : "{{ui.app.attached}}";
     return '<a href="#" role="tab" class="tab' + (b.id === currentBox ? " on" : "") + '" data-box="' + esc(b.id) + '"' +
-      ' title="' + esc(b.kind === "docker" ? "{{ui.app.the-box-on-this-machine}}" : "{{ui.app.attached-at}} " + (b.baseUrl || b.address || "{{ui.app.another-machine}}")) + '">' +
+      ' title="' + esc(b.kind === "docker" ? "{{ui.app.the-box-on-this-machine}}" : b.kind === "kubernetes" ? kind :
+        "{{ui.app.attached-at}} " + (b.baseUrl || b.address || "{{ui.app.another-machine}}")) + '">' +
       '<span class="dot" style="background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
-      esc(b.name) + ' <span class="kind">' + esc(b.kind === "docker" ? "docker" : "{{ui.app.attached}}") + "</span>" +
+      esc(b.name) + ' <span class="kind">' + esc(kind) + "</span>" +
       "</a>";
   }).join("") +
     '<a href="#" class="tab" data-operator data-newbox="1" title="{{ui.app.create-or-attach-a-box}}">+ box</a>';
@@ -2887,6 +2898,7 @@ function selectBox(boxId) {
   currentBox = boxId;
   refreshSetup();
   renderBoxBar();
+  if (boxState.backend === "kubernetes") renderClusterBoxStatus();
   renderAgents();
   var selected = agentById(current);
   if (!selected || selected.boxId !== currentBox) {
@@ -4547,6 +4559,14 @@ function updateComposerTarget() {
       " {{ui.app.reaches-that-chat-not-the}}";
 }
 
+function renderClusterBoxStatus() {
+  var selected = boxesSeen.find(function (b) { return b.id === currentBox; });
+  $("boxinfo").textContent = !selected ? "" : selected.connected ? "{{ui.app.box-online}}" :
+    selected.id === boxState.own ? (selected.kind === "kubernetes" ? t("ui.next.box.sharedKubernetes") : boxState.detail) :
+    personalBoxError({ status: "unreachable", connectionError: selected.detail });
+  $("boxdot").className = "dot " + (selected && selected.connected ? "ok" : "bad");
+}
+
 function refresh() {
   return fetch("/api/state").then(function (r) { return r.json(); }).then(function (state) {
     var priorBox = currentBox;
@@ -4562,11 +4582,15 @@ function refresh() {
     renderBoxBar();
     allTools = state.allTools || allTools;
     $("model").innerHTML = state.provider ? "<b>" + esc(state.provider) + "</b>" : "";
-    boxState = { ok: !!state.box.ok, detail: String(state.box.detail || "") };
+    boxState = state.box;
+    var cluster = state.box.backend === "kubernetes";
     dockerState = state.box.docker || null;
-    $("boxinfo").textContent = (state.box.ok ? (state.box.detail === "answering" ? "{{ui.app.box-online}}" : state.box.detail) : "{{ui.app.box-unavailable}}") + // the probe's word, said plainly: nothing for the person to do
-      (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " {{ui.app.up}}" : "");
-    $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
+    if (cluster) renderClusterBoxStatus();
+    else {
+      $("boxinfo").textContent = (state.box.ok ? (state.box.detail === "answering" ? "{{ui.app.box-online}}" : state.box.detail) : "{{ui.app.box-unavailable}}") +
+        (state.boxes && state.boxes.length > 1 ? " · " + state.boxes.length + " boxes (" + state.boxes.filter(function (b) { return b.connected; }).length + " {{ui.app.up}}" : "");
+      $("boxdot").className = "dot " + (state.box.ok ? "ok" : "bad");
+    }
     showBoxClass(state.box);
     if (myRole === "admin" && !onboardChecked) {
       onboardChecked = true;
@@ -6083,7 +6107,9 @@ stream.onmessage = function (raw) {
     return;
   }
 
+  if (e.type === "box_status") { refresh(); return; }
   if (e.type === "box_setup") {
+    $("setboxup").disabled = !e.done;
     // Docker output while the box comes up, into the settings dialog's log — not the
     // activity feed, which an image pull would flood with a hundred lines.
     var boxLog = $("setboxlog");
@@ -7038,14 +7064,17 @@ function shelfCard(head, sub, action, dataAttr, preview) {
 
 var personalRequestId = null;
 var personalPoll = null;
+function personalBoxError(b) {
+  return b.error || (b.status === "unreachable" ? t("ui.next.box.podUnreachable", { why: b.connectionError || t("ui.next.box.healthPending") }) : "");
+}
 function renderPersonalBoxes(d) {
   $("personalstatus").textContent = d.held + " {{ui.app.allocated}} " + (d.quota === null ? "{{ui.app.unlimited}}" : d.quota) + " {{ui.app.quota}}";
   $("personalcreate").disabled = d.quota !== null && d.held >= d.quota;
   $("personalboxes").innerHTML = (d.boxes || []).map(function (b) {
     return '<div style="padding:6px 0"><span>' + esc(b.name) + ' — ' + esc(b.status) + '</span>' +
-      (b.error ? '<div class="fieldnote">' + esc(b.error) + '</div>' : '') +
-      (['failed', 'interrupted', 'detached', 'deleting'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">{{ui.app.retry-recover}}</button>' : '') +
-      (['ready', 'failed', 'detached'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">{{ui.app.remove-keep-data}}</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">{{ui.app.delete-box-and-data}}</button>' : '') + '</div>';
+      (personalBoxError(b) ? '<div class="fieldnote">' + esc(personalBoxError(b)) + '</div>' : '') +
+      (['failed', 'interrupted', 'detached', 'deleting', 'unreachable'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">{{ui.app.retry-recover}}</button>' : '') +
+      (['ready', 'failed', 'detached', 'unreachable'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">{{ui.app.remove-keep-data}}</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">{{ui.app.delete-box-and-data}}</button>' : '') + '</div>';
   }).join('');
   clearTimeout(personalPoll);
   if ((d.boxes || []).some(function (b) { return b.status === 'provisioning' || b.status === 'deleting'; })) personalPoll = setTimeout(loadPersonalBoxes, 2000);
@@ -7091,7 +7120,8 @@ function openShelf(preferredBox) {
   fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
     var boxes = d.boxes || [];
     $("shelfbox").innerHTML = boxes.map(function (b) {
-      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + (b.kind === "docker" ? " {{ui.app.docker}}" : " {{ui.app.attached-2}}") + "</option>";
+      var kind = b.kind === "kubernetes" ? " (" + b.kind + ")" : b.kind === "docker" ? " {{ui.app.docker}}" : " {{ui.app.attached-2}}";
+      return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + kind + "</option>";
     }).join("");
     var html = "";
     var market = d.marketplace || [];

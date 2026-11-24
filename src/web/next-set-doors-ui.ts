@@ -4,7 +4,10 @@
  * people who knocked and are waiting to be let in. An admin's pane. A credential is typed, saved
  * and never shown again: the page is only told whether one is set.
  */
+import { CHANNEL_SETUP_JS } from "./channel-setup-ui.ts";
+
 export const NEXT_SET_DOORS_JS = `
+${CHANNEL_SETUP_JS}
 var doors = { data: null, connectors: null, error: "", adding: false, note: "" };
 
 function loadDoors() {
@@ -20,6 +23,10 @@ function channelsBlock() {
   var data = doors.data, box = el("section", "setting"), running = {};
   (data.channels || []).forEach(function (channel) { running[channel.name] = channel; });
   box.appendChild(el("h2", "group", t("ui.next.doors.channels")));
+  if (data.bootstrapPending) {
+    var setup = el("a", "why", t("ui.channels.bootstrap-pending"));
+    setup.href = "/bootstrap"; box.appendChild(setup);
+  }
   if (doors.note) box.appendChild(el("p", "why", doors.note));
   var change = function (record, extra) {
     postJson("/api/channels/records", Object.assign({ id: record.id, type: record.type }, extra)).then(function (got) { doors.note = doorSaved(got); loadDoors(); }, failed);
@@ -27,7 +34,8 @@ function channelsBlock() {
   (data.records || []).forEach(function (record) {
     var state = running[record.id] || running[record.name] || {}, line = el("div", "fact"), text = el("span", ""), acts = el("span", "acts");
     var status = state.running ? t("ui.next.doors.on") : record.credentialsSet ? t("ui.next.doors.off") : t("ui.next.doors.noCredentials");
-    text.appendChild(el("b", "", record.name || record.id)); text.appendChild(el("div", "why", record.type + " · " + status + (state.detail ? " · " + state.detail : "")));
+    var detail = record.credentialsSet ? state.detail : t(record.type === "telegram" ? "ui.channels.telegram-setup" : "ui.channels.add-credentials");
+    text.appendChild(el("b", "", record.name || record.id)); text.appendChild(el("div", "why", record.type + " · " + status + (detail ? " · " + detail : "")));
     var who = selectOf([["", t("ui.next.config.default")]].concat((data.agents || []).map(function (agent) { return [agent.id, agent.name]; })), record.defaultAgent || "");
     var groups = selectOf([["addressed", t("ui.next.doors.addressed")], ["all", t("ui.next.doors.all")]], record.groupMessages || "addressed");
     who.setAttribute("aria-label", t("ui.next.doors.answers")); groups.setAttribute("aria-label", t("ui.next.doors.groups"));
@@ -67,6 +75,10 @@ function channelsBlock() {
   cancel.addEventListener("click", function () { doors.adding = false; render(); });
   [labelled(t("ui.next.doors.type"), type), labelled(t("ui.next.doors.id"), id), labelled(t("ui.next.member.name"), name), labelled(t("ui.next.doors.appId"), appId),
     labelled(t("ui.next.doors.appSecret"), secret)].forEach(function (node) { box.appendChild(node); });
+  var callback = el("p", "why");
+  var updateCallback = function () { channelCallbackHint(callback, data.feishuCallbackTemplate, type.value, id.value); };
+  type.addEventListener("change", updateCallback); id.addEventListener("input", updateCallback); updateCallback();
+  box.appendChild(callback);
   acts2.appendChild(save); acts2.appendChild(cancel); box.appendChild(acts2);
   return box;
 }

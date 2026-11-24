@@ -92,6 +92,7 @@ function installationViews({ store, mainWindow, openOutside, log, onCounts = () 
     });
     await ses.cookies.set({ url: record.origin, name: SESSION_COOKIE, value: token, path: "/", httpOnly: true, secure: record.origin.startsWith("https:"), sameSite: "lax" });
     const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    view.webContents.setUserAgent(`${view.webContents.getUserAgent()} LumenBoxOrgView/1`);
     view.webContents.setWindowOpenHandler(({ url }) => windowOpenAction(url, record.origin, openOutside));
     view.webContents.on("will-navigate", (event, url) => { if (windowOpenAction(url, record.origin, openOutside).action === "deny") event.preventDefault(); });
     view.webContents.on("destroyed", () => { ses.clearStorageData().catch(() => {}); });

@@ -441,6 +441,13 @@ export class KubeBoxes {
   }
 
   /** DELETE returns when the pod is *marked*; re-creating before the name frees is a 409 loop. */
+  async podStatus(name: string): Promise<string> {
+    const pod = await this.options.api.getPod(name);
+    if (!pod) return "Not created";
+    if (pod.metadata.deletionTimestamp !== undefined) return "Terminating";
+    return pod.status?.phase ?? "Unknown";
+  }
+
   private async waitPodGone(name: string): Promise<void> {
     const deadline = Date.now() + POD_DELETION_WAIT_MS;
     const interval = this.options.pollIntervalMs ?? 2_000;

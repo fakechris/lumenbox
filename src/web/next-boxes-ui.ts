@@ -18,6 +18,10 @@ function boxById(id) { return boxes.list.filter(function (box) { return box.id =
  */
 function startBox() {
   if (!canOperateInstallation()) return;
+  if (boxes.starting) return;
+  if (boxes.state && boxes.state.backend === "kubernetes") {
+    boxes.failed = t("ui.next.box.sharedKubernetes"); render(); return;
+  }
   boxes.starting = true; boxes.log = []; boxes.failed = ""; render();
   postJson("/api/box/up", {}).then(function (got) {
     // Already up: there will be no events to wait for.
@@ -30,11 +34,29 @@ function startBox() {
 }
 function boxSetupEvent(event) {
   if (!event || event.type !== "box_setup") return;
+  var changed = boxes.starting === !!event.done;
   boxes.starting = !event.done;
   if (event.line) boxes.log = boxes.log.concat([String(event.line)]).slice(-200);
   if (event.done) { boxes.failed = event.ok ? "" : String(event.line || ""); refresh(); }
   var log = document.querySelector("#box-notice pre"); // drawn only while starting, so not looked up by id
-  if (log) { log.textContent = boxes.log.slice(-8).join(String.fromCharCode(10)); log.scrollTop = log.scrollHeight; } else renderSide();
+  if (!changed && log) { log.textContent = boxes.log.slice(-8).join(String.fromCharCode(10)); log.scrollTop = log.scrollHeight; } else render();
+}
+
+function podUnreachable(detail) {
+  return t("ui.next.box.podUnreachable", { why: detail || t("ui.next.box.healthPending") });
+}
+
+function personalBoxRetry(id, onRetried) {
+  var retry = el("button", "act", t("ui.next.boxset.retryConnection"));
+  retry.addEventListener("click", function () {
+    retry.disabled = true;
+    return postJson("/api/personal-boxes/retry", { id: id }).then(function () {
+      retry.disabled = false;
+      if (onRetried) onRetried();
+      refreshSoon();
+    }, function (error) { retry.disabled = false; failed(error); });
+  });
+  return retry;
 }
 
 /** Why this installation's own computer is not there, in words a person can act on. */
@@ -54,14 +76,28 @@ function boxNotice() {
   members.hidden = !members.firstChild;
   strip.hidden = !box || box.connected !== false;
   if (strip.hidden) return;
-  var admin = canOperateInstallation(), why = admin ? boxWhy(box) : "offline";
-  strip.replaceChildren(el("span", "", why === "missing" ? t("ui.box.dockerMissing") : why === "stopped" ? t("ui.box.dockerStopped") : t("ui.next.box.offline", { name: box.name })));
+  var admin = canOperateInstallation();
+  if (box.kind === "kubernetes" && box.id !== boxes.own) {
+    strip.replaceChildren(el("span", "", podUnreachable(box.detail)));
+    if (admin) {
+      var settingsLink = el("button", "act", t("ui.next.box.podSettings"));
+      settingsLink.addEventListener("click", function () { openSettingsPane("boxes"); });
+      strip.appendChild(settingsLink);
+    } else if (canDriveAgents()) {
+      strip.appendChild(personalBoxRetry(box.id));
+    }
+    return;
+  }
+  var why = admin ? boxWhy(box) : "offline";
+  var sharedKubernetes = box.id === boxes.own && boxes.state && boxes.state.backend === "kubernetes";
+  strip.replaceChildren(el("span", "", sharedKubernetes ? (box.kind === "kubernetes" ? t("ui.next.box.sharedKubernetes") : admin ? boxes.state.detail : t("ui.next.box.offline", { name: box.name })) :
+    why === "missing" ? t("ui.box.dockerMissing") : why === "stopped" ? t("ui.box.dockerStopped") : t("ui.next.box.offline", { name: box.name })));
   if (why === "missing") {
     [["Docker Desktop", "https://www.docker.com/products/docker-desktop/"], ["OrbStack", "https://orbstack.dev/"]].forEach(function (pair) {
       var link = el("a", "", pair[0]); link.href = pair[1]; link.target = "_blank"; link.rel = "noopener noreferrer"; strip.appendChild(link);
     });
   }
-  if (!admin || box.id !== boxes.own) return;
+  if (!admin || box.id !== boxes.own || sharedKubernetes) return;
   var start = el("button", "act", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
   start.id = "box-start"; start.disabled = boxes.starting;
   start.addEventListener("click", startBox);
@@ -92,12 +128,16 @@ function renderBoxes(view) {
     row.appendChild(el("span", "who", initial(box.name)));
     row.appendChild(body);
     row.appendChild(el("span", box.connected ? "chip-run" : "chip", t(box.connected ? "ui.next.box.on" : "ui.next.box.off")));
-    if (admin && !box.connected && box.id === boxes.own) {
+    if (!admin && !box.connected && box.id === boxes.own && box.kind === "kubernetes") {
+      body.appendChild(el("div", "why", t("ui.next.box.sharedKubernetes")));
+    } else if (admin && !box.connected && box.id === boxes.own) {
       var start = el("button", "act", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
       start.disabled = boxes.starting; start.addEventListener("click", startBox);
       row.appendChild(start);
+      if (boxes.failed) body.appendChild(el("div", "why", boxes.failed));
     }
-    if (admin && box.id !== boxes.own && !(box.agents > 0)) {
+    if (!box.connected && box.kind === "kubernetes" && box.id !== boxes.own) body.appendChild(el("div", "why", podUnreachable(box.detail)));
+    if (admin && box.id !== boxes.own && box.kind !== "kubernetes" && !(box.agents > 0)) {
       var remove = el("button", "act", t("ui.next.box.remove"));
       remove.addEventListener("click", function () {
         var confirm = el("button", "act-danger", t("ui.next.box.removeConfirm"));

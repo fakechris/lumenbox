@@ -25,6 +25,7 @@ function numberField(labelText, value, min, max) {
 function settingsPane(key) { return Object.hasOwn(NATIVE_PANES, key) ? key : ""; }
 function openSettingsPane(key) {
   if (!canDriveAgents() || (key && settingsPanes().indexOf(key) < 0)) return;
+  if (key === "boxes" && boxSet.config !== null) loadBoxSet();
   navigateView("settings", key);
 }
 
@@ -119,10 +120,15 @@ function setupCard() {
   var state = settings.setup;
   if (!state || !canDriveAgents()) return null;
   var admin = canOperateInstallation(), here = state.byBox ? state.byBox[chat.box] || {} : state;
-  if (!chat.box && (admin || state.hasPersonalBox !== false)) return null;
+  var bootstrap = admin && state.bootstrapPending, card = el("div", "card-plain");
+  if (bootstrap) {
+    var link = el("a", "act", t("ui.channels.bootstrap-pending"));
+    link.href = "/bootstrap"; card.appendChild(link);
+  }
+  if (!chat.box && (admin || state.hasPersonalBox !== false)) return bootstrap ? card : null;
   var who = settings.me.identity || "operator";
   var storageKey = "lumen-setup-closed:" + state.installationId + ":" + who + ":" + chat.box;
-  if ((admin && here.established) || localStorage.getItem(storageKey) === "1") return null;
+  if ((admin && here.established) || localStorage.getItem(storageKey) === "1") return bootstrap ? card : null;
   var agent = agentsHere().length > 0, steps = admin ? [
     { key: "key", done: state.key, open: function () { openSettingsPane("model"); } },
     { key: "box", done: here.box, open: function () { openSettingsPane("boxes"); } },
@@ -131,7 +137,7 @@ function setupCard() {
   ] : chat.box ? [{ key: "agent", done: agent, open: function () { openMember(""); } }] : [];
   if (!admin && state.hasPersonalBox !== undefined) steps.unshift({ key: "personalBox", done: state.hasPersonalBox, open: createSetupBox });
   if (!admin && steps.every(function (step) { return step.done; })) return null;
-  var card = el("div", "card-plain"), close = el("button", "act", t("ui.next.act.close"));
+  var close = el("button", "act", t("ui.next.act.close"));
   card.appendChild(el("div", "card-head", t("ui.next.setup.title")));
   steps.forEach(function (step) {
     var row = el("div", "setup-step"), go = el("button", "act", t("ui.next.setup.go"));

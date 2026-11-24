@@ -22,6 +22,42 @@ import { APP_PAGE } from "./page-locale.ts";
 /** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
 const APP_HTML = APP_PAGE("en");
 
+test("classic onboarding checks model readiness but does not require a Kubernetes shared box", async () => {
+  const source = APP_HTML.slice(APP_HTML.indexOf("function maybeOnboard()"), APP_HTML.indexOf("function markOnboarded()"));
+  const opensWelcome = async (backend: string, configured: boolean, ok: boolean) => {
+    let opened = false;
+    runInNewContext(`${source}; maybeOnboard();`, {
+      boxState: { backend, ok }, localStorage: { getItem: () => null }, $: () => ({ style: {} }),
+      fetch: async () => ({ json: async () => ({ effective: { configured } }) }),
+      openSettings: () => { opened = true; },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    return opened;
+  };
+  assert.equal(await opensWelcome("kubernetes", true, false), false);
+  assert.equal(await opensWelcome("kubernetes", false, false), true);
+  assert.equal(await opensWelcome("docker", true, false), true);
+  assert.equal(await opensWelcome("docker", true, true), false);
+});
+
+test("both channel forms show the Feishu callback for the ID being entered (INV-2058)", async () => {
+  const { NEXT_PAGE } = await import("./page-locale.ts");
+  for (const page of [APP_HTML, NEXT_PAGE("en")]) {
+    const source = /function channelCallbackHint\([\s\S]*?\n}/.exec(page)?.[0];
+    assert.ok(source);
+    const node = { hidden: false, textContent: "" };
+    const hint = runInNewContext(source + "\nchannelCallbackHint") as (node: object, template: string | undefined, type: string, id: string) => void;
+    const template = "https://org.example/auth/CHANNEL_ID/callback";
+    hint(node, template, "feishu", "work");
+    assert.match(node.textContent, /https:\/\/org\.example\/auth\/work\/callback$/);
+    hint(node, template, "dingtalk", "work");
+    assert.equal(node.hidden, true);
+    hint(node, undefined, "feishu", "");
+    assert.equal(node.hidden, false);
+    assert.match(node.textContent, /AGENTBOX_PUBLIC_URL/);
+  }
+});
+
 test("Mine offers first-admin setup only to an uninitialized operator, and explains unavailable setup", () => {
   const source = APP_HTML.slice(APP_HTML.indexOf("var mcpSetup, myIdentity;"), APP_HTML.indexOf("function renderMcpTokens(tokens)"));
   const notice = {
@@ -69,7 +105,7 @@ test("the classic Guide offers personal-box creation to a driver without a visib
 test("classic Settings loads the driver's own token list without reading installation config", async () => {
   const settings = APP_HTML.slice(APP_HTML.indexOf("function openSettings("), APP_HTML.indexOf("/** Scopes:"));
   const mcp = APP_HTML.slice(APP_HTML.indexOf("function renderMcp()"), APP_HTML.indexOf("function renderChannels()"));
-  const wrap = { style: { display: "none" } };
+  const wrap = { style: { display: "none" }, addEventListener() {} };
   const servers = { style: { display: "" } };
   const tokens = [{ label: "my editor", mine: true, createdAt: "2026-01-01" }], paths: string[] = [];
   let listed: unknown;
