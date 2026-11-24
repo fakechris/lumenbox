@@ -63,16 +63,6 @@ export interface UpgradeSituation {
   hour: number;
   /** How long this upgrade has already waited for its window. */
   waitingHours?: number;
-  /**
-   * Whether a person has already been asked about *this* image and these findings, and
-   * said yes (`upgrade-consent.ts`).
-   *
-   * A boolean rather than the consent itself, because matching a decision to a situation
-   * is the caller's job and a delicate one — the image must be the same image and the
-   * losses the same losses — and this function's whole value is being a pure statement of
-   * the rules over a situation somebody else established.
-   */
-  approved?: boolean;
 }
 
 export type UpgradeDecision =
@@ -105,18 +95,7 @@ export function decideUpgrade(situation: UpgradeSituation): UpgradeDecision {
     };
   }
 
-  // A question already answered is not asked again. Every rule below this line up to the
-  // watching check exists to put a decision in front of a person; the caller has
-  // established that a person saw *this* image and *these* findings and said yes, so
-  // re-asking is not caution, it is the notice nobody reads.
-  //
-  // Deliberately only these. What a person authorised is the loss — they were shown a
-  // list of files and a list of jobs and accepted them. They said nothing about whether
-  // now is a good moment, so the rules about interrupting people and about the quiet
-  // window still apply underneath, unchanged.
-  const decided = situation.approved === true;
-
-  if (!decided && situation.preflight.unknown !== undefined) {
+  if (situation.preflight.unknown !== undefined) {
     return {
       action: "ask",
       why: "The box could not be inspected, so what an upgrade would destroy is unknown.",
@@ -124,7 +103,7 @@ export function decideUpgrade(situation: UpgradeSituation): UpgradeDecision {
     };
   }
 
-  if (!decided && !isQuiet(situation.preflight)) {
+  if (!isQuiet(situation.preflight)) {
     return {
       action: "ask",
       why: "Upgrading would destroy work that is not on a volume.",
@@ -132,7 +111,7 @@ export function decideUpgrade(situation: UpgradeSituation): UpgradeDecision {
     };
   }
 
-  if (!decided && situation.protocolChanges === true) {
+  if (situation.protocolChanges === true) {
     // Not merely disruptive: anything talking to this box may stop working until it is
     // upgraded too, and that is not a decision to take on somebody's behalf at 4am.
     return {
@@ -152,7 +131,7 @@ export function decideUpgrade(situation: UpgradeSituation): UpgradeDecision {
   }
 
   if (situation.quietHour !== undefined && situation.quietHour !== situation.hour) {
-    if (!decided && (situation.waitingHours ?? 0) >= STALE_WAIT_HOURS) {
+    if ((situation.waitingHours ?? 0) >= STALE_WAIT_HOURS) {
       return {
         action: "ask",
         why:
@@ -169,65 +148,10 @@ export function decideUpgrade(situation: UpgradeSituation): UpgradeDecision {
     };
   }
 
-  // The reason has to be the real one. "Nothing would be lost" is what makes an
-  // unattended upgrade defensible, and it is false for an approved one — something *would*
-  // be lost, and a person looked at the list and accepted it. Saying so is the difference
-  // between a log line that explains a destroyed file and one that contradicts it.
   return {
     action: "go",
-    why: decided
-      ? "Somebody was shown what this would destroy and approved it."
-      : "Nothing is running, nobody is connected, and nothing would be lost.",
+    why: "Nothing is running, nobody is connected, and nothing would be lost.",
   };
-}
-
-/**
- * What to say to the people who have to decide, or who are about to be interrupted.
- *
- * Written here rather than at each channel so every route says the same thing, and so the
- * wording is testable. It names what the upgrade costs before what it offers: a person
- * deciding needs the cost, and a person who only skims should still see it.
- *
- * **It may not offer anything nothing implements.** The first version ended `Reply
- * "upgrade" to go ahead` and `Reply "wait" to postpone it`, and no such handler existed
- * anywhere — replying did nothing, in silence. The cost of that is not one wasted reply:
- * somebody read "reply to go ahead", reasonably concluded the bot could act on the box,
- * and asked the agent in the chat to back the listed files up (2026-09-15). A button that
- * is not wired is worse than no button, because the next real notice is not believed
- * either.
- *
- * `UPGRADE_WORD` is now wired — `parseUpgradeApproval` in the channel manager answers it,
- * and a test asserts that the word this message names is the word that manager parses, so
- * the two cannot drift apart again. What it does is stated exactly, including what it does
- * not do: it records a decision, and the box is recreated by the upgrade run that reads
- * it, not by the reply. `"wait"` is still unimplemented and so is still not offered.
- */
-export function upgradeMessage(decision: UpgradeDecision, boxName: string): string {
-  switch (decision.action) {
-    case "ask":
-      return (
-        `${boxName} has an upgrade waiting, and it needs you to decide.\n\n` +
-        `${decision.why}\n\n${decision.detail}\n\n` +
-        `Reply "${UPGRADE_WORD}" to approve it. That records your decision and nothing ` +
-        `else — the box is recreated by the next upgrade run, which will then stop ` +
-        `asking. Or leave it and nothing happens.`
-      );
-    case "announce":
-      return (
-        `${boxName} has an upgrade waiting, and taking it will interrupt you.\n\n` +
-        `${decision.why} Open browser tabs and anything running in a shell will be lost; ` +
-        `saved work and browser logins are kept.\n\n` +
-        `This is a warning, not a countdown: it happens when somebody runs ` +
-        `\`agentbox box upgrade\`. Replying here does not postpone it — finish what is on ` +
-        `the screen, or say so to whoever runs it.`
-      );
-    case "repair":
-      return `${boxName} is being upgraded now: ${decision.why}`;
-    case "wait":
-      return `${boxName} has an upgrade waiting. ${decision.why}`;
-    case "go":
-      return `${boxName} is upgrading. ${decision.why}`;
-  }
 }
 
 

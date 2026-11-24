@@ -4,7 +4,7 @@
  * The activity feed rendered `Ada → bash` and the task card `bash: python batch.py`. Both
  * are true and neither is what the person glancing at them wanted to know, which is
  * "what is it doing, roughly" — running a command, reading a file, opening a website.
- * `progress-file.ts` rightly refuses to turn tool calls into a progress number; this is
+ * `task-progress.ts` rightly refuses to turn tool calls into a progress number; this is
  * the other half: a phrase, not a number, and never a guess.
  *
  * Deterministic on purpose: a table from tool name to a template, plus one extractor

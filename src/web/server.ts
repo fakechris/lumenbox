@@ -201,7 +201,7 @@ import { SentRootsLedger, sentRootsPath } from "../channels/sent-roots.ts";
 import { poppyRoute } from "./poppy-routes.ts";
 import { isLive, isTaskStatus, type Task } from "../host/tasks.ts"; import { UnknownAgentError } from "../host/task-agents.ts";
 import { connectorSatisfied } from "../host/mcp-connectors.ts";
-import { adminRecipients } from "../host/upgrade.ts";
+import { adminRecipients, UPGRADE_WORD } from "../host/upgrade.ts";
 import { BoxUpdateService, boxUpdateRoute } from "./box-update-routes.ts"; import { personRoute } from "./person-routes.ts"; import { PERSON_JS } from "./person-ui.ts"; import { agentFactsRoute } from "./agent-facts.ts"; import { agentCaseText } from "../host/consent-case.ts"; import { ROW_ORDER_JS } from "./row-order.ts"; import { BOARD_ORDER_JS } from "./board-order.ts"; import { teamMemoryReviewRoute } from "./team-memory-review-routes.ts"; import { outboxRoute } from "./outbox-routes.ts"; import { OUTBOX_JS } from "./outbox-ui.ts"; import { chatTarget } from "../host/outbox-drafts.ts"; import { TEAM_MEMORY_REVIEW_JS } from "./team-memory-review-ui.ts"; import { orgKnowledgeRoute } from "./org-knowledge-routes.ts"; import { orgCorrectionRoute } from "./org-correction-routes.ts"; import { ORG_CORRECTION_JS } from "./org-correction-ui.ts"; import { ORG_KNOWLEDGE_JS } from "./org-knowledge-ui.ts"; import { pendingReviews } from "../host/team-memory-review.ts"; import { CLAIM_ACCOUNT_JS } from "./claim-account-ui.ts"; import { DIGEST_HOUR, heldSection, PushBudget } from "../host/push-budget.ts"; import { pushBudgetRoute } from "./push-budget-routes.ts"; import { PUSH_BUDGET_JS } from "./push-budget-ui.ts"; import { SpendLimits, todaysRows } from "../host/spend-limits.ts"; import { spendLimitRoute } from "./spend-limit-routes.ts"; import { SPEND_LIMIT_JS } from "./spend-limit-ui.ts"; import { configuredRates } from "../host/provider-fallback.ts"; import { BoxKeeper } from "./box-keeper.ts"; import { AgentPauses } from "../host/agent-pause.ts"; import { ProbeKeeper, type ProbeKind } from "../host/boundary-probe.ts"; import { longWorkRoute } from "./long-work-routes.ts"; import { taskArchiveRoute } from "./task-archive-routes.ts"; import { runLaterWords } from "../host/run-later-words.ts"; import type { RunLaterFinding } from "../host/run-later-paths.ts";
 import { agentPauseRoute } from "./agent-pause-routes.ts"; import { reminderRoute } from "./reminder-routes.ts"; import { historySearchRoute } from "./history-search-routes.ts"; import { installationHeld } from "../host/search-history-tool.ts"; import { exceptionRetryDeps, exceptionRoute, noteDelivery } from "./exception-routes.ts"; import { EXCEPTIONS_JS } from "./exceptions-ui.ts"; import { AGENT_PAUSE_JS } from "./agent-pause-ui.ts"; import { diagnosticsRoute } from "./diagnostics-routes.ts"; import { DIAGNOSTICS_JS } from "./diagnostics-ui.ts"; import { providerRests, quotaStatusLine } from "../host/provider-rest.ts"; import { providerRestRoute, restNotice } from "./provider-rest-routes.ts"; import { PROVIDER_REST_JS } from "./provider-rest-ui.ts"; import { fallbackRoute } from "./provider-fallback-routes.ts"; import { PROVIDER_FALLBACK_JS } from "./provider-fallback-ui.ts"; import { routineRunsRoute } from "./routine-runs-routes.ts"; import { ROUTINE_RUNS_JS } from "./routine-runs-ui.ts"; import { deliverableRoute } from "./deliverable-routes.ts"; import { DELIVERABLES_JS } from "./deliverables-ui.ts"; import { DIVISION_JS } from "./division-ui.ts"; import { taskGateRoute } from "./task-gate-routes.ts"; import { TASK_GATE_JS } from "./task-gate-ui.ts"; import { isForkChild } from "../host/pending-work.ts"; import { readToolPermissions, toolPermissionRoute } from "./tool-permission-routes.ts"; import { TOOL_PERMS_JS } from "./tool-permissions-ui.ts"; import { configVersionRoute } from "./config-version-routes.ts"; import { CONFIG_HISTORY_JS } from "./config-history-ui.ts"; import { switchesForTask } from "../agents/config-versions.ts"; import { CredentialWaits } from "../host/credential-waits.ts"; import { secretsNeededBy, taskCredentialEvent, templateCredentialEvent, templateSkillNeeds, type CredentialEvent } from "./credential-routes.ts"; import { CREDENTIALS_JS } from "./credentials-ui.ts"; import { ORGANISATIONS_JS } from "./organisations-ui.ts"; import { INSTALLATIONS_JS } from "./installations-ui.ts"; import { MACHINE_JS } from "./machine-use-ui.ts"; import { GuestDesk } from "../host/guests.ts"; import { answerGuest, guestMessageOf } from "../host/guest-turn.ts"; import { guestAnswerReview } from "../host/answer-review.ts"; import { guestRoute } from "./guest-routes.ts"; import { GUEST_JS } from "./guest-ui.ts"; import { boxRegisterRoute } from "./box-register-routes.ts"; import { nodeMembersRefusal, nodeOfBox, nodeRoute } from "./node-routes.ts"; import { NODES_JS } from "./nodes-ui.ts"; import { blockerProblem, dependencyView, notReady, parseBlockers } from "../host/task-deps.ts"; import { TASK_DEPS_JS } from "./task-deps-ui.ts";
 import { BootstrapAdmins } from "../host/bootstrap.ts"; import { boxRegistrationModeAt, openRoster, PERSONAL_ONLY_KEY, PersonalInstallationOnly, roleLabel } from "../host/installation.ts"; import { redeemInvite } from "../host/invite-redeem.ts"; import { installationRoute, mergeRoute, routeErrorReply } from "./installation-routes.ts"; import { adoptOperatorNotes, applyPendingMerge, doorOfIdentity, lastActiveByPrincipal, mergePaths } from "../host/self-merge.ts"; import { operatorKey } from "../host/person.ts"; import { INSTALLATION_JS } from "./installation-ui.ts";
@@ -1044,7 +1044,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // situation, and after a restart the timer re-derives it from the box rather than
   // resurrecting somebody's unanswered prompt from a file. The *answer* is what is
   // durable, and it lives in the consent ledger.
-  let upgradeWaiting: { image: string; losses: string } | undefined;
+  let upgradeWaiting: { image: string } | undefined;
 
   // Prepares a handoff for a long private chat at rest; never switches it (INV-1190).
   const steward = new ContextSteward({
@@ -1325,13 +1325,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
-    // The answer to the upgrade notice, coming back the way it was asked. Recorded,
-    // not acted on: the destructive sequence — back up the volumes, recreate, verify,
-    // roll back if the box does not return — exists once, in `agentbox box upgrade`,
-    // and docs/12 §5 is explicit that a web server must not be the second copy of it.
-    // So the box is recreated by the next upgrade run, which reads this and stops
-    // asking. Approving twice is harmless; the ledger is append-only and the newest
-    // matching record wins.
+    // The answer to the upgrade notice, coming back the way it was asked: the same shared
+    // update Settings → Boxes → Apply update runs (box-update.ts), which waits for work in
+    // flight and keeps the volumes. Approving twice is harmless; a second start is refused.
     upgrade: {
       waiting: () => upgradeWaiting?.image,
       approve: identity => {
@@ -2447,8 +2443,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (state?.available !== true) { upgradeWaiting = undefined; return; } // updated since: "upgrade" has nothing to start
       if (upgradeToldAbout === state.expectedRef) return;
       upgradeToldAbout = state.expectedRef;
-      upgradeWaiting = { image: state.expectedRef, losses: "" };
-      const text = `Your box can be updated to ${state.expectedRef} (it runs ${state.runningRef ?? "an older image"}). Settings → Boxes → Apply update, or reply "upgrade". It waits for work in progress and keeps the box's files and browser logins.`;
+      upgradeWaiting = { image: state.expectedRef };
+      const text = `Your box can be updated to ${state.expectedRef} (it runs ${state.runningRef ?? "an older image"}). Settings → Boxes → Apply update, or reply "${UPGRADE_WORD}". It waits for work in progress and keeps the box's files and browser logins.`;
       broadcast({ type: "error", boxId: registry.box.id, message: text });
       for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text);
       log(`box update available (${state.runningRef} -> ${state.expectedRef})`);
