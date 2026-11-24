@@ -64,6 +64,7 @@ test("an auto routine's Run now is a real turn; with the chat held it is refused
       assert.match(unstarted?.reason ?? "", /its turn did not start: Mia did not take it up \(busy with other work in this chat\)/);
     }
     assert.equal(host.scheduler.holds.holdOf(slug), undefined, "a turn that never started is not the routine's failure: three of them do not pause it");
+    assert.equal(host.exceptions.list().some(entry => entry.kind === "routine"), false, "nor do they open an issue whose Retry could not run it");
     focus.settle(work, "answered");
     writePause(registry.dirFor(mia.id), { by: "chris", at: new Date().toISOString(), reason: "on leave" });
     const paused = await host.scheduler.runNow(slug);

@@ -39,7 +39,7 @@ import { mkdirSync } from "node:fs";
 import { appendLine } from "./jsonl.ts"; import { DOCKER_WORK } from "./box-paths.ts";
 import type { DeliverWhen } from "./routine-resolve.ts";
 import type { RunResult } from "./run-result.ts";
-import { readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
+import { NOT_STARTED, readRunLedger, RoutineHolds, runsOf, type RoutineHold, type RoutineReason, type RoutineRun, type RunRecord } from "./routine-runs.ts";
 import { upcomingFires } from "./schedule-time.ts";
 import { classifyFailure } from "./failure-taxonomy.ts";
 import { IDLE_OWNER, idleDays, idleReason, type IdledRoutine, type IdleOwner } from "./routine-idle.ts";
@@ -523,7 +523,10 @@ export class Scheduler {
           ms: this.now().getTime() - startedAt.getTime(),
           ...(this.deps.spentSinceAgent !== undefined ? { tokens: this.deps.spentSinceAgent(startedAt.getTime(), agent) } : {}),
         });
-        try { this.deps.finished?.(skill, agent, outcome.result, outcome.reason); } catch (error) { this.log(`${skill.name}: could not note the end (${error instanceof Error ? error.message : String(error)})`); }
+        // A turn that never started is not the routine failing: no issue and no Retry, as it is no pause either.
+        if (outcome.code !== NOT_STARTED) {
+          try { this.deps.finished?.(skill, agent, outcome.result, outcome.reason); } catch (error) { this.log(`${skill.name}: could not note the end (${error instanceof Error ? error.message : String(error)})`); }
+        }
         if (retrying) {
           this.log(`${skill.name}: failed on a passing cause; retry ${retry} of ${ROUTINE_RETRIES} in ${routineRetryDelayMs(retry) / 60_000} min`);
           const timer = setTimeout(() => { void this.runNow(skill.slug, retry).then(ran => { if (!ran.ok) { this.retries.delete(skill.slug); this.log(`${skill.name}: retry ${retry} did not start — ${ran.reason}`); } }); }, routineRetryDelayMs(retry));
