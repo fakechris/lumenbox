@@ -298,7 +298,7 @@ function renderChat(view) {
   $("view-title").textContent = agent ? agent.name : t("ui.next.nav.chat"); $("view-title").title = agent ? t("ui.next.thread.agent") : "";
   $("view-hint").textContent = agent ? (agent.title || agent.description || "") : "";
   $("composer").hidden = !agent;
-  renderModelNotice();
+  renderModelNotice(); renderWatchOnly();
   $("composer-text").placeholder = agent ? t("ui.next.chat.placeholder", { name: agent.name }) : "";
   if (agent && chat.loading !== chat.agentId && chat.loadedFor !== chat.agentId) loadThread();
   if (chat.loadedFor === chat.agentId || !agent) renderThread(view);
@@ -350,7 +350,12 @@ async function sendMessage() {
   chat.entries = chat.entries.concat([{ kind: "text", role: "user", text: text }]);
   chat.live = { text: "", doing: "" }; chat.jump = true;
   render();
-  postJson("/api/prompt", { agent: id, conversation: chat.conversation, text: text }).catch(function (error) { chat.live = null; failed(error); loadThread(); });
+  postJson("/api/prompt", { agent: id, conversation: chat.conversation, text: text }).catch(function (error) {
+    // Refused, the words are given back and the server's own sentence is shown (INV-2047); a refusal may be a role that changed.
+    chat.live = null; failed(error); loadThread();
+    if (chat.agentId === id && !input.value.trim()) input.value = text;
+    rereadRole();
+  });
 }
 
 /** Live events for the open conversation: words as they come, what it is doing, and a re-read when the turn ends. */

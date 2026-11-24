@@ -257,6 +257,7 @@ function renderView(view) {
 function refresh() {
   if (next.loading) { next.refreshAgain = true; return Promise.resolve(); }
   next.loading = true;
+  if (settings.me) rereadRole(); // a role changed by an admin reaches this page with everything else (INV-2047)
   // A refused optional read must not prevent the rest of the page from drawing.
   var machines = getJson("/api/boxes?lang={{@locale}}").then(function (got) { return got; }, function () { return { boxes: [], own: "" }; });
   var setup = getJson("/api/setup").catch(function () { return settings.setup; });
