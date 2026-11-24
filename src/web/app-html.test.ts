@@ -22,6 +22,24 @@ import { APP_PAGE } from "./page-locale.ts";
 /** The page as an English reader receives it: its words filled from the bundle (INV-1684). */
 const APP_HTML = APP_PAGE("en");
 
+test("classic onboarding checks model readiness but does not require a Kubernetes shared box", async () => {
+  const source = APP_HTML.slice(APP_HTML.indexOf("function maybeOnboard()"), APP_HTML.indexOf("function markOnboarded()"));
+  const opensWelcome = async (backend: string, configured: boolean, ok: boolean) => {
+    let opened = false;
+    runInNewContext(`${source}; maybeOnboard();`, {
+      boxState: { backend, ok }, localStorage: { getItem: () => null }, $: () => ({ style: {} }),
+      fetch: async () => ({ json: async () => ({ effective: { configured } }) }),
+      openSettings: () => { opened = true; },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    return opened;
+  };
+  assert.equal(await opensWelcome("kubernetes", true, false), false);
+  assert.equal(await opensWelcome("kubernetes", false, false), true);
+  assert.equal(await opensWelcome("docker", true, false), true);
+  assert.equal(await opensWelcome("docker", true, true), false);
+});
+
 test("both channel forms show the Feishu callback for the ID being entered (INV-2058)", async () => {
   const { NEXT_PAGE } = await import("./page-locale.ts");
   for (const page of [APP_HTML, NEXT_PAGE("en")]) {

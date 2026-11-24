@@ -80,12 +80,13 @@ ${renderSettingsTabs()}
     <div class="field" data-tier="installation" id="setboxwrap" data-settab="boxes">
       <label>{{ui.settings.box}}</label>
       <div class="fieldnote" id="setboxstate" style="margin:0"></div>
-      <div id="setboxactions" style="display:none">
+      <div id="setboxactions" data-operator style="display:none">
         <button class="btn sm" id="setboxup">{{ui.settings.start-the-box}}</button>
       </div>
       <pre id="setboxlog" style="display:none;max-height:140px;overflow:auto;background:var(--code-bg);color:var(--code-text);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;font-family:var(--font-mono);font-size:11px;line-height:1.6;margin:0;white-space:pre-wrap"></pre>
       <input id="setboximage" placeholder="{{ui.settings.image-override-e-g-mirror}}" spellcheck="false" style="margin-top:8px">
-      <div class="fieldnote" style="margin-top:4px">{{ui.settings.what-docker-pulls-when-this}}</div>
+      <div id="setboximagenote" class="fieldnote" style="margin-top:4px">{{ui.settings.what-docker-pulls-when-this}}</div>
+      <div id="setclusterpods" class="fieldnote"></div>
     </div>
     <div class="field" data-tier="installation" data-settab="boxes">
       <label>{{ui.settings.personal-box-allocation-limits}}</label>
@@ -111,7 +112,7 @@ ${renderSettingsTabs()}
       <div class="fieldnote">{{ui.settings.every-machine-this-installation-drives}}</div>
       <div class="fieldnote" id="setboxesstatus"></div>
     </div>
-    <div class="field" data-tier="installation" data-settab="boxes">
+    <div class="field" data-tier="installation" data-settab="boxes" data-docker-box>
       <label>{{ui.settings.host-execution}}</label>
       <label class="radio"><input type="checkbox" id="sethostenabled">
         {{ui.settings.let-agents-run-commands-on}}</label>
@@ -120,7 +121,7 @@ ${renderSettingsTabs()}
         <code>claude</code> {{ui.settings.or}} <code>git</code>{{ui.settings.every-host-command-still-stops}}</div>
       <div class="fieldnote" id="sethoststatus"></div>
     </div>
-    <div class="field" data-tier="installation" data-settab="boxes">
+    <div class="field" data-tier="installation" data-settab="boxes" data-docker-box>
       <label>{{ui.settings.startup-item}}</label>
       <label class="radio"><input type="checkbox" id="setstartupitem">
         {{ui.settings.launch-lumenbox-automatically-on-system}}</label>

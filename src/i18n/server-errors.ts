@@ -81,6 +81,7 @@ export const SERVER_ERRORS = {
   "err.no-box": ["没有接入的 box。", "No box is connected."],
   "err.box-client-missing": ["没有可用的 box 连接。", "No box client available"],
   "err.box-starting": ["box 已经在启动了。", "The box is already being started."],
+  "err.shared-box-kubernetes": ["Kubernetes 后端暂不支持启动共享 box。请创建个人 box，或请管理员连接一个组织节点。", "Starting a shared box is not supported on the Kubernetes backend. Create a personal box or ask an administrator to attach an organisation node."],
   "err.box-unregistered": ["没有登记过的 box {box}。", "No registered box {box}."],
   "err.box-named-unknown": ["没有叫 {name} 的 box。", "No box named {name}."],
   "err.box-id-unknown": ["没有 id 为 {box} 的 box。", "No box with id {box}."],

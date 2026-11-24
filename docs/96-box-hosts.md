@@ -90,6 +90,40 @@ Two rules hold in every cell:
   Owner's VMs join the personal installation. The organisation's machines and VMs, and its
   cluster, join the organisation. Nobody else's machine joins either.
 
+### Run the organisation server in its cluster
+
+Use a dedicated namespace for the organisation server and its personal boxes. The example uses
+`agentbox`. Apply the namespace and permissions, then provision the `agentbox-organisation-env`
+Secret there with a stable `AGENTBOX_UI_TOKEN` and any provider settings using your usual secret
+management tooling. Don't put credentials in the manifest. The server binds to `0.0.0.0` inside
+the pod and refuses to start without one of these settings in that Secret:
+
+- For an isolated, port-forward-only deployment, set `AGENTBOX_INSECURE=1`. Keep the Service
+  internal and do not publish its HTTP port.
+- For a deployment behind a TLS-enabled ingress, set `AGENTBOX_PUBLIC_URL` to its public
+  `https://` URL and leave `AGENTBOX_INSECURE` unset. Open that public URL instead of port-forwarding.
+
+Set `LUMENBOX_IMAGE` to a pullable release tag or digest that includes the organisation-server
+Kubernetes fixes. If that release is not published yet, build from this checkout and push the
+content-hash tag to your registry; see [Choose the image](../deploy/kubernetes/ONBOARDING.md#2-choose-the-image).
+Render the manifest before applying it so the server and the personal boxes use the same image.
+
+```sh
+kubectl apply -f deploy/kubernetes/namespace.yaml -f deploy/kubernetes/rbac.yaml
+sed "s|fakechris/lumenbox:REPLACE_WITH_RELEASE_TAG|${LUMENBOX_IMAGE:?Set LUMENBOX_IMAGE to the pullable image}|g" \
+  deploy/kubernetes/organisation.yaml | kubectl apply -f -
+kubectl -n agentbox rollout status deployment/agentbox-organisation
+kubectl -n agentbox port-forward service/agentbox-organisation 7777:7777
+```
+
+For the port-forward path, open `http://localhost:7777` and follow the organisation admin
+bootstrap.
+
+The manifest labels the **web server's pod template** `agentbox/role: control`. If you use your
+own deployment, apply that label to its pod template, not just the Deployment or Service. A
+personal box's NetworkPolicy admits only pods with that label **in the box's namespace**. Pod
+readiness does not guarantee that the server can reach it.
+
 ## 3. The first run: three answers, and what each puts on this machine
 
 INV-1696 asks on the first run, before anything is created. Each answer is one sentence of what

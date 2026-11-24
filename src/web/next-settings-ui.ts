@@ -25,6 +25,7 @@ function numberField(labelText, value, min, max) {
 function settingsPane(key) { return Object.hasOwn(NATIVE_PANES, key) ? key : ""; }
 function openSettingsPane(key) {
   if (!canDriveAgents() || (key && settingsPanes().indexOf(key) < 0)) return;
+  if (key === "boxes" && boxSet.config !== null) loadBoxSet();
   navigateView("settings", key);
 }
 
