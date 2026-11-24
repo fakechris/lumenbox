@@ -16,7 +16,7 @@ export function taskVisibilityNote(task: Task, creator: string, registry: AgentR
     : "";
   if (!task.assigneeId) return "Unassigned: other signed-in box members cannot see this agent-created task. "
     + "For an All work card, create standalone requested work (parent: none) and assign it to an agent in their box or take it yourself." + sharing;
-  const audience = taskAudience(task, new Set([creator]));
+  const audience = taskAudience(task, new Set(registry.list().map(agent => agent.id)));
   if (audience !== "user") return "This is not a standalone card in All work or its board. Members of the assignee’s box can find it by searching All work." + sharing;
   return "All work and its board show this card to members of the assignee’s box, not to people outside that box." + sharing;
 }

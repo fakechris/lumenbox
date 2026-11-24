@@ -5,6 +5,7 @@ import { SurfaceLedger } from "./show-ui.ts";
 import { ResultChecks } from "./result-check-policy.ts";
 import { Claims } from "./claims.ts";
 import { PolicyGate } from "./policy.ts";
+import { planCards } from "./plan-cards.ts";
 /**
  * The episodes that went wrong, as tests.
  *
@@ -4649,10 +4650,31 @@ test("agent suggestions during a user request remain internal until a person com
 
 test("an agent asked to create team work learns when it is actually visible in All work", async () => {
   const tasks = new TaskStore(null), visibility: string[] = [];
+  let reassignedPlanItem: string | undefined, planVisibility: string | undefined;
+  let takingPlan = false;
   const episode = await runEpisode({
-    team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Runner" }], tasks, says: ["Create a shared task Bob can see."],
+    team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Runner", tools: ["Tasks"] }], tasks, says: [],
+    drive: async ({ bus, registry, frontId, say }) => {
+      await say("Create a shared task Bob can see.");
+      const parent = tasks.create({ title: "Audit inventory", requester: "web", assigneeId: frontId, conversation: "main" })!;
+      [reassignedPlanItem] = planCards(tasks).open({ agentId: frontId, parent: "main", taskId: parent.id, plan: { brief: "Audit inventory", items: ["Desk"], prompt: "Review {{item}}" } });
+      assert.ok(reassignedPlanItem);
+      const runner = registry.resolve("Runner").id;
+      assert.equal(tasks.update(reassignedPlanItem, { assigneeId: runner }, frontId)?.task.assigneeId, runner);
+      bus.sendFromUser(runner, "Take the reassigned plan item.");
+      await bus.wake(runner);
+      await bus.idle();
+    },
     script: ({ agent, round, messages }) => {
-      if (agent !== "Ada") return undefined;
+      if (agent !== "Ada") {
+        if (reassignedPlanItem === undefined || planVisibility !== undefined) return undefined;
+        if (!takingPlan) {
+          takingPlan = true;
+          return { call: "Tasks", input: { action: "take", id: reassignedPlanItem } };
+        }
+        planVisibility = JSON.stringify(messages.at(-1)?.content);
+        return { say: "I took the plan item." };
+      }
       if (round) visibility.push(JSON.stringify(messages.at(-1)?.content));
       if (round === 0) return { call: "Tasks", input: { action: "create", title: "Unassigned draft" } };
       if (round === 1) return { call: "Tasks", input: { action: "create", title: "Internal step", assignee: "Runner" } };
@@ -4669,6 +4691,7 @@ test("an agent asked to create team work learns when it is actually visible in A
     assert.match(visibility[3] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
     assert.match(visibility[4] ?? "", /not a standalone card in All work/);
     assert.ok(visibility.every(result => !result.includes("restricted box")));
+    assert.match(planVisibility ?? "", /You are on it: .*not a standalone card in All work/);
     const adaId = episode.registry.resolve("Ada").id;
     assert.equal(tasks.list().find(task => task.title === "Self-assigned task")?.assigneeId, adaId);
     assert.equal(tasks.list().find(task => task.title === "Unassigned draft")?.assigneeId, adaId);
