@@ -12,7 +12,7 @@
  * read again from the start. A trailing line still being written is read but not passed: it is read again,
  * whole, next time — harmless, because "newest" is a maximum and counting a line twice cannot change one.
  */
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync, type Stats } from "node:fs";
 
 const HEAD = 256;
 
@@ -50,7 +50,7 @@ function fold(newest: Map<string, string>, text: string, key: string, at: string
 /** For each `key` value in the log at `path`, the greatest `at` value: the newest, for ISO timestamps. Read-only to the caller. */
 export function newestByKey(path: string, key: string, at: string): ReadonlyMap<string, string> {
   const id = `${path}\0${key}\0${at}`;
-  let stat;
+  let stat: Stats;
   try { stat = statSync(path); } catch { cursors.delete(id); return new Map(); }
   let cursor = cursors.get(id);
   const replaced = cursor !== undefined && (cursor.dev !== stat.dev || cursor.ino !== stat.ino || stat.size < cursor.offset || !bytes(path, 0, cursor.head.length).equals(cursor.head));
