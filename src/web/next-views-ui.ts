@@ -249,6 +249,7 @@ function renderView(view) {
   if (next.view === "inbox") renderInbox(view);
   else if (next.view === "settings") renderSettings(view);
   else if (next.view === "auto") renderAuto(view);
+  else if (next.view === "files") renderFiles(view);
   else if (next.view === "boxes") renderBoxes(view);
   else if (next.view === "system") { if (canOperateInstallation()) renderSystem(view); }
   else renderWork(view);
@@ -298,14 +299,18 @@ function writeViewAddress(view, pane) {
 
 function readViewAddress() {
   var params = new URLSearchParams(location.search), view = params.get("view");
-  next.view = ["work", "inbox", "settings", "auto", "boxes", "system"].includes(view) ? view : "chat";
-  settings.pane = next.view === "settings" ? settingsPane(params.get("pane")) : "";
+  selectView(["work", "inbox", "settings", "auto", "files", "boxes", "system"].includes(view) ? view : "chat", params.get("pane"));
   if (next.view !== "chat" || params.has("agent")) document.body.dataset.open = "1";
   else delete document.body.dataset.open;
 }
 
-function navigateView(view, pane) {
+function selectView(view, pane) {
   next.view = view; settings.pane = view === "settings" ? settingsPane(pane) : "";
+  if (view === "files" && boxById(workFiles.box)) readWorkFiles(workFiles.box, workFiles.dir);
+}
+
+function navigateView(view, pane) {
+  selectView(view, pane);
   document.body.dataset.open = "1"; writeViewAddress(view, settings.pane); render();
 }
 
@@ -364,6 +369,9 @@ function nextStart() {
     var kind = event && event.type;
     if (["box_status", "task_changed", "approval_pending", "approval_settled", "question", "turn_finished", "turn_failed", "reset"].includes(kind)) refreshSoon();
     if (kind === "tool_end" && event.tool === "SetTodos") refreshSoon(); // a member moved through its list: its row's line is what it marked doing
+    if (next.view === "files" && (kind === "turn_finished" || kind === "box_status") && workFiles.box === (event.boxId || next.agents[event.agentId]?.boxId)) {
+      readWorkFiles(workFiles.box, workFiles.dir); render();
+    }
     if ((kind === "task_changed" || kind === "task_execution") && event.taskId) panelChanged(event.taskId);
     if (kind === "turn_started" || kind === "turn_finished" || kind === "turn_failed") { var who = next.agents[event.agentId]; if (who) who.running = kind === "turn_started"; }
     chatEvent(event);

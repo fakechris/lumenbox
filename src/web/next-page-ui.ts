@@ -14,6 +14,7 @@ import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
+import { NEXT_FILES_JS } from "./next-files-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_REMINDER_JS } from "./next-reminder-ui.ts";
@@ -392,6 +393,7 @@ export const NEXT_HTML = `<!doctype html>
   <div class="agents" id="agents"></div>
   <div class="side-links">
     <button data-nav="work">{{ui.next.side.work}}</button>
+    <button data-nav="files">{{ui.next.nav.files}}</button>
     <button data-nav="auto">{{ui.next.side.auto}}</button>
     <button data-nav="boxes">{{ui.next.side.boxes2}}</button>
     <button data-nav="settings" hidden>{{ui.next.side.settings}}</button>
@@ -491,6 +493,7 @@ ${NEXT_CHAT_JS}
 ${NEXT_PANEL_JS}
 ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
+${NEXT_FILES_JS}
 ${NEXT_SETTINGS_JS}
 ${NEXT_AUTO_JS}
 ${NEXT_REMINDER_JS}
