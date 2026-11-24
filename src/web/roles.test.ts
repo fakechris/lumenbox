@@ -21,6 +21,7 @@ import { startWebServer } from "./server.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { defaultLimits, PolicyGate } from "../host/policy.ts";
 import { Principals } from "../host/principals.ts";
+import { heartbeatSlug, seedStanding, standingDir } from "../host/standing.ts";
 
 // These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
 process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
@@ -245,6 +246,8 @@ test("approvals, grants, tokens and the restart answer to the boxes a person may
       return decision.approval;
     };
     for (const agentId of [one, two]) { ask(agentId, `deploy waiting ${agentId}`); assert.ok(gate.grant(ask(agentId, `deploy granted ${agentId}`).id, "user", "always")); }
+    // A routine per box: each agent's heartbeat, which needs no box to be listed (INV-2094).
+    for (const agentId of [one, two]) { seedStanding(registry.dirFor(agentId), agentId); writeFileSync(join(standingDir(registry.dirFor(agentId)), "HEARTBEAT.md"), "- [ ] check in\n"); }
     let base = "";
     stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {}, onReady: url => { base = url; } });
     const gateway = { ada: "member", vic: "viewer", bob: "member", olga: "owner" } as const;
@@ -286,6 +289,11 @@ test("approvals, grants, tokens and the restart answer to the boxes a person may
     assert.deepEqual(viewer.servers, [], "nor the installation's servers");
     assert.ok(viewer.setup, "the setup notice the Mine page reads is still there");
     assert.deepEqual(((await tokens("olga")).tokens as { label: string }[]).map(token => token.label).sort(), ["ada", "bob"]);
+
+    // Running a routine by hand is for the people of the box whose agent runs it (INV-2094).
+    assert.equal((await call("ada", "/api/schedules/run", { slug: heartbeatSlug(two) })).status, 403, "a driver does not fire another box's routine");
+    assert.equal((await call("bob", "/api/schedules/run", { slug: heartbeatSlug(two) })).status, 200, "its own box's driver does");
+    assert.equal((await call("olga", "/api/schedules/run", { slug: heartbeatSlug(one) })).status, 200, "and so does an admin");
 
     // Restarting the installation is an admin's. Only the refusals are exercised: an admin's would exit the process.
     for (const who of ["ada", "vic"] as const) assert.equal((await call(who, "/api/restart", {})).status, 403, `${who} may not restart`);

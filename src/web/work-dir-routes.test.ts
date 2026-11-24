@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
@@ -147,5 +147,47 @@ test("the file routes refuse what is outside the default box's own work director
     else process.env.AGENTBOX_HOME = previous.home;
     if (previous.work !== undefined) process.env.AGENTBOX_WORK_DIR = previous.work;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Files without a boxId cannot follow a link out of the default box's work folder (INV-2094)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-files-link-")), outside = mkdtempSync(join(tmpdir(), "agentbox-files-outside-"));
+  const work = join(home, "work"), previous = { home: process.env.AGENTBOX_HOME, work: process.env.AGENTBOX_WORK_DIR };
+  mkdirSync(work);
+  writeFileSync(join(outside, "secret-name.txt"), "x");
+  symlinkSync(outside, join(work, "escape"));
+  process.env.AGENTBOX_HOME = home;
+  process.env.AGENTBOX_WORK_DIR = work;
+  const { listDir } = await import("../boxd/fs-service.ts"); // the real listing, which reads the work root at import
+  const boxd = createHttpServer(async (req, res) => {
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/health") { res.end(JSON.stringify({ protocol: BOXD_PROTOCOL })); return; }
+    if (req.url !== "/fs/list") { res.writeHead(404).end("{}"); return; }
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk);
+    try { res.end(JSON.stringify(await listDir(JSON.parse(Buffer.concat(chunks).toString())))); }
+    catch (error) { res.writeHead(400).end(JSON.stringify({ error: (error as Error).message })); }
+  });
+  let stop: (() => void) | undefined;
+  try {
+    const boxPort = await freePort();
+    await new Promise<void>(resolve => boxd.listen(boxPort, "127.0.0.1", resolve));
+    const port = await freePort();
+    stop = await startWebServer({ port, host: "127.0.0.1", token: "t0k", onLog: () => {},
+      boxProvisioner: new AttachedBoxProvisioner({ baseUrl: `http://127.0.0.1:${boxPort}`, token: "default-fixture" }) });
+    const get = (dir?: string) => fetch(`http://127.0.0.1:${port}/api/files${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`, { headers: { authorization: "Bearer t0k" } });
+    const top = await get();
+    assert.equal(top.status, 200, "the page's own listing still works");
+    assert.deepEqual(((await top.json()) as { entries: { name: string; target_in_work?: boolean }[] }).entries.map(entry => [entry.name, entry.target_in_work]), [["escape", false]]);
+    const through = await get(join(work, "escape"));
+    assert.notEqual(through.status, 200);
+    assert.doesNotMatch(await through.text(), /secret-name/);
+  } finally {
+    stop?.();
+    boxd.close();
+    if (previous.home === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous.home;
+    if (previous.work === undefined) delete process.env.AGENTBOX_WORK_DIR; else process.env.AGENTBOX_WORK_DIR = previous.work;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   }
 });
