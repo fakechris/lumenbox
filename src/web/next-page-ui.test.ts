@@ -278,8 +278,10 @@ test("reopening Boxes settings refreshes its status and preserves the settings r
   const boxSet = { config: null as object | null };
   const writes: unknown[][] = [];
   let loads = 0;
+  const settings = { pane: "" };
+  const selectView = pageFunction("selectView", { next: {}, settings, settingsPane: (key: unknown) => key });
   const navigateView = pageFunction("navigateView", {
-    next: {}, settings: {}, settingsPane: (key: unknown) => key, document: { body: { dataset: {} } },
+    selectView, settings, document: { body: { dataset: {} } },
     writeViewAddress: (...args: unknown[]) => writes.push(args), render() {},
   });
   const open = pageFunction("openSettingsPane", {
