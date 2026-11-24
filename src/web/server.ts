@@ -105,6 +105,7 @@ import {
   newWebIdentity,
   readSession,
   SESSION_COOKIE,
+  SESSION_MAX_AGE_SECONDS,
   sessionCookie,
   sessionKey,
 } from "./session.ts";
@@ -777,13 +778,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const principals = new Principals(undefined, { incarnationOf, warn: line => log(`principals: ${line}`), changed: () => openDesktops.recheck() });
   const retiredSignIn = (person: Principal, identity: string): boolean => {
     const door = doorOfIdentity(identity);
-    return door !== "web" && (!channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity));
+    return door === "web" ? (principals.browserSignInExpiresAt(person.id, identity) ?? Infinity) <= Date.now()
+      : !channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity);
   };
   const usableSignIns = (person: Principal) => {
     const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
+    const now = Date.now();
     return person.identities.filter(identity =>
       principals.hasCurrentIdentity(person.id, identity) &&
-      (identity.startsWith("web:") || doors.some(door => identity.startsWith(door.id + ":"))));
+      (identity.startsWith("web:") ? (principals.browserSignInExpiresAt(person.id, identity) ?? 0) > now
+        : doors.some(door => identity.startsWith(door.id + ":"))));
   };
   /** What a task's mandate is checked against now (INV-1457): the principal's role today and the rule set as loaded. */
   const mandateWorld = (): MandateWorld => ({
@@ -3856,7 +3860,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           invites.delete(code);
-          const redeemed = redeemInvite(principals, invite, identity, name); // a code for somebody known links this browser to them: same human, second surface, one bill
+          const redeemed = redeemInvite(principals, invite, identity, name, Date.now() + SESSION_MAX_AGE_SECONDS * 1_000);
           if (redeemed.kind === "gone") { send(res, 409, apiError("invite-person-gone")); return; }
           // Two cookies, because they answer different questions: the token says this browser may reach the installation at all, the session says who it is. What the person may then *do* is their roster role.
           res.setHeader("set-cookie", [sessionCookie(identity, sessionSecret, epochs.of(redeemed.person.id), secureCookies)]);

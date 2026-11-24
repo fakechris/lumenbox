@@ -95,6 +95,7 @@ export function soleAdmin(people: readonly { id: string; role: string }[]): stri
 export interface IdentityLink {
   identity: string;
   incarnation: number;
+  browserExpiresAt?: number;
 }
 
 interface StoredPrincipal {
@@ -279,6 +280,10 @@ export class Principals {
     return this.byIdentity.get(identity)?.id === principalId;
   }
 
+  browserSignInExpiresAt(principalId: string, identity: string): number | undefined {
+    return this.stored.find(person => person.id === principalId)?.links.find(link => link.identity === identity)?.browserExpiresAt;
+  }
+
   resolve(identity: string): Principal {
     const known = this.byIdentity.get(identity);
     if (known !== undefined) return known;
@@ -308,13 +313,22 @@ export class Principals {
    * world it was made in. The one-identity-one-person rule is applied here too, so
    * the file never stores the conflict `reload` would have to resolve.
    */
-  save(principals: Principal[]): void {
-    this.write(principals);
+  save(principals: Principal[], browserSignIn?: { identity: string; expiresAt: number }): void {
+    this.write(principals, browserSignIn);
     this.changed();
   }
 
-  private write(principals: Principal[]): void {
+  private write(principals: Principal[], browserSignIn?: { identity: string; expiresAt: number }): void {
     withRosterLock(this.path, () => {
+    const previousFile = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) as PrincipalsFile : undefined;
+    const browserExpiries = new Map<string, number>();
+    for (const person of Array.isArray(previousFile?.principals) ? previousFile.principals : []) {
+      for (const entry of Array.isArray(person?.identities) ? person.identities : []) {
+        const link = asLink(entry);
+        if (link?.browserExpiresAt !== undefined) browserExpiries.set(link.identity, link.browserExpiresAt);
+      }
+    }
+    if (browserSignIn) browserExpiries.set(browserSignIn.identity, browserSignIn.expiresAt);
     const previous = new Map<string, number>();
     // Aliases are the merge's record, not something the People dialog edits: a save keeps them.
     const aliasesOf = new Map(this.stored.map(principal => [principal.id, principal.aliases]));
@@ -343,13 +357,13 @@ export class Principals {
           })
           .map(identity => ({
             identity,
+            browserExpiresAt: browserExpiries.get(identity),
             incarnation:
               previous.get(`${principal.id} ${identity}`) ?? this.incarnationOf(identity),
           })),
       }));
     mkdirSync(dirname(this.path), { recursive: true });
     const temp = `${this.path}.${process.pid}.tmp`;
-    const previousFile = existsSync(this.path) ? JSON.parse(readFileSync(this.path, "utf8")) as PrincipalsFile : undefined;
     // Read under the lock, so the mode this save is checked against is the file's, not this process's cache.
     guardRoster(installationOf(previousFile), cleaned);
     const bootstrap = previousFile?.bootstrap ?? (previousFile?.principals?.length ? { disabled: true } : undefined);
@@ -437,6 +451,7 @@ function asLink(entry: string | IdentityLink | unknown): IdentityLink | undefine
       return {
         identity: link.identity.trim(),
         incarnation: typeof link.incarnation === "number" ? link.incarnation : 1,
+        browserExpiresAt: Number.isFinite(link.browserExpiresAt) ? link.browserExpiresAt : undefined,
       };
     }
   }

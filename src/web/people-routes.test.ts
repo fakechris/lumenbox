@@ -12,6 +12,7 @@ import { startWebServer } from "./server.ts";
 import { Principals } from "../host/principals.ts";
 import { inviteMinutes, leavesNoAdmin, peopleRoute } from "./people-routes.ts";
 import { InviteStore } from "./invite-store.ts";
+import { SESSION_MAX_AGE_SECONDS } from "./session.ts";
 
 const PORT = 7964;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -28,7 +29,7 @@ const login = async (code: string, name: string) => {
   return response.headers.getSetCookie().map(cookie => cookie.split(";")[0]).join("; ");
 };
 
-test("the roster keeps an admin; a code says who it is for; a person's own code brings back the same person", async () => {
+test("the roster keeps an admin; a code says who it is for; a person's own code brings back the same person", async t => {
   const home = mkdtempSync(join(tmpdir(), "agentbox-people-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
@@ -48,6 +49,7 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const forBob = (await (await post("/api/channels/invite", { role: "viewer" })).json()) as Code;
     assert.ok(forBob.expiresAt <= Date.now() + 15 * 60_000, "no lifetime asked for is the fifteen minutes it always was");
 
+    const beforeAdaLogin = Date.now();
     const adaCookie = await login(forAda.code, "Ada");
     const bobCookie = await login(forBob.code, "Bob");
     const bobHeaders = { "content-type": "application/json", cookie: bobCookie };
@@ -56,6 +58,10 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     // INV-2054: each row says how the person signs in, when they last did something, and their boxes.
     let rows = (await people()).people;
     const ada = rows.find(row => row.name === "Ada")!, bob = rows.find(row => row.name === "Bob")!;
+    const adaIdentity = ada.identities[0]!;
+    const adaExpiry = new Principals().browserSignInExpiresAt(ada.id, adaIdentity);
+    const sessionLifetime = SESSION_MAX_AGE_SECONDS * 1_000;
+    assert.ok(adaExpiry !== undefined && adaExpiry >= beforeAdaLogin + sessionLifetime && adaExpiry <= Date.now() + sessionLifetime);
     assert.deepEqual(bob.doors.map(door => door.door), ["web"]);
     assert.equal(bob.lastActive, undefined);
     assert.deepEqual(Object.keys(bob.boxes).sort(), ["held", "quota"]);
@@ -145,6 +151,25 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.ok(!(await people()).invites.some(invite => invite.code === pending.code), "his own codes go with him");
     assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 401);
     assert.equal((await mcp()).status, 401, "and out of the side door");
+
+    t.mock.timers.enable({ apis: ["Date"], now: adaExpiry });
+    const legacyIdentity = "web:legacy-browser";
+    roster.reload();
+    roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, legacyIdentity] } : person));
+    const renewedAda = (await (await post("/api/channels/invite", { principalId: ada.id })).json()) as Code;
+    const freshCookie = await login(renewedAda.code, "Ada after expiry");
+    const afterExpiry = await (await fetch(`${BASE}/api/channels`, { headers: ui })).json() as typeof classicRoster;
+    const renewed = afterExpiry.principals.find(person => person.id === ada.id)!;
+    const [freshIdentity] = renewed.usableSignIns;
+    assert.ok(freshIdentity && freshIdentity !== adaIdentity && freshIdentity !== legacyIdentity);
+    assert.deepEqual(renewed.usableSignIns, [freshIdentity], "neither expired nor undated browser links are usable backups (INV-2090)");
+    assert.deepEqual(renewed.retiredSignIns, [adaIdentity]);
+    const freshHeaders = { ...ui, authorization: "", cookie: freshCookie };
+    const revokeFresh = await post(revoke, { principalId: ada.id, identity: freshIdentity }, freshHeaders);
+    assert.equal(revokeFresh.status, 409);
+    assert.equal((await revokeFresh.json()).code, "sign-in-last-admin");
+    assert.equal((await post(revoke, { principalId: ada.id, identity: adaIdentity }, freshHeaders)).status, 200);
+
     roster.reload();
     roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [oldFeishu] } : person));
     assert.equal((await post(revoke, { principalId: ada.id, identity: oldFeishu })).status, 200);

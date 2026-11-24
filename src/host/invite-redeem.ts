@@ -25,18 +25,19 @@ export type Redeemed =
   | { kind: "gone" };
 
 /** Links `identity` to the invite's person, or admits a new person named `name` at the invite's role. Throws `PersonalInstallationOnly` for a new person on a personal installation. */
-export function redeemInvite(principals: Principals, invite: Invite, identity: string, name: string): Redeemed {
+export function redeemInvite(principals: Principals, invite: Invite, identity: string, name: string, browserExpiresAt?: number): Redeemed {
   principals.reload();
   const roster = principals.list();
+  const browserSignIn = browserExpiresAt === undefined ? undefined : { identity, expiresAt: browserExpiresAt };
   if (invite.principalId !== undefined) {
     const person = principals.byId(invite.principalId);
     const target = person === undefined ? undefined : roster.find(entry => entry.id === person.id);
     if (target === undefined) return { kind: "gone" };
     target.identities.push(identity);
-    principals.save(roster);
+    principals.save(roster, browserSignIn);
     return { kind: "linked", person: principals.byId(target.id) ?? target };
   }
   const person: Principal = { id: identity, name, role: invite.role, identities: [identity] };
-  principals.save([...roster, person]);
+  principals.save([...roster, person], browserSignIn);
   return { kind: "joined", person };
 }
