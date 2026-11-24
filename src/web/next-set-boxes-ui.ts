@@ -109,7 +109,7 @@ function hostBlock() {
   startup.type = "checkbox"; startup.checked = !!saved.startupItem; startupLabel.appendChild(startup); startupLabel.appendChild(document.createTextNode(" " + t("ui.next.boxset.startup")));
   image.value = saved.boxImage || ""; image.placeholder = t("ui.next.boxset.imageDefault");
   box.appendChild(onLabel); box.appendChild(labelled(t("ui.next.boxset.hostDirLabel"), cwd));
-  if (host.unavailableReason) box.appendChild(el("p", "why", host.unavailableReason));
+  if (host.unavailableReason) box.appendChild(el("p", "guidance", host.unavailableReason));
   box.appendChild(startupLabel); box.appendChild(labelled(t("ui.next.boxset.imageOverride"), image));
   if (boxSet.note) box.appendChild(el("p", "why", boxSet.note));
   save.addEventListener("click", function () {

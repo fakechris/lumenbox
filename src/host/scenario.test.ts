@@ -4667,9 +4667,38 @@ test("an agent asked to create team work learns when it is actually visible in A
     assert.match(visibility[1] ?? "", /not a standalone card in All work/);
     assert.match(visibility[2] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
     assert.match(visibility[3] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
+    assert.match(visibility[4] ?? "", /not a standalone card in All work/);
+    assert.ok(visibility.every(result => !result.includes("restricted box")));
     const adaId = episode.registry.resolve("Ada").id;
     assert.equal(tasks.list().find(task => task.title === "Self-assigned task")?.assigneeId, adaId);
     assert.equal(tasks.list().find(task => task.title === "Unassigned draft")?.assigneeId, adaId);
+  } finally { episode.cleanup(); }
+});
+
+test("assigning a task on a personal box does not make it organisation-wide (INV-2063)", async () => {
+  const tasks = new TaskStore(null), results: string[] = [];
+  const idOf = (title: string) => tasks.list().find(task => task.title === title)?.id;
+  const episode = await runEpisode({
+    team: [{ name: "Nina", tools: ["Tasks"] }], tasks, says: [],
+    drive: async ({ registry, say }) => {
+      registry.updateBox(registry.box.id, { members: ["operator"] });
+      await say("Open a task my organisation can see.");
+    },
+    script: ({ round, messages }) => {
+      if (round) results.push(JSON.stringify(messages.at(-1)?.content));
+      if (round === 0) return { call: "Tasks", input: { action: "create", title: "Draft", parent: "none" } };
+      if (round === 1) return { call: "Tasks", input: { action: "update", id: idOf("Draft"), assignee: "Nina" } };
+      if (round === 2) return { call: "Tasks", input: { action: "create", title: "Assigned", parent: "none", assignee: "Nina" } };
+      if (round === 3) return { call: "Tasks", input: { action: "create", title: "Unclaimed", parent: "none" } };
+      if (round === 4) return { call: "Tasks", input: { action: "take", id: idOf("Unclaimed") } };
+      return { say: "These tasks are local to this box. Use the Shared box for organisation-wide work." };
+    },
+  });
+  try {
+    assert.equal(results.length, 5);
+    for (const result of results) assert.match(result, /restricted box is not organisation-wide[^"]+with an agent on a Shared box/);
+    for (const index of [0, 3]) assert.match(results[index]!, /Unassigned: other signed-in box members cannot see/);
+    for (const index of [1, 2, 4]) assert.match(results[index]!, /members of the assignee’s box, not to people outside that box/);
   } finally { episode.cleanup(); }
 });
 

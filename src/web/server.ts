@@ -3164,9 +3164,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // the code is what authenticates them.
       if (route === "GET /bootstrap") {
         try {
-        if (!bootstrap.pending()) { send(res, 404, apiError("bootstrap-unavailable")); return; }
+        if (!bootstrap.pending()) {
+          const reason = "bootstrap-unavailable", html = wantsHtml(req.headers.accept);
+          send(res, 404, html ? signInRecoveryPage(reason, localeOf(req, url)) : apiError(reason), html ? "text/html" : "application/json"); return;
+        }
         const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
-        res.setHeader("cache-control", "no-store");
         res.setHeader("referrer-policy", "no-referrer");
         send(res, 200, bootstrapPage(doors, localeOf(req, url), bootstrap.codePath, feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID")), "text/html");
         } catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
@@ -3186,7 +3188,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       if (route === "GET /login") {
         const locale = localeOf(req, url); // a code, or a Feishu door to the same session (INV-1701)
-        send(res, 200, loginPageWithDoors(LOGIN_PAGE(locale), webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL), locale), "text/html");
+        send(res, 200, loginPageWithDoors(LOGIN_PAGE(locale, bootstrapPending()), webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL), locale), "text/html");
         return;
       }
       // The Feishu doors' sign-in, also before the gate and for the same reason as

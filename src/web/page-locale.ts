@@ -105,7 +105,9 @@ export function localized(template: string, kind: "page" | "script"): (locale: L
 export const APP_PAGE = localized(APP_HTML, "page");
 /** The rebuilt page (INV-1825): the default since every surface of the classic one was rebuilt on it. */
 export const NEXT_PAGE = localized(NEXT_HTML, "page");
-export const LOGIN_PAGE = localized(LOGIN_HTML, "page");
+const loginWithSetup = localized(LOGIN_HTML, "page");
+const loginWithoutSetup = localized(LOGIN_HTML.replace(/<!--bootstrap-setup-->.*?<!--\/bootstrap-setup-->/s, ""), "page");
+export const LOGIN_PAGE = (locale: Locale, setup: boolean): string => (setup ? loginWithSetup : loginWithoutSetup)(locale);
 
 /**
  * Which page a request for `/` gets (INV-1825): the rebuilt one, unless the person chose the classic
