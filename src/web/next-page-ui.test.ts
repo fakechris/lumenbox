@@ -243,9 +243,11 @@ test("reopening Boxes settings refreshes its status and preserves the settings r
   const boxSet = { config: null as object | null };
   const writes: unknown[][] = [];
   let loads = 0;
+  const next = {};
+  const renderOpenedView = pageFunction("renderOpenedView", { next, render() {} });
   const navigateView = pageFunction("navigateView", {
-    next: {}, settings: {}, settingsPane: (key: unknown) => key, document: { body: { dataset: {} } },
-    writeViewAddress: (...args: unknown[]) => writes.push(args), render() {},
+    next, settings: {}, settingsPane: (key: unknown) => key, document: { body: { dataset: {} } },
+    writeViewAddress: (...args: unknown[]) => writes.push(args), renderOpenedView,
   });
   const open = pageFunction("openSettingsPane", {
     navigateView, boxSet, loadBoxSet: () => { loads++; }, canDriveAgents: () => true, settingsPanes: () => ["boxes"],

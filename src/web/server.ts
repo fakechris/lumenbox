@@ -5965,7 +5965,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const labels = personalBoxes.names();
           const boxes = orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(status => {
             const label = labels.get(status.id);
-            const box = withBoxBackend(label === undefined ? status : { ...status, name: label, personal: true });
+            const backendBox = withBoxBackend(status);
+            const box = label === undefined ? backendBox : { ...backendBox, name: label, personal: true };
             const entry = registry.listBoxes().find(candidate => candidate.id === box.id);
             const membership =
               entry === undefined

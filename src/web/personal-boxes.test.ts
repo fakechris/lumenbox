@@ -431,7 +431,9 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.ok(registry.has(bea.id) && registry.has(dee.id));
     assert.ok(fake.pods.has(resource(bob)) && fake.pods.has(resource(dana)));
     assert.equal((await call(collection, undefined, "bob")).status, 200);
-    assert.equal((await call(collection + "/rename", { id: alice, name: "Desk" }, "alice")).data.boxes[0].name, "Desk");
+    const renamed = (await call(collection + "/rename", { id: alice, name: "Desk" }, "alice")).data.boxes[0];
+    assert.equal(renamed.name, "Desk");
+    assert.equal(renamed.podStatus, "Running", "pod lookup uses the Kubernetes name after rename");
     assert.equal((await call(collection + "/rename", { id: bob, name: "Unexpected" }, "alice")).status, 409);
     const own = (await call(collection + "/panel", undefined, "bob")).data;
     assert.equal(own.inventory, null);
