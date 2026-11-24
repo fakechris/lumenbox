@@ -66,7 +66,9 @@ Goal: a two-point summary of example.com, as a downloadable file with the page t
 request, and no surface says the task failed while its deliverable is there.
 **Found here:** "Tasks update failed" beside a good deliverable; the new view names the place
 All work, not Tasks → Deliverables.
-**Automated:** `src/web/task-export.test.ts`, `src/web/task-focus.test.ts`.
+**Automated:** `src/host/scenario.test.ts` (INV-692: a chat ask whose broken file is fixed before
+only the fixed file reaches the chat), `src/host/task-deliverables.test.ts`,
+`src/web/task-export.test.ts`, `src/web/task-focus.test.ts`.
 
 ### A3 · I take over the screen
 Goal: check the browser myself without fighting the agent. Desktop → Take over, browse, ask
@@ -75,7 +77,9 @@ the agent to act meanwhile, hand back.
 while the person drives (`USER_IN_CONTROL`) and says so in the chat, control returns to the
 named member without a reload, and the instructions fit at 390 px.
 **Found here:** the driving instructions truncated at 400 px.
-**Automated:** `src/boxd/display-ownership.test.ts`, `src/host/tools.test.ts`.
+**Automated:** `src/host/acceptance-journeys.test.ts` (the whole turn: the box refuses the click,
+the agent is told, the person hears who is driving), `src/boxd/display-ownership.test.ts`,
+`src/host/tools.test.ts`.
 
 ### A4 · Two agents on one box
 Goal: a brief with an independent second check. The coordinator asks another member to open
@@ -90,6 +94,8 @@ All work; send it back with a reason; accept the revision.
 **Pass when** it is one task in every place, sending back produces a revision, accepting ends
 in a done state, and an accepted task is still findable.
 **Found here:** revisions came back but the task could not reach an accepted state.
+**Automated:** `src/host/task-delivery.test.ts` (submit, sent back with a reason, resubmit, a
+stranger's accept refused, the reviewer's accept ends done; and the web route).
 
 ### A6 · Make it a skill, a memory and a routine
 Goal: stop explaining the format each time. `/` inserts a skill without running it; save the
