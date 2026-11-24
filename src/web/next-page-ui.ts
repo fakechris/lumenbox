@@ -433,6 +433,7 @@ export const NEXT_HTML = `<!doctype html>
     <div class="picker" id="composer-menu" hidden></div>
     <div class="reply-to" id="reply-to" hidden></div>
     <div class="why" id="composer-watch" role="status" hidden></div>
+    <div class="reply-to" id="composer-send-status" role="status" hidden></div>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
   </div>
 </main>
@@ -474,7 +475,7 @@ function postJson(path, body) {
   return fetch(path, { method: "POST", headers: { "content-type": "application/json", "accept-language": "{{@locale}}" }, body: JSON.stringify(body) }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (data) {
       // A refusal carries what the server said beside its words: "saved, but not in effect" is still a save.
-      if (!res.ok) { var problem = new Error(data && data.error ? data.error : String(res.status)); problem.data = data || {}; throw problem; }
+      if (!res.ok) { var problem = new Error(data && data.error ? data.error : String(res.status)); problem.data = data || {}; problem.status = res.status; throw problem; }
       // What was typed has been sent: the next redraw shows what the server holds (render in next-views-ui.ts).
       document.querySelectorAll("#view [data-edited]").forEach(function (node) { delete node.dataset.edited; });
       return data;

@@ -127,12 +127,9 @@ function renderReplyTo() {
   line.appendChild(off);
 }
 
-/** Sends what was typed as the reply to the card on show. False when there is no card to attach it to. */
+/** Sends what was typed as the reply to the card on show, if there is one. */
 function sendReply(text) {
-  var row = replyTarget(), input = $("composer-text");
-  if (!row) return false;
-  input.value = ""; input.style.height = "";
-  sayNeed(row, text);
-  return true;
+  var row = replyTarget();
+  return row && sayNeed(row, text);
 }
 `;

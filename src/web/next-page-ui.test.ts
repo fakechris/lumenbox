@@ -12,6 +12,7 @@ import { ASK_SENTENCES, askLabel, askProse, splitAsk } from "../host/person-ask.
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_FILES_JS } from "./next-files-ui.ts";
+import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
@@ -199,6 +200,122 @@ const fakeEl = (_tag: string, cls = "", text = ""): Fake => {
   };
   return node;
 };
+
+function chatComposerTest() {
+  const input = { value: "", style: { height: "" }, scrollHeight: 70 };
+  const status = { hidden: true, textContent: "" }, send = { disabled: false }, navigator = { onLine: true };
+  const nodes = { "composer-text": input, "composer-menu": { hidden: false }, "composer-send-status": status, "composer-send": send };
+  const posts: Array<{ path: string; body: unknown; accept: () => void; reject: (e: Error) => void }> = [];
+  const postJson = (path: string, body: unknown) => new Promise<void>((accept, reject) => posts.push({ path, body, accept, reject }));
+  const next = { view: "chat", agents: { ada: { id: "ada", name: "Ada" }, rex: { id: "rex", name: "Rex" } } };
+  const context = vm.createContext({
+    window: {}, next, navigator, $: (id: keyof typeof nodes) => nodes[id],
+    need: {}, watchOnly: () => false, composerCanSend: async () => true, sendReply: () => false, rereadRole: () => {},
+    postJson,
+    t: (key: string, args?: { error: string }) => args?.error && key.endsWith("sendRefused") ? key + ": " + args.error : key,
+  });
+  vm.runInContext(NEXT_CHAT_JS, context);
+  const chat = context.chat as { agentId: string; conversation: string; entries: unknown[]; live: unknown; jump: boolean };
+  const go = (id: string, conversation = "main") => {
+    chat.agentId = id; chat.conversation = conversation;
+    vm.runInContext("syncChatComposer(chatTarget())", context);
+  };
+  const open = (id: string) => go(id);
+  const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+  const loaded: string[] = [];
+  context.loadThread = () => loaded.push(chat.agentId);
+  context.openChat = open;
+  const press = () => vm.runInContext("sendMessage()", context) as Promise<void>;
+  const withCard = () => { context.sendReply = (text: string) => postJson("/api/tasks/update", { id: "card", note: text }); };
+  go("ada");
+  return { input, status, send, navigator, posts, chat, go, press, settle, loaded, withCard };
+}
+
+test("drafts follow the exact agent and conversation, including explicit @ routing (INV-2106)", async () => {
+  const f = chatComposerTest();
+  f.input.value = "Only for Ada";
+  f.go("rex"); assert.equal(f.input.value, "");
+  f.input.value = "Only for Rex";
+  f.go("ada"); assert.equal(f.input.value, "Only for Ada");
+  f.go("ada", "other"); assert.equal(f.input.value, "", "the same agent's other conversation has its own draft");
+  f.input.value = "A different conversation";
+  f.go("rex"); assert.equal(f.input.value, "Only for Rex");
+  f.go("ada"); assert.equal(f.input.value, "Only for Ada");
+  f.go("ada", "other"); assert.equal(f.input.value, "A different conversation");
+  f.go("ada"); f.input.value = "@Rex A message for Rex";
+  const message = f.press();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.posts[0]!.body)), { agent: "rex", conversation: "main", text: "A message for Rex" });
+  f.posts[0]!.accept(); await message;
+  assert.equal(f.chat.agentId, "rex");
+  assert.equal(f.input.value, "Only for Rex", "explicit routing must not overwrite a recipient's own draft");
+  f.go("ada"); assert.equal(f.input.value, "");
+});
+
+test("an offline send preserves the exact draft and existing turn; retry uses the same Send (INV-2107)", async () => {
+  const f = chatComposerTest();
+  const existingLive = { text: "Already responding" }, existingEntries = [{ text: "Already sent" }];
+  f.chat.live = existingLive; f.chat.entries = existingEntries;
+  f.input.value = "  Retry this  "; f.navigator.onLine = false;
+  await f.press();
+  assert.equal(f.posts.length, 0, "the fetch is never attempted when the browser is already offline");
+  assert.equal(f.input.value, "  Retry this  ");
+  assert.equal(f.status.textContent, "ui.next.chat.sendOffline");
+  assert.equal(f.status.hidden, false);
+  assert.equal(f.chat.live, existingLive);
+  assert.equal(f.chat.entries, existingEntries);
+  f.go("rex"); assert.equal(f.status.hidden, true);
+  f.go("ada"); assert.equal(f.status.hidden, false);
+  f.navigator.onLine = true;
+  const retry = f.press(); await f.settle();
+  await f.press();
+  assert.equal(f.posts.length, 1);
+  assert.equal(f.send.disabled, true);
+  assert.equal(f.input.value, "  Retry this  ", "the draft stays until acceptance");
+  f.posts[0]!.accept(); await retry;
+  assert.equal(f.input.value, "");
+  assert.equal(f.send.disabled, false);
+  assert.equal(f.status.hidden, true);
+  assert.deepEqual(f.loaded, ["ada"], "read the accepted prompt from the server rather than create a bubble");
+  assert.equal(f.chat.live, existingLive);
+  assert.equal(f.chat.entries, existingEntries);
+});
+
+test("a lost response is uncertain, and a late response cannot clear another chat's draft (INV-2107)", async () => {
+  const f = chatComposerTest();
+  f.input.value = "First message";
+  const lost = f.press(); await f.settle();
+  f.go("rex"); f.input.value = "Rex's draft";
+  f.navigator.onLine = false;
+  f.posts[0]!.reject(new TypeError("Failed to fetch")); await lost;
+  assert.equal(f.input.value, "Rex's draft");
+  assert.equal(f.status.hidden, true);
+  f.go("ada"); assert.equal(f.input.value, "First message");
+  assert.equal(f.status.textContent, "ui.next.chat.sendUnconfirmed", "offline now does not mean the earlier request never arrived");
+  assert.equal(f.chat.live, null);
+  assert.equal(f.chat.entries.length, 0);
+  f.navigator.onLine = true;
+  const refused = f.press(); await f.settle();
+  f.posts[1]!.reject(Object.assign(new Error("This role cannot send"), { status: 403 })); await refused;
+  assert.equal(f.input.value, "First message");
+  assert.equal(f.status.textContent, "ui.next.chat.sendRefused: This role cannot send");
+  const next = f.press(); await f.settle();
+  f.input.value = "A newer Ada draft";
+  f.go("rex");
+  f.posts[2]!.accept(); await next;
+  assert.equal(f.input.value, "Rex's draft");
+  f.go("ada"); assert.equal(f.input.value, "A newer Ada draft");
+});
+
+test("a refused reply to a waiting card uses the same draft and delivery status (INV-2107)", async () => {
+  const f = chatComposerTest();
+  f.withCard(); f.input.value = "The file is ready";
+  const reply = f.press(); await f.settle();
+  assert.equal(f.posts[0]!.path, "/api/tasks/update");
+  f.posts[0]!.reject(Object.assign(new Error("Cannot update the card"), { status: 403 })); await reply;
+  assert.equal(f.input.value, "The file is ready");
+  assert.equal(f.status.textContent, "ui.next.chat.sendRefused: Cannot update the card");
+  assert.equal(f.chat.live, null);
+});
 
 /** One function out of the page's own script, run with the globals it reads. */
 function pageFunction(name: string, globals: Record<string, unknown>): (...args: unknown[]) => unknown {
@@ -937,15 +1054,15 @@ test("a request the agent wrote is the card: its title, its sentences, and the b
   page.rows = [act]; held.length = 0;
   assert.equal(needDock(page.agents.mia)!.kids.length, 1, "one thing waiting needs no paging");
   // A reply typed while a card is on show is that card's: written on the work, unless the person detaches it.
-  const field = { value: "ignored", style: { height: "" } }, replyTarget = pageFunction("replyTarget", { ...world, dockShown });
-  const sendReply = pageFunction("sendReply", { ...world, replyTarget, sayNeed, $: () => field });
+  const replyTarget = pageFunction("replyTarget", { ...world, dockShown });
+  const sendReply = pageFunction("sendReply", { ...world, replyTarget, sayNeed });
   assert.equal((replyTarget() as { id: string }).id, "t1");
-  assert.equal(sendReply("The PDF is in inbox/."), true); await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual([sent(), field.value], [["/api/tasks/update", { id: "t1", note: "The PDF is in inbox/." }], ""]);
+  await sendReply("The PDF is in inbox/.");
+  assert.deepEqual(sent(), ["/api/tasks/update", { id: "t1", note: "The PDF is in inbox/." }]);
   need.detached = "t1";
-  assert.deepEqual([replyTarget(), sendReply("unrelated")], [null, false], "detached: an ordinary message");
+  assert.deepEqual([replyTarget(), sendReply("unrelated")], [null, null], "detached: an ordinary message");
   need.detached = ""; page.rows = [];
-  assert.deepEqual([needDock(page.agents.mia), sendReply("hello")], [null, false], "nothing waiting: nothing above the conversation, and a message is a message");
+  assert.deepEqual([needDock(page.agents.mia), sendReply("hello")], [null, null], "nothing waiting: nothing above the conversation, and a message is a message");
   // What was settled is one line among what was said, by time; a day later it is history.
   const fresh = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
   page.rows = [{ ...answered, id: "t9", receipt: { ...answered.receipt, at: fresh(30) } }, { ...answered, id: "t10", receipt: { ...answered.receipt, what: "returned", at: fresh(5) } }, { ...answered, id: "t11", receipt: { ...answered.receipt, at: fresh(60 * 30) } }];
