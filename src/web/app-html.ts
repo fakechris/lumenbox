@@ -1965,7 +1965,8 @@ function renderChannels() {
       people = []; window.installation = data.installation; window.rosterPeople = data.principals || []; // Owner or Admin (INV-1685): read by ownerBadge and afterPeople in installation-ui.ts
       (data.principals || []).forEach(function (p) {
         (p.identities.length ? p.identities : [""]).forEach(function (identity) {
-          people.push({ id: p.id, name: p.name, role: p.role, identity: identity, usableSignIn: (p.usableSignIns || []).includes(identity) });
+          people.push({ id: p.id, name: p.name, role: p.role, identity: identity,
+            usableSignIn: (p.usableSignIns || []).includes(identity), retiredSignIn: (p.retiredSignIns || []).includes(identity) });
         });
       });
       renderPeople(); if (window.afterPeople) window.afterPeople(); // the Owner's own code and "these are all me" (INV-1698)
@@ -2138,7 +2139,7 @@ function renderPeople() {
     var roleControl = owner || '<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>";
     var remove = '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>';
     var lastAdmin = p.role === "admin" && admins === 1;
-    var removeControl = hasOtherSignIn(p, lastAdmin) ? remove : owner ? "" :
+    var removeControl = p.retiredSignIn || hasOtherSignIn(p, lastAdmin) ? remove : owner ? "" :
       lastAdmin ? '<span class="fieldnote" style="margin:0">{{ui.app.only-admin}}</span>' : remove;
     return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
@@ -2205,7 +2206,7 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
     }).then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
       .catch(function (error) { $("setpeoplestatus").textContent = error.message; renderChannels(); });
   }
-  if (hasOtherSignIn(person)) {
+  if (person.retiredSignIn || hasOtherSignIn(person)) {
     if (window.confirm(t("ui.app.remove-confirm", { name: person.name, identity: person.identity })))
       postRemoval("/api/principals/revoke-sign-in", { principalId: person.id, identity: person.identity });
     return;

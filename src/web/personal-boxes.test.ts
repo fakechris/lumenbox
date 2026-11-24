@@ -478,7 +478,8 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const classic = { people: [adminRow], window: {}, esc: String, $: () => classicRows };
     runInNewContext(renderPeople + "\nrenderPeople()", classic);
     assert.doesNotMatch(classicRows.innerHTML, /data-remove=/, "the only admin’s last sign-in still cannot be removed");
-    classic.people.push({ ...adminRow, identity: "removed-feishu:ou_admin", usableSignIn: false });
+    const retiredRow = { ...adminRow, identity: "removed-feishu:ou_admin", usableSignIn: false, retiredSignIn: true };
+    classic.people.push(retiredRow);
     runInNewContext(renderPeople + "\nrenderPeople()", classic);
     assert.deepEqual([...classicRows.innerHTML.matchAll(/data-remove="(\d+)"/g)].map(match => match[1]), ["1"],
       "the only admin can revoke the retired identity but not the remaining usable sign-in");
@@ -487,6 +488,21 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     assert.deepEqual([...classicRows.innerHTML.matchAll(/data-remove="(\d+)"/g)].map(match => match[1]), ["0", "1"],
       "the only admin can choose either sign-in to revoke without leaving the roster");
     const revokePath = "/api/principals/revoke-sign-in";
+    classic.people = [retiredRow];
+    runInNewContext(renderPeople + "\nrenderPeople()", classic);
+    assert.match(classicRows.innerHTML, /data-remove="0"/, "a retired identity can be revoked with no fallback");
+    const retiredRequests: [string, unknown][] = [];
+    runInNewContext(renderPeople + "\n" + removeIdentity, {
+      ...classic, window: { confirm: () => true }, t: String, renderChannels() {},
+      fetch: async (path: string, init: { body: string }) => {
+        retiredRequests.push([path, JSON.parse(init.body)]);
+        return { ok: true, json: async () => ({}) };
+      },
+      document: { getElementById: () => ({ addEventListener: (_type: string, click: (event: object) => void) => {
+        click({ target: { getAttribute: () => "0" }, preventDefault() {} });
+      } }) },
+    });
+    assert.deepEqual(retiredRequests, [[revokePath, { principalId: "admin", identity: retiredRow.identity }]]);
     assert.equal((await call(revokePath, { principalId: "bob", identity: "old:bob" })).status, 200);
     const writes: ReturnType<typeof call>[] = [];
     runInNewContext(renderPeople + "\n" + removeIdentity, {

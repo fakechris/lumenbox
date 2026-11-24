@@ -93,7 +93,8 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
         new Principals().save(originalRoster.map(person => person.id === ada.id ? { ...person, role: "viewer" } : person));
         return revocation;
       },
-      signOut() {}, usableSignIns: person => person.identities, planRemoval: () => async () => {}, boxesOf: () => ({ held: 0, quota: null }),
+      signOut() {}, usableSignIns: person => person.identities, retiredSignIn: () => false,
+      planRemoval: () => async () => {}, boxesOf: () => ({ held: 0, quota: null }),
       lastActive: () => new Map(), doorType: () => undefined, log() {},
     });
     assert.equal(authorityChecks, 2);
@@ -112,13 +113,18 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.equal((await post(revoke, { principalId: ada.id, identity: adaLaptop }, { ...ui, authorization: "", cookie: adaCookie })).status, 200);
     assert.equal((await people()).people.find(row => row.id === ada.id)?.lastAdmin, true);
     const oldFeishu = "removed-feishu:ou_ada";
+    assert.equal((await post("/api/channels/records", { id: "removed-feishu", type: "feishu" })).status, 200);
     roster.reload();
     roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, oldFeishu] } : person));
+    assert.equal((await post("/api/channels/records/remove", { id: "removed-feishu" })).status, 200);
     assert.equal((await fetch(`${BASE}/auth/removed-feishu`)).status, 404);
-    const classicRoster = await (await fetch(`${BASE}/api/channels`, { headers: ui })).json() as { principals: (Row & { usableSignIns: string[] })[] };
+    const classicRoster = await (await fetch(`${BASE}/api/channels`, { headers: ui })).json() as {
+      principals: (Row & { usableSignIns: string[]; retiredSignIns: string[] })[];
+    };
     const classicAda = classicRoster.principals.find(person => person.id === ada.id)!;
     assert.deepEqual(classicAda.identities, [ada.identities[0], oldFeishu]);
     assert.deepEqual(classicAda.usableSignIns, ada.identities);
+    assert.deepEqual(classicAda.retiredSignIns, [oldFeishu]);
     const lastUsable = await post(revoke, { principalId: ada.id, identity: ada.identities[0] }, { ...ui, authorization: "", cookie: adaCookie });
     assert.equal(lastUsable.status, 409);
     assert.equal((await lastUsable.json()).code, "sign-in-last-admin");
@@ -137,6 +143,12 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     assert.ok(!(await people()).invites.some(invite => invite.code === pending.code), "his own codes go with him");
     assert.equal((await fetch(`${BASE}/api/me`, { headers: bobHeaders })).status, 401);
     assert.equal((await mcp()).status, 401, "and out of the side door");
+    roster.reload();
+    roster.save(roster.list().map(person => person.id === ada.id ? { ...person, identities: [oldFeishu] } : person));
+    assert.equal((await post(revoke, { principalId: ada.id, identity: oldFeishu })).status, 200);
+    const remainingAdmin = (await people()).people.find(row => row.id === ada.id)!;
+    assert.deepEqual(remainingAdmin.identities, []);
+    assert.equal(remainingAdmin.lastAdmin, true, "revoking the only recorded identity does not remove the admin");
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;
