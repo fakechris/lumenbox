@@ -132,6 +132,22 @@ test("classic Automations shows where a message routine replies (INV-1969)", () 
   assert.match(row({ kind: "schedule", slug: "daily", name: "Daily", described: "daily", schedule: "0 9 * * *" }, {}), /no chat hears it/);
 });
 
+test("classic connector setup shows the OAuth callback on its own line", async () => {
+  const source = APP_HTML.slice(APP_HTML.indexOf("var connProviders"), APP_HTML.indexOf('$("setconnadd").onclick'));
+  const select = { options: [], value: "github" };
+  const setup = { textContent: "" };
+  const nodes = { setconnprov: select, setconnsetup: setup, setconns: {} };
+  const redirectUri = "https://example.test/oauth/callback";
+  const providers = [{ id: "github", kind: "authorization_code", title: "GitHub", setup: "Set up GitHub" }];
+  const render = runInNewContext(source + "; renderConnectors", {
+    $: (id: keyof typeof nodes) => nodes[id], esc: String,
+    fetch: async () => ({ json: async () => ({ providers, redirectUri }) }),
+  });
+  render();
+  await new Promise(setImmediate);
+  assert.equal(setup.textContent, "Set up GitHub\n" + redirectUri);
+});
+
 test("classic Automations blocks a new draft when the computer is offline", () => {
   const source = APP_HTML.slice(APP_HTML.indexOf("var autoCreateOpen"), APP_HTML.indexOf("// Track selected trigger and cron"));
   const nodes = new Map<string, { style: { display: string }; textContent: string; addEventListener: () => void }>();

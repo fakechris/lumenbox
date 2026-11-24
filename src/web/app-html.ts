@@ -1667,7 +1667,7 @@ function renderConnectors() {
         select.innerHTML = connProviders.map(function (p) { return '<option value="' + esc(p.id) + '">' + esc(p.title) + "</option>"; }).join("");
         select.onchange = function () {
           var p = connProviders.filter(function (x) { return x.id === select.value; })[0];
-          $("setconnsetup").textContent = p ? p.setup + (p.kind === "authorization_code" && data.redirectUri ? "\\n" + data.redirectUri : "") : "";
+          $("setconnsetup").textContent = p ? p.setup + (p.kind === "authorization_code" && data.redirectUri ? "\n" + data.redirectUri : "") : "";
         };
         select.onchange();
       }
