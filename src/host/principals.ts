@@ -149,6 +149,7 @@ export class Principals {
   private byAlias = new Map<string, StoredPrincipal>();
   private readonly incarnationOf: (identity: string) => number;
   private readonly warn: (line: string) => void;
+  private readonly changed: () => void;
 
   constructor(
     private readonly path: string = principalsPath(),
@@ -161,10 +162,13 @@ export class Principals {
        */
       incarnationOf?: (identity: string) => number;
       warn?: (line: string) => void;
+      /** After every save: who may do what may have changed (INV-2071). */
+      changed?: () => void;
     } = {}
   ) {
     this.incarnationOf = options.incarnationOf ?? (() => 1);
     this.warn = options.warn ?? (line => console.error(`[principals] ${line}`));
+    this.changed = options.changed ?? (() => {});
     this.reload();
   }
 
@@ -285,6 +289,11 @@ export class Principals {
     return this.resolve(identity).role;
   }
 
+  /** The person an id names: the roster id (or alias) it is, else whoever holds it as a sign-in now (INV-2074). Tokens judge their sign-in in `McpTokenStore.personFor`. */
+  personOf(id: string): Principal | undefined {
+    return this.byId(id) ?? (this.isKnown(id) ? this.resolve(id) : undefined);
+  }
+
   /** True when this identity is a configured person, not the fallback viewer. */
   isKnown(identity: string): boolean {
     return this.byIdentity.has(identity);
@@ -300,6 +309,11 @@ export class Principals {
    * the file never stores the conflict `reload` would have to resolve.
    */
   save(principals: Principal[]): void {
+    this.write(principals);
+    this.changed();
+  }
+
+  private write(principals: Principal[]): void {
     withRosterLock(this.path, () => {
     const previous = new Map<string, number>();
     // Aliases are the merge's record, not something the People dialog edits: a save keeps them.
