@@ -22,11 +22,7 @@ import { STRIP_TOKEN_JS } from "./token-url-ui.ts";
  * The two exceptions that do live on disk — the markdown renderer and the woff2
  * fonts — degrade gracefully when absent: plain text, system fonts.
  *
- * The look is the Lumen design system: two equal themes ("Atelier" warm light,
- * "Vault" dark) switched by data-theme on <html>, IBM Plex for UI and mono, a
- * reading serif for the agents' prose, 1px hairlines instead of elevation, and
- * status as a colored dot plus a word. The tokens below are copied from the design
- * sheet rather than referenced, for the same reason everything else is inline.
+ * The Lumen themes are selected by data-theme on <html>. Their tokens are inlined.
  *
  * The embedded script uses concatenation to avoid interpolating browser code in this template literal.
  */
