@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { diffSummary, editDiffOf, lineDiff } from "./line-diff.ts";
+import { editDiffOf, lineDiff } from "./line-diff.ts";
 
 test("a one-line change is one minus and one plus, with the rest as context", () => {
   assert.deepEqual(lineDiff("a\nb\nc", "a\nB\nc"), [
@@ -41,8 +41,4 @@ test("only an edit_file call with both texts becomes a diff", () => {
   });
   assert.equal(editDiffOf("write_file", { path: "/w/a.ts", content: "x" }), undefined);
   assert.equal(editDiffOf("edit_file", { path: "/w/a.ts", old: "x" }), undefined, "a malformed call is shown as it was, not guessed at");
-});
-
-test("the summary counts what changed", () => {
-  assert.equal(diffSummary(lineDiff("a\nb\nc", "a\nB\nC\nD")), "+3 −2");
 });

@@ -72,10 +72,3 @@ export function editDiffOf(name: string, input: unknown): EditDiff | undefined {
   if (before === undefined || after === undefined) return undefined;
   return { path: typeof args.path === "string" ? args.path : "", lines: lineDiff(before, after) };
 }
-
-/** How many lines changed, for the one-line summary: "+2 −1". */
-export function diffSummary(lines: readonly DiffLine[]): string {
-  const added = lines.filter(line => line.op === "+").length;
-  const removed = lines.filter(line => line.op === "-").length;
-  return `+${added} −${removed}`;
-}

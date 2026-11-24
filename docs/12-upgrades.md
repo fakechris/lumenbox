@@ -2,7 +2,7 @@
      title: Upgrading somebody's box
      family: guide
      status: current
-     updated: 2026-11-06
+     updated: 2026-11-24
 -->
 # Upgrading somebody's box
 
@@ -178,25 +178,14 @@ run; `src/box/preflight.ts` holds the check before and the verification after. S
 are the web server's ten-minute check. Step 9 — reporting what
 was lost, afterwards, to the people who were told — is still design.
 
-Step 3, **deciding**, is split across the two halves on purpose, and the split is the
-interesting part. `decideUpgrade` decides everything that can be decided from the
-situation. What it cannot decide is whether a person accepts losing what the preflight
-found, so it answers `ask` — and the answer comes back through `upgrade-consent.ts`:
-
-- The server's timer holds what it just asked about (the image, and a fingerprint of the
-  findings the person is reading).
-- An admin replying `upgrade` in the chat writes a consent record naming both.
-- The next `agentbox box upgrade` matches its own situation against that record and passes
-  `approved` to `decideUpgrade`, which then stops asking.
-
-A consent is deliberately narrow. It names one image, because approving 0.31 says nothing
-about 0.32; it names what the person was shown would be lost, so a day's work that appeared
-since invalidates it rather than riding along on yesterday's yes; and it goes stale after a
-day. It also authorises only the *loss* — the rules about interrupting connected people and
-about the quiet window still run underneath, because nobody spoke to those.
-
-`agentbox box upgrade` still decides this way. The app's own path (§6) is simpler: the
-person who presses *Apply update*, or replies `upgrade`, has decided.
+Step 3, **deciding**, is `decideUpgrade`: everything that can be decided from the
+situation is decided there, and what it cannot decide — whether a person accepts losing
+what the preflight found — it answers `ask`. The person who answers is the one who acts:
+pressing *Apply update* in Settings → Boxes, or an admin replying `upgrade` in the chat
+the notice reached, starts the shared update in `box-update.ts`, which waits for work in
+flight and keeps the volumes. `agentbox box upgrade` prints the findings and stops at
+`--yes`. (A consent ledger that let a chat reply pre-authorise a later CLI run was retired
+once the reply started the update itself: nothing wrote it any more.)
 
 ## 5. What is missing before this is safe unattended
 
