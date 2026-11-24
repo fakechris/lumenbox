@@ -791,7 +791,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (!principals.hasCurrentIdentity(person.id, identity)) return false;
       const expiresAt = principals.browserSignInExpiresAt(person.id, identity);
       if (expiresAt !== undefined) return expiresAt > now;
-      return !isInviteBrowserIdentity(identity) && doors.some(door => door.id === doorOfIdentity(identity));
+      const separator = identity.indexOf(":");
+      return !isInviteBrowserIdentity(identity) && separator > 0 && identity.slice(separator + 1).trim() !== ""
+        && doors.some(door => door.id === identity.slice(0, separator));
     });
   };
   /** What a task's mandate is checked against now (INV-1457): the principal's role today and the rule set as loaded. */

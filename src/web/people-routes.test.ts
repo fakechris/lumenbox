@@ -182,8 +182,14 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     saveConfig({ env: { WEB_APP_ID: "fixture-app", WEB_APP_SECRET: "fixture-secret" } });
     const feishuIdentity = "web:ou_ada";
     roster.reload();
-    const linkedRoster = roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, feishuIdentity] } : person);
-    assert.equal((await post("/api/principals", { principals: linkedRoster })).status, 200);
+    const saveAdaLinks = (...identities: string[]) => post("/api/principals", {
+      principals: roster.list().map(person => person.id === ada.id ? { ...person, identities: [...person.identities, ...identities] } : person),
+    });
+    assert.equal((await saveAdaLinks("web", "web:")).status, 200);
+    const incompleteBackup = await post(revoke, { principalId: ada.id, identity: freshIdentity }, freshHeaders);
+    assert.equal(incompleteBackup.status, 409);
+    assert.equal((await incompleteBackup.json()).code, "sign-in-last-admin");
+    assert.equal((await saveAdaLinks("web", "web:", feishuIdentity)).status, 200);
     const begin = await fetch(`${BASE}/auth/web`, { redirect: "manual" });
     assert.equal(begin.status, 302);
     const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
