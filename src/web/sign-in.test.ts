@@ -52,7 +52,11 @@ test("an organisation's /login offers its Feishu door; the door's sign-in gives 
   });
   writeFileSync(join(home, "channels.json"), JSON.stringify({ channels: [{ id: "fixture", name: "Fixture", type: "feishu", incarnation: 1, boxId: "default", createdAt: new Date().toISOString() }] }));
   writeFileSync(join(home, "config.json"), JSON.stringify({ env: { FIXTURE_APP_ID: "app", FIXTURE_APP_SECRET: "secret" } }));
-  writeFileSync(join(home, "principals.json"), JSON.stringify({ principals: [{ id: "p-ana", name: "Ana", role: "admin", identities: ["fixture:ou_ana"] }], installation: { mode: "organisation" } }));
+  const secondAdmin = { id: "p-bao", name: "Bao", role: "admin", identities: ["fixture:ou_bao"] };
+  writeFileSync(join(home, "principals.json"), JSON.stringify({
+    principals: [{ id: "p-ana", name: "Ana", role: "admin", identities: ["fixture:ou_ana"] }, secondAdmin],
+    installation: { mode: "organisation" },
+  }));
   // The vendor, faked: the authorization code is the open_id it vouches for.
   const loginFetch = (async (input: string | URL | Request, init?: RequestInit) => {
     if (String(input).endsWith("oauth/token")) return Response.json({ access_token: JSON.parse(String(init!.body)).code });
@@ -111,7 +115,7 @@ test("an organisation's /login offers its Feishu door; the door's sign-in gives 
   assert.equal(expiredApi.status, 400);
   assert.equal((await expiredApi.json()).code, "sign-in-expired");
   const removed = await fetch(base + "/api/principals", {
-    method: "POST", headers: { authorization: "Bearer fixture", "content-type": "application/json" }, body: JSON.stringify({ principals: [] }),
+    method: "POST", headers: { authorization: "Bearer fixture", "content-type": "application/json" }, body: JSON.stringify({ principals: [secondAdmin] }),
   });
   assert.equal(removed.status, 200);
   const cookie = known.headers.getSetCookie()[0]!.split(";")[0]!;
