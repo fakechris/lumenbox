@@ -132,6 +132,25 @@ test("classic Automations shows where a message routine replies (INV-1969)", () 
   assert.match(row({ kind: "schedule", slug: "daily", name: "Daily", described: "daily", schedule: "0 9 * * *" }, {}), /no chat hears it/);
 });
 
+test("classic Automations blocks a new draft when the computer is offline", () => {
+  const source = APP_HTML.slice(APP_HTML.indexOf("var autoCreateOpen"), APP_HTML.indexOf("// Track selected trigger and cron"));
+  const nodes = new Map<string, { style: { display: string }; textContent: string; addEventListener: () => void }>();
+  const get = (id: string) => {
+    if (!nodes.has(id)) nodes.set(id, { style: { display: "" }, textContent: "", addEventListener() {} });
+    return nodes.get(id)!;
+  };
+  const boxState = { connected: false };
+  const render = runInNewContext(source + "; renderAutoComputer", { boxState, $: get, document: { getElementById: get } });
+  render();
+  assert.equal(get("autonew").style.display, "none");
+  assert.equal(get("autocomputer").style.display, "");
+  assert.match(get("autocomputer-title").textContent, /Connect a computer to create an automation/);
+  boxState.connected = true;
+  render();
+  assert.equal(get("autonew").style.display, "");
+  assert.equal(get("autocomputer").style.display, "none");
+});
+
 /** Every `id="…"` the document defines. */
 const definedIds = new Set([...APP_HTML.matchAll(/id="([A-Za-z0-9_-]+)"/g)].map(match => match[1]!));
 
