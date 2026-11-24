@@ -289,9 +289,9 @@ export class Principals {
     return this.resolve(identity).role;
   }
 
-  /** The person an id names: whoever holds it as a sign-in now, else the roster id (or alias) it is (INV-2074). */
+  /** The person an id names: the roster id (or alias) it is, else whoever holds it as a sign-in now (INV-2074). Tokens judge their sign-in in `McpTokenStore.personFor`. */
   personOf(id: string): Principal | undefined {
-    return this.isKnown(id) ? this.resolve(id) : this.byId(id);
+    return this.byId(id) ?? (this.isKnown(id) ? this.resolve(id) : undefined);
   }
 
   /** True when this identity is a configured person, not the fallback viewer. */

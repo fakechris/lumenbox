@@ -87,6 +87,8 @@ test("a token from a sign-in is whoever holds the sign-in now, never the roster 
     assert.equal(store.personFor(alice.token, principals), undefined, "the sign-in was removed; the token went with it");
     assert.equal(store.personFor(linked.token, principals), "feishu:ou_a");
     assert.equal(store.personFor(store.mint("feishu:ou_x", "ide").token, principals), "p_bob", "Carol's old sign-in, now Bob's, is Bob");
+    // Work stored under Carol's roster id stays Carol's, though Bob now holds the sign-in it also names.
+    assert.equal(principals.personOf("feishu:ou_x")?.id, "feishu:ou_x");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
