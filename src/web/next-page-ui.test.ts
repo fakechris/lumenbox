@@ -113,7 +113,7 @@ test("automation refresh shows discovery, ignores an old response and renders th
   });
   let view = node("main");
   const context = vm.createContext({
-    settings, next: { view: "auto" }, el: node, t: (key: string) => key, initial: () => "N",
+    settings, boxes: { state: { connected: true } }, next: { view: "auto" }, el: node, t: (key: string) => key, initial: () => "N",
     getJson: () => new Promise((resolve, reject) => pending.push({ resolve, reject })),
     failed: (error: Error) => errors.push(error),
     render: () => { view = node("main"); vm.runInContext("renderAuto(view)", Object.assign(context, { view })); },
@@ -136,6 +136,86 @@ test("automation refresh shows discovery, ignores an old response and renders th
   pending[3]!.reject(new Error("offline"));
   await Promise.resolve();
   assert.equal(errors[0]?.message, "offline");
+});
+
+test("automation creation guides an offline user to Computers and preserves the draft until a retry succeeds", async () => {
+  class Node {
+    kids: Node[] = [];
+    events = new Map<string, () => void>();
+    style = {};
+    value = "";
+    hidden = false;
+    constructor(readonly tag: string, readonly text = "") {}
+    appendChild(child: Node) { this.kids.push(child); }
+    addEventListener(event: string, run: () => void) { this.events.set(event, run); }
+    setAttribute() {}
+    find(text: string): Node | undefined {
+      if (this.text === text) return this;
+      for (const child of this.kids) { const found = child.find(text); if (found) return found; }
+    }
+    click() { this.events.get("click")!(); }
+  }
+  const settings = { routines: [], runnerAgents: ["Ada"] }, next = { view: "auto" };
+  const boxes = { state: { connected: false } };
+  const connectionError = Object.assign(new Error("No box is connected"), { data: { code: "no-box" } });
+  const payloads: unknown[] = [];
+  let view = new Node("main");
+  const context = vm.createContext({
+    settings, boxes, next, t: String,
+    el: (tag: string, _cls: string, text: string) => new Node(tag, text),
+    field: (text: string, value: string) => {
+      const label = new Node("label", text), input = new Node("input");
+      input.value = value; label.appendChild(input); return { label, input };
+    },
+    navigateView: (view: string) => { next.view = view; },
+    getJson: async () => ({ schedules: [] }),
+    postJson: async (path: string, body: unknown) => {
+      assert.equal(path, "/api/automations");
+      payloads.push(JSON.parse(JSON.stringify(body)));
+      if (!boxes.state.connected) throw connectionError;
+      return { slug: "morning-report" };
+    },
+    render: () => { view = new Node("main"); vm.runInContext("renderAuto(view)", Object.assign(context, { view })); },
+  });
+  vm.runInContext(NEXT_AUTO_JS, context);
+  const render = () => vm.runInContext("render()", context);
+  const control = (key: string) => view.find("ui.next.auto." + key)!.kids[0]!;
+  render();
+  assert.equal(view.find("ui.next.auto.new"), undefined);
+  assert.ok(view.find("ui.auto.needsComputer"));
+  view.find("ui.auto.openComputers")!.click();
+  assert.equal(next.view, "boxes");
+
+  boxes.state.connected = true; next.view = "auto"; render();
+  view.find("ui.next.auto.new")!.click();
+  control("name").value = "Morning report";
+  control("what").value = "Summarize yesterday’s work.";
+  control("who").value = "Ada";
+  control("starts").value = "message";
+  control("match").value = "morning report";
+  view.kids[0]!.events.get("change")!();
+  boxes.state.connected = false;
+  view.find("ui.next.member.create")!.click();
+  await Promise.resolve();
+  assert.ok(view.find("ui.auto.computerLost"));
+  assert.ok(view.find("ui.auto.computerRetry"));
+  view.find("ui.auto.openComputers")!.click();
+  assert.equal(next.view, "boxes");
+
+  boxes.state.connected = true; next.view = "auto"; render();
+  assert.equal(control("name").value, "Morning report");
+  assert.equal(control("what").value, "Summarize yesterday’s work.");
+  assert.equal(control("who").value, "Ada");
+  assert.equal(control("starts").value, "message");
+  assert.equal(control("match").value, "morning report");
+  assert.equal(view.find("ui.next.auto.match")!.hidden, false);
+  view.find("ui.next.member.create")!.click();
+  await Promise.resolve();
+  await Promise.resolve();
+  const payload = { name: "Morning report", body: "Summarize yesterday’s work.", triggerType: "message", match: "morning report", agent: "Ada" };
+  assert.deepEqual(payloads, [payload, payload]);
+  assert.ok(view.find("ui.next.auto.new"));
+  assert.equal(view.find("ui.auto.computerLost"), undefined);
 });
 
 const row = (phase: string, blocker?: string, status = "doing") => ({ status, reading: { phase, ...(blocker ? { blocker: { kind: blocker } } : {}) } });

@@ -3981,14 +3981,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           
-          const slug = slugify(name), runAs = typeof body.agent === "string" && body.agent.trim() !== "" ? body.agent.trim() : undefined;
-          const decision = orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs }, id => registry.tryGet(id)?.profile.name ?? id);
-          if (decision.reason) { send(res, 400, { error: decision.reason }); return; }
           const box = orchestrator.boxClient();
           if (box === undefined) {
             send(res, 503, apiError("no-box"));
             return;
           }
+          const slug = slugify(name), runAs = typeof body.agent === "string" && body.agent.trim() !== "" ? body.agent.trim() : undefined;
+          const decision = orchestrator.scheduler.runnerDecision({ slug: "", boxId: registry.defaultBox().id, runAs }, id => registry.tryGet(id)?.profile.name ?? id);
+          if (decision.reason) { send(res, 400, { error: decision.reason }); return; }
 
           const triggerType = typeof body.triggerType === "string" ? body.triggerType : "";
           let triggerLines = "";
@@ -4042,8 +4042,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             await orchestrator.skills.refresh(true);
             log(`automation created: ${slug} (${triggerType})${caller.userId === undefined ? "" : ` by ${caller.userId}`}`);
             send(res, 200, { ok: true, slug });
-          } catch (e) {
-            send(res, 500, apiError("routine-write-failed"));
+          } catch {
+            const reachable = await box.health().then(() => true, () => false);
+            send(res, reachable ? 500 : 503, apiError(reachable ? "routine-write-failed" : "no-box"));
           }
           return;
         }

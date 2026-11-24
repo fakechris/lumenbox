@@ -18,11 +18,13 @@ test("automation saves refuse borrowed identities before writing, for timers and
   process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
   process.env.AGENTBOX_SKILL_TTL_MS = "0";
   const files = new Map<string, string>();
+  let connected = true;
   const daemon = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = raw ? JSON.parse(raw) : {};
     res.setHeader("content-type", "application/json");
+    if (!connected) { res.statusCode = 503; res.end(JSON.stringify({ error: "unavailable" })); return; }
     if (req.url === "/health") { res.end(JSON.stringify({ ok: true, protocol: BOXD_PROTOCOL })); return; }
     if (req.url === "/fs/write") files.set(body.path, body.content);
     if (req.url === "/fs/list") {
@@ -91,6 +93,13 @@ test("automation saves refuse borrowed identities before writing, for timers and
     const hidden = await excluded.json() as { runnerAgents: string[]; boxes: unknown[] };
     assert.deepEqual(hidden.boxes, [], "this caller cannot read the default box");
     assert.deepEqual(hidden.runnerAgents, [], "the picker must not disclose its default agent's name");
+    const interrupted = { name: "After reconnect", body: "Report status", triggerType: "webhook" };
+    connected = false;
+    const lost = await save(interrupted);
+    assert.equal(lost.status, 503);
+    assert.equal((await lost.json()).code, "no-box", "the computer disappeared before the host's connection status caught up");
+    connected = true;
+    assert.equal((await save(interrupted)).status, 200, "the unchanged request can be retried after recovery");
   } finally {
     stop?.(); await new Promise<void>(resolve => daemon.close(() => resolve()));
     if (previous === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previous;

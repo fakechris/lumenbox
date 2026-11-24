@@ -14,6 +14,7 @@ import { MCP_TOKEN_JS } from "./mcp-token-ui.ts";
 import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts";
 import { PERSONAL_BOX_DIALOG_JS } from "./personal-box-dialog-ui.ts";
 import { PERSONAL_BOX_CLASSIC_JS } from "./personal-box-classic-ui.ts";
+import { CLASSIC_AUTO_COMPUTER_HTML, CLASSIC_AUTO_COMPUTER_JS } from "./classic-auto-computer.ts";
 
 /**
  * The web UI, as a single inlined document.
@@ -1045,9 +1046,10 @@ ${WORK_ATTENTION_HTML}
   <div id="autoview" style="display:none;flex:1;min-height:0;flex-direction:column">
     <div class="bar" style="display:flex;gap:8px;align-items:center;border-bottom:1px solid var(--border)">
       <span class="dim" id="autostate" style="flex:1;font-size:12px"></span>
-      <a href="#" id="autonew" class="dim" style="font-size:12px">{{ui.page.new}}</a>
+      <a href="#" id="autonew" class="dim" style="display:none;font-size:12px">{{ui.next.auto.new}}</a>
       <a href="#" id="autorefresh" class="dim" style="font-size:12px">{{ui.page.refresh}}</a>
     </div>
+    ${CLASSIC_AUTO_COMPUTER_HTML}
     <div id="autocreate" style="display:none;padding:16px;border-bottom:1px solid var(--border)">
       <div style="display:flex;flex-direction:column;gap:12px">
         <!-- Name -->
@@ -4626,6 +4628,7 @@ function refresh() {
     allTools = state.allTools || allTools;
     $("model").innerHTML = state.provider ? "<b>" + esc(state.provider) + "</b>" : "";
     boxState = state.box;
+    renderAutoComputer();
     var cluster = state.box.backend === "kubernetes";
     dockerState = state.box.docker || null;
     if (cluster) renderClusterBoxStatus();
@@ -5421,16 +5424,17 @@ document.getElementById("autolist").addEventListener("click", function (e) {
 });
 
 
-// The form toggle
-var autoCreateOpen = false;
+var autoCreateOpen = false, autoComputerLost = false;
+${CLASSIC_AUTO_COMPUTER_JS}
 document.getElementById("autonew").addEventListener("click", function (e) {
   e.preventDefault();
+  if (!boxState.connected && !autoCreateOpen) return;
   autoCreateOpen = !autoCreateOpen;
   $("autocreate").style.display = autoCreateOpen ? "" : "none";
   if (autoCreateOpen) {
-    // populate agent dropdown
     $("autoagent").innerHTML = '<option value="">{{ui.app.first-agent}}</option>';
   }
+  renderAutoComputer();
 });
 
 // Track selected trigger and cron
@@ -5522,14 +5526,17 @@ $("autosave").addEventListener("click", function () {
   .then(function (result) {
     $("autosave").disabled = false;
     if (!result.ok) {
+      autoComputerLost = result.data.code === "no-box";
+      renderAutoComputer();
       $("autoerror").textContent = result.data.error || "{{ui.app.something-went-wrong}}";
-      $("autoerror").style.display = "";
+      $("autoerror").style.display = autoComputerLost ? "none" : "";
       return;
     }
     // Success: reset form, close it, refresh the list
     resetAutoForm();
     autoCreateOpen = false;
     $("autocreate").style.display = "none";
+    renderAutoComputer();
     refreshAutomations();
   })
   .catch(function () {
@@ -5544,9 +5551,11 @@ $("autocancel").addEventListener("click", function () {
   resetAutoForm();
   autoCreateOpen = false;
   $("autocreate").style.display = "none";
+  renderAutoComputer();
 });
 
 function resetAutoForm() {
+  autoComputerLost = false;
   $("autoname").value = "";
   $("autobody").value = "";
   $("automatch").value = "";
