@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
@@ -67,6 +67,7 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const demoted = rows.map(row => ({ ...row, role: row.id === ada.id ? "viewer" : row.role }));
     assert.equal((await post("/api/principals", { principals: demoted })).status, 409);
     assert.equal((await post("/api/principals", { principals: rows.filter(row => row.id !== ada.id) })).status, 409);
+    assert.equal((await post("/api/principals/logout", { principalId: ada.id })).status, 409, "nor signing her out everywhere: nobody could let her back in (INV-2082)");
     assert.equal((await people()).people.find(row => row.id === ada.id)?.role, "admin");
 
     // INV-2057: Bob's own code links a second sign-in to the same Bob; it creates nobody.
@@ -109,4 +110,32 @@ test("a lifetime is one of the offered ones, and only a roster that loses its ev
   assert.equal(leavesNoAdmin([{ role: "admin" }, { role: "driver" }], [{ role: "driver" }]), true);
   assert.equal(leavesNoAdmin([{ role: "admin" }, { role: "admin" }], [{ role: "admin" }]), false);
   assert.equal(leavesNoAdmin([{ role: "driver" }], []), false, "a roster with no admin yet is the operator's to build");
+});
+
+test("a week-long code outlives a restart, works once after it, and is never written or logged (INV-2082)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-people-restart-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  const logs: string[] = [];
+  let stop: (() => void) | undefined, base = "";
+  const start = () => startWebServer({ port: 0, host: "127.0.0.1", token: "t0k", useBox: false, onLog: line => logs.push(line), onReady: url => { base = url; } });
+  try {
+    stop = await start();
+    const made = await fetch(`${base}/api/channels/invite`, { method: "POST", headers: ui, body: JSON.stringify({ role: "driver", minutes: 7 * 24 * 60 }) });
+    const { code } = (await made.json()) as Code;
+    stop(); stop = await start(); // Save & restart, a door change, an upgrade
+    const listed = ((await (await fetch(`${base}/api/people`, { headers: ui })).json()) as { invites: Code[] }).invites;
+    assert.equal(listed.length, 1, "still pending");
+    assert.equal(listed[0]!.code, undefined, "and not shown again: only its hash was kept");
+    const redeem = () => fetch(`${base}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code, name: "Cleo" }) });
+    assert.equal((await redeem()).status, 200);
+    assert.equal((await redeem()).status, 400, "once");
+    assert.ok(!readFileSync(join(home, "invites.json"), "utf8").includes(code));
+    assert.ok(logs.every(line => !line.includes(code)), "never logged");
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

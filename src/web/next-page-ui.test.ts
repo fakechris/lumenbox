@@ -10,9 +10,76 @@ import { nextLogic } from "./next-logic-ui.ts";
 import { DELIVERY_BRIEF, DELIVERY_SECTIONS, deliveryLabel } from "../host/delivery-report.ts";
 import { ASK_SENTENCES, askLabel, askProse, splitAsk } from "../host/person-ask.ts";
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
+import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
+import { NEXT_FILES_JS } from "./next-files-ui.ts";
 
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
+
+test("work process distinguishes delivered files from a task metadata update failure", () => {
+  const node = (tag: string, cls = "", text = "") => ({
+    tag, cls, text, kids: [] as unknown[],
+    appendChild(child: unknown) { this.kids.push(child); },
+  });
+  const context = vm.createContext({ el: node, t: (key: string) => key, agentName: () => "Ada", MSG: { "ui.next.step.failed": "failed" } });
+  vm.runInContext(NEXT_PANEL_JS, context);
+  vm.runInContext(`panel.steps = [
+    { name: "Tasks", detail: "update", metadataUpdate: true, outcome: "failed" },
+    { name: "Tasks", detail: "submit", outcome: "succeeded" },
+    { name: "tool", detail: { status: "unexpected" }, outcome: "failed" }
+  ]`, context);
+  const render = (task: string): string => vm.runInContext("JSON.stringify(processBlock(" + task + "))", context);
+  const delivered = render("{ deliverables: [{ id: 'report' }] }");
+  assert.match(delivered, /filesDelivered.*metadataFailed.*metadataDeliveryIntact.*Tasks submit/);
+  assert.doesNotMatch(delivered, /Tasks update|\[object Object\]/);
+  assert.match(delivered, /ui\.next\.step\.failed/, "unrelated failures still have a flag");
+  assert.match(render("{}"), /metadataFailed.*metadataRetry/);
+  assert.doesNotMatch(render("{}"), /filesDelivered|resultSubmitted|metadataDeliveryIntact/);
+  assert.match(render("{ delivery: { submitted: true } }"), /resultSubmitted.*metadataDeliveryIntact/);
+});
+
+test("Files opens in the main view and downloads from the selected box", async () => {
+  assert.match(NEXT_PAGE("en"), /data-nav="files">Files<\/button>/);
+  const boxes = [{ id: "private", name: "Personal box" }, { id: "shared", name: "Shared box" }];
+  const pending: { path: string; resolve: (listing: unknown) => void }[] = [];
+  const clicks = new Map<string, () => void>();
+  const node = (tag: string, cls = "", text = "") => ({
+    tag, cls, text, kids: [] as unknown[], classList: { add() {} },
+    appendChild(child: unknown) { this.kids.push(child); },
+    addEventListener(event: string, run: () => void) { if (event === "click") clicks.set(text, run); },
+    setAttribute() {},
+  });
+  let view = node("main");
+  const context = vm.createContext({
+    boxes: { list: boxes }, chat: { box: "private" }, next: { view: "files" }, boxById: (id: string) => boxes.find(box => box.id === id),
+    el: node, t: (key: string) => key, bytes: (n: number) => String(n),
+    getJson: (path: string) => new Promise(resolve => pending.push({ path, resolve })),
+    render: () => { view = node("main"); vm.runInContext("renderFiles(view)", Object.assign(context, { view })); },
+  });
+  vm.runInContext(NEXT_FILES_JS, context);
+  vm.runInContext("render()", context);
+  assert.equal(pending[0]!.path, "/api/files?boxId=private");
+  vm.runInContext("readWorkFiles('shared', ''); render()", context);
+  assert.equal(pending[1]!.path, "/api/files?boxId=shared");
+  pending[0]!.resolve({ root: "/work", path: "/work", entries: [{ name: "private.md", type: "file", size: 1 }] });
+  pending[1]!.resolve({ root: "/work", path: "/work", entries: [
+    { name: "one turn.md", type: "file", size: 47 },
+    { name: "latest.md", type: "symlink", target_in_work: true, target_type: "file" },
+    { name: "archive-link", type: "symlink", target_in_work: true, target_type: "directory" },
+    { name: "outside.md", type: "symlink", target_in_work: false },
+    { name: "broken.md", type: "symlink", target_in_work: false },
+    { name: "unverified.md", type: "symlink" },
+  ] });
+  await Promise.resolve();
+  assert.doesNotMatch(JSON.stringify(view), /private\.md/);
+  assert.match(JSON.stringify(view), /one turn.md.*\/api\/file\?boxId=shared&path=%2Fwork%2Fone%20turn.md/);
+  assert.match(JSON.stringify(view), /latest\.md.*\/api\/file\?boxId=shared&path=%2Fwork%2Flatest\.md/);
+  assert.doesNotMatch(JSON.stringify(view), /(?:outside|broken|unverified)\.md/);
+  assert.doesNotMatch(JSON.stringify(view), /\/api\/file\?boxId=shared&path=%2Fwork%2Farchive-link/);
+  assert.ok(clicks.has("archive-link/"), "an in-root directory alias is a folder button, not a download");
+  clicks.get("archive-link/")!();
+  assert.equal(pending[2]!.path, "/api/files?boxId=shared&dir=%2Fwork%2Farchive-link");
+});
 
 test("automation refresh shows discovery, ignores an old response and renders the new paused routine", async () => {
   const pending: { resolve: (got: unknown) => void; reject: (error: Error) => void }[] = [];
@@ -194,7 +261,7 @@ test("welcome setup uses the latest box result even when setup is the last respo
   const delayedSetup = new Promise<typeof settings.setup>(resolve => { finishSetup = resolve; });
   const drawn: string[][] = [];
   const refresh = pageFunction("refresh", {
-    next: { agents: {} }, settings, boxes, chat: {}, member: {}, panel: {},
+    next: { agents: {} }, settings, boxes, chat: {}, member: {}, panel: {}, rereadRole: () => {},
     getJson: (path: string) => path === "/api/setup" ? delayedSetup : Promise.resolve({ boxes: [{ id: "b1", connected: true }] }),
     render: () => { drawn.push(boxStep().kids.map(node => node.text)); },
     failed: (error: unknown) => { throw error; },
@@ -211,8 +278,10 @@ test("reopening Boxes settings refreshes its status and preserves the settings r
   const boxSet = { config: null as object | null };
   const writes: unknown[][] = [];
   let loads = 0;
+  const settings = { pane: "" };
+  const selectView = pageFunction("selectView", { next: {}, settings, settingsPane: (key: unknown) => key });
   const navigateView = pageFunction("navigateView", {
-    next: {}, settings: {}, settingsPane: (key: unknown) => key, document: { body: { dataset: {} } },
+    selectView, settings, document: { body: { dataset: {} } },
     writeViewAddress: (...args: unknown[]) => writes.push(args), render() {},
   });
   const open = pageFunction("openSettingsPane", {
@@ -925,4 +994,27 @@ test("a reload stays on the computer and agent the person was on, and a new sign
   const fresh = { box: "", agentId: "" };
   pageFunction("recallPlace", globals(fresh))();
   assert.deepEqual(fresh, { box: "mine", agentId: "" }, "a computer chosen with no agent on it is a place too");
+});
+
+test("a viewer's composer says they can watch and not act, and takes nothing; nobody else's is shut (INV-2047)", async () => {
+  const nodes: Record<string, { textContent: string; hidden: boolean; disabled: boolean }> = {
+    "composer-watch": { textContent: "", hidden: true, disabled: false },
+    "composer-text": { textContent: "", hidden: false, disabled: false },
+    "composer-send": { textContent: "", hidden: false, disabled: false },
+  };
+  const settings: { me: null | { role?: string } } = { me: null };
+  const watchOnly = pageFunction("watchOnly", { settings }) as () => boolean;
+  const draw = pageFunction("renderWatchOnly", { $: (id: string) => nodes[id], t: (key: string) => key, watchOnly });
+  const canSend = pageFunction("composerCanSend", { watchOnly, refreshModelReadiness: () => Promise.resolve(true) }) as () => Promise<boolean>;
+  draw();
+  assert.equal(nodes["composer-text"]!.disabled, false, "while the role is not yet known, nothing is shut");
+  settings.me = { role: "viewer" };
+  draw();
+  assert.deepEqual([nodes["composer-text"]!.disabled, nodes["composer-send"]!.disabled, nodes["composer-watch"]!.hidden, nodes["composer-watch"]!.textContent],
+    [true, true, false, "ui.next.composer.watchOnly"], "a viewer is told before typing, not after sending");
+  assert.equal(await canSend(), false, "and nothing a viewer typed is sent to be refused");
+  settings.me = { role: "driver" };
+  draw();
+  assert.deepEqual([nodes["composer-text"]!.disabled, nodes["composer-watch"]!.hidden], [false, true], "made a driver, the composer opens");
+  assert.equal(await canSend(), true);
 });

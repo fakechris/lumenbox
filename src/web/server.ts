@@ -1,4 +1,5 @@
 import { WorkGovernance, resourceKey } from "../host/work-governance.ts";
+import { CodeAttempts } from "./code-attempts.ts";
 import { governanceResources } from "./work-governance-resources.ts";
 import { governanceRoute } from "./work-governance-routes.ts";
 import { surfaceActionWork } from "../host/surface-action.ts";
@@ -20,6 +21,7 @@ import { taskProgressSurface } from "../host/task-progress-surface.ts";
 import { lastReport, taskBoardRecord } from "./task-board-record.ts";
 import { taskCostRoute } from "./task-cost-routes.ts";
 import { taskListRoute, TaskListPages } from "./task-list-routes.ts";
+import { withinWork, workFileRoute } from "./work-file-routes.ts";
 import { SseReplay } from "./sse-replay.ts";
 import { taskRecord } from "./mcp-record.ts";
 import { TaskExecutions } from "./task-execution.ts";
@@ -51,7 +53,7 @@ import {
 } from "node:http";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect as netConnect, type Socket } from "node:net";
-import { join, posix } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentRegistry, MAIN_CONVERSATION, conversationIdFor } from "../agents/registry.ts";
 import { isContextCommand, newContext } from "../host/context-recovery.ts";
@@ -143,19 +145,6 @@ function readToolList(value: unknown): readonly string[] | null | undefined | Er
  */
 export const RESTART_EXIT_CODE = 75;
 
-/**
- * Whether a path is inside the work directory, textually.
- *
- * A prefix check on a normalised path, which stops `..` and a bare `/etc/passwd`. It does *not* stop
- * a symlink pointing out of the tree — that is checked in the daemon with `realpath`, where the
- * filesystem actually is. Both, because this one is reachable by anyone with a UI token.
- */
-function withinWork(path: string, work: string): boolean {
-  if (path.includes("\0")) return false;
-  const normalised = posix.normalize(path);
-  return normalised === work || normalised.startsWith(`${work}/`);
-}
-
 import { agentboxHome, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
@@ -246,7 +235,7 @@ import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { quietWiring } from "./quiet-wiring.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { OpenDesktops } from "./open-desktops.ts";
-import { leavesNoAdmin, peopleRoute, type PendingInvite } from "./people-routes.ts";
+import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
 import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
@@ -254,6 +243,7 @@ import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
+import { policyFor } from "./policy-scope.ts";
 import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import { approvedCallNotice } from "../host/approval-notice.ts";
 import {workRootSummary} from "../host/work-root-store.ts";
@@ -832,9 +822,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   // Letting somebody in is one click, not an id copied around. A stranger's message
   // records a knock; the settings dialog approves it with one button, or the owner
-  // hands out a short-lived invite code the person redeems in the chat itself.
-  // In memory on purpose: a knock lost to a restart costs the person one more
-  // message, and a code that did not outlive the process is a *property* of a code.
+  // hands out an invite code the person redeems in the chat itself. Knocks are in
+  // memory on purpose: one lost to a restart costs the person one more message. Codes
+  // are kept as hashes, because a week-long code must outlive a restart (INV-2082, invite-store.ts).
   // Side-door tokens, one per person per client, kept across restarts as hashes (INV-1520, mcp-tokens.ts).
   const mcpTokens = new McpTokenStore(join(agentboxHome(), "mcp-tokens.json"), line => log(line));
 
@@ -844,11 +834,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   >();
   /**
    * Sign-ins in flight through a Feishu door (docs: 网页应用免登). Keyed by the state
-   * nonce; in memory like the invite codes, and for the same reason — a dance that
+   * nonce; in memory like the knocks, and for the same reason — a dance that
    * does not survive a restart costs the person one more click.
    */
   const oauthStates = new Map<string, { channelId: string; next: string; at: number; appId: string; incarnation: number; bootstrapCode?: string }>();
-  const invites = new Map<string, PendingInvite>();
+  const invites = new InviteStore(join(agentboxHome(), "invites.json"), line => log(line));
+  // Wrong codes, bounded per source and overall, so a code that lives a week cannot be guessed (INV-2078).
+  const codeAttempts = new CodeAttempts();
   const newInviteCode = (): string => {
     // Unambiguous alphabet — no 0/O, 1/I/L — because this travels by voice and by
     // hand. Six characters of 31 ≈ 10^9, plenty for 15 minutes and one use.
@@ -1382,9 +1374,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       log(`channel ${request.channel}: ${request.senderLabel} (${request.identity}) knocked`);
     },
     bind: (code, identity, senderLabel) => {
+      const wait = codeAttempts.waitFor(`chat:${identity}`);
+      if (wait !== undefined) return `Too many wrong codes; try again in ${wait} seconds.`;
       const invite = invites.get(code);
       if (invite === undefined || invite.expiresAt < Date.now()) {
         invites.delete(code);
+        if (codeAttempts.failed(`chat:${identity}`)) log(`channel bind: too many wrong codes (${identity}); refusing codes for a while`);
         return "That code is not live — a code works once, until it expires (15 minutes unless the admin chose longer). Ask for a fresh one.";
       }
       // An identity that already belongs to somebody is not re-linkable by code —
@@ -3362,6 +3357,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (!boxId && registry.has(id)) { boxId = registry.boxOf(id).id; agentBoxes.set(id, boxId); }
         return boxId !== undefined && mayReadBox(boxId);
       };
+      const seesAgent = (id: string): boolean => callerRole === "admin" || mayReadAgent(id); // an agent's approvals and grants: its box's members, any box for an admin (INV-2083)
       const fileRevision = (path: string): string => {
         try { const stat = statSync(path, { bigint: true }); return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`; }
         catch { return "missing"; }
@@ -3691,17 +3687,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // with it, which is why they are POSTs with no body beyond an id: there is nothing to get
         // wrong, and nothing that reads as a normal instruction.
         if (route === "GET /api/policy") {
-          send(res, 200, {
-            pending: orchestrator.policy.pending(),
-            standing: orchestrator.policy.standingGrants(),
-            // What the side-effect tier gate would have asked about this week (INV-691), so a
-            // person can see the cost of enforcing it before choosing to.
-            tierShadow: orchestrator.policy.tierShadow(),
-            stopped: orchestrator.registry
-              .list()
-              .filter(agent => orchestrator.policy.isStopped(agent.id))
-              .map(agent => agent.id),
-          });
+          send(res, 200, policyFor(orchestrator.policy, orchestrator.registry.list().map(agent => agent.id), seesAgent));
           return;
         }
 
@@ -3869,11 +3855,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // because one code for two surfaces is the whole point — a person the owner
         // invited can arrive either way and be the same principal either way.
         if (route === "POST /api/login") {
+          const source = `web:${req.socket.remoteAddress ?? "unknown"}`, wait = codeAttempts.waitFor(source);
+          if (wait !== undefined) { send(res, 429, apiError("code-attempts", { seconds: wait })); return; }
           const body = await readJson(req);
           const code = String(body.code ?? "").trim().toUpperCase();
           const invite = invites.get(code);
           if (invite === undefined || invite.expiresAt < Date.now()) {
             invites.delete(code);
+            if (codeAttempts.failed(source)) log(`web login: too many wrong codes from ${source}; refusing codes for a while`); // never the code
             send(res, 400, {
               ...apiError("code-not-live"),
             });
@@ -4580,20 +4569,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/mcp") {
           send(res, 200, {
             setup: { admins: principals.list().filter(person => person.role === "admin").length, bootstrap: bootstrapPending() },
-            servers: orchestrator.mcp.statuses(),
+            servers: callerRole === "admin" ? orchestrator.mcp.statuses() : [], // the installation's, so an admin's (INV-2083)
             budget: TOOL_BUDGET_WARNING,
-            extensions: orchestrator.extensions?.current() ?? null,
-            // Never the secrets — only that they exist, whose they are, and when.
-            tokens: mcpTokens.list().map(entry => ({ ...entry, mine: entry.principalId === (caller.userId ?? soleAdmin(principals.list())) })), // unsigned: the one admin's (INV-1681)
+            extensions: callerRole === "admin" ? orchestrator.extensions?.current() ?? null : null,
+            // Never the secrets — only that they exist, whose they are, and when; to anyone but an admin, only their own (INV-2083).
+            // `mine` for nobody signed in is the one admin's (INV-1681).
+            tokens: mcpTokens.list().filter(entry => callerRole === "admin" || entry.principalId === caller.userId)
+              .map(entry => ({ ...entry, mine: entry.principalId === (caller.userId ?? soleAdmin(principals.list())) })),
           });
           return;
         }
 
         if (route === "GET /api/channels") {
           if (refusedRole("admin")) return;
-          for (const [code, invite] of invites) {
-            if (invite.expiresAt < Date.now()) invites.delete(code);
-          }
+          invites.dropWhere(invite => invite.expiresAt < Date.now());
           send(res, 200, {
             bootstrapPending: caller.userId === undefined && bootstrapPending(),
             feishuCallbackTemplate: feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID"),
@@ -4616,12 +4605,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               .map(record => ({ id: record.id, name: record.profile.name })),
             principals: principals.list(), installation: principals.installation(),
             knocks: [...knocks.values()],
-            invites: [...invites.entries()].map(([code, invite]) => ({
-              code,
-              role: invite.role,
-              principalId: invite.principalId,
-              expiresAt: invite.expiresAt,
-            })),
+            invites: invites.list().map(({ code, role, principalId, expiresAt }) => ({ code, role, principalId, expiresAt })),
           });
           return;
         }
@@ -4785,7 +4769,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        // The People list, removing a person, and invitation codes: people-routes.ts (INV-2053, INV-2054, INV-2056, INV-2057).
+        // The People list, removing or signing out a person, and invitation codes: people-routes.ts (INV-2053, INV-2054, INV-2056, INV-2057, INV-2082).
         const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req), signOut: id => epochs.bump(id),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });
@@ -4872,31 +4856,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        // Signing one person out of everywhere (INV-537): their generation moves on, and
-        // every browser and tab they left signed in stops being served on its next
-        // request. Nobody else is touched — which is the difference between this and
-        // rotating the token, the only way to do it before, and therefore the reason it
-        // was never done.
-        if (route === "POST /api/principals/logout") {
-          if (refusedRole("admin")) return;
-          const body = await readJson(req);
-          const principalId = String(body.principalId ?? "").trim();
-          const person = principals.list().find(entry => entry.id === principalId);
-          if (person === undefined) {
-            send(res, 404, apiError("person-unknown", { person: principalId }));
-            return;
-          }
-          const epoch = epochs.bump(person.id);
-          log(`signed out everywhere: ${person.name} (generation ${epoch})`);
-          send(res, 200, { name: person.name, epoch });
-          return;
-        }
-
         // Ending a standing grant. The next identical action asks again.
         if (route === "POST /api/policy/revoke") {
           if (refused()) return;
           const body = await readJson(req);
-          const revoked = orchestrator.policy.revokeStanding(String(body.fingerprint ?? ""));
+          const fingerprint = String(body.fingerprint ?? ""), grant = orchestrator.policy.standingGrants().find(item => item.fingerprint === fingerprint);
+          if (grant && !seesAgent(grant.agentId)) { send(res, 403, apiError("role-needed", { need: "admin", role: callerRole })); return; } // another box's grant
+          const revoked = orchestrator.policy.revokeStanding(fingerprint);
           if (!revoked) {
             send(res, 404, apiError("standing-approval-unknown"));
             return;
@@ -4905,71 +4871,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        // What a long task's progress actually looks like: the plan and the list, which survive
-        // summarisation and so are the only state that is still true after an hour.
-        // ── handing work over ──────────────────────────────────────────────────────
-        //
-        // The gap this closes: an agent would write a report to /home/box/work and say so, and that
-        // was the end of it. A person had to open the VNC desktop, find a file manager, and read it
-        // there — with no way to get it onto their own machine. The reference product solves this two
-        // ways: pushing the file onto the user's actual disk through an agent running on their
-        // machine, or attaching it to the message. We have no agent on their machine, so the browser
-        // is the delivery mechanism, and these two routes are it.
-        if (route === "GET /api/files") {
-          const work = workRootOf(registry.defaultBox()), dir = url.searchParams.get("dir") ?? work; // the box boxClient() is (INV-1736)
-          // Confined here as well as in the daemon. Two checks rather than one because this is the
-          // one reachable by anyone holding a UI token, including a viewer.
-          if (!withinWork(dir, work)) {
-            send(res, 403, apiError("browse-outside-work", { dir: work }));
-            return;
-          }
-          const client = orchestrator.boxClient();
-          if (!client) {
-            send(res, 503, { ...apiError("box-not-running"), root: work }); // the page's chat links need the root with or without a box (INV-1737)
-            return;
-          }
-          try {
-            const listing = await client.listDir(dir);
-            send(res, 200, { ...listing, root: work }); // where the page starts and stops going up
-          } catch (error) {
-            send(res, 404, { error: error instanceof Error ? error.message : String(error), root: work });
-          }
-          return;
-        }
-
-        if (route === "GET /api/file") {
-          const path = url.searchParams.get("path") ?? "", work = workRootOf(registry.defaultBox());
-          if (!withinWork(path, work)) {
-            send(res, 403, apiError("handover-outside-work", { dir: work }));
-            return;
-          }
-          const client = orchestrator.boxClient();
-          if (!client) {
-            send(res, 503, apiError("box-not-running"));
-            return;
-          }
-          try {
-            const file = await client.downloadFile(path);
-            const bytes = Buffer.from(file.base64, "base64");
-            // `inline` so a browser shows what it can and downloads what it cannot; the filename is
-            // still given, so "save as" produces the right name either way.
-            const name = file.path.split("/").pop() ?? "file";
-            res.writeHead(200, {
-              "content-type": file.media_type,
-              "content-length": bytes.length,
-              "content-disposition": `${
-                url.searchParams.get("download") === "1" ? "attachment" : "inline"
-              }; filename="${name.replace(/["\\]/g, "")}"`,
-              // Never cached: an agent rewrites its own output, and a stale copy would be read as
-              // the current one.
-              "cache-control": "no-store",
-            });
-            res.end(bytes);
-          } catch (error) {
-            send(res, 404, { error: error instanceof Error ? error.message : String(error) });
-          }
-          return;
-        }
+        if (await workFileRoute(route, url, res, { send, box: id => {
+          const own = registry.defaultBox(), entry = id === null ? own : registry.boxById(id);
+          if (!entry || !mayReadBox(entry.id)) return undefined;
+          return entry.id === own.id ? { work: workRootOf(own), client: orchestrator.boxClient() }
+            : { work: workDir(entry), client: orchestrator.boxClientById(entry.id) };
+        } })) return;
 
         if (route === "POST /api/file") {
           // The other direction: a person hands the agent a document. Driving is required — a viewer
@@ -5345,6 +5252,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const scope =
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
           const waiting = orchestrator.policy.pending().find(item => item.id === id), parked = orchestrator.approvalIsParked(id);
+          if (waiting && !seesAgent(waiting.agentId)) { send(res, 403, apiError("role-needed", { need: "admin", role: callerRole })); return; } // another box's approval (INV-2083)
           const answered =
             route === "POST /api/approve"
               ? orchestrator.policy.grant(id, "user", scope)
@@ -5654,7 +5562,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         if (route === "POST /api/restart") {
-          if (refused()) return;
+          if (refusedRole("admin")) return; // the installation's, not a driver's (INV-2083)
           log("restart requested from the UI");
           send(res, 202, { restarting: true });
           setTimeout(() => process.exit(RESTART_EXIT_CODE), 300);

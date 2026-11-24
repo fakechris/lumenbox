@@ -96,6 +96,7 @@ import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILL_FILENAME } from "./skills.ts";
 import { capRefusal, standingFileOf, writeStandingFromAgent } from "./standing.ts";
 import { clampContract, describeTask, isLive, isTaskStatus, TASK_STATUSES, type Task, type TaskStore } from "./tasks.ts"; import { BlockerError, notReady, parseBlockers } from "./task-deps.ts"; import { citationFor, DEFAULT_REVIEWERS_PER_CLAIM, type VerificationLedger } from "./review-dispatch.ts";
+import { createdTaskVisibility } from "./task-audience.ts";
 import {
   type BotTemplate,
   describeTemplate,
@@ -1698,8 +1699,8 @@ evidence: {
     {
       name: "Tasks",
       description:
-        "The team's task board — work as an object everyone can see, not a message that " +
-        "scrolls away. Use it when work outlives one reply: create a task before starting " +
+        "The team's task ledger. Creation reports who can see it in All work. " +
+        "Use it when work outlives one reply: create a task before starting " +
         "something a teammate or the user will want to track, take a task before working " +
         "it so nobody duplicates you, move it as it progresses, and put a note on it when " +
         "something a successor needs to know happens. Statuses: open (nobody on it), " +
@@ -4982,7 +4983,8 @@ export async function dispatchTool(
       const action = String(input.action ?? "");
       const nameOf = (id: string) => context.registry.tryGet(id)?.profile.name ?? id;
       const cited = (task: Task) => { const policy = context.resultChecks?.snapshot(task).policy; const line = context.verifications !== undefined ? citationFor(task, context.verifications, policy?.mode === "model" ? policy.reviewers : policy?.mode === "files" ? 1 : context.reviewersPerClaim ?? DEFAULT_REVIEWERS_PER_CLAIM, nameOf) : undefined; return line === undefined ? "" : `\n  · ${line}`; }; // the record stands in for a re-check (INV-1614)
-      const resolveAgent = (raw: string): string | undefined => teammateNamed(context, raw)?.id; // an id or a name; teammates say names, the board stores ids
+      const resolveAssignee = (raw: string): string | undefined => teammateNamed(context, raw)?.id ??
+        (raw.replace(/^@/, "").toLowerCase() === context.agent.profile.name.toLowerCase() ? context.agent.id : undefined);
       const mayAssign = (taskId: string): boolean => {
         const task = board.get(taskId);
         return task === undefined || task.assigneeId === undefined ||
@@ -5014,8 +5016,8 @@ export async function dispatchTool(
         const discovery = parseDiscovery(input); const propose = input.propose === true || discovery !== undefined || context.unrequested === true; const already = discovery !== undefined ? board.byFingerprint(discovery.fingerprint) : undefined; if (already !== undefined) return { text: `Not proposed again: ${already.id} (${already.status}${already.proposedBy !== undefined ? ", awaiting a person's commit" : ""}) already carries this finding from ${discovery!.source}.${already.status === "dropped" ? " It was dismissed; do not raise it again unless the evidence changed." : ""}`, isError: true };
         const assigneeRaw = String(input.assignee ?? "").trim();
         const reviewerRaw = String(input.reviewer ?? "").trim();
-        const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
-        const reviewerId = reviewerRaw === "" ? undefined : resolveAgent(reviewerRaw);
+        const assigneeId = assigneeRaw === "" ? undefined : resolveAssignee(assigneeRaw);
+        const reviewerId = reviewerRaw === "" ? undefined : teammateNamed(context, reviewerRaw)?.id;
         if (assigneeRaw !== "" && assigneeId === undefined) {
           return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
         }
@@ -5052,7 +5054,7 @@ export async function dispatchTool(
         if (created === undefined) return { text: "A task needs a title.", isError: true };
         const told = context.unrequested === true ? ` ${PROPOSED_INSTEAD}` : tellAssignee(context, created.id, created.title, assigneeId);
         const waits = parent !== undefined && isLive(parent.status) && !(blockedBy ?? []).includes(parent.id) && board.update(parent.id, { blockedBy: [...new Set([...(parent.blockedBy ?? []), created.id])] }, context.agent.id, context.turnId) !== undefined ? ` ${parent.id} now waits on it; it stays open until its pieces are finished, and its assignee is woken then.` : "";
-        return { text: `Created ${describeTask(created, nameOf, board)}.${told}${waits}` };
+        return { text: `Created ${describeTask(created, nameOf, board)}.${told}${waits} ${createdTaskVisibility(created, context.agent.id)}` };
       }
 
       if (action === "propose_close") {
@@ -5091,7 +5093,7 @@ export async function dispatchTool(
         const refusal = status === "done" ? reviewerInspectionRefusal(target, context.agent.id, context.toolsUsedThisTurn) : undefined;
         if (refusal) return { text: refusal, isError: true };
         const assigneeRaw = String(input.assignee ?? "").trim();
-        const assigneeId = assigneeRaw === "" ? undefined : resolveAgent(assigneeRaw);
+        const assigneeId = assigneeRaw === "" ? undefined : resolveAssignee(assigneeRaw);
         if (assigneeRaw !== "" && assigneeId === undefined) {
           return { text: `No agent called "${assigneeRaw}" to assign.`, isError: true };
         }

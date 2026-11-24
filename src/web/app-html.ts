@@ -11,7 +11,7 @@ import { TASK_FOCUS_JS, TASK_FOCUS_STYLE } from "./task-focus-ui.ts";
 import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
 import { LIVE_TOOLS_JS } from "./live-tools.ts";
 import { MCP_TOKEN_JS } from "./mcp-token-ui.ts";
-import { STRIP_TOKEN_JS } from "./token-url-ui.ts";
+import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts";
 
 /**
  * The web UI, as a single inlined document.
@@ -1305,7 +1305,7 @@ ${SETTINGS_DIALOG_HTML}
 // html:false is what keeps model output inert — see src/web/markdown.ts.
 var md = window.markdownit ? window.markdownit(${JSON.stringify(MARKDOWN_OPTIONS)}) : null;
 
-${STRIP_TOKEN_JS}
+${STRIP_TOKEN_JS}${SIGN_IN_AGAIN_JS}
 
 function renderMarkdown(text, options) {
   var value = String(text == null ? "" : text);
@@ -2162,7 +2162,7 @@ function savePeople() {
   })
     .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(d.error || "{{ui.app.save-failed-2}}"); return d; }); })
     .then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
-    .catch(function (error) { $("setpeoplestatus").textContent = error.message; });
+    .catch(function (error) { $("setpeoplestatus").textContent = error.message; renderChannels(); }); // a refused save (the last admin, INV-2082) redraws the roster the server kept
 }
 
 $("setpadd").onclick = function () {

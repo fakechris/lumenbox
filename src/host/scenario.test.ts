@@ -63,6 +63,7 @@ for (const recovers of [true, false]) {
     const greeting = "Hello! I'm Ada. How can I help?";
     const events: string[] = [];
     const tasks = new TaskStore(null);
+    let toolList: string[] = [];
     const trigger = DEFAULT_POLICY.triggerTokens;
     const envTrigger = process.env.AGENTBOX_COMPACT_AT_TOKENS;
     t.after(() => {
@@ -76,10 +77,12 @@ for (const recovers of [true, false]) {
       tasks,
       files: { "/home/box/work/welcome.txt": "Welcome" },
       onEvent: event => { if (event.type === "text") events.push(event.delta); },
-      script: ({ round, messages, offered }) => {
+      script: ({ round, messages, offered, toolChoice }) => {
         if (round === 0) return { call: "read_file", input: { path: "/home/box/work/welcome.txt" } };
         if (round === 1) return { call: "list_dir", input: { path: "/home/box/work" } };
         if (round === 2) {
+          toolList = offered;
+          assert.equal(toolChoice, undefined, "an ordinary round leaves tool choice to the model");
           if (!recovers) {
             // Force the context rebuild between the empty response and the closing request.
             process.env.AGENTBOX_COMPACT_AT_TOKENS = "1";
@@ -88,7 +91,7 @@ for (const recovers of [true, false]) {
           return undefined;
         }
         if (recovers && round === 4) {
-          assert.deepEqual(offered, [], "the malformed-reply retry is still text-only");
+          assert.deepEqual([offered, toolChoice], [toolList, { type: "none" }], "the malformed-reply retry is still text-only");
           assert.match(JSON.stringify(messages), /Do not call tools\. Reply in plain text/);
           return { say: greeting };
         }
@@ -99,7 +102,8 @@ for (const recovers of [true, false]) {
         const nudge = blocks.find(block => block.type === "text" && /answer them now/.test(block.text));
         assert.ok(result?.type === "tool_result" && !result.is_error, "the successful tool result remains paired");
         assert.ok(nudge?.type === "text" && /answer them now/.test(nudge.text), "the retry asks for a reply");
-        assert.deepEqual(offered, [], "the recovery request can only reply");
+        // Same tool list, calls disabled (INV-2080): an emptied list misses the prompt cache and can void preserved thinking.
+        assert.deepEqual([offered, toolChoice], [toolList, { type: "none" }], "the recovery request can only reply");
         return recovers ? { call: "list_dir", input: { path: "/home/box/work" }, saying: '<tool_call>\n{"name":"list_dir","arguments":{}}\n</tool_call>' } : undefined;
       },
     });
@@ -130,6 +134,46 @@ for (const recovers of [true, false]) {
           stage: { active: false, questionPending: true, undelivered: false },
         });
         assert.equal(withQuestion.blocker?.kind, "confirmation", "an open question takes priority over a recorded empty reply");
+      }
+    } finally {
+      episode.cleanup();
+    }
+  });
+}
+
+// INV-2080: the INV-2032 recovery asked a member that read a file on a room message addressed to nobody to "answer the
+// person" — and it posted into a group nobody had asked it to speak in. Silence was offered, so ending quiet is allowed;
+// and with the guards off (AGENTBOX_GUARDS=0) the recovery is off like every other guard.
+for (const why of ["the room message named nobody", "the guards are off"] as const) {
+  test(`a member that ran a tool and ended quiet is not asked to answer when ${why} (INV-2080)`, async t => {
+    const guards = process.env.AGENTBOX_GUARDS;
+    t.after(() => { if (guards === undefined) delete process.env.AGENTBOX_GUARDS; else process.env.AGENTBOX_GUARDS = guards; });
+    if (why === "the guards are off") process.env.AGENTBOX_GUARDS = "0";
+    const conversation = conversationIdFor("feishu:room-1");
+    let calls = 0;
+    const episode = await runEpisode({
+      team: [{ name: "Ada", tools: ["read_file"] }],
+      says: why === "the guards are off" ? ["Hi Ada!"] : [],
+      files: { "/home/box/work/notes.txt": "deploy at 3pm" },
+      script: ({ round }) => {
+        calls += 1;
+        return round === 0 ? { call: "read_file", input: { path: "/home/box/work/notes.txt" } } : undefined;
+      },
+      drive: async ({ registry, bus }) => {
+        if (why === "the guards are off") return;
+        const ada = registry.resolve("Ada");
+        bus.sendFromUser(ada.id, "大家早，今天几点部署？", { conversation, addressed: false, messageId: "room-msg-Ada" });
+        await bus.wake(ada.id);
+        await bus.idle();
+      },
+    });
+    try {
+      assert.equal(calls, 2, "no recovery round after the empty reply");
+      assert.deepEqual(episode.score.trail, ["Ada:read_file"]);
+      assert.deepEqual(episode.score.said, [], "nothing is posted for Ada");
+      if (why === "the room message named nobody") {
+        const transcript = episode.registry.readTranscript(episode.registry.resolve("Ada").id, conversation) as TranscriptEntry[];
+        assert.equal(replyForMessage(transcript, "room-msg-Ada"), "", "the room receives nothing from Ada");
       }
     } finally {
       episode.cleanup();
@@ -4573,6 +4617,32 @@ test("agent suggestions during a user request remain internal until a person com
   assert.ok(requested.origin?.workId,"the host supplies the admitted work identity");
   tasks.commit(suggestion.id,"chris");assert.equal(tasks.get(suggestion.id)!.origin?.kind,"user");
  } finally {episode.cleanup();}
+});
+
+test("an agent asked to create team work learns when it is actually visible in All work", async () => {
+  const tasks = new TaskStore(null), visibility: string[] = [];
+  const episode = await runEpisode({
+    team: [{ name: "Ada", tools: ["Tasks"] }, { name: "Runner" }], tasks, says: ["Create a shared task Bob can see."],
+    script: ({ agent, round, messages }) => {
+      if (agent !== "Ada") return undefined;
+      if (round) visibility.push(JSON.stringify(messages.at(-1)?.content));
+      if (round === 0) return { call: "Tasks", input: { action: "create", title: "Unassigned draft" } };
+      if (round === 1) return { call: "Tasks", input: { action: "create", title: "Internal step", assignee: "Runner" } };
+      if (round === 2) return { call: "Tasks", input: { action: "create", title: "Shared team task", parent: "none", assignee: "Runner" } };
+      if (round === 3) return { call: "Tasks", input: { action: "create", title: "Self-assigned task", parent: "none", assignee: "Ada" } };
+      if (round === 4) return { call: "Tasks", input: { action: "update", id: tasks.list().find(task => task.title === "Unassigned draft")?.id, assignee: "@aDa" } };
+      return { say: "The shared team task is listed for members of this box." };
+    },
+  });
+  try {
+    assert.match(visibility[0] ?? "", /Unassigned: other signed-in box members cannot see/);
+    assert.match(visibility[1] ?? "", /not a standalone card in All work/);
+    assert.match(visibility[2] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
+    assert.match(visibility[3] ?? "", /show this card to members of the assignee’s box, not to people outside that box/);
+    const adaId = episode.registry.resolve("Ada").id;
+    assert.equal(tasks.list().find(task => task.title === "Self-assigned task")?.assigneeId, adaId);
+    assert.equal(tasks.list().find(task => task.title === "Unassigned draft")?.assigneeId, adaId);
+  } finally { episode.cleanup(); }
 });
 
 test("a refused self-acceptance cannot create a review cascade; explicit submission leaves one check request (INV-1810)", async () => {

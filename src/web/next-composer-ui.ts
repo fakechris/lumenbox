@@ -37,7 +37,29 @@ function renderModelNotice() {
 }
 
 function composerCanSend() {
+  if (watchOnly()) return Promise.resolve(false);
   return refreshModelReadiness();
+}
+
+/** A viewer watches (INV-2047). Read off the role the server gave, so nothing is shut while it is not yet known. */
+function watchOnly() { return !!settings.me && settings.me.role === "viewer"; }
+
+/** The composer says a viewer can watch and not act, and takes no words the server would refuse. */
+function renderWatchOnly() {
+  var watching = watchOnly(), notice = $("composer-watch");
+  notice.textContent = watching ? t("ui.next.composer.watchOnly") : ""; notice.hidden = !watching;
+  $("composer-text").disabled = watching; $("composer-send").disabled = watching;
+}
+
+/** The role as the server has it now: re-read with the rest of the page, and a change is said to the person it happened to. */
+function rereadRole() {
+  getJson("/api/me").then(function (got) {
+    var before = settings.me && settings.me.role, now = got && got.role;
+    if (!now || before === now) return;
+    settings.me = got;
+    if (before) toast(t("ui.next.composer.roleChanged", { role: t("ui.role." + now) }));
+    render();
+  }, function () {});
 }
 
 /** What is being asked for at the caret: a skill, a colleague, or nothing. */

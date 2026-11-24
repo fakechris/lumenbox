@@ -2518,9 +2518,9 @@ ${outcome.text}`;
           : {}),
         ...effortConfig(answering, "turn", deps.effort),
         system,
-        tools: closingReply ? [] : tools,
+        tools, // INV-2080: the recovery keeps the list (cache prefix, preserved thinking) and disables calls by tool_choice.
         messages,
-        ...(!closingReply && forceTools !== undefined ? { tool_choice: forceTools } : {}),
+        ...(closingReply ? { tool_choice: { type: "none" as const } } : forceTools !== undefined ? { tool_choice: forceTools } : {}),
       },
       { signal: attemptControl.signal }
     );
@@ -3042,12 +3042,12 @@ ${outcome.text}`;
         }
       }
 
-      if (!finalText.trim() && personOpened && !closingNudged && !questionDelivered) {
+      if (!finalText.trim() && personOpened && !silenceOffered && guardsEnabled() && !closingNudged && !questionDelivered) {
         const prior = messages.slice(0, -1).findLast(message => message.role === "assistant" ||
           (Array.isArray(message.content) && message.content.some(block => block.type === "tool_result")));
         const toolsSucceeded = !confirmationPending && prior?.role === "user" && Array.isArray(prior.content)
           && prior.content.every(block => block.type !== "tool_result" || block.is_error !== true);
-        if (toolsSucceeded || (interimDelivered && guardsEnabled() && tools.length > 0)) {
+        if (toolsSucceeded || (interimDelivered && tools.length > 0)) {
           closingNudged = closingReply = true;
           console.error(`[conduct] ${agent.profile.name}: closing nudge (ran tools, ended without a reply)`);
           messages.pop();

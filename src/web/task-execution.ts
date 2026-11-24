@@ -21,6 +21,7 @@ export interface ExecutionStep {
   kind: "tool" | "maintenance";
   contextEpoch: number; role: TaskBinding["role"]; parent?: TaskBinding["parent"];
   name: string; detail: string; outcome: "running" | "succeeded" | "failed" | "unknown" | "waiting" | "refused";
+  metadataUpdate?: true;
   startedAt?: string; endedAt?: string; sourceRefs: string[];
   coverage: "exact" | "partial";
   gate?: ExecutionStepRecord["gate"];
@@ -123,6 +124,7 @@ export class TaskExecutions {
       if (!catalog) { catalog = executionContent(this.deps.registry, r, budget); catalogs.set(scopeKey, catalog); }
       partial ||= catalog.partial;
       const content = contentFor(catalog.values, r);
+      const callInput = content.call?.input as { action?: unknown } | null | undefined;
       const known = content.result !== undefined;
       const reported = pair.end?.outcome;
       const coverage = !catalog.partial && content.call && pair.start && (pair.end ? known : !known && !ended.has(r.executionId)) ? "exact" : "partial";
@@ -134,6 +136,7 @@ export class TaskExecutions {
         conversation: r.conversation, contextEpoch: r.contextEpoch,
         role: selected.role, ...(selected.parent ? { parent: selected.parent } : {}),
         name: content.call?.name ?? r.tool, detail: (content.call?.detail ?? "").split("\n")[0]!.slice(0, 160),
+        ...(content.call?.name === "Tasks" && callInput?.action === "update" ? { metadataUpdate: true } : {}),
         outcome: reported === "unknown" || reported === "waiting" || reported === "refused" ? reported : known ? (!pair.end ? "unknown" : reported === "failed" || content.result!.isError ? "failed" : "succeeded") : pair.end || ended.has(r.executionId) ? "unknown" : "running",
         ...(pair.start ? { startedAt: pair.start.at } : {}), ...(pair.end ? { endedAt: pair.end.at } : {}),
         sourceRefs: [pair.start?.recordId, pair.end?.recordId, content.call?.hash, content.result?.hash].filter((v): v is string => !!v), coverage,

@@ -1009,6 +1009,29 @@ test("an assignee reads current task details through Tasks without searching hos
   assert.ok(missing.isError);
 });
 
+test("Tasks prefers a same-name teammate over the caller and preserves explicit self IDs", async () => {
+  const { TaskStore } = await import("./tasks.ts");
+  const root = mkdtempSync(join(tmpdir(), "agentbox-task-assignee-"));
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const agent = registry.create({ name: "Ada" }), teammate = registry.create({ name: "Ada" });
+    const tasks = new TaskStore(null), recipients: string[] = [];
+    const context = {
+      agent, registry, tasks, bus: { send: ({ toId }: { toId: string }) => { recipients.push(toId); return "Sent"; } },
+    } as unknown as Parameters<typeof dispatchTool>[2];
+    const named = await dispatchTool("Tasks", { action: "create", title: "For my teammate", assignee: "Ada" }, context);
+    assert.ok(!named.isError, named.text);
+    assert.equal(tasks.list().find(task => task.title === "For my teammate")?.assigneeId, teammate.id);
+    assert.deepEqual(recipients, [teammate.id]);
+    const self = await dispatchTool("Tasks", { action: "create", title: "For me", assignee: agent.id }, context);
+    assert.ok(!self.isError, self.text);
+    assert.equal(tasks.list().find(task => task.title === "For me")?.assigneeId, agent.id);
+    assert.deepEqual(recipients, [teammate.id]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // ── the control outline the model reads (INV-412) ────────────────────────────────────
 test("elementsOutline is one line per control in the browser outline's shape, and says plainly when there is no tree", () => {
   const outline = elementsOutline({

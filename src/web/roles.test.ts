@@ -18,6 +18,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
+import { AgentRegistry } from "../agents/registry.ts";
+import { defaultLimits, PolicyGate } from "../host/policy.ts";
+import { Principals } from "../host/principals.ts";
 
 // These requests carry identity the way the hosted gateway sends it, so this file runs as a box behind one (INV-1543).
 process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
@@ -205,6 +208,87 @@ test("a role asserted by the gateway is honoured over the pod's empty roster", a
     assert.notEqual(await status("/api/templates/stamp", "member", {}), 403, "member stamps");
     assert.equal(await status("/api/scopes", "member", { scopes: [] }), 403, "member does not administer");
     assert.equal(await status("/api/templates/stamp", "viewer", {}), 403, "viewer watches");
+  } finally {
+    stop?.();
+    if (previous === undefined) delete process.env.AGENTBOX_HOME;
+    else process.env.AGENTBOX_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// The approval gate, the MCP page and the restart were the routes #794's role scoping did not reach
+// (INV-2083): a driver or viewer read every box's approvals and grants, a driver revoked any agent's
+// grant and restarted the installation, and a viewer read everyone's token metadata.
+test("approvals, grants, tokens and the restart answer to the boxes a person may enter", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-roles-boxes-"));
+  const previous = process.env.AGENTBOX_HOME;
+  process.env.AGENTBOX_HOME = home;
+  let stop: (() => void) | undefined;
+  try {
+    new Principals().save([
+      { id: "ada", name: "Ada", role: "driver", identities: ["web:ada"] },
+      { id: "vic", name: "Vic", role: "viewer", identities: ["web:vic"] },
+      { id: "bob", name: "Bob", role: "driver", identities: ["web:bob"] },
+      { id: "olga", name: "Olga", role: "admin", identities: ["web:olga"] },
+    ]);
+    const registry = new AgentRegistry(join(home, "agents"));
+    const [one, two] = (["one", "two"] as const).map(id => {
+      registry.attachBox({ id, name: id, kind: "attached", endpoint: { baseUrl: "http://127.0.0.1:1", tokenFile: join(home, `${id}.token`) },
+        members: id === "one" ? ["ada", "vic"] : ["bob"], displayFloor: 1, workDir: "/home/box/work", createdAt: new Date().toISOString() });
+      return registry.create({ name: `Agent ${id}`, boxId: id }).id;
+    }) as [string, string];
+    // One question waiting and one standing grant per box, on the gate the server replays at start.
+    const gate = new PolicyGate({ path: join(home, "policy.jsonl"), boxOf: id => registry.boxOf(id).id, limits: { ...defaultLimits(), approvalRequiredTools: ["bash"] } });
+    const ask = (agentId: string, command: string) => {
+      const decision = gate.check({ kind: "tool", agentId, agentName: agentId, tool: "bash", input: { command } });
+      assert.ok(!decision.allow && decision.approval);
+      return decision.approval;
+    };
+    for (const agentId of [one, two]) { ask(agentId, `deploy waiting ${agentId}`); assert.ok(gate.grant(ask(agentId, `deploy granted ${agentId}`).id, "user", "always")); }
+    let base = "";
+    stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "t0k", useBox: false, onLog: () => {}, onReady: url => { base = url; } });
+    const gateway = { ada: "member", vic: "viewer", bob: "member", olga: "owner" } as const;
+    const call = async (who: keyof typeof gateway, path: string, body?: unknown) => {
+      const response = await fetch(base + path, { method: body === undefined ? "GET" : "POST", body: body === undefined ? undefined : JSON.stringify(body),
+        headers: { "content-type": "application/json", authorization: "Bearer t0k", "x-agentbox-user": `web:${who}`, "x-agentbox-role": gateway[who] } });
+      return { status: response.status, data: (await response.json()) as Record<string, unknown> };
+    };
+    type Item = { agentId: string; fingerprint: string; id: string };
+    const policy = async (who: keyof typeof gateway) => {
+      const got = await call(who, "/api/policy");
+      assert.equal(got.status, 200, JSON.stringify(got.data));
+      return { pending: (got.data.pending as Item[]).map(item => item.agentId), standing: got.data.standing as Item[] };
+    };
+
+    for (const who of ["ada", "vic"] as const) {
+      const seen = await policy(who);
+      assert.deepEqual(seen.pending, [one], `${who} sees only box one's waiting approval`);
+      assert.deepEqual(seen.standing.map(grant => grant.agentId), [one], `${who} sees only box one's grants`);
+    }
+    const all = await policy("olga");
+    assert.deepEqual([...all.pending].sort(), [one, two].sort(), "an admin sees across boxes");
+    const theirs = all.standing.find(grant => grant.agentId === two)!, ours = all.standing.find(grant => grant.agentId === one)!;
+
+    assert.equal((await call("ada", "/api/policy/revoke", { fingerprint: theirs.fingerprint })).status, 403, "a driver does not revoke another box's grant");
+    assert.equal((await call("vic", "/api/policy/revoke", { fingerprint: ours.fingerprint })).status, 403, "a viewer revokes nothing");
+    const waitingTwo = (await call("olga", "/api/policy")).data.pending as Item[];
+    assert.equal((await call("ada", "/api/approve", { id: waitingTwo.find(item => item.agentId === two)!.id })).status, 403, "nor answers its approvals");
+    assert.equal((await call("ada", "/api/policy/revoke", { fingerprint: ours.fingerprint })).status, 200, "her own box's grant is hers to end");
+    assert.equal((await call("olga", "/api/policy/revoke", { fingerprint: theirs.fingerprint })).status, 200, "an admin's reach is the installation");
+    assert.deepEqual((await policy("olga")).standing, [], "both ended, and only those two");
+
+    // Tokens: everybody their own, nobody else's; the installation's servers are an admin's.
+    for (const who of ["ada", "bob"] as const) assert.equal((await call(who, "/api/mcp/tokens", { label: who })).status, 200);
+    const tokens = async (who: keyof typeof gateway) => (await call(who, "/api/mcp")).data;
+    assert.deepEqual(((await tokens("ada")).tokens as { label: string }[]).map(token => token.label), ["ada"]);
+    const viewer = await tokens("vic");
+    assert.deepEqual(viewer.tokens, [], "a viewer reads no one else's tokens");
+    assert.deepEqual(viewer.servers, [], "nor the installation's servers");
+    assert.ok(viewer.setup, "the setup notice the Mine page reads is still there");
+    assert.deepEqual(((await tokens("olga")).tokens as { label: string }[]).map(token => token.label).sort(), ["ada", "bob"]);
+
+    // Restarting the installation is an admin's. Only the refusals are exercised: an admin's would exit the process.
+    for (const who of ["ada", "vic"] as const) assert.equal((await call(who, "/api/restart", {})).status, 403, `${who} may not restart`);
   } finally {
     stop?.();
     if (previous === undefined) delete process.env.AGENTBOX_HOME;

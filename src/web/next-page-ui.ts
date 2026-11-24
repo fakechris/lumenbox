@@ -14,6 +14,7 @@ import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 import { NEXT_DIAGNOSTICS_JS } from "./next-diagnostics-ui.ts";
 import { NEXT_SCREEN_JS } from "./next-screen-ui.ts";
+import { NEXT_FILES_JS } from "./next-files-ui.ts";
 import { NEXT_SETTINGS_JS } from "./next-settings-ui.ts";
 import { NEXT_AUTO_JS } from "./next-auto-ui.ts";
 import { NEXT_REMINDER_JS } from "./next-reminder-ui.ts";
@@ -49,7 +50,7 @@ import { NEXT_NEED_JS } from "./next-need-ui.ts";
 import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
 import { NEXT_LINE_JS } from "./next-line-ui.ts";
 import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
-import { STRIP_TOKEN_JS } from "./token-url-ui.ts";
+import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts";
 
 const STYLE = `
 :root {
@@ -157,6 +158,7 @@ h2.group:first-child { margin-top: 0; }
 .composer { flex: none; padding: 10px 24px 16px; }
 .composer form { max-width: 780px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
 .composer textarea { flex: 1; min-height: 44px; max-height: 180px; resize: none; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--surface); font: inherit; }
+.composer textarea:disabled, .composer button:disabled { opacity: .45; cursor: not-allowed; } /* a viewer: shut, and looking it (INV-2047) */
 .ask { align-self: flex-start; max-width: 82%; background: var(--warn-soft); border-radius: 14px; padding: 10px 14px; }
 .ask .acts { margin-top: 8px; flex-wrap: wrap; }
 .plan { align-self: stretch; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 9px 14px; font-size: 13px; }
@@ -367,7 +369,7 @@ export const NEXT_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ui.next.title}}</title>
 <link rel="icon" href="data:,">
-<script>${STRIP_TOKEN_JS}</script>
+<script>${STRIP_TOKEN_JS}${SIGN_IN_AGAIN_JS}</script>
 <script src="/vendor/markdown-it.js"></script>
 <style>${STYLE}</style>
 </head>
@@ -391,6 +393,7 @@ export const NEXT_HTML = `<!doctype html>
   <div class="agents" id="agents"></div>
   <div class="side-links">
     <button data-nav="work">{{ui.next.side.work}}</button>
+    <button data-nav="files">{{ui.next.nav.files}}</button>
     <button data-nav="auto">{{ui.next.side.auto}}</button>
     <button data-nav="boxes">{{ui.next.side.boxes2}}</button>
     <button data-nav="settings" hidden>{{ui.next.side.settings}}</button>
@@ -429,6 +432,7 @@ export const NEXT_HTML = `<!doctype html>
   <div class="composer" id="composer" hidden>
     <div class="picker" id="composer-menu" hidden></div>
     <div class="reply-to" id="reply-to" hidden></div>
+    <div class="why" id="composer-watch" role="status" hidden></div>
     <form id="composer-form"><textarea id="composer-text" rows="1"></textarea><button class="act-primary" id="composer-send" type="submit">{{ui.next.act.send}}</button></form>
   </div>
 </main>
@@ -489,6 +493,7 @@ ${NEXT_CHAT_JS}
 ${NEXT_PANEL_JS}
 ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
+${NEXT_FILES_JS}
 ${NEXT_SETTINGS_JS}
 ${NEXT_AUTO_JS}
 ${NEXT_REMINDER_JS}
