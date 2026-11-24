@@ -17,7 +17,7 @@ import { Principals } from "../host/principals.ts";
 import { BOXD_PROTOCOL } from "../protocol/index.ts";
 import { startWebServer } from "./server.ts";
 
-test("removing a person or signing them out closes the desktops they have open; their sign-in's token acts as them", async () => {
+test("sign-out, removal and changes to box access close open desktops; a sign-in's token acts as its person", async () => {
   const home = mkdtempSync(join(tmpdir(), "open-desktops-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
@@ -43,6 +43,7 @@ test("removing a person or signing them out closes the desktops they have open; 
     await new Promise<void>(resolve => daemon.listen(0, "127.0.0.1", resolve));
     const address = daemon.address();
     assert.ok(address && typeof address !== "string");
+    const daemonUrl = `http://127.0.0.1:${address.port}`;
     const chris = { id: "chris", name: "Chris", role: "admin" as const, identities: [] };
     const bob = { id: "bob", name: "Bob", role: "driver" as const, identities: [] };
     new Principals().save([chris, bob, { id: "cara", name: "Cara", role: "driver", identities: [] }]);
@@ -51,7 +52,8 @@ test("removing a person or signing them out closes the desktops they have open; 
     const worker = registry.create({ name: "Worker" });
     let base = "";
     stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "t0k", onLog: () => {},
-      boxProvisioner: new AttachedBoxProvisioner({ baseUrl: `http://127.0.0.1:${address.port}`, token: "daemon" }),
+      boxProvisioner: new AttachedBoxProvisioner({ baseUrl: daemonUrl, token: "daemon" }),
+      personalBoxDriver: { start: async () => daemonUrl, remove: async () => {} },
       onReady: url => { base = url; },
     });
     const ui = { "content-type": "application/json", authorization: "Bearer t0k" };
@@ -67,16 +69,16 @@ test("removing a person or signing them out closes the desktops they have open; 
     };
     const host = new URL(base);
     const index = registry.displayIndexFor(worker.id);
-    const openDesktop = (cookie: string) => new Promise<{ socket: Socket; closed: Promise<void> }>((resolve, reject) => {
+    const openDesktop = (cookie: string, path = `/desktop/${index}/websockify`, status = 101) => new Promise<{ socket: Socket; closed: Promise<void> }>((resolve, reject) => {
       const socket = connect(Number(host.port), host.hostname, () => {
-        socket.write(`GET /desktop/${index}/websockify HTTP/1.1\r\nHost: ${host.host}\r\nCookie: ${cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
+        socket.write(`GET ${path} HTTP/1.1\r\nHost: ${host.host}\r\nCookie: ${cookie}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
       });
       clients.push(socket);
       const closed = new Promise<void>(done => socket.once("close", () => done()));
       socket.once("error", reject);
       socket.once("data", data => {
-        assert.match(data.toString(), /101 Switching Protocols/);
-        resolve({ socket, closed });
+        if (!data.toString().startsWith(`HTTP/1.1 ${status} `)) reject(new Error(`Unexpected desktop response: ${data}`));
+        else resolve({ socket, closed });
       });
     });
     const within = (closed: Promise<void>, what: string) => Promise.race([
@@ -118,6 +120,24 @@ test("removing a person or signing them out closes the desktops they have open; 
     assert.equal((await post("/api/principals/remove", { principalId: "cara" })).status, 200);
     await within(caraScreen.closed, "Cara's desktop after she was removed");
     assert.equal((await startGoal("second")).status, 401, "and her token went with her");
+
+    const bobOwnerCookie = await signIn("bob");
+    const chrisCookie = await signIn("chris");
+    const created = await post("/api/personal-boxes/create", { requestId: "personal", name: "Personal desk" },
+      { "content-type": "application/json", cookie: bobOwnerCookie });
+    assert.equal(created.status, 200, await created.clone().text());
+    const { boxId } = await created.json() as { boxId: string };
+    const personalDesktop = `/desktop/b/${boxId}/1/websockify`;
+    const oldOwner = await openDesktop(bobOwnerCookie, personalDesktop);
+    const oldUpstream = upstreamClosed.at(-1)!;
+    const transferred = await post("/api/personal-boxes/admin", { action: "transfer", id: boxId, recipient: "chris" });
+    assert.equal(transferred.status, 200, await transferred.text());
+    await within(oldOwner.closed, "Bob's desktop after his personal computer was transferred");
+    await within(oldUpstream, "Bob's connection to the transferred computer");
+    assert.equal((await fetch(`${base}/api/me`, { headers: { cookie: bobOwnerCookie } })).status, 200, "Bob was not signed out");
+    await openDesktop(bobOwnerCookie, personalDesktop, 403);
+    const newOwner = await openDesktop(chrisCookie, personalDesktop);
+    assert.ok(await stillOpen(newOwner.socket), "the new owner can open the same computer's desktop");
   } finally {
     for (const socket of [...clients, ...upstreams]) socket.destroy();
     stop?.();
