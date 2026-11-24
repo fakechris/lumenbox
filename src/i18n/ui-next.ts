@@ -586,7 +586,7 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.team.signedOut": ["{name} 已在所有地方退出", "{name} is signed out everywhere"],
   "ui.next.team.lastAdmin": ["唯一的管理员，不能移除", "The only admin: can't be removed"],
   "ui.next.team.remove": ["移除…", "Remove…"],
-  "ui.next.team.removeWhat": ["移除 {name}：他会立即在所有地方退出，不能再使用这里的任何成员；他的 {n} 个个人盒子、任务和记录都保留，盒子可以在“盒子”里清理。", "Removing {name} signs them out everywhere at once, and they can no longer reach any agent here. Their {n} personal box(es), tasks and history stay; clean the boxes up under Boxes."],
+  "ui.next.team.removeWhat": ["移除 {name} 会立即让对方在所有设备上退出并撤销其访问权限。如果对方有个人电脑，你需要选择如何处理。", "Removing {name} signs them out everywhere and revokes their access. If they have personal computers, you’ll choose what to do with them."],
   "ui.next.team.removeSelf": ["这是你自己：移除后你会立刻退出。", "This is you: you'll be signed out at once."],
   "ui.next.team.removeSure": ["确认移除 {name}", "Remove {name}"],
   "ui.next.team.keep": ["取消", "Cancel"],

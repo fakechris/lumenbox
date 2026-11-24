@@ -114,8 +114,8 @@ test("an organisation's /login offers its Feishu door; the door's sign-in gives 
   const expiredApi = await fetch(base + expiredTarget);
   assert.equal(expiredApi.status, 400);
   assert.equal((await expiredApi.json()).code, "sign-in-expired");
-  const removed = await fetch(base + "/api/principals", {
-    method: "POST", headers: { authorization: "Bearer fixture", "content-type": "application/json" }, body: JSON.stringify({ principals: [secondAdmin] }),
+  const removed = await fetch(base + "/api/principals/remove", {
+    method: "POST", headers: { authorization: "Bearer fixture", "content-type": "application/json" }, body: JSON.stringify({ principalId: "p-ana" }),
   });
   assert.equal(removed.status, 200);
   const cookie = known.headers.getSetCookie()[0]!.split(";")[0]!;

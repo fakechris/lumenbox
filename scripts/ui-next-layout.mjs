@@ -113,7 +113,7 @@ try {
     await page.locator('[data-nav="boxes"]').click();
     await page.evaluate(() => refresh());
     await checkMembershipRedraw("Boxes");
-    await page.locator("#view section.setting button").click();
+    await page.getByRole("button", { name: lang === "en" ? "Open computer settings" : "打开电脑设置", exact: true }).click();
     await checkMembershipRedraw("Settings → Boxes");
     // The way to the other language and the other page: on screen, side by side.
     if (width < 1000) { await page.goto(`${meta.base}/?ui=next&lang=${lang}`); await page.waitForSelector(".agent"); }

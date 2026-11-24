@@ -12,6 +12,8 @@ import { EVENT_RECOVERY_JS } from "./event-recovery.ts";
 import { LIVE_TOOLS_JS } from "./live-tools.ts";
 import { MCP_TOKEN_JS } from "./mcp-token-ui.ts";
 import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts";
+import { PERSONAL_BOX_DIALOG_JS } from "./personal-box-dialog-ui.ts";
+import { PERSONAL_BOX_CLASSIC_JS } from "./personal-box-classic-ui.ts";
 
 /**
  * The web UI, as a single inlined document.
@@ -1834,6 +1836,7 @@ document.getElementById("setmemlines").addEventListener("click", function (event
 var people = [];
 
 ${MCP_TOKEN_JS}
+${PERSONAL_BOX_DIALOG_JS}
 
 document.getElementById("setextreload").addEventListener("click", function () {
   var note = $("setextreloaded");
@@ -1962,7 +1965,8 @@ function renderChannels() {
       people = []; window.installation = data.installation; window.rosterPeople = data.principals || []; // Owner or Admin (INV-1685): read by ownerBadge and afterPeople in installation-ui.ts
       (data.principals || []).forEach(function (p) {
         (p.identities.length ? p.identities : [""]).forEach(function (identity) {
-          people.push({ id: p.id, name: p.name, role: p.role, identity: identity });
+          people.push({ id: p.id, name: p.name, role: p.role, identity: identity,
+            usableSignIn: (p.usableSignIns || []).includes(identity), retiredSignIn: (p.retiredSignIns || []).includes(identity) });
         });
       });
       renderPeople(); if (window.afterPeople) window.afterPeople(); // the Owner's own code and "these are all me" (INV-1698)
@@ -2117,21 +2121,30 @@ $("setinvite").onclick = function () {
     .catch(function () { $("setinviteout").textContent = "{{ui.app.failed}}"; });
 };
 
+function hasOtherSignIn(person, usableOnly) {
+  return people.some(function (entry) { return entry !== person && entry.id === person.id && entry.identity && (!usableOnly || entry.usableSignIn); });
+}
+
 function renderPeople() {
   if (!people.length) {
     $("setpeople").innerHTML = '<div class="fieldnote" style="margin:0">{{ui.app.nobody-yet-add-a-person}}</div>';
     return;
   }
-  var admins = people.filter(function (p) { return p.role === "admin"; }).length; // the last admin's last sign-in has no Remove (INV-2053)
+  var admins = new Set(people.filter(function (p) { return p.role === "admin"; }).map(function (p) { return p.id; })).size;
   $("setpeople").innerHTML = people.map(function (p, i) {
     var roles = ["viewer", "driver", "admin"].map(function (role) {
       return '<option value="' + role + '"' + (p.role === role ? " selected" : "") + ">" + ({ viewer: "{{ui.role.viewer}}", driver: "{{ui.role.driver}}", admin: "{{ui.role.admin}}" }[role] || role) + "</option>";
     }).join("");
+    var owner = window.ownerBadge && window.ownerBadge(p);
+    var roleControl = owner || '<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>";
+    var remove = '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>';
+    var lastAdmin = p.role === "admin" && admins === 1;
+    var removeControl = p.retiredSignIn || hasOtherSignIn(p, lastAdmin) ? remove : owner ? "" :
+      lastAdmin ? '<span class="fieldnote" style="margin:0">{{ui.app.only-admin}}</span>' : remove;
     return '<div style="display:flex;gap:8px;align-items:center;font-size:13px">' +
       '<span style="min-width:80px;font-weight:600">' + esc(p.name) + "</span>" +
       '<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(p.identity) + "</span>" +
-      ((window.ownerBadge && window.ownerBadge(p)) || ('<select data-role-of="' + i + '" style="height:28px;border-radius:6px;border:1px solid var(--border-strong);background:var(--bg);color:var(--text);padding:0 4px;font-size:12px">' + roles + "</select>" +
-      (p.role === "admin" && admins === 1 ? '<span class="fieldnote" style="margin:0">{{ui.app.only-admin}}</span>' : '<a href="#" data-remove="' + i + '" style="color:var(--danger);font-size:12px">{{ui.app.remove}}</a>'))) + "</div>";
+      roleControl + removeControl + "</div>";
   }).join("");
 }
 
@@ -2149,7 +2162,7 @@ document.getElementById("setpeople").addEventListener("change", function (event)
 
 function savePeople() {
   // Regroup rows back into principals by id, so one person's several ids are one entry.
-  var byId = {};
+  var byId = Object.create(null);
   people.forEach(function (p) {
     if (!byId[p.id]) byId[p.id] = { id: p.id, name: p.name, role: p.role, identities: [] };
     if (p.identity) byId[p.id].identities.push(p.identity);
@@ -2181,11 +2194,32 @@ document.getElementById("setpeople").addEventListener("click", function (event) 
   var idx = event.target.getAttribute && event.target.getAttribute("data-remove");
   if (idx === null || idx === undefined) return;
   event.preventDefault();
-  var row = people[Number(idx)];
-  if (!row || !window.confirm("{{ui.app.remove-confirm}}".replace("{name}", row.name).replace("{identity}", row.identity || "-"))) return;
-  people.splice(Number(idx), 1);
-  renderPeople();
-  savePeople();
+  var person = people[Number(idx)];
+  if (!person) return;
+  function postRemoval(path, body) {
+    $("setpeoplestatus").textContent = "{{ui.app.saving}}";
+    (window.rosterFetch || fetch)(path, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      return res.json().then(function (data) { if (!res.ok) throw new Error(data.error); });
+    }).then(function () { $("setpeoplestatus").textContent = "{{ui.app.saved-2}}"; renderChannels(); })
+      .catch(function (error) { $("setpeoplestatus").textContent = error.message; renderChannels(); });
+  }
+  if (person.retiredSignIn || hasOtherSignIn(person)) {
+    if (window.confirm(t("ui.app.remove-confirm", { name: person.name, identity: person.identity })))
+      postRemoval("/api/principals/revoke-sign-in", { principalId: person.id, identity: person.identity });
+    return;
+  }
+  if (!window.confirm(t("ui.next.team.removeWhat", { name: person.name }))) return;
+  fetch("/api/personal-boxes/admin").then(function (res) {
+    return res.json().then(function (data) { if (!res.ok) throw new Error(data.error); return data; });
+  }).then(function (data) {
+    removeMemberComputerDialog(person, data, function (choice) {
+      postRemoval("/api/principals/remove", { principalId: person.id, disposition: choice || undefined });
+    });
+  })
+    .catch(function (error) { $("setpeoplestatus").textContent = error.message; });
 });
 
 /** Resource figures belong to the daemon; no per-desktop memory estimates. */
@@ -2231,8 +2265,8 @@ function renderBoxes() {
           '<span class="dot" style="width:8px;height:8px;background:' + (b.connected ? "var(--ok, #3fb950)" : "var(--warn)") + '"></span>' +
           '<b>' + esc(b.name) + "</b>" + (own ? ' <span class="dim">{{ui.app.own}}</span>' : "") +
           '<span class="dim" style="flex:1">' + where + " {{ui.app.displays-from}}" + esc(b.displayFloor) + " · " + esc(b.agents) + " agent" + (b.agents === 1 ? "" : "{{ui.plural.s}}") + (b.connected ? "" : " {{ui.app.not-connected-2}}") + "</span>" +
-          (myRole === "admin" ? '<button class="btn sm ghost" data-members-box="' + esc(b.name) + '" title="' + esc(b.membersLabel || "") + '">{{ui.app.members}}</button>' : "") +
-          (own ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">{{ui.app.detach}}</button>") +
+          (!b.personal && myRole === "admin" ? '<button class="btn sm ghost" data-members-box="' + esc(b.name) + '" title="' + esc(b.membersLabel || "") + '">{{ui.app.members}}</button>' : "") +
+          (b.personal || own ? "" : '<button class="btn sm ghost" data-detach-box="' + esc(b.name) + '"' + (b.agents > 0 ? ' disabled title="delete its agents first"' : "") + ">{{ui.app.detach}}</button>") +
           "</div>" +
           // Who the box is for, in the words the members set produces (docs/22 §5, INV-538).
           // Not free text: a label somebody types is a label that stops being true.
@@ -7061,55 +7095,7 @@ function shelfCard(head, sub, action, dataAttr, preview) {
     "</div>";
 }
 
-var personalRequestId = null;
-var personalPoll = null;
-function personalBoxError(b) {
-  return b.error || (b.status === "unreachable" ? t("ui.next.box.podUnreachable", { why: b.connectionError || t("ui.next.box.healthPending") }) : "");
-}
-function renderPersonalBoxes(d) {
-  $("personalstatus").textContent = d.held + " {{ui.app.allocated}} " + (d.quota === null ? "{{ui.app.unlimited}}" : d.quota) + " {{ui.app.quota}}";
-  $("personalcreate").disabled = d.quota !== null && d.held >= d.quota;
-  $("personalboxes").innerHTML = (d.boxes || []).map(function (b) {
-    return '<div style="padding:6px 0"><span>' + esc(b.name) + ' — ' + esc(b.status) + '</span>' +
-      (personalBoxError(b) ? '<div class="fieldnote">' + esc(personalBoxError(b)) + '</div>' : '') +
-      (['failed', 'interrupted', 'detached', 'deleting', 'unreachable'].indexOf(b.status) >= 0 ? ' <button class="btn sm" data-personal-retry="' + esc(b.id) + '">{{ui.app.retry-recover}}</button>' : '') +
-      (['ready', 'failed', 'detached', 'unreachable'].indexOf(b.status) >= 0 ? ' <button class="btn sm ghost" data-personal-keep="' + esc(b.id) + '">{{ui.app.remove-keep-data}}</button> <button class="btn sm ghost" data-personal-delete="' + esc(b.id) + '">{{ui.app.delete-box-and-data}}</button>' : '') + '</div>';
-  }).join('');
-  clearTimeout(personalPoll);
-  if ((d.boxes || []).some(function (b) { return b.status === 'provisioning' || b.status === 'deleting'; })) personalPoll = setTimeout(loadPersonalBoxes, 2000);
-}
-function loadPersonalBoxes() {
-  if ($("shelfwrap").style.display === "none") return;
-  fetch('/api/personal-boxes').then(function (r) { return r.json(); }).then(function (d) {
-    if (d.error) { $("personalstatus").textContent = d.error; $("personalcreate").disabled = true; $("personalboxes").innerHTML = ''; return; }
-    renderPersonalBoxes(d);
-  }).catch(function () { $("personalstatus").textContent = '{{ui.app.could-not-load-personal-boxes}}'; });
-}
-function personalAction(action, body) {
-  $("personalstatus").textContent = '{{ui.app.working}}';
-  $("personalcreate").disabled = true;
-  fetch('/api/personal-boxes/' + action, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    .then(function (r) { return r.json(); }).then(function (d) {
-      if (d.error) { $("personalstatus").textContent = d.error; $("personalcreate").disabled = false; return; }
-      if (action === 'create') personalRequestId = null;
-      renderPersonalBoxes(d);
-      openShelf(d.boxId);
-    }).catch(function () { $("personalstatus").textContent = '{{ui.app.connection-interrupted-retry-uses-the}}'; $("personalcreate").disabled = false; });
-}
-$("personalcreate").onclick = function () {
-  if (!personalRequestId) personalRequestId = crypto.randomUUID();
-  personalAction('create', { requestId: personalRequestId });
-};
-$("personalboxes").onclick = function (event) {
-  var button = event.target.closest('button');
-  if (!button) return;
-  var retry = button.getAttribute('data-personal-retry');
-  var keep = button.getAttribute('data-personal-keep');
-  var erase = button.getAttribute('data-personal-delete');
-  if (retry) personalAction('retry', { id: retry });
-  if (keep) personalAction('remove', { id: keep, deleteData: false });
-  if (erase && confirm('{{ui.app.permanently-delete-this-personal-box}}')) personalAction('remove', { id: erase, deleteData: true });
-};
+${PERSONAL_BOX_CLASSIC_JS}
 
 function openShelf(preferredBox) {
   $("shelfwrap").style.display = "";
@@ -7118,7 +7104,8 @@ function openShelf(preferredBox) {
   $("shelfbody").innerHTML = '<div class="dim">{{ui.app.loading}}</div>';
   fetch("/api/templates/shelf").then(function (r) { return r.json(); }).then(function (d) {
     var boxes = d.boxes || [];
-    $("shelfbox").innerHTML = boxes.map(function (b) {
+    var lostDestination = preferredBox !== undefined && !boxes.some(function (box) { return box.id === preferredBox; });
+    $("shelfbox").innerHTML = (lostDestination ? '<option value="" selected disabled>' + esc(t("ui.personal.selectDestination")) + '</option>' : '') + boxes.map(function (b) {
       var kind = b.kind === "kubernetes" ? " (" + b.kind + ")" : b.kind === "docker" ? " {{ui.app.docker}}" : " {{ui.app.attached-2}}";
       return '<option value="' + esc(b.id) + '"' + (b.id === (preferredBox || currentBox) ? " selected" : "") + ">" + esc(b.name) + kind + "</option>";
     }).join("");
@@ -7185,6 +7172,7 @@ $("shelfbody").onclick = function (event) {
   var btn = event.target.closest("button[data-stamp-template],button[data-stamp-catalog],button[data-stamp-agent]");
   if (!btn) return;
   var boxId = $("shelfbox").value;
+  if (!boxId) { $("shelfstatus").textContent = t("ui.personal.selectDestination"); return; }
   // One click. The name is the template's own; the server picks a free one if it is taken.
   var body = { boxId: boxId };
   if (btn.getAttribute("data-stamp-template")) body.templateSlug = btn.getAttribute("data-stamp-template");
