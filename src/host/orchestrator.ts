@@ -24,7 +24,7 @@ import { bindingsOf, CommitmentLedger, describeGaps, parseCommitments, priorComm
 import { finishRoutineRun, PendingAttachments, RoutineResultLedger, routineResolveMode, type DeliveryOutcome } from "./routine-resolve.ts";
 import { BoxGenerations } from "./box-generation.ts";
 import { writeEvalCase } from "./eval-cases.ts";
-import { routineReason, routineResult } from "./run-result.ts"; import { ExceptionLedger, noteJobEnd, noteRoutineEnd, noteTurnEnd } from "./exceptions.ts";
+import { routineReason, routineResult } from "./run-result.ts"; import { routineBlocked, routineNotStarted } from "./routine-start.ts"; import { ExceptionLedger, noteJobEnd, noteRoutineEnd, noteTurnEnd } from "./exceptions.ts";
 import { learningsDir } from "./learnings.ts";
 import { boxLearningsDir } from "./site-learnings.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
@@ -699,6 +699,7 @@ export class Orchestrator {
         })));
     },
     observed: (slug, would) => this.policy.notifyObserved(slug, would), finished: (skill, agent, result, reason) => noteRoutineEnd(this.exceptions, skill.slug, agent, result, reason), // The observe-mode audit row (INV-1458); every run's end on the exception list (INV-1741).
+    busy: (skill, agent) => { const record = this.registry.resolve(agent); return routineBlocked(this.bus, record.id, skill.deliver !== undefined ? conversationIdFor(skill.deliver) : MAIN_CONVERSATION, record.profile.name); },
     priorCommitments: slug => priorCommitmentsPrompt(this.commitments.lastFor(slug), this.tasks?.list() ?? []),
     run: async (agent, prompt, deliver, slug, toolScope, deliverWhen, identity, origin) => {
       const scope = { ...(toolScope !== undefined ? { toolScope } : {}), ...(origin !== undefined ? { origin } : {}) }; // origin: a member's reminder, the host's words and not a person's (INV-1878)
@@ -707,8 +708,7 @@ export class Orchestrator {
       const why = (agentId: string) => { const reason = routineReason(this.turns?.endedSince(agentId, startedMs) ?? []); return reason === undefined ? {} : { reason }; }; // the run history's line (INV-1665)
       if (deliver === undefined) {
         await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...scope }); // model-text: routine
-        const id = this.registry.resolve(agent).id;
-        return { result: resultOf(id), ...why(id) };
+        const ran = this.registry.resolve(agent); return routineNotStarted(this.bus, ran.id, MAIN_CONVERSATION, prompt, ran.profile.name) ?? { result: resultOf(ran.id), ...why(ran.id) };
       }
       const conversation = conversationIdFor(deliver);
       const record = this.registry.resolve(agent);
@@ -723,7 +723,7 @@ export class Orchestrator {
         conversation,
         ...scope,
       });
-      await this.settle();
+      await this.settle(); const unstarted = origin !== undefined ? undefined : routineNotStarted(this.bus, agentId, conversation, prompt, record.profile.name); if (unstarted !== undefined) return unstarted;
       const said = this.replySince(agentId, before, conversation).trim();
       const result = resultOf(agentId);
       // The box was reconnected under the run (INV-1476): its result is the old incarnation's and is not delivered.
@@ -762,7 +762,7 @@ export class Orchestrator {
       const agentId = this.registry.resolve(agent).id;
       const before = this.registry.readTranscript(agentId).length;
       await this.prompt(agent, prompt, undefined, { steerable: false, lane: "background", synthetic: true, ...(toolScope !== undefined ? { toolScope } : {}) }); // model-text: routine
-      await this.settle();
+      await this.settle(); const unstarted = routineNotStarted(this.bus, agentId, MAIN_CONVERSATION, prompt, this.registry.resolve(agent).profile.name); if (unstarted !== undefined) return unstarted;
       return this.replySince(agentId, before).trim();
     },
     // A skill runs on the box its file is in, as that box's first agent; the installation's first agent only when the box has none.
