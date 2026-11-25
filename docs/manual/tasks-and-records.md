@@ -4,7 +4,7 @@
      status: current
      covers: task
      audience: user
-     updated: 2026-11-10
+     updated: 2026-11-24
 -->
 # Tasks and records
 
@@ -41,7 +41,8 @@ nobody takes it until a person presses *Commit*.
 
 ### In the app
 
-- **Follow the current work:** choose a member and a conversation, then open *Tasks*. The
+- **Follow the current work:** open *Work* for everything you asked for, one row each; a row
+  opens the work's panel. In the classic view: choose a member and a conversation, then open *Tasks*. The
   heading names that member and conversation. Tasks from their other conversations are folded
   under a separate heading and load only when expanded. *Team tasks* in the top bar opens the
   clearly labelled view across members; the return link takes you back to the current conversation.
@@ -64,7 +65,9 @@ nobody takes it until a person presses *Commit*.
   a copy of the agent with a one-line brief. Forks are folded under the thread that started
   them (`▸ 2 forks · 1 done · 1 running`), and the task's *Division of work* shows each one's chain:
   sent → started → reported → merged.
-- **Read the record:** the Audit tab shows each tool call. *Hide system probes* is on by default.
+- **Read the record:** the work panel's *Diagnostics* tab shows each step with its raw input and
+  output, what the work used, and an export. In the classic view the Audit tab shows each tool
+  call, with *Hide system probes* on by default.
 
 ### In a chat
 
@@ -90,11 +93,12 @@ From another tool over MCP, `fetch_deliverable` reads a task's deliverable.
 
 ## Where to see the result
 
-- The Tasks tab: read-only state, sourced progress, and a link to the task. A missing association
+- *Work*, or the classic view's Tasks tab: read-only state, sourced progress, and a link to the task. A missing association
   is shown as an empty conversation view; use the member’s other conversations or Team tasks
   to find older work.
 - The task detail: its deliverables, the configuration version and the division of work.
-- The Audit tab and `agentbox usage`: what was done and what it cost.
+- The work panel's *Diagnostics* tab, the classic Audit tab, and `agentbox usage`: what was done
+  and what it cost.
 
 ## Limits
 

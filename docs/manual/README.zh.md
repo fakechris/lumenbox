@@ -4,8 +4,8 @@
      status: current
      covers: manual
      audience: user
-     source-updated: 2026-11-06
-     updated: 2026-11-06
+     source-updated: 2026-11-24
+     updated: 2026-11-24
 -->
 # LumenBox 使用手册
 
@@ -30,7 +30,7 @@
 
 ## 你会遇到的一切
 
-每个概念一行。**在聊天里**是指你在飞书或钉钉聊天中输入的内容。短横线表示那里暂时还没有入口。
+每个概念一行。**在 app 里**指页面自己的位置：对话、收件、工作、文件、自动化、设置，以及工作面板和它的诊断标签页；旧界面在 *回到旧界面* 下面。**在聊天里**是指你在飞书、钉钉或 Telegram 聊天中输入的内容。短横线表示那里暂时还没有入口。
 
 | 概念 | 在 app 里 | 在聊天里 | 命令行 | 状态词 | 页面 |
 |---|---|---|---|---|---|
@@ -48,13 +48,13 @@
 | 给 Claude Code 和 Codex 用的 LumenBox skill | 设置 → 我的 → 你的 MCP token | — | `agentbox skill install` | — | [skill](skills.zh.md) |
 | 记忆 | 设置 → 记忆 | — | `agentbox backup` 会复制它 | 有效 · 已撤回 | [记忆](memory.zh.md) |
 | 团队记忆审核 | 设置 → 团队 → 团队记忆 | — | — | 等待中 · 已批准 · 已拒绝 | [记忆](memory.zh.md) |
-| 任务 | 任务 标签页 | `看板`, `可以`, `停`, `/continue`, `/recover` | `agentbox usage --task tN` | open · doing · blocked · review · done · dropped | [任务与记录](tasks-and-records.zh.md) |
+| 任务 | 工作；这件工作的面板 | `看板`, `可以`, `停`, `/continue`, `/recover` | `agentbox usage --task tN` | open · doing · blocked · review · done · dropped | [任务与记录](tasks-and-records.zh.md) |
 | 交付物 | 任务详情 → 交付物 | 文件出现在聊天里 | MCP `fetch_deliverable` | 已交付 | [任务与记录](tasks-and-records.zh.md) |
 | 分工 | 任务详情 → 分工；分支挂在各自的线程下 | — | — | 已发出 · 已开始 · 已隔离 · 已汇报 · 已合并 · 已放弃 | [任务与记录](tasks-and-records.zh.md) |
-| 记录 | 审计 标签页 | — | `agentbox usage`, `audit export`, `scan-records` | 只追加 | [任务与记录](tasks-and-records.zh.md) |
+| 记录 | 工作面板的诊断标签页 | — | `agentbox usage`, `audit export`, `scan-records` | 只追加 | [任务与记录](tasks-and-records.zh.md) |
 | 确认 | 聊天里的确认卡片；设置 → 我的 | `允许`, `一直允许`, `本次会话`, `拒绝` | `~/.agentbox/rules` | 等待中 · 已允许 · 已拒绝 · 已过期 | [确认](approvals.zh.md) |
 | 凭据检查 | “开始前需要”卡片 | `… 开始前需要：` | — | 缺失 · 即将过期 · 已就位 | [确认](approvals.zh.md) |
-| 例行任务 | 自动化 标签页；设置 → 团队 → 例行任务 | `定时` | `agentbox routines runs <slug>` | 关闭 · 观察 · 自动；已暂停 | [自动化](automations.zh.md) |
+| 例行任务 | 自动化；设置 → 团队 → 例行任务 | `定时` | `agentbox routines runs <slug>` | 关闭 · 观察 · 自动；已暂停 | [自动化](automations.zh.md) |
 | 目标 | 设置 → 监督 | `/goal <text>` | MCP `goal_start` | 进行中 · 验证中 · 已暂停 · 已完成 · 已清除 | [监督](supervision.zh.md) |
 | 看门狗 | 设置 → 监督 → 看门狗 | 任务聊天里的一条提醒 | `agentbox watchdog` | 开 · 关 | [监督](supervision.zh.md) |
 | 监督者 | 设置 → 监督 → 开始受监督的目标 | — | `agentbox supervise` | 排队中 · 运行中 | [监督](supervision.zh.md) |
@@ -67,10 +67,10 @@
 每一条都是“看起来像另一样东西”的一样东西，以及到哪里确认你手上是哪一种。
 
 - **box 在运行，不等于 agent 在干活：** box 可以开着，而每个 agent 都闲着或已暂停。看侧栏：底部显示 `box online`，每个 agent 那一行显示运行中、等你处理或 `paused`。
-- **一轮结束，不等于工作被验收：** 带有验收标准、截止日期或外部依赖的任务，在一轮结束时会进入 `review`，由你来决定 `done`。在任务标签页查看该任务的历史：“turn ended; not closed because … — stopped, not verified”。
-- **agent 的提议，不等于已经认定的工作：** agent 提议的任务带着 `proposed` 标签，直到有人按下立项。在任务标签页打开 `inbox` 查看。
+- **结果交付了，不等于工作被验收：** 一个请求在结果交付时结束，记录写明没有人验收过它。只有你的一句话会改变什么时，它才等你：有别的工作在等它，交出了文件，你要求先看或写了验收标准，它没做完就被交回，或者检查无法判定。7 天没人回应的结果会自己结束，除非有别的工作在等它。在收件里查看：每个等你的结果都写明是哪一种情况。
+- **agent 的提议，不等于已经认定的工作：** agent 提议的任务带着 `proposed` 标签，直到有人同意去做。看这件工作的面板：它写着你同意之前不会开始，旁边是 *同意去做*。
 - **导入模板，不等于有了一个能干活的 agent：** 导入会新建一个 agent，它在第一轮安装自己的配方，并索要它需要的东西；群只能通过渠道找到它。在这个 agent 的聊天里找“开始前需要”卡片，并在设置 → 渠道查看它的默认 agent。
-- **观察模式只报告、不行动：** 处于观察模式的例行任务只记录“本来会运行”，实际什么都不运行。在自动化标签页查看：“would have run N times”。
+- **观察模式只报告、不行动：** 处于观察模式的例行任务只记录“本来会运行”，实际什么都不运行。在自动化里查看：这个例行任务的运行记录写着 *已观察*。
 - **保存的配置，不等于正在运行的配置：** 改动从 agent 的下一轮起生效。看配置旁边的标签：`config v3 · v4 next turn`。
 - **机主不是管理员：** 机主是你的个人安装（你电脑上的桌面应用）里唯一的人；管理员管理组织，组织是另一个独立的安装。个人安装永远不会让第二个人加入。在设置 → 团队 → 人员查看：它显示 Owner · 机主，或者显示角色，不会两者都显示。
 - **“一直允许”不是一揽子同意：** 它只允许那一个确切的操作，只对那一个 agent，直到你撤销为止。在设置 → 我的 → 长期确认查看。
