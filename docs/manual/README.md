@@ -36,7 +36,7 @@ where each row is held to account.
 ## Everything you meet
 
 One row per concept. **In the app** names the page's own places — Chat, Inbox, Work, Files,
-Automation, Settings, and an agent's panel with its Diagnostics tab; the classic view is under
+Automation, Settings, and the work panel with its Diagnostics tab; the classic view is under
 *Back to the classic view*. **In a chat** is what you type in a Feishu, DingTalk or Telegram
 chat. A dash means there is no entry there yet.
 
@@ -59,7 +59,7 @@ chat. A dash means there is no entry there yet.
 | task | Work; the work's panel | `看板`, `可以`, `停`, `/continue`, `/recover` | `agentbox usage --task tN` | open · doing · blocked · review · done · dropped | [tasks and records](tasks-and-records.md) |
 | deliverable | task detail → Deliverables | the file arrives in the chat | MCP `fetch_deliverable` | delivered | [tasks and records](tasks-and-records.md) |
 | division of work | task detail → Division of work; forks under their thread | — | — | sent · started · fenced · reported · merged · dropped | [tasks and records](tasks-and-records.md) |
-| record | an agent's Diagnostics tab | — | `agentbox usage`, `audit export`, `scan-records` | append-only | [tasks and records](tasks-and-records.md) |
+| record | the work panel's Diagnostics tab | — | `agentbox usage`, `audit export`, `scan-records` | append-only | [tasks and records](tasks-and-records.md) |
 | approval | the consent card in the chat; Settings → Mine | `允许`, `一直允许`, `本次会话`, `拒绝` | `~/.agentbox/rules` | waiting · allowed · refused · expired | [approvals](approvals.md) |
 | credential check | the "Before … can start" card | `… 开始前需要：` | — | missing · expiring · in place | [approvals](approvals.md) |
 | routine | Automation; Settings → Team → Routines | `定时` | `agentbox routines runs <slug>` | off · observe · auto; paused | [automations](automations.md) |

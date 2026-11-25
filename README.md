@@ -66,22 +66,24 @@ The whole argument, with the layers, the decisions and the paths refused:
 - **A real computer.** Every agent gets its own Linux desktop with a browser and a shell — a
   container on your Mac, or a machine of yours anywhere. You can watch each desktop live and
   drive it with your own mouse while the agent keeps working elsewhere.
-- **In your chat apps.** Connect Feishu (飞书), DingTalk (钉钉) or Telegram: a message in the
-  group chat is a message to the agent, replies land in the thread, files go both ways, long jobs
-  show a card that updates as they run, and approvals are buttons. The chat and the agent's
-  conversation in the app read one record, so they say the same thing.
+- **In your chat apps.** Connect Feishu (飞书) or DingTalk (钉钉): a message in the group chat
+  is a message to the agent, replies land in the thread, files go both ways, long jobs show a
+  card that updates as they run, and approvals are buttons. Telegram carries text both ways, a
+  long reply split into several messages. The chat and the agent's conversation in the app read
+  one record, so they say the same thing.
 - **Asks you only when your word changes something.** What waits on you is one card above the
   conversation, saying what happened and what to do, with buttons for exactly that. A request ends
   when its result is delivered; it waits for you only when other work depends on it, files were
-  handed over, or you asked to see it first.
+  handed over, you asked to see it first, it came back unfinished, or a check could not decide.
 - **Long work carries on.** A request that outgrows one turn is continued until it is answered,
   under a ceiling you choose in Settings (*Lean / Standard / Open*). Work an agent thinks up on
   its own is a proposal until a person commits it.
 - **Work that starts by itself.** Routines run on a timer, when a URL is called, or when a chat
   message matches, as the agent you name; reminders an agent sets itself are listed beside them.
 - **Memory that is yours.** What an agent learns about you and your work is kept in plain files
-  you can read and edit, per agent and per team, and never leaves your machine. A fact is kept
-  only if it can quote where you said it, and one search covers every conversation.
+  you can read and edit, per agent and per team, under LumenBox's data folder on your machine;
+  what an agent recalls goes to your model provider only inside the requests it makes. A fact is
+  kept only if it can quote where you said it, and one search covers every conversation.
 - **Skills you can install and share.** A skill is a folder with a `SKILL.md` — the format four
   other projects use — so what you write for one agent works for another, and a whole agent can
   be packed and handed to someone as a template.
@@ -147,7 +149,7 @@ topics in place, and what it owes you pinned where you asked for it. Around it:
 - **Automation** — routines and reminders: what starts by itself, and when next.
 - **Settings** — model, boxes, channels, team and people, memory, supervision.
 
-Raw steps, usage and identifiers are in an agent's *Diagnostics* tab. The earlier page is still
+Raw steps, usage and identifiers are in the work panel's *Diagnostics* tab. The earlier page is still
 there: *Back to the classic view* at the foot of the side column.
 
 ## On your own or as an organisation

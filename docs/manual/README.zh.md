@@ -30,7 +30,7 @@
 
 ## 你会遇到的一切
 
-每个概念一行。**在 app 里**指页面自己的位置：对话、收件、工作、文件、自动化、设置，以及 agent 面板里的诊断标签页；旧界面在 *回到旧界面* 下面。**在聊天里**是指你在飞书、钉钉或 Telegram 聊天中输入的内容。短横线表示那里暂时还没有入口。
+每个概念一行。**在 app 里**指页面自己的位置：对话、收件、工作、文件、自动化、设置，以及工作面板和它的诊断标签页；旧界面在 *回到旧界面* 下面。**在聊天里**是指你在飞书、钉钉或 Telegram 聊天中输入的内容。短横线表示那里暂时还没有入口。
 
 | 概念 | 在 app 里 | 在聊天里 | 命令行 | 状态词 | 页面 |
 |---|---|---|---|---|---|
@@ -51,7 +51,7 @@
 | 任务 | 工作；这件工作的面板 | `看板`, `可以`, `停`, `/continue`, `/recover` | `agentbox usage --task tN` | open · doing · blocked · review · done · dropped | [任务与记录](tasks-and-records.zh.md) |
 | 交付物 | 任务详情 → 交付物 | 文件出现在聊天里 | MCP `fetch_deliverable` | 已交付 | [任务与记录](tasks-and-records.zh.md) |
 | 分工 | 任务详情 → 分工；分支挂在各自的线程下 | — | — | 已发出 · 已开始 · 已隔离 · 已汇报 · 已合并 · 已放弃 | [任务与记录](tasks-and-records.zh.md) |
-| 记录 | agent 的诊断标签页 | — | `agentbox usage`, `audit export`, `scan-records` | 只追加 | [任务与记录](tasks-and-records.zh.md) |
+| 记录 | 工作面板的诊断标签页 | — | `agentbox usage`, `audit export`, `scan-records` | 只追加 | [任务与记录](tasks-and-records.zh.md) |
 | 确认 | 聊天里的确认卡片；设置 → 我的 | `允许`, `一直允许`, `本次会话`, `拒绝` | `~/.agentbox/rules` | 等待中 · 已允许 · 已拒绝 · 已过期 | [确认](approvals.zh.md) |
 | 凭据检查 | “开始前需要”卡片 | `… 开始前需要：` | — | 缺失 · 即将过期 · 已就位 | [确认](approvals.zh.md) |
 | 例行任务 | 自动化；设置 → 团队 → 例行任务 | `定时` | `agentbox routines runs <slug>` | 关闭 · 观察 · 自动；已暂停 | [自动化](automations.zh.md) |
