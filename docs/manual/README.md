@@ -4,7 +4,7 @@
      status: current
      covers: manual
      audience: user
-     updated: 2026-11-06
+     updated: 2026-11-24
 -->
 # The LumenBox manual
 
@@ -35,8 +35,10 @@ where each row is held to account.
 
 ## Everything you meet
 
-One row per concept. **In a chat** is what you type in a Feishu or DingTalk chat. A dash means
-there is no entry there yet.
+One row per concept. **In the app** names the page's own places — Chat, Inbox, Work, Files,
+Automation, Settings, and an agent's panel with its Diagnostics tab; the classic view is under
+*Back to the classic view*. **In a chat** is what you type in a Feishu, DingTalk or Telegram
+chat. A dash means there is no entry there yet.
 
 | Concept | In the app | In a chat | Command line | State words | Page |
 |---|---|---|---|---|---|
@@ -54,13 +56,13 @@ there is no entry there yet.
 | LumenBox skill for Claude Code and Codex | Settings → Mine → Your MCP tokens | — | `agentbox skill install` | — | [skills](skills.md) |
 | memory | Settings → Memory | — | `agentbox backup` copies it | live · withdrawn | [memory](memory.md) |
 | team memory review | Settings → Team → Team memory | — | — | waiting · approved · rejected | [memory](memory.md) |
-| task | Tasks tab | `看板`, `可以`, `停`, `/continue`, `/recover` | `agentbox usage --task tN` | open · doing · blocked · review · done · dropped | [tasks and records](tasks-and-records.md) |
+| task | Work; the work's panel | `看板`, `可以`, `停`, `/continue`, `/recover` | `agentbox usage --task tN` | open · doing · blocked · review · done · dropped | [tasks and records](tasks-and-records.md) |
 | deliverable | task detail → Deliverables | the file arrives in the chat | MCP `fetch_deliverable` | delivered | [tasks and records](tasks-and-records.md) |
 | division of work | task detail → Division of work; forks under their thread | — | — | sent · started · fenced · reported · merged · dropped | [tasks and records](tasks-and-records.md) |
-| record | Audit tab | — | `agentbox usage`, `audit export`, `scan-records` | append-only | [tasks and records](tasks-and-records.md) |
+| record | an agent's Diagnostics tab | — | `agentbox usage`, `audit export`, `scan-records` | append-only | [tasks and records](tasks-and-records.md) |
 | approval | the consent card in the chat; Settings → Mine | `允许`, `一直允许`, `本次会话`, `拒绝` | `~/.agentbox/rules` | waiting · allowed · refused · expired | [approvals](approvals.md) |
 | credential check | the "Before … can start" card | `… 开始前需要：` | — | missing · expiring · in place | [approvals](approvals.md) |
-| routine | Automations tab; Settings → Team → Routines | `定时` | `agentbox routines runs <slug>` | off · observe · auto; paused | [automations](automations.md) |
+| routine | Automation; Settings → Team → Routines | `定时` | `agentbox routines runs <slug>` | off · observe · auto; paused | [automations](automations.md) |
 | goal | Settings → Supervision | `/goal <text>` | MCP `goal_start` | active · verifying · paused · complete · cleared | [supervision](supervision.md) |
 | watchdog | Settings → Supervision → Watchdog | a notice in the task's chat | `agentbox watchdog` | on · off | [supervision](supervision.md) |
 | supervisor | Settings → Supervision → Start a supervised goal | — | `agentbox supervise` | queued · running | [supervision](supervision.md) |
@@ -75,17 +77,21 @@ Each line is one thing that looks like another, and where to check which one you
 - **A running box is not an agent at work:** the box can be up while every agent is idle or
   paused. Check the sidebar: the footer says `box online`, and each agent's row says Running,
   Waiting for you, or `paused`.
-- **A finished turn is not accepted work:** a task with acceptance criteria, a due date or an
-  outside dependency moves to `review` when its turn ends, and you decide `done`. Check the
-  task's history on the Tasks tab: "turn ended; not closed because … — stopped, not verified".
+- **A delivered result is not accepted work:** a request ends when its result is delivered,
+  and the record says that no person accepted it. It waits for you instead when your word
+  changes something: other work waits on it, files were handed over, you asked to see it first
+  or wrote acceptance criteria, it came back unfinished, or a check could not decide. One
+  nobody answers for 7 days ends on its own, unless other work waits on it. Check Inbox: each
+  waiting result says which of these applies.
 - **An agent's proposal is not agreed work:** a task an agent proposes carries a `proposed`
-  chip until a person presses Commit. Check the Tasks tab, with `inbox` on.
+  chip until a person commits it. Check the work's panel: it says nothing starts until you
+  commit, beside *Commit to it*.
 - **Importing a template is not a working agent:** the import makes a new agent, which installs
   its recipe on its first turn and asks for what it needs; a group chat reaches it only through
   a channel. Check the agent's chat for the "Before … can start" card, and Settings → Channels
   for its default agent.
 - **Observe mode reports and does not act:** a routine in observe records that it would have
-  run, and nothing runs. Check the Automations tab: "would have run N times".
+  run, and nothing runs. Check Automation: the routine's runs read *Observed*.
 - **A saved configuration is not the running one:** a change applies from the agent's next
   turn. Check the chip beside Configure: `config v3 · v4 next turn`.
 - **The Owner is not an Admin:** the Owner is the one person of your personal installation,

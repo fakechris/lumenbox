@@ -47,7 +47,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [manual/box](manual/box.md) | Box | current | 2026-11-06 |
 | [manual/channels](manual/channels.md) | Channels | current | 2026-11-06 |
 | [manual/memory](manual/memory.md) | Memory | current | 2026-11-06 |
-| [manual/README](manual/README.md) | The LumenBox manual | current | 2026-11-06 |
+| [manual/README](manual/README.md) | The LumenBox manual | current | 2026-11-24 |
 | [manual/reference-commands](manual/reference-commands.md) | Reference: what you can say in a chat | current | generated |
 | [manual/reference-prompt-parts](manual/reference-prompt-parts.md) | Reference: the prompt parts | current | generated |
 | [manual/reference-rules](manual/reference-rules.md) | Reference: the rules file grammar | current | generated |
@@ -74,7 +74,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
 | [19-pitfalls](19-pitfalls.md) | Pitfalls: remembering how things went wrong | current | 2026-08-28 |
-| [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-11-07 |
+| [37-onboarding](37-onboarding.md) | Getting started, every way in | current | 2026-11-24 |
 | [38-operators-guide](38-operators-guide.md) | The operator's guide (what the README used to be) | current | 2026-11-20 |
 | [55-external-desktops](55-external-desktops.md) | External browsers and desktop control | current | 2026-09-15 |
 | [56-teaching-upgrade](56-teaching-upgrade.md) | Teaching draft upgrade | current | 2026-09-15 |
