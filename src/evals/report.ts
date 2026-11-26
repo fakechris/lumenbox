@@ -1,5 +1,5 @@
 /**
- * The one page (INV-1772): `docs/evals/REPORT-<date>.md`.
+ * The one page (INV-1772): `docs/evals/REPORT-<date>-<model>.md`.
  *
  * Four numbers, each beside what limits it: the pass rate with its interval, pass^k beside pass@k,
  * the comparison with the previous run, and the smallest difference this sample could show. Then
@@ -72,6 +72,16 @@ function judgeLines(summary: Summary): string[] {
         `${one?.mayGate === true ? "may gate" : "**may not gate**"} — ${one?.why ?? "no labels"} |`;
     }),
   ];
+}
+
+/**
+ * The page's name: the day and the agent's model, so two models measured on one day are two pages
+ * and neither overwrites the other. The model is lower-cased and anything outside `a-z 0-9 .` becomes
+ * a dash; `docs-lint` accepts exactly this shape, and a page from before the model was in the name.
+ */
+export function reportName(run: Pick<EvalRun, "at" | "models">): string {
+  const model = (run.models.primary?.model ?? "").toLowerCase().replace(/[^a-z0-9.]+/g, "-").replace(/^-+|-+$/g, "");
+  return `REPORT-${run.at.slice(0, 10)}${model === "" ? "" : `-${model}`}`;
 }
 
 export function renderReport(run: EvalRun, summary: Summary, options: { name: string }): string {

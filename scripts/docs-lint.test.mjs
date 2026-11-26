@@ -130,7 +130,9 @@ test("docs/evals/ keeps only reports of a measured run: a stand-in's page, a han
   try {
     const page = measured => `<!-- eval-report: REPORT-2026-11-19\n     measured: ${measured}\n     split: test\n-->\n# Evaluation report\n`;
     writeFileSync(join(dir, "REPORT-2026-11-19.md"), page("yes"));
-    assert.deepEqual(lintEvalReports(dir), []);
+    writeFileSync(join(dir, "REPORT-2026-11-19-gpt-6.1-terra.md"), page("yes").replace("REPORT-2026-11-19", "REPORT-2026-11-19-gpt-6.1-terra"));
+    assert.deepEqual(lintEvalReports(dir), [], "a second model measured the same day is a second page");
+    rmSync(join(dir, "REPORT-2026-11-19-gpt-6.1-terra.md"));
     writeFileSync(join(dir, "REPORT-2026-11-19.md"), page("no — a deterministic stand-in answered; these numbers measure nothing"));
     assert.match(lintEvalReports(dir)[0], /a stand-in's page is not a result/);
     writeFileSync(join(dir, "REPORT-2026-11-19.md"), "# Evaluation report\n\nPass rate 97%.\n");

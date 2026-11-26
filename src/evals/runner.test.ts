@@ -10,7 +10,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { resolveProvider } from "../host/provider.ts";
 import { type CacheStore, FileCache, type ModelCall } from "./cache.ts";
 import { type EvalTask, loadCorpus } from "./corpus.ts";
-import { renderReport, renderTrend } from "./report.ts";
+import { renderReport, renderTrend, reportName } from "./report.ts";
 import { callBudget, type EvalRun, runEval, type Tier } from "./runner.ts";
 import { SUBJECT_TABLE } from "./subjects.ts";
 import { scorecardModelSection, summarise } from "./summary.ts";
@@ -159,6 +159,8 @@ test("the page says in its first lines whether anything was measured, carries th
   const baseline = recorded(passes(30, 30));
   const real = recorded(passes(20, 30));
   const page = renderReport(real, summarise(real, { baseline, rates: { m: { inputPerM: 1, outputPerM: 1 } } }), { name: "REPORT-2026-11-19" });
+  const named = { at: "2026-11-26T10:53:37.915Z", models: { primary: { provider: "MiniMax (China)", model: "MiniMax-M3.1-Flash" } } };
+  assert.equal(reportName(named), "REPORT-2026-11-26-minimax-m3.1-flash", "the page is named by day and agent model, so a second model that day does not overwrite it");
   assert.ok(page.startsWith("<!-- eval-report: REPORT-2026-11-19\n     measured: yes\n     split: test\n     corpus: v\n     commit: abc1234\n     models: primary: p m\n-->"));
   for (const wanted of [/Pass rate \| \*\*66\.7%\*\* \| 95% interval \d+\.\d% – \d+\.\d%/, /pass\^1[^|]*\| \*\*66\.7%\*\*/, /\*\*REVIEW\*\* — 10 worse \(33\.3%\), 0 better/, /Smallest detectable difference \| \*\*\d+\.\d%\*\*/, /per passed attempt/]) {
     assert.match(page, wanted);
