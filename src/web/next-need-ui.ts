@@ -142,14 +142,23 @@ function sayNeed(row, text) {
  * running paragraph, the panel the same sentences under their names.
  */
 function needInto(box, row, listed) {
-  var family = nextNeedOf(row), ask = row.ask, last = (row.history || [])[(row.history || []).length - 1] || {}, name = agentName(row.assigneeId), acts = el("div", "acts");
-  var options = last.options || [];
+  var ask = row.ask, last = (row.history || [])[(row.history || []).length - 1] || {};
   // Answered, and the agent has not moved yet: the one line it became, in place of the request and its buttons.
   if (row.receipt && row.status === "blocked") { box.appendChild(receiptLine(row)); return; }
   if (ask && listed) box.appendChild(askBlock(ask));
   else if (ask) askBrief(box, ask);
   else box.appendChild(last.note ? rich(last.note, "report") : el("div", "why", t("ui.wr.reason.needs")));
   if (!listed) embedInto(box, row); // the panel lists what was handed over under its own heading
+  needActs(box, row);
+}
+
+/**
+ * The buttons that answer what is asked, and the line under them saying what each leads to. The card, the work's panel
+ * and the inbox row all draw them from here (INV-2189), so a decision looks and works the same wherever it is met.
+ */
+function needActs(box, row) {
+  var family = nextNeedOf(row), last = (row.history || [])[(row.history || []).length - 1] || {}, name = agentName(row.assigneeId), acts = el("div", "acts");
+  var options = last.options || [];
   if (need.refusing === row.id) {
     // Refusing may carry a sentence of why, which the agent reads with the refusal; it is not required.
     var why = el("input"), no = el("button", "act-danger", options[1] || t("ui.next.act.deny")), back = el("button", "act", t("ui.next.act.cancel"));

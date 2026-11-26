@@ -186,6 +186,13 @@ function inboxRow(item) {
   });
   if (acts.childNodes.length) node.appendChild(acts);
   if (item.deadline) node.appendChild(el("span", "when", agoText(item.deadline)));
+  // Work that waits on the person is answered on its row with the buttons its card has, and the line saying what each
+  // does (INV-2189): it had none here, and its card sat one page of several above a conversation.
+  var work = !acts.childNodes.length && isTask(item.ref) ? next.rows.filter(function (row) { return row.id === item.ref; })[0] : null, family = work ? nextNeedOf(work) : "";
+  var answer = el("div", "decide");
+  if (family === "delivery") resultActs(answer, work);
+  else if (family) needActs(answer, work);
+  if (family) under.appendChild(answer);
   node.appendChild(under);
   return node;
 }

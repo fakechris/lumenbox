@@ -706,12 +706,13 @@ test("a result waiting for the person says where it came from and what was repor
   const embedInto = pageFunction("embedInto", { el, t, need, fileRow });
   const laterButton = pageFunction("laterButton", { el, t, nextLaterTimes: nextLogic.nextLaterTimes, postJson: () => Promise.resolve({}), toast: () => {}, failed: () => {} });
   const askBrief = pageFunction("askBrief", { el, t, rich, askProse });
-  const resultCard = pageFunction("resultCard", {
+  const resultGlobals = {
     embedInto, laterButton, askBrief,
     reportBlock, REPORT_BRIEF: DELIVERY_BRIEF, el, t, agentName, originOf, chat, signOffLines, agoText: () => "3d", rich, toast: () => {}, refreshSoon: () => {}, failed: () => {}, encodeURIComponent,
     render: () => {}, document: { querySelector: () => null },
     openPanel: (id: string) => opened.push(id), postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
-  });
+  };
+  const resultCard = pageFunction("resultCard", { ...resultGlobals, resultActs: pageFunction("resultActs", resultGlobals) });
   const row = { id: "t1", title: "October report", assigneeId: "mia", requester: "feishu:ou_1", createdAt: "2026-11-01T00:00:00.000Z", deliverables: files, report: { at: "2026-11-02T00:00:00.000Z", by: "ada", note: "Checked: **cannot be accepted as is**." }, signOffBecause: ["files", "remarked"] };
   const card = resultCard(row) as Fake;
   const chips = (from: Fake) => from.kids.find(kid => kid.cls === "embeds")!.kids[0]!.kids;
@@ -776,15 +777,20 @@ test("a draft waiting to be sent and a proposal to close are decided on their in
     return node;
   };
   const posted: unknown[] = [];
+  // Work that waits on the person is answered on its row, with the buttons its card has (INV-2189): drawn by the same two functions.
+  const waiting = [{ id: "t5", status: "blocked", ask: { kind: "do" } }, { id: "t6", status: "review", reading: { phase: "review" } }];
   const inboxRow = pageFunction("inboxRow", {
     el, t: (key: string) => key, owedText: () => "", initial: () => "A", isTask: () => true, openPanel: () => {}, openChat: () => {}, failed: () => {}, settle: () => {}, inboxPlace: () => null,
     postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
+    next: { rows: waiting }, nextNeedOf: nextLogic.nextNeedOf,
+    needActs: (box: Fake, row: { id: string }) => box.appendChild(el("button", "act", "needActs " + row.id)), resultActs: (box: Fake, row: { id: string }) => box.appendChild(el("button", "act", "resultActs " + row.id)),
   });
-  const buttons = (kind: string) => (inboxRow({ kind, ref: "r1", title: "x" }) as Fake).kids.slice(1).flatMap(kid => kid.kids);
+  const buttons = (kind: string, ref = "r1") => (inboxRow({ kind, ref, title: "x" }) as Fake).kids.slice(1).flatMap(kid => kid.kids).flatMap(kid => (kid.kids.length ? kid.kids : [kid]));
   buttons("outbox")[0]!.press!(); buttons("close-proposal")[0]!.press!();
   await Promise.resolve();
   assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/outbox/decide", { id: "r1", decision: "approve" }], ["/api/tasks/oppose-close", { id: "r1" }]]);
   assert.equal(buttons("review").length, 0, "a row with nothing to decide on it has no buttons");
+  assert.deepEqual([buttons("question", "t5").map(kid => kid.text), buttons("review", "t6").map(kid => kid.text)], [["needActs t5"], ["resultActs t6"]], "what its card asks, answered here");
   // A row that is not about a piece of work goes where it is dealt with, from its button and from the row itself.
   const opened: string[] = [];
   const placed = pageFunction("inboxRow", {
@@ -1095,7 +1101,8 @@ test("a request the agent wrote is the card: its title, its sentences, and the b
   const embedInto = pageFunction("embedInto", { ...shared, fileRow });
   const laterButton = pageFunction("laterButton", { ...shared, nextLaterTimes: nextLogic.nextLaterTimes });
   const sayNeed = pageFunction("sayNeed", shared);
-  const needInto = pageFunction("needInto", { ...shared, nextNeedOf: nextLogic.nextNeedOf, askBlock, askBrief, receiptLine, embedInto, laterButton, sayNeed });
+  const needActs = pageFunction("needActs", { ...shared, nextNeedOf: nextLogic.nextNeedOf, laterButton, sayNeed });
+  const needInto = pageFunction("needInto", { ...shared, nextNeedOf: nextLogic.nextNeedOf, askBlock, askBrief, receiptLine, embedInto, needActs });
   const needCard = pageFunction("needCard", { ...shared, needInto, openPanel: () => {} }) as (row: unknown) => Fake;
   const sent = (): [string, Record<string, unknown>] => JSON.parse(JSON.stringify(posted.pop())); // the page's own objects, as plain ones
   const buttons = (card: Fake) => card.kids.find(kid => kid.cls === "acts")!.kids;
@@ -1186,6 +1193,7 @@ test("a request the agent wrote is the card: its title, its sentences, and the b
   const first = needDock(page.agents.mia)!;
   assert.deepEqual([first.dataset.dock, first.kids[0]!.kids[0]!.text], ["t0", "ui.next.need.page(1|4)"], "longest-waiting first, and it says how many: the result, two requests and a consent it holds; not the one put off, the one answered, or another conversation's");
   assert.equal(first.kids.length, 2, "one card on show");
+  assert.equal(first.kids[0]!.kids[2]!.text, "ui.next.need.next(2|4) ›", "the way to the next one is a button that says where it goes, not a bare arrow");
   await press(first.kids[0]!.kids[2]!);
   assert.equal(needDock(page.agents.mia)!.dataset.dock, "t2", "the next one, in the same place");
   page.rows = page.rows.filter(row => row.id !== "t0"); // the result was settled meanwhile
@@ -1308,4 +1316,24 @@ test("a viewer's composer says they can watch and not act, and takes nothing; no
   draw();
   assert.deepEqual([nodes["composer-text"]!.disabled, nodes["composer-watch"]!.hidden], [false, true], "made a driver, the composer opens");
   assert.equal(await canSend(), true);
+});
+
+test("the work panel's foot says what a person can decide, as buttons that say what they lead to; there is no status to pick (INV-2189)", () => {
+  // A status picker (open, doing, blocked, review, done, dropped) was the panel's way to decide, and nobody knew why they would use it.
+  const changes: Record<string, unknown>[] = [];
+  const stopBlock = pageFunction("stopBlock", {
+    el: fakeEl, t: (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : ""), agentName: () => "Mia", encodeURIComponent, Date,
+    updateTask: (change: Record<string, unknown>) => changes.push(change), nextLaterTimes: nextLogic.nextLaterTimes, nextNeedOf: nextLogic.nextNeedOf, getJson: () => new Promise(() => {}), postJson: () => Promise.resolve({}),
+  }) as (task: unknown) => Fake;
+  const foot = stopBlock({ id: "t1", status: "blocked", assigneeId: "mia", conversation: "main" });
+  const acts = foot.kids.find(kid => kid.cls === "acts")!;
+  assert.deepEqual(acts.kids.map(kid => [kid.text, kid.cls]), [["ui.next.act.markDone", "act"], ["ui.next.act.snooze", "act"], ["ui.next.act.stop", "act-danger"]]);
+  assert.equal(foot.kids.find(kid => kid.cls === "why")!.text, "ui.next.panel.footHint(Mia)", "and one line says what each leads to");
+  acts.kids[0]!.press!();
+  assert.deepEqual(JSON.parse(JSON.stringify(changes)), [{ status: "done" }], "the person's word that it is finished");
+  const asking = stopBlock({ id: "t4", status: "blocked", assigneeId: "mia", ask: { kind: "do" } }).kids.find(kid => kid.cls === "acts")!;
+  assert.deepEqual(asking.kids.map(kid => kid.text), ["ui.next.act.markDone", "ui.next.act.stop"], "put off is offered once, by the request above");
+  const review = stopBlock({ id: "t2", status: "review", assigneeId: "mia" }).kids.find(kid => kid.cls === "acts")!;
+  assert.ok(!review.kids.some(kid => kid.text === "ui.next.act.markDone"), "a delivered result is confirmed on its own card");
+  assert.deepEqual(stopBlock({ id: "t3", status: "done", assigneeId: "mia" }).kids.map(kid => kid.cls), ["foot-links"], "finished work has only its links");
 });

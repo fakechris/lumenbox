@@ -66,7 +66,8 @@ html[data-theme="dark"] {
   --accent: #e08a5b; --accent-soft: rgba(224,138,91,.16); --blue: #6aa5f8; --blue-soft: rgba(59,130,246,.18);
   --ok: #4ecb86; --ok-soft: rgba(34,197,94,.15); --warn: #f0b34a; --warn-soft: rgba(245,158,11,.14); --bad: #f08a8a; --bad-soft: rgba(240,90,90,.14);
 }
-html[data-theme="dark"] .msg-me, html[data-theme="dark"] .act-primary, html[data-theme="dark"] .brand .logo { background: #e6edf5; color: #0f1218; border-color: #e6edf5; }
+html[data-theme="dark"] .msg-me, html[data-theme="dark"] .brand .logo { background: #e6edf5; color: #0f1218; border-color: #e6edf5; }
+html[data-theme="dark"] .act-primary { color: #0f1218; } html[data-theme="dark"] .act { --btn-border: #56657a; }
 html[data-theme="dark"] .agent:hover { background: rgba(255,255,255,.04); }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -126,9 +127,13 @@ h2.group:first-child { margin-top: 0; }
 .chip-run { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; flex: none; }
 .chip.done { background: var(--ok-soft); color: var(--ok); }
 .chip.stuck { background: var(--bad-soft); color: var(--bad); }
-.act, .act-primary, .act-danger { padding: 5px 12px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); font-size: 13px; flex: none; }
-.act-primary { background: var(--text); color: var(--bg); border-color: var(--text); }
-.act-danger { color: var(--bad); border-color: var(--bad); }
+/* Three tiers, so what can be pressed is never read as a label (INV-2189): filled accent for the one answer the card
+   expects, a raised outline for the others, red outline for what cannot be undone. Chips stay flat and borderless. */
+.act, .act-primary, .act-danger { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--btn-border, #b5a999); background: var(--surface); color: var(--text); }
+.act, .act-primary, .act-danger { font-size: 13px; font-weight: 500; flex: none; cursor: pointer; box-shadow: 0 1px 0 rgba(31,26,23,.08); }
+.act:hover { background: var(--rail); border-color: var(--soft); } .act-danger:hover { background: var(--bad-soft); }
+.act-primary { background: var(--accent); color: #fff; border-color: var(--accent); } .act-primary:hover { filter: brightness(.92); }
+.act-danger { color: var(--bad); border-color: var(--bad); } .act:disabled, .act-primary:disabled { opacity: .5; cursor: default; }
 .acts { display: flex; gap: 6px; flex: none; }
 .empty { color: var(--muted); padding: 48px 0; text-align: center; max-width: 880px; }
 .board { display: grid; grid-template-columns: repeat(4, minmax(220px, 1fr)); gap: 14px; align-items: start; }
@@ -217,7 +222,7 @@ header.bar { position: relative; }
 .runs { padding: 4px 14px 12px 52px; }
 #work-find { width: 180px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font: inherit; font-size: 13px; }
 .row .under { flex-basis: 100%; display: flex; gap: 8px; align-items: flex-start; }
-.row .under:empty { display: none; }
+.row .under:empty { display: none; } .row .decide { flex: 1; display: flex; flex-direction: column; gap: 6px; padding-left: 42px; } .row .decide .why { white-space: normal; }
 .row:has(.under:not(:empty)) { flex-wrap: wrap; }
 .row .under textarea, .row .under input { flex: 1; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
 .row .under textarea { min-height: 90px; }
@@ -235,7 +240,7 @@ body[data-view="chat"] #view-title { cursor: pointer; }
 .toolgrid .tool { flex-direction: row; align-items: center; gap: 6px; font-size: 12.5px; color: var(--soft); }
 .toolgrid input { width: auto; }
 .card-need, .card-stuck, .card-plain { align-self: flex-start; max-width: 82%; border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-.card-need { background: var(--warn-soft); }
+.card-need { background: var(--warn-soft); border-left: 4px solid var(--warn); } .needdock > .card-plain { border-left: 4px solid var(--accent); }
 .card-stuck { background: var(--bad-soft); }
 .card-plain { background: var(--surface); border: 1px solid var(--border); min-width: 260px; }
 .card-head { font-weight: 600; }
@@ -257,7 +262,7 @@ button.file { width: 100%; text-align: left; background: none; cursor: pointer; 
 .needdock { max-width: 780px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; max-height: 56vh; overflow: auto; }
 .needdock > .card-need, .needdock > .card-plain, .needdock > .card-stuck { max-width: none; align-self: stretch; }
 .pager { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
-.pager span { margin-right: 4px; } .pager button { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); line-height: 1; }
+.pager span { margin-right: 4px; } .pager .act { padding: 3px 10px; font-size: 12px; }
 .card-need > .said p, .card-plain > .said p, .yours .said p { margin: 0; } .card-need > .said, .card-plain > .said { overflow-wrap: anywhere; }
 .yours { border-left: 2px solid var(--warn); padding-left: 10px; font-size: 13.5px; overflow-wrap: anywhere; } .yours b { display: block; font-size: 12px; font-weight: 600; color: var(--warn); }
 .embeds { display: flex; flex-direction: column; gap: 8px; } .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; } .chips .why { white-space: nowrap; }
@@ -352,7 +357,8 @@ body.electron-mac .side { padding-top: 40px; }
 .steps .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .steps time, .steps .flag { color: var(--muted); flex: none; }
 .steps .flag.bad { color: var(--bad); }
-.foot-links { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+.foot { display: flex; flex-direction: column; gap: 8px; margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); } .foot .acts { flex-wrap: wrap; }
+.foot-links { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 10px; font-size: 13px; max-width: 80vw; }
 @media (max-width: 720px) {
   body { flex-direction: column; }
