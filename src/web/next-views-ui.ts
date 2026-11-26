@@ -103,6 +103,23 @@ function renderWork(view) {
 
 var INBOX_GROUPS = ["answer", "approve", "review", "stuck", "other"];
 
+/**
+ * Where a row that is not about one piece of work is dealt with: a Settings pane, the automations, or the agent it names.
+ * Without it the row said the way in words ("Settings → Boxes → Apply update") and pressing it did nothing.
+ */
+var INBOX_PLACES = { "box-update": ["settings", "boxes"], "provider-resting": ["settings", "model"], "team-memory": ["settings", "team"], "routine-paused": ["auto", ""] };
+var INBOX_AGENT_KINDS = ["spend-limit", "boundary-probe"];
+/** The place a row goes to, with the words on its button; none where the row opens what it is about itself. */
+function inboxPlace(item) {
+  var place = INBOX_PLACES[item.kind];
+  if (place) {
+    var where = place[0] === "settings" ? t("ui.pane." + place[1]) : t("ui.next.nav." + place[0]);
+    return { go: function () { if (place[0] === "settings") openSettingsPane(place[1]); else navigateView(place[0], place[1]); }, label: t("ui.next.inbox.go", { place: where }) };
+  }
+  if (INBOX_AGENT_KINDS.indexOf(item.kind) >= 0 && next.agents[item.ref]) return { go: function () { openChat(item.ref); }, label: t("ui.next.inbox.go", { place: agentName(item.ref) }) };
+  return null;
+}
+
 function settle(node, text) { node.replaceChildren(el("span", "body", text)); node.style.opacity = "0.6"; refreshSoon(); }
 
 function inboxRow(item) {
@@ -111,10 +128,18 @@ function inboxRow(item) {
   body.appendChild(el("div", "why", owedText(item)));
   open.appendChild(el("span", "who", initial(item.with || item.title)));
   open.appendChild(body);
-  // Opens the work when it is about work, else the conversation with the agent that asked.
-  if (isTask(item.ref)) open.addEventListener("click", function () { openPanel(item.ref); });
+  // A row with a place goes there and nowhere else (a routine's slug can look like a work id); else it opens the work
+  // when it is about work, or the conversation with the agent that asked.
+  var place = inboxPlace(item);
+  if (place) open.addEventListener("click", place.go);
+  else if (isTask(item.ref)) open.addEventListener("click", function () { openPanel(item.ref); });
   else if (item.answer) open.addEventListener("click", function () { openChat(item.answer.agentId); });
   else if (item.kind === "verification") open.addEventListener("click", function () { window.open("/verification/" + encodeURIComponent(item.ref), "_blank", "noopener"); }); // its report page (INV-1925)
+  if (place) {
+    var go = el("button", "act-primary", place.label);
+    go.addEventListener("click", place.go);
+    acts.appendChild(go);
+  }
   node.appendChild(open);
   if (item.kind === "approval") {
     var approve = el("button", "act-primary", t("ui.next.act.approve")), deny = el("button", "act", t("ui.next.act.deny"));

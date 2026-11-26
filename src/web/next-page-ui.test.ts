@@ -720,8 +720,9 @@ test("a result waiting for the person says where it came from and what was repor
   assert.ok(card.kids.some(kid => kid.cls === "report" && kid.text.includes("cannot be accepted")), "what was reported is on the card");
   assert.equal(chips(card).filter(kid => kid.cls === "chip-file").length, 4, "the files are names in one row, not a box each");
   assert.ok(chips(card).some(kid => kid.text === "ui.next.chat.moreFiles2"), "the rest are counted, not listed");
-  assert.equal(card.kids.at(-1)!.cls, "acts", "the card ends at its buttons");
-  const [accept, changes, details] = card.kids.at(-1)!.kids;
+  assert.deepEqual(card.kids.slice(-2).map(kid => kid.cls), ["acts", "why"], "the card ends at its buttons and the line that says what each leads to");
+  assert.equal(card.kids.at(-1)!.text, "ui.next.chat.reviewHint(Mia) ui.next.need.hint.later", "said on the card, not in a tooltip");
+  const [accept, changes, details] = card.kids.at(-2)!.kids;
   accept!.press!(); details!.press!(); changes!.press!();
   await Promise.resolve();
   assert.deepEqual(opened, ["t1"], "Details opens the panel; Request changes does not");
@@ -745,7 +746,7 @@ test("a result waiting for the person says where it came from and what was repor
   assert.equal(asked.kids.find(kid => kid.cls === "said")!.text, "Open src/export.ts line 41. Meanwhile: Fixing the same bug on import.");
   assert.deepEqual(asked.kids.find(kid => kid.cls === "yours")!.kids.map(kid => kid.text), ["ui.next.ask.unverified", "The live account."]);
   assert.ok(!asked.kids.some(kid => kid.cls === "parts"), "no labelled breakdown on the card: that is in the work's panel");
-  assert.deepEqual(asked.kids.at(-1)!.kids.map(kid => kid.text), ["ui.next.act.accept", "ui.next.act.changes", "ui.next.act.details", "ui.next.act.snooze"]);
+  assert.deepEqual(asked.kids.at(-2)!.kids.map(kid => kid.text), ["ui.next.act.accept", "ui.next.act.changes", "ui.next.act.details", "ui.next.act.snooze"]);
   // INV-1922: a result written as a delivery is drawn by its parts. The card shows the short form; what was not
   // verified is on it without a click, and a delivery that never said is told apart from one that said "none".
   const { lastReport } = await import("./task-board-record.ts");
@@ -776,7 +777,7 @@ test("a draft waiting to be sent and a proposal to close are decided on their in
   };
   const posted: unknown[] = [];
   const inboxRow = pageFunction("inboxRow", {
-    el, t: (key: string) => key, owedText: () => "", initial: () => "A", isTask: () => true, openPanel: () => {}, openChat: () => {}, failed: () => {}, settle: () => {},
+    el, t: (key: string) => key, owedText: () => "", initial: () => "A", isTask: () => true, openPanel: () => {}, openChat: () => {}, failed: () => {}, settle: () => {}, inboxPlace: () => null,
     postJson: (path: string, body: unknown) => { posted.push([path, body]); return Promise.resolve({}); },
   });
   const buttons = (kind: string) => (inboxRow({ kind, ref: "r1", title: "x" }) as Fake).kids.slice(1).flatMap(kid => kid.kids);
@@ -784,6 +785,23 @@ test("a draft waiting to be sent and a proposal to close are decided on their in
   await Promise.resolve();
   assert.deepEqual(JSON.parse(JSON.stringify(posted)), [["/api/outbox/decide", { id: "r1", decision: "approve" }], ["/api/tasks/oppose-close", { id: "r1" }]]);
   assert.equal(buttons("review").length, 0, "a row with nothing to decide on it has no buttons");
+  // A row that is not about a piece of work goes where it is dealt with, from its button and from the row itself.
+  const opened: string[] = [];
+  const placed = pageFunction("inboxRow", {
+    el, t: (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : ""), owedText: () => "", initial: () => "A", isTask: (ref: string) => /^t\d+$/.test(ref), openPanel: (id: string) => opened.push("panel " + id), failed: () => {}, settle: () => {}, postJson: () => Promise.resolve({}),
+    inboxPlace: pageFunction("inboxPlace", {
+      INBOX_PLACES: { "box-update": ["settings", "boxes"], "routine-paused": ["auto", ""] }, INBOX_AGENT_KINDS: ["spend-limit"], next: { agents: { mia: {} } }, agentName: () => "Mia",
+      t: (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : ""),
+      openSettingsPane: (pane: string) => opened.push("settings " + pane), navigateView: (view: string) => opened.push(view), openChat: (id: string) => opened.push("chat " + id),
+    }),
+  }) as (item: unknown) => Fake;
+  const update = placed({ kind: "box-update", ref: "box", title: "The box can be updated" });
+  const go = update.kids.slice(1).flatMap(kid => kid.kids)[0]!;
+  assert.equal(go.text, "ui.next.inbox.go(ui.pane.boxes)", "the button names the place");
+  go.press!(); update.kids[0]!.press!();
+  placed({ kind: "routine-paused", ref: "t12", title: "x" }).kids[0]!.press!(); // a routine whose slug looks like a work id still goes to Automation
+  placed({ kind: "spend-limit", ref: "mia", title: "x" }).kids[0]!.press!();
+  assert.deepEqual(opened, ["settings boxes", "settings boxes", "auto", "chat mia"]);
 });
 
 test("a turn's process is one line saying how long it took, a teammate's messages one line saying who and how many; a click opens all of it", () => {
@@ -1097,7 +1115,8 @@ test("a request the agent wrote is the card: its title, its sentences, and the b
   assert.ok(!acting.kids.some(kid => kid.cls === "parts"), "no label over each sentence on the card");
   const strip = acting.kids.find(kid => kid.cls === "embeds")!.kids[0]!.kids;
   assert.deepEqual(strip.map(kid => [kid.text, kid.cls === "chip-file" ? kid.attrs["aria-expanded"] ?? "download" : "said"]), [["step-3.png", "false"], ["ledger.xlsx", "download"], ["ui.next.need.check.failed", "said"]], "a picture opens where it stands, a sheet is downloaded, and the check's conclusion closes the row");
-  assert.equal(acting.kids.at(-1)!.cls, "acts", "the card ends at its buttons");
+  assert.deepEqual(acting.kids.slice(-2).map(kid => kid.cls), ["acts", "why"], "the card ends at its buttons and one line saying what each leads to");
+  assert.equal(acting.kids.at(-1)!.text, "ui.next.need.hint.act(Mia) ui.next.need.hint.later", "what pressing does is read, not hovered for");
   assert.deepEqual(buttons(acting).map(kid => kid.text), ["ui.next.need.done", "ui.next.need.skip", "ui.next.act.snooze"]);
   // The work's panel is where the breakdown is: the same sentences under their names, by the same code.
   const inPanel = el("div"); needInto(inPanel, act, true);

@@ -15,7 +15,8 @@
  * (next-result-ui.ts). A press is the person's word written on the work it answers, so it need not
  * say again what it is about: the host tells
  * the agent and starts its turn (person-word.ts), and the card becomes one line (next-dock-ui.ts).
- * It changes no permission. Every family can be put off to one of a few ready times.
+ * It changes no permission. Every family can be put off to one of a few ready times. One line under the buttons says
+ * what each leads to.
  *
  * What was handed over is one row of names: a picture, a recording or a text opens where the card
  * stands, and anything else is downloaded.
@@ -180,9 +181,10 @@ function needInto(box, row, listed) {
     });
   }
   acts.appendChild(laterButton(row.id, function () { if (panel.taskId === row.id) loadPanel(); refreshSoon(); }));
-  // What a press does is said on the button it belongs to, for whoever wants to know before pressing: one line less on every card.
-  acts.title = t("ui.next.need.hint." + (family || "answer"), { name: name });
   box.appendChild(acts);
+  // What each press leads to, in one line under the buttons. It was the buttons' tooltip, to save a line, and a person
+  // facing three or four buttons could not tell why they would pick one or what would follow.
+  box.appendChild(el("div", "why", t("ui.next.need.hint." + (family || "answer"), { name: name }) + " " + t("ui.next.need.hint.later")));
 }
 
 /** Work that waits on the person for something other than a look at its result: the request, as a card in the agent's conversation. */
