@@ -180,8 +180,7 @@ function reportBlock(report, keys) {
  * fixed line, why it waits and the note, as before. What was not done or not verified is on the card in every case.
  */
 function resultCard(row) {
-  var card = el("div", "card-plain"), acts = el("div", "acts"), files = row.deliverables || [], report = row.report, maker = agentName(row.assigneeId), ask = row.ask;
-  var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes")), open = el("button", "act", t("ui.next.act.details"));
+  var card = el("div", "card-plain"), files = row.deliverables || [], report = row.report, maker = agentName(row.assigneeId), ask = row.ask;
   card.dataset.result = row.id;
   card.appendChild(el("div", "card-head", ask ? ask.title : t("ui.next.chat.review")));
   if (!ask) signOffLines(row).forEach(function (line) { card.appendChild(line); });
@@ -196,6 +195,18 @@ function resultCard(row) {
   }
   embedInto(card, row);
   if (files.length === 0 && !(report && (report.note || report.parts)) && !ask) card.appendChild(el("div", "why", t("ui.next.chat.noReport")));
+  resultActs(card, row);
+  return card;
+}
+
+/**
+ * Confirm, send back with a note, the details, put off; and the line saying what each leads to. The card and the inbox
+ * row draw them from here (INV-2189). \`box\` carries data-result, which is how sending back finds its field again.
+ */
+function resultActs(box, row) {
+  var acts = el("div", "acts"), maker = agentName(row.assigneeId);
+  var accept = el("button", "act-primary", t("ui.next.act.accept")), changes = el("button", "act", t("ui.next.act.changes")), open = el("button", "act", t("ui.next.act.details"));
+  box.dataset.result = row.id;
   accept.addEventListener("click", function () {
     postJson("/api/tasks/update", { id: row.id, status: "done" }).then(function () { toast(t("ui.next.done.accepted")); refreshSoon(); }, failed);
   });
@@ -209,12 +220,11 @@ function resultCard(row) {
       postJson("/api/tasks/update", { id: row.id, status: "doing", note: input.value.trim() }).then(function () { chat.changing = ""; toast(t("ui.next.done.sent", { name: maker })); refreshSoon(); }, failed);
     });
     back.addEventListener("click", function () { chat.changing = ""; render(); });
-    card.appendChild(input); acts.appendChild(send); acts.appendChild(back); card.appendChild(acts);
-    return card;
+    box.appendChild(input); acts.appendChild(send); acts.appendChild(back); box.appendChild(acts);
+    return;
   }
   changes.addEventListener("click", function () { chat.changing = row.id; render(); var field = document.querySelector("[data-result='" + row.id + "'] textarea"); if (field) field.focus(); });
-  acts.appendChild(accept); acts.appendChild(changes); acts.appendChild(open); acts.appendChild(laterButton(row.id, refreshSoon)); card.appendChild(acts);
-  card.appendChild(el("div", "why", t("ui.next.chat.reviewHint", { name: maker }) + " " + t("ui.next.need.hint.later"))); // what each press leads to, said, not a tooltip
-  return card;
+  acts.appendChild(accept); acts.appendChild(changes); acts.appendChild(open); acts.appendChild(laterButton(row.id, refreshSoon)); box.appendChild(acts);
+  box.appendChild(el("div", "why", t("ui.next.chat.reviewHint", { name: maker }) + " " + t("ui.next.need.hint.later"))); // what each press leads to, said, not a tooltip
 }
 `;

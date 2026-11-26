@@ -1,12 +1,11 @@
 /**
  * The less common things done to a piece of work, on the rebuilt page (INV-1825): what it waits on
- * and what waits on it, setting its status or level by hand, keeping what it found as the
+ * and what waits on it, setting its level and what it waits on by hand, keeping what it found as the
  * organisation's knowledge, and — under diagnostics — what the policy gate decided at each step.
  * Detail and diagnostics only: none of it is on a row or a card.
  */
 export const NEXT_PANEL_MORE_JS = `
 var gate = { forId: "", data: null, error: "" };
-var TASK_STATUSES = ["open", "doing", "blocked", "review", "done", "dropped"];
 
 /** What it waits on and what waits on it; each opens that work. The list it waits on can be rewritten. */
 function dependsBlock(task) {
@@ -23,16 +22,15 @@ function dependsBlock(task) {
   return box;
 }
 
-/** Set by hand: the status, the level, what it waits on. A fold, because the agent normally moves these itself. */
-function manageBlock(task) {
-  var fold = el("details", "fold"), body = el("div", "fold-body"), status = el("select"), waits = el("input"), save = el("button", "act", t("ui.next.settings.save"));
+/**
+ * How far it may go alone, and what it waits on: set by hand, in the Diagnostics tab. The agent normally moves these, and
+ * a status was never a person's word: what a person decides is said by the buttons at the panel's foot (INV-2189).
+ */
+function adjustBlock(task) {
+  var box = section(t("ui.next.adjust.title")), body = el("div", "fold-body"), waits = el("input"), save = el("button", "act", t("ui.next.settings.save"));
   var option = function (select, value, text, chosen) { var node = el("option", "", text); node.value = value; node.selected = chosen; select.appendChild(node); };
   var labelled = function (text, control) { var label = el("label", "", text); label.appendChild(control); return label; };
-  fold.appendChild(el("summary", "", t("ui.next.manage.title"))); fold.appendChild(body);
-  fold.open = panel.managing === task.id;
-  fold.addEventListener("toggle", function () { panel.managing = fold.open ? task.id : ""; });
-  TASK_STATUSES.forEach(function (value) { option(status, value, t("ui.next.status." + value), value === task.status); });
-  body.appendChild(labelled(t("ui.next.manage.status"), status));
+  box.appendChild(body);
   var level = null;
   if (task.level) {
     level = el("select");
@@ -43,7 +41,6 @@ function manageBlock(task) {
   body.appendChild(labelled(t("ui.next.deps.waitsOn"), waits));
   save.addEventListener("click", function () {
     var change = {};
-    if (status.value !== task.status) change.status = status.value;
     if (level && Number(level.value) !== task.level) change.level = Number(level.value);
     if (waits.value.trim() !== (task.blockedBy || []).join(", ")) change.blockedBy = waits.value;
     if (Object.keys(change).length) updateTask(change, t("ui.next.settings.saved2"));
@@ -58,7 +55,7 @@ function manageBlock(task) {
     });
     body.appendChild(keep);
   }
-  return fold;
+  return box;
 }
 
 /** What the policy gate decided, step by step: counts first, the steps it stopped or asked about under them. */

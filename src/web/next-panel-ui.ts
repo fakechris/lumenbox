@@ -88,14 +88,18 @@ function resultBlock(task) {
   evidence.forEach(function (line) { box.appendChild(el("div", "file", line)); });
   // What was said about the work, newest first: for work with no file this is the result.
   var said = (task.history || []).filter(function (change, index) { return change.note && !HOST_NOTES[change.by] && !(index === 0 && change.at === task.createdAt); }).slice(-3).reverse();
+  var drawn = 0;
   said.forEach(function (change) {
     // The newest report comes read into its parts when it was written as a delivery; here every part is shown.
     var report = task.report && task.report.at === change.at && task.report.by === change.by ? task.report : { note: change.note };
     if (!report.parts && !report.note) return; // all of it was the request to the person, which stands above
     box.appendChild(el("div", "why", (agentName(change.by) === change.by ? originOf({ requester: change.by }) : agentName(change.by)) + " · " + agoText(change.at)));
-    box.appendChild(reportBlock(report, REPORT_ORDER));
+    box.appendChild(reportBlock(report, REPORT_ORDER)); drawn++;
   });
-  if (files.length === 0 && evidence.length === 0 && said.length === 0) box.appendChild(el("p", "why", t("ui.next.panel.noResult")));
+  if (files.length === 0 && evidence.length === 0 && drawn === 0) {
+    if (task.ask) return null; // all that was said is the request above: a heading over nothing read as a missing result
+    box.appendChild(el("p", "why", t("ui.next.panel.noResult")));
+  }
   return box;
 }
 
@@ -161,9 +165,13 @@ function processBlock(task) {
   return box;
 }
 
-/** Stopping is two steps on purpose: the first shows what stops, the second does it. */
+/**
+ * The panel's foot: what a person can decide about the work, as buttons that say what they lead to, and a line saying it;
+ * then the links. Stopping is two steps on purpose: the first shows what stops, the second does it. Counting it as done
+ * is the person's word that it is finished (INV-2189): it replaced a status picker nobody knew why they would use.
+ */
 function stopBlock(task) {
-  var links = el("div", "foot-links");
+  var foot = el("div", "foot"), acts = el("div", "acts"), links = el("div", "foot-links");
   if (task.assigneeId && (!task.conversation || task.conversation === "main")) { // another conversation is linked from the line that says where it was asked
     var chat = el("a", "", t("ui.next.act.openChat"));
     chat.href = "/?agent=" + encodeURIComponent(task.assigneeId);
@@ -173,10 +181,16 @@ function stopBlock(task) {
   // The classic page's task view, for one look: the page the person uses stays the one they chose.
   record.href = "/?ui=classic&once=1&agent=" + encodeURIComponent(task.assigneeId || "") + "&task=" + encodeURIComponent(task.id);
   links.appendChild(record);
-  if (task.status === "done" || task.status === "dropped") return links;
-  // Put off: nobody is reminded of it until then. Said back with the day, and undone from the same place.
-  var later = Date.parse(task.snoozeUntil || "") > Date.now();
-  var snooze = el("button", "", later ? t("ui.next.act.unsnooze", { when: new Date(task.snoozeUntil).toLocaleDateString() }) : t("ui.next.act.snooze"));
+  if (task.status === "done" || task.status === "dropped") { foot.appendChild(links); return foot; }
+  if (task.status !== "review") { // a delivered result is confirmed on its own card
+    var done = el("button", "act", t("ui.next.act.markDone"));
+    done.addEventListener("click", function () { updateTask({ status: "done" }, t("ui.next.done.markedDone")); });
+    acts.appendChild(done);
+  }
+  // Put off: nobody is reminded of it until then. Said back with the day, and undone from the same place. Where the
+  // request above already offers it, once is enough.
+  var later = Date.parse(task.snoozeUntil || "") > Date.now(), asked = !later && !!nextNeedOf(task);
+  var snooze = el("button", "act", later ? t("ui.next.act.unsnooze", { when: new Date(task.snoozeUntil).toLocaleDateString() }) : t("ui.next.act.snooze"));
   snooze.addEventListener("click", function () {
     if (later) { updateTask({ snoozeUntil: "" }, t("ui.next.done.unsnoozed")); return; }
     var pick = el("span", "acts");
@@ -187,24 +201,27 @@ function stopBlock(task) {
     });
     snooze.replaceWith(pick);
   });
-  links.appendChild(snooze);
-  var stop = el("button", "", t("ui.next.act.stop"));
+  if (!asked) acts.appendChild(snooze);
+  var stop = el("button", "act-danger", t("ui.next.act.stop"));
   stop.addEventListener("click", function () {
     getJson("/api/work-control/preview?taskId=" + encodeURIComponent(task.id)).then(function (preview) {
-      var confirm = el("button", "act-danger", t("ui.next.act.stopConfirm")), note = el("span", "", t("ui.next.panel.stopNote"));
+      var confirm = el("button", "act-danger", t("ui.next.act.stopConfirm")), note = el("span", "why", t("ui.next.panel.stopNote"));
       confirm.addEventListener("click", function () {
-        var done = function () { toast(t("ui.next.done.stopped")); loadPanel(); refreshSoon(); };
-        if (preview.token) postJson("/api/work-control/cancel", { taskId: task.id, token: preview.token }).then(done, failed);
+        var stopped = function () { toast(t("ui.next.done.stopped")); loadPanel(); refreshSoon(); };
+        if (preview.token) postJson("/api/work-control/cancel", { taskId: task.id, token: preview.token }).then(stopped, failed);
         else updateTask({ status: "dropped" }, t("ui.next.done.stopped"));
       });
-      links.replaceChildren(note, confirm);
+      acts.replaceChildren(note, confirm);
     }, function () {
       // Without the admin's preview the board's own rule still applies: the requester may drop their task.
       updateTask({ status: "dropped" }, t("ui.next.done.stopped"));
     });
   });
-  links.appendChild(stop);
-  return links;
+  acts.appendChild(stop);
+  foot.appendChild(acts);
+  foot.appendChild(el("div", "why", t("ui.next.panel.footHint", { name: agentName(task.assigneeId) })));
+  foot.appendChild(links);
+  return foot;
 }
 
 function renderPanel() {
@@ -214,7 +231,7 @@ function renderPanel() {
   inner.replaceChildren();
   document.querySelectorAll("[data-tab]").forEach(function (button) { button.setAttribute("aria-pressed", String(button.dataset.tab === panel.tab)); });
   inner.appendChild(el("h3", "", task.title));
-  if (panel.tab === "diagnostics") { renderDiagnostics(inner, task); inner.appendChild(gateBlock(task)); return; }
+  if (panel.tab === "diagnostics") { renderDiagnostics(inner, task); inner.appendChild(adjustBlock(task)); inner.appendChild(gateBlock(task)); return; }
   var from = el("p", "why", originOf(task));
   if (task.assigneeId && task.conversation && task.conversation !== "main") {
     var there = el("button", "elsewhere", t("ui.next.panel.where", { where: conversationLabel(task.conversation) }));
@@ -230,7 +247,7 @@ function renderPanel() {
     else inner.appendChild(asked);
   }
   [modelAuthBlock(task), needBlock(task), resultBlock(task), progressBlock(task), processBlock(task),
-    dependsBlock(task), manageBlock(task), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
+    dependsBlock(task), stopBlock(task)].forEach(function (block) { if (block) inner.appendChild(block); });
 }
 
 function loadPanel() {

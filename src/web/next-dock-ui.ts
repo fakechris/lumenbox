@@ -46,9 +46,10 @@ function needDock(agent) {
   var dock = el("div", "needdock"), entry = shown.entry;
   dock.dataset.dock = entry.id;
   if (total > 1) {
-    var pager = el("div", "pager"), back = el("button", "", "‹"), on = el("button", "", "›");
+    // How many wait, and the way to the next said as a button: two small arrows were missed, and what they hid was too.
+    var pager = el("div", "pager"), back = el("button", "act", "‹"), on = el("button", "act", t("ui.next.need.next", { n: (shown.at + 1) % total + 1, m: total }) + " ›");
     var turn = function (by) { need.page[agent.id] = shown.entries[(shown.at + by + total) % total].id; need.detached = ""; render(); };
-    back.setAttribute("aria-label", t("ui.next.need.previous")); on.setAttribute("aria-label", t("ui.next.need.following"));
+    back.setAttribute("aria-label", t("ui.next.need.previous"));
     back.addEventListener("click", function () { turn(-1); }); on.addEventListener("click", function () { turn(1); });
     pager.appendChild(el("span", "", t("ui.next.need.page", { n: shown.at + 1, m: total })));
     pager.appendChild(back); pager.appendChild(on); dock.appendChild(pager);

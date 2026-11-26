@@ -9,4 +9,9 @@ export const UI_NEXT_PRESS: Record<string, readonly [string, string]> = {
   "ui.next.need.hint.release": ["同意，{name} 就照做；不同意，它就不做，可以顺便说一句理由。都只是这一次的答复，不改变任何权限设置。", "Say yes and {name} goes ahead; say no and it does not, with a reason if you like. Either is an answer for this once and changes no permission setting."],
   "ui.next.need.hint.later": ["“延后”：选一个时间，在那之前不再问你这件事。", "“Put off”: pick a time, and you are not asked about this again until then."],
   "ui.next.need.hint.answer": ["选一个，或直接在下面回复 {name}。", "Pick one, or just reply to {name} below."],
+  "ui.next.adjust.title": ["放手程度和要等的工作", "How far it goes alone, and what it waits on"],
+  "ui.next.act.markDone": ["算它完成了", "Count it as done"],
+  "ui.next.done.markedDone": ["已算作完成", "Counted as done"],
+  "ui.next.panel.footHint": ["“算它完成了”：这件事到此结束，{name} 不再做它，也不再等你。“停止这件工作”：中断它正在做的，已经在外面发生的变化要你核对。", "“Count it as done” closes it: {name} stops working on it and nothing waits on you. “Stop this work” interrupts what it is doing; check what already happened outside."],
+  "ui.next.need.next": ["下一件（{n}/{m}）", "Next ({n}/{m})"],
 };
