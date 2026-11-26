@@ -1,4 +1,4 @@
-<!-- eval-report: REPORT-2026-11-26
+<!-- eval-report: REPORT-2026-11-26-minimax-m3.1-flash
      measured: yes
      split: test
      corpus: cc233ab983b5
@@ -63,7 +63,7 @@ Judge: MiniMax (China) MiniMax-M3.1-Flash, questions version 6ad9c7026924. One y
 ## Cost
 
 675 model calls: 3,278,479 input, 296,410 output, 10,079,092 cache-read and 0 cache-write tokens, as each call reported them (cached calls keep what they first cost).
-No price: MiniMax-M3.1-Flash has no rate under `rates` in config.json.
+At the configured rates: $0.82 in all, **$0.0039 per passed attempt**.
 Tokens per passed attempt: 64,103.
 
 ## What this does not say

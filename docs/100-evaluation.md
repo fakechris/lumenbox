@@ -192,7 +192,8 @@ tokens.
 Where the numbers land:
 
 - the record of every attempt: `~/.agentbox/scorecards/eval-test-<time>-<commit>.json`;
-- the page: `docs/evals/REPORT-<date>.md`, to be committed;
+- the page: `docs/evals/REPORT-<date>-<model>.md`, to be committed — one page per agent model and day,
+  so two models measured on one day are two pages;
 - the cache: `~/.agentbox/eval-cache/`. The same command run again makes no call.
   `--offline` refuses to make one.
 

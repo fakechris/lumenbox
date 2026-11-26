@@ -5,7 +5,7 @@
  *   npm run eval -- plan                     what a run would cost in model calls; makes none
  *   npm run eval -- run                      the test split, 3 attempts a task, on the configured
  *                                            provider. Costs money. Writes the result beside the
- *                                            release scorecards and docs/evals/REPORT-<date>.md
+ *                                            release scorecards and docs/evals/REPORT-<date>-<model>.md
  *     --split dev|test    --k 3              which half, how many attempts
  *     --only <id prefix>  --subject <name>   fewer tasks (the report says how many ran)
  *     --provider <name>                      instead of the configured one
@@ -276,7 +276,7 @@ async function run(args, out) {
   const { runEval } = await import("../src/evals/runner.ts");
   const { FileCache } = await import("../src/evals/cache.ts");
   const { summarise } = await import("../src/evals/summary.ts");
-  const { renderReport } = await import("../src/evals/report.ts");
+  const { renderReport, reportName } = await import("../src/evals/report.ts");
   const { judgeRun } = await import("../src/evals/judges.ts");
   const { loadLabels } = await import("../src/evals/calibration.ts");
   const { tiers, rates, home } = await modelTiers(args, fake, out);
@@ -287,7 +287,7 @@ async function run(args, out) {
   const outFile = args.flag("--out") ?? (resultsDir !== undefined ? join(resultsDir, `eval-${split}-${at.replace(/[:.]/g, "-")}-${commit}.json`) : undefined);
   const baselineFile = args.flag("--baseline") ?? (resultsDir !== undefined ? resultsIn(resultsDir).filter(one => one.run.split === split && !one.run.fake).at(-1)?.path : undefined);
   const baseline = baselineFile !== undefined ? readRun(baselineFile) : undefined;
-  const name = `REPORT-${at.slice(0, 10)}`;
+  const name = reportName({ at, models: { primary: { provider: tiers.primary.profile.label, model: tiers.primary.profile.model } } });
   const reportFile = args.flag("--report") ?? (fake ? undefined : join(REPORTS_DIR, `${name}.md`));
   refuseStandInPage(fake, reportFile);
 
@@ -376,14 +376,14 @@ async function labelSheet(args, out) {
 async function report(args, out) {
   const file = recordArgument(args, "report");
   const { summarise } = await import("../src/evals/summary.ts");
-  const { renderReport } = await import("../src/evals/report.ts");
+  const { renderReport, reportName } = await import("../src/evals/report.ts");
   const result = readRun(file);
   const baselineFile = args.flag("--baseline");
   let rates = {};
   if (!result.fake) rates = (await import("../src/host/provider-fallback.ts")).configuredRates();
   const { loadLabels } = await import("../src/evals/calibration.ts");
   const summary = summarise(result, { ...(baselineFile !== undefined ? { baseline: readRun(baselineFile) } : {}), rates, labels: loadLabels(LABELS_DIR) });
-  out(renderReport(result, summary, { name: `REPORT-${result.at.slice(0, 10)}` }));
+  out(renderReport(result, summary, { name: reportName(result) }));
   return 0;
 }
 
