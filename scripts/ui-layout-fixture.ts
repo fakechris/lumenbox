@@ -1,11 +1,18 @@
 import { TurnLedger } from "../src/host/resume.ts";
 /** Anonymous, isolated production server for browser geometry checks. No model or box. */
+// It writes a roster, tasks and an agent wherever AGENTBOX_HOME points, and without it that is the live installation:
+// started by hand once, it replaced a person's roster with its one test admin (2026-11-26). Its callers pass a fresh one.
+if (!process.env.AGENTBOX_HOME || process.env.AGENTBOX_HOME === join(homedir(), ".agentbox")) {
+  process.stderr.write("ui-layout-fixture: set AGENTBOX_HOME to a fresh temporary directory; it writes a roster, tasks and an agent there.\n");
+  process.exit(2);
+}
 import { AgentRegistry } from "../src/agents/registry.ts";
 import { Principals } from "../src/host/principals.ts";
 import { TaskStore } from "../src/host/tasks.ts";
 import { startWebServer } from "../src/web/server.ts";
 import { agentboxHome } from "../src/config.ts";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { buildWakePrompt } from "../src/host/prompt.ts";
 
 new Principals().save([{ id: "layout-viewer", name: "Layout reader", role: "admin", identities: ["web:layout-viewer"] }]);
@@ -55,6 +62,13 @@ if (process.argv.includes("--conversation")) {
   const inbound = (text: string, n: number) => ({ id: `m${n}`, fromId: bob.id, fromName: "Bob", text, priority: false, receivedAt: at(500 + n) });
   registry.appendTranscript(ada.id, { role: "user", text: buildWakePrompt([inbound("Checked the DST branch: correct.", 1), inbound("One nit: the test name could say which zone.", 2)]), at: at(510) });
   registry.appendTranscript(ada.id, { role: "assistant", text: "Bob confirmed the fix. The export now keeps the time zone.", at: at(530) });
+}
+if (process.argv.includes("--needs")) {
+  // What waits on the person (INV-2189): something only they can do elsewhere, and a go-ahead with the agent's two outcomes.
+  const act = tasks.create({ title: "Reconcile October · 十月对账", requester: "web:layout-viewer", assigneeId: agent.id, conversation: "main", origin: { kind: "user" } })!;
+  tasks.update(act.id, { status: "blocked", note: "Please do: Sign in to the vendor portal and download the October invoice\nWhat happened: Reconciliation stopped at step 3.\nWhy you: The code goes to your phone.\nHow: Open the vendor portal and drop the PDF in inbox/.\nMeanwhile: Reconciling September.\nStill yours to check: The invoice header." }, agent.id);
+  const release = tasks.create({ title: "Renewal notices · 续费通知", requester: "web:layout-viewer", assigneeId: agent.id, conversation: "main", origin: { kind: "user" } })!;
+  tasks.update(release.id, { status: "blocked", options: ["Send it", "Don't send"], note: "Please approve: Send the renewal notice to 214 customers\nWhy you: It goes out under your name." }, agent.id);
 }
 let base = "";
 const stop = await startWebServer({ port: 0, host: "127.0.0.1", useBox: false, token: "layout-fixture", onLog: () => {}, onReady: url => { base = url; } });
