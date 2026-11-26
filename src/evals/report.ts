@@ -80,7 +80,7 @@ function judgeLines(summary: Summary): string[] {
  * a dash; `docs-lint` accepts exactly this shape, and a page from before the model was in the name.
  */
 export function reportName(run: Pick<EvalRun, "at" | "models">): string {
-  const model = run.models.primary.model.toLowerCase().replace(/[^a-z0-9.]+/g, "-").replace(/^-+|-+$/g, "");
+  const model = (run.models.primary?.model ?? "").toLowerCase().replace(/[^a-z0-9.]+/g, "-").replace(/^-+|-+$/g, "");
   return `REPORT-${run.at.slice(0, 10)}${model === "" ? "" : `-${model}`}`;
 }
 
