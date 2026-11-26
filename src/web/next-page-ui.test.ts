@@ -788,7 +788,7 @@ test("a draft waiting to be sent and a proposal to close are decided on their in
   // A row that is not about a piece of work goes where it is dealt with, from its button and from the row itself.
   const opened: string[] = [];
   const placed = pageFunction("inboxRow", {
-    el, t: (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : ""), owedText: () => "", initial: () => "A", isTask: () => false, openPanel: () => {}, failed: () => {}, settle: () => {}, postJson: () => Promise.resolve({}),
+    el, t: (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : ""), owedText: () => "", initial: () => "A", isTask: (ref: string) => /^t\d+$/.test(ref), openPanel: (id: string) => opened.push("panel " + id), failed: () => {}, settle: () => {}, postJson: () => Promise.resolve({}),
     inboxPlace: pageFunction("inboxPlace", {
       INBOX_PLACES: { "box-update": ["settings", "boxes"], "routine-paused": ["auto", ""] }, INBOX_AGENT_KINDS: ["spend-limit"], next: { agents: { mia: {} } }, agentName: () => "Mia",
       t: (key: string, values?: Record<string, unknown>) => key + (values ? `(${Object.values(values).join("|")})` : ""),
@@ -799,7 +799,7 @@ test("a draft waiting to be sent and a proposal to close are decided on their in
   const go = update.kids.slice(1).flatMap(kid => kid.kids)[0]!;
   assert.equal(go.text, "ui.next.inbox.go(ui.pane.boxes)", "the button names the place");
   go.press!(); update.kids[0]!.press!();
-  placed({ kind: "routine-paused", ref: "daily", title: "x" }).kids[0]!.press!();
+  placed({ kind: "routine-paused", ref: "t12", title: "x" }).kids[0]!.press!(); // a routine whose slug looks like a work id still goes to Automation
   placed({ kind: "spend-limit", ref: "mia", title: "x" }).kids[0]!.press!();
   assert.deepEqual(opened, ["settings boxes", "settings boxes", "auto", "chat mia"]);
 });

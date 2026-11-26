@@ -128,13 +128,14 @@ function inboxRow(item) {
   body.appendChild(el("div", "why", owedText(item)));
   open.appendChild(el("span", "who", initial(item.with || item.title)));
   open.appendChild(body);
-  // Opens the work when it is about work, else the conversation with the agent that asked.
-  if (isTask(item.ref)) open.addEventListener("click", function () { openPanel(item.ref); });
+  // A row with a place goes there and nowhere else (a routine's slug can look like a work id); else it opens the work
+  // when it is about work, or the conversation with the agent that asked.
+  var place = inboxPlace(item);
+  if (place) open.addEventListener("click", place.go);
+  else if (isTask(item.ref)) open.addEventListener("click", function () { openPanel(item.ref); });
   else if (item.answer) open.addEventListener("click", function () { openChat(item.answer.agentId); });
   else if (item.kind === "verification") open.addEventListener("click", function () { window.open("/verification/" + encodeURIComponent(item.ref), "_blank", "noopener"); }); // its report page (INV-1925)
-  var place = inboxPlace(item);
   if (place) {
-    open.addEventListener("click", place.go);
     var go = el("button", "act-primary", place.label);
     go.addEventListener("click", place.go);
     acts.appendChild(go);
