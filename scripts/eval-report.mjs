@@ -287,7 +287,8 @@ async function run(args, out) {
   const outFile = args.flag("--out") ?? (resultsDir !== undefined ? join(resultsDir, `eval-${split}-${at.replace(/[:.]/g, "-")}-${commit}.json`) : undefined);
   const baselineFile = args.flag("--baseline") ?? (resultsDir !== undefined ? resultsIn(resultsDir).filter(one => one.run.split === split && !one.run.fake).at(-1)?.path : undefined);
   const baseline = baselineFile !== undefined ? readRun(baselineFile) : undefined;
-  const name = reportName({ at, models: { primary: { provider: tiers.primary.profile.label, model: tiers.primary.profile.model } } });
+  // A stand-in is no model: its page is named by the day alone, never by the placeholder profile behind it.
+  const name = reportName({ at, models: fake ? {} : { primary: { provider: tiers.primary.profile.label, model: tiers.primary.profile.model } } });
   const reportFile = args.flag("--report") ?? (fake ? undefined : join(REPORTS_DIR, `${name}.md`));
   refuseStandInPage(fake, reportFile);
 
