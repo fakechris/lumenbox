@@ -12,6 +12,7 @@
 
 import { activityOfInbound, type Awaiting, type ConversationFacts, type ConversationState, rowMarker } from "../host/conversation-state.ts";
 import { apiError } from "./api-error.ts";
+import { isForkChild } from "../host/pending-work.ts";
 import type { MemberNow } from "./member-now.ts";
 
 export interface AgentFactsDeps {
@@ -74,9 +75,13 @@ export class AgentFacts {
     return found.sort((a, b) => b.since.localeCompare(a.since))[0];
   }
 
-  /** The row's facts: the agent's conversations folded, and the marker. */
+  /**
+   * The row's facts: the agent's conversations folded, and the marker. A fork's own thread is not one: nobody reads it
+   * (its report lands in the thread it was forked from), so what it said is not unread. Counted, it was a "1" on the
+   * row that opened a conversation with nothing unread in it, and stayed.
+   */
   forAgent(agentId: string): AgentRowFacts {
-    const own = this.state.all().filter(facts => facts.agentId === agentId);
+    const own = this.state.all().filter(facts => facts.agentId === agentId && !isForkChild(facts.conversation));
     const latest = (pick: (facts: ConversationFacts) => string | undefined): string | undefined =>
       own.map(pick).filter((at): at is string => at !== undefined).sort().at(-1);
     const unreadCount = own.reduce((sum, facts) => sum + facts.unreadCount, 0);

@@ -214,7 +214,7 @@ function resultCard(row) {
   }
   changes.addEventListener("click", function () { chat.changing = row.id; render(); var field = document.querySelector("[data-result='" + row.id + "'] textarea"); if (field) field.focus(); });
   acts.appendChild(accept); acts.appendChild(changes); acts.appendChild(open); acts.appendChild(laterButton(row.id, refreshSoon)); card.appendChild(acts);
-  acts.title = t("ui.next.chat.reviewHint", { name: maker }); // what the two decisions do, for whoever wants it before pressing
+  card.appendChild(el("div", "why", t("ui.next.chat.reviewHint", { name: maker }) + " " + t("ui.next.need.hint.later"))); // what each press leads to, said, not a tooltip
   return card;
 }
 `;
