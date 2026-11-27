@@ -27,6 +27,7 @@ const {
   nativeImage,
   nativeTheme,
   powerMonitor,
+  powerSaveBlocker,
   session,
   shell,
 } = require("electron");
@@ -46,6 +47,7 @@ const { organisationWindows, signInWindow } = require("./organisation-windows.cj
 const { installationViews } = require("./installation-views.cjs");
 const { MachineUseRefused, machineUseCalls, machineUseStore, runsPersonalInstallation, startupUse } = require("./machine-use.cjs");
 const { JoinRefused, NODE_KEYCHAIN_SERVICE, NODE_REVOKED_EXIT, NodeRefused, organisationNode } = require("./organisation-node.cjs");
+const { createMobileSleepGuard } = require("./mobile-sleep.cjs");
 /**
  * The UI credential of the personal installation, made the first time it is needed — when the
  * personal installation starts — and not when the shell loads: desktopAuth writes
@@ -407,9 +409,11 @@ function watchEvents() {
 function handleServerEvent(event) {
   if (event.type === "turn_started") {
     busyAgents.add(event.agentId);
+    mobileSleep?.setActiveTurns(busyAgents.size);
   }
   if (event.type === "turn_finished" || event.type === "turn_failed" || event.type === "turn_interrupted") {
     busyAgents.delete(event.agentId);
+    mobileSleep?.setActiveTurns(busyAgents.size);
   }
   // A consent asked for or a turn ended: the facts moved, and the badge and notices follow them.
   if (event.type === "approval_pending" || event.type === "turn_finished" || event.type === "turn_failed") readAgentFacts();
@@ -763,6 +767,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("activate", () => createWindow());
   app.on("before-quit", () => {
     quitting = true;
+    void mobileSleep?.dispose();
     serverChild?.kill();
     supervisionChild?.kill();
     nodeChild?.kill();
@@ -771,9 +776,22 @@ if (!app.requestSingleInstanceLock()) {
 
 /** The personal installation: its server, its supervision, and what watches them. */
 let personalStarted = false;
+let mobileSleep = null;
 function startPersonal() {
   if (personalStarted) return;
   personalStarted = true;
+  mobileSleep = createMobileSleepGuard({
+    powerSaveBlocker,
+    powerMonitor,
+    log,
+    onSuspendNotice: ({ at, reason }) => {
+      fetch(`http://127.0.0.1:${PORT}/api/mobile-relay/sleeping`, {
+        method: "POST",
+        headers: { ...uiAuth.headers, "content-type": "application/json" },
+        body: JSON.stringify({ at, reason }),
+      }).catch(() => {});
+    },
+  });
   updateTrayMenu();
   applyStartupItemSettings();
   startServer();
