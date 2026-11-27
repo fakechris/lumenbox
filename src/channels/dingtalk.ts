@@ -59,6 +59,7 @@ import type {
 } from "./manager.ts";
 import { acquireConsumerLock } from "./single-consumer.ts";
 import { looksLikeMarkdown } from "./markdown.ts";
+import { roomFactsOf, type RoomFacts } from "./dingtalk-room.ts";
 
 const GATEWAY = "https://api.dingtalk.com/v1.0/gateway/connections/open";
 /**
@@ -244,8 +245,8 @@ export interface BotMessage {
   msgtype?: string;
   msgId?: string;
   conversationId?: string;
-  /** `"1"` is a direct session, `"2"` a group. */
-  conversationType?: string;
+  conversationType?: string; // `"1"` is a direct session, `"2"` a group
+  isInAtList?: boolean; conversationTitle?: string; // read by roomFactsOf (dingtalk-room.ts)
   senderStaffId?: string;
   senderId?: string;
   senderNick?: string;
@@ -975,7 +976,7 @@ export class DingTalkChannel implements ChannelAdapter {
         senderLabel(payload, sender),
         "",
         attachments,
-        onMessage
+        roomFactsOf(payload), onMessage
       );
       return;
     }
@@ -1027,7 +1028,7 @@ export class DingTalkChannel implements ChannelAdapter {
       senderLabel(payload, sender),
       body,
       files,
-      onMessage
+      roomFactsOf(payload), onMessage
     );
   }
 
@@ -1042,14 +1043,14 @@ export class DingTalkChannel implements ChannelAdapter {
     label: string,
     text: string,
     files: { name: string; base64: string }[],
+    room: RoomFacts,
     onMessage: (message: InboundMessage) => Promise<string | undefined>
   ): Promise<void> {
     try {
       const reply = await onMessage({
         identity,
         chatKey,
-        // No threads on this wire: the conversation *is* the subject, so no
-        // threadKey is offered and the manager keys context on the chat alone.
+        ...room, // No threads on this wire: the conversation *is* the subject, so no threadKey.
         ...(messageId !== undefined ? { messageId } : {}),
         senderLabel: label,
         text,
@@ -1057,8 +1058,7 @@ export class DingTalkChannel implements ChannelAdapter {
       });
       if (reply !== undefined && reply !== "") await this.sendToChat(chatKey, reply);
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      this.log(`channel ${this.name}: reply failed (${detail})`);
+      this.log(`channel ${this.name}: reply failed (${error instanceof Error ? error.message : String(error)})`);
     }
   }
 

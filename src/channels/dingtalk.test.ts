@@ -32,6 +32,7 @@ import {
   wantsNudge,
   type BotMessage,
 } from "./dingtalk.ts";
+import { roomFactsOf } from "./dingtalk-room.ts";
 import { looksLikeMarkdown as fromShared } from "./markdown.ts";
 import { looksLikeMarkdown as fromFeishu } from "./feishu.ts";
 
@@ -47,7 +48,7 @@ interface Harness {
   acks: unknown[];
   arrived: { id: string; kind: string }[];
   decided: { id: string; fate: string; reason?: string }[];
-  turns: { text: string; files?: { name: string; base64: string }[]; messageId?: string; identity: string; chatKey: string; senderLabel: string }[];
+  turns: { text: string; files?: { name: string; base64: string }[]; messageId?: string; identity: string; chatKey: string; senderLabel: string; privateChat?: boolean; addressed?: boolean; chatName?: string }[];
   pushes: { target: unknown; kind: string; body: string; title?: string }[];
 }
 
@@ -99,6 +100,9 @@ function deliver(state: Harness, raw: string, reply = "here is your answer"): Pr
         text: inbound.text,
         messageId: inbound.messageId,
         files: inbound.files,
+        privateChat: inbound.privateChat,
+        addressed: inbound.addressed,
+        chatName: inbound.chatName,
       });
       return reply;
     }
@@ -110,6 +114,8 @@ const GROUP_TEXT: BotMessage = {
   msgId: "msg-1",
   conversationId: "cid7",
   conversationType: "2",
+  conversationTitle: "[Support] billing",
+  isInAtList: true,
   senderStaffId: "staff9",
   senderNick: "chris",
   sessionWebhook: "https://oapi.dingtalk.com/robot/sendBySession?s=abc",
@@ -131,6 +137,8 @@ test("a text frame becomes one turn addressed to its room, replied in kind", asy
   assert.equal(turn.chatKey, "dingtalk:cid7");
   assert.equal(turn.senderLabel, "chris");
   assert.equal(turn.text, "hello there");
+  // Where it was said (INV-2225): a group, for the bot, and the room's own name for the door's room rules.
+  assert.deepEqual([turn.privateChat, turn.addressed, turn.chatName], [false, true, "[Support] billing"]);
   const push = state.pushes[0]!;
   assert.equal(push.kind, "text");
   assert.equal(push.body, "here is your answer");
@@ -246,12 +254,16 @@ test("an empty group message stays silent; an empty direct session gets told we 
       ...GROUP_TEXT,
       msgId: "m-e2",
       conversationType: "1",
+      conversationTitle: undefined,
+      isInAtList: false,
       senderStaffId: "solo",
       text: { content: "   " },
     })
   );
   assert.equal(nudge.turns.length, 1);
   assert.match(nudge.turns[0]!.text, /I am here/);
+  // A one-to-one session is direct and for the bot, whatever the @ flag says, and is in no room.
+  assert.deepEqual([nudge.turns[0]!.privateChat, nudge.turns[0]!.addressed, nudge.turns[0]!.chatName], [true, true, undefined]);
 });
 
 test("recorded webhooks expire, and expiry sends pushes over the robot api instead", () => {
@@ -332,6 +344,11 @@ test("routing decisions have one obvious answer each", () => {
   assert.equal(wantsNudge({ conversationType: "1" }), true);
   assert.equal(wantsNudge({ conversationType: "2", atUsers: [{}] }), true);
   assert.equal(wantsNudge({ conversationType: "2" }), false);
+
+  // A group frame that says the bot is not in its @ list (a robot granted every group message) is not addressed;
+  // one that does not say is, because the topic delivers only @-messages in a group.
+  assert.deepEqual(roomFactsOf({ conversationType: "2", isInAtList: false, conversationTitle: " 群 " }), { privateChat: false, addressed: false, chatName: "群" });
+  assert.deepEqual(roomFactsOf({ conversationType: "2" }), { privateChat: false, addressed: true });
 
   assert.deepEqual(chunkText("abcde", 2), ["ab", "cd", "e"]);
   assert.deepEqual(chunkText("", 5), []);

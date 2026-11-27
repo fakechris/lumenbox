@@ -2,7 +2,7 @@
      title: A guest turn: what an organisation's agent may do for someone who is not on the roster
      family: decision
      status: current
-     updated: 2026-11-07
+     updated: 2026-11-27
 -->
 # A guest turn: what an organisation's agent may do for someone who is not on the roster
 
@@ -75,8 +75,11 @@ wants to be a member is let in the way everybody is (an invite code). A guest's 
 command: `/new`, `停`, `看板`, `允许` and the other verbs are not parsed for a guest, because the
 guest branch returns before the command table. A guest's text never answers an approval.
 
-Wires that do not say whether a chat is private (DingTalk today) count a stranger's direct
-message as a group message. That changes who is answered, not what the turn holds.
+A wire that does not say whether a chat is private counts a stranger's direct message as a group
+message. That changes who is answered, not what the turn holds. DingTalk was such a wire until
+2026-11-27 (INV-2225): its adapter now reads the robot callback's `conversationType` (`"1"`
+one-to-one), `isInAtList` and `conversationTitle`, so a stranger's DingTalk direct message is a
+knock, as on Feishu.
 
 ## 3. The tool surface
 
