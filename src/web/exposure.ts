@@ -30,6 +30,7 @@
  */
 import type { IncomingMessage } from "node:http";
 import { isLoopback } from "./auth.ts";
+import { originOf } from "./browser-guard.ts";
 
 export type ExposureLevel = "local" | "private" | "public";
 
@@ -63,6 +64,8 @@ export interface Exposure {
   hsts: boolean;
   /** The gateway stands in front; the installation token arrives from it on every request. */
   behindGateway: boolean;
+  /** Off local: the origin people open (`AGENTBOX_PUBLIC_URL`), which a browser's requests must come from (browser-guard.ts). Absent, the address a request was sent to is its own. */
+  publicOrigin?: string;
   /** What to say in the log on every start. */
   notes: string[];
 }
@@ -90,6 +93,7 @@ export function resolveExposure(input: ExposureInput): Exposure {
     const notes = wide ? [claim] : [];
     return { level, source, secureCookies: https, hsts: false, behindGateway, notes };
   }
+  const publicOrigin = originOf(publicUrl);
 
   const missing: string[] = [];
   if (input.noToken === true) missing.push("AGENTBOX_NO_TOKEN=1 serves everyone with no check: unset it");
@@ -122,7 +126,7 @@ export function resolveExposure(input: ExposureInput): Exposure {
   if (level === "public") {
     notes.push("exposure public: this version enforces HTTPS, Secure cookies and the token rule. The rest of what public requires (docs/106 §5, R4–R10) is not enforced yet.");
   }
-  return { level, source, secureCookies: https, hsts: https, behindGateway, notes };
+  return { level, source, secureCookies: https, hsts: https, behindGateway, ...(publicOrigin !== undefined ? { publicOrigin } : {}), notes };
 }
 
 const FORWARDING_HEADERS = ["x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-real-ip", "forwarded", "via"];

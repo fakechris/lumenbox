@@ -165,8 +165,14 @@ kubectl -n agentbox exec deploy/agentbox-organisation -- sh -c \
      -d "{\"role\":\"admin\"}" http://127.0.0.1:7777/api/channels/invite'
 ```
 
-The Ingress controller must set `X-Forwarded-For` (ingress-nginx and Traefik do): it is how the
-server tells a member's request from the CLI's.
+The Ingress controller must set `X-Forwarded-For` with the client's address as its last entry
+(ingress-nginx and Traefik do): it is how the server tells a member's request from the CLI's, and
+the address its sign-in limiter counts. Behind a second proxy (a cloud load balancer, a CDN), let
+the controller pass the real client address through (`use-forwarded-headers` and
+`proxy-real-ip-cidr` on ingress-nginx), or everyone shares one address and one person's wrong
+tries make everyone wait. Members must open the host in `AGENTBOX_PUBLIC_URL`: reached by another
+name, the page loads and its changes are refused as cross-origin (docs/06, "Sign-in limits and
+what a browser is held to").
 
 If you inspect the deployment from a Mac running the LumenBox desktop app, local port `7777` is
 already bound by your personal desktop installation (`127.0.0.1:7777`). Forward a distinct local

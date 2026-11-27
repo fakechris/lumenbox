@@ -37,6 +37,8 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import { connect as netConnect, type Socket } from "node:net";
 import { parseCookies, safeNext } from "../web/auth.ts";
 import { HSTS } from "../web/exposure.ts";
+import { originRefusal, securityHeaders } from "../web/browser-guard.ts";
+import { clientAddress, type SignInGuard } from "../web/sign-in-limits.ts";
 import { adminRouteOf, handleAdmin } from "./admin.ts";
 import type { BoxAllocator, BoxHandle } from "./allocator.ts";
 import { isRole, type ControlStore, type Role } from "./store.ts";
@@ -169,6 +171,12 @@ export interface GatewayOptions {
   secureCookies?: boolean;
   /** Private and public over https (web/exposure.ts): every response says HSTS. */
   hsts?: boolean;
+  /** Off local: the origin people open, which a browser's requests must come from (web/browser-guard.ts). */
+  publicOrigin?: string;
+  /** The password form's limiter and record (web/sign-in-limits.ts); absent or disabled, nothing waits. */
+  signIns?: SignInGuard;
+  /** A TLS terminator stands in front, so a person's address is the last `X-Forwarded-For` entry. */
+  behindProxy?: boolean;
   /**
    * Where this gateway is reached by a person, for the share links it hands out (docs/29
    * §6 B). Absent, templates can be staged and served but no link is built.
@@ -270,6 +278,13 @@ export class Gateway {
     const url = new URL(req.url ?? "/", "http://gateway");
     const route = routeOf(url.pathname, req.method ?? "GET");
     if (this.options.hsts === true) res.setHeader("strict-transport-security", HSTS);
+    for (const [name, value] of Object.entries(securityHeaders(req, this.options.publicOrigin))) res.setHeader(name, value);
+    // The session is a cookie, which a browser sends whoever wrote the page: what changes something comes from our own page.
+    if (originRefusal(req, this.options.publicOrigin) !== undefined) {
+      res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+      res.end("This request did not come from this gateway's own page.\n");
+      return;
+    }
 
     if (route.kind === "login-page") return this.sendLoginPage(res, undefined, safeNext(url.searchParams.get("next")));
     if (route.kind === "login-submit") return this.handleLogin(req, res);
@@ -414,7 +429,7 @@ export class Gateway {
     json(reply.status, reply.body);
   }
 
-  private sendLoginPage(res: ServerResponse, message?: string, next?: string): void {
+  private sendLoginPage(res: ServerResponse, message?: string, next?: string, status?: number): void {
     const body =
       `<!doctype html><meta charset="utf-8"><title>Sign in</title>` +
       `<body style="font:14px system-ui;padding:3rem;max-width:22rem">` +
@@ -428,7 +443,7 @@ export class Gateway {
       `<p><label>Password<br><input name="password" type="password" ` +
       `autocomplete="current-password"></label></p>` +
       `<p><button>Sign in</button></p></form></body>`;
-    res.writeHead(message === undefined ? 200 : 401, {
+    res.writeHead(status ?? (message === undefined ? 200 : 401), {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
     });
@@ -444,14 +459,24 @@ export class Gateway {
     // on the way through the form would make the button on that page a dead end.
     const next = safeNext(form.get("next"));
 
+    // Counted by where it came from and by the name it was for, and asked before the password is compared.
+    const attempt = { door: "gateway" as const, address: clientAddress(req, this.options.behindProxy === true), account: username };
+    const wait = this.options.signIns?.blocked(attempt);
+    if (wait !== undefined) {
+      res.setHeader("retry-after", String(wait));
+      this.sendLoginPage(res, `Too many attempts. Try again in ${wait}s.`, next, 429);
+      return;
+    }
     const tenantName = await this.options.identity.authenticate(username, password);
     if (tenantName === undefined) {
+      this.options.signIns?.failed(attempt, "wrong-password");
       // One message for both failures: which of the two was wrong is not the visitor's business.
       this.log(`failed sign-in for ${JSON.stringify(username)}`);
       this.sendLoginPage(res, "That user and password did not match.", next);
       return;
     }
 
+    this.options.signIns?.succeeded(attempt);
     const tenant = this.options.store.upsertTenant({ name: tenantName });
     const user = this.options.store.upsertUser({ username });
     // The first person into a tenant owns it; anyone after is a member. Somebody has to be able to
@@ -552,6 +577,10 @@ export class Gateway {
    * without signing in.
    */
   async handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
+    if (originRefusal(req, this.options.publicOrigin, true) !== undefined) {
+      socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      return;
+    }
     const session = this.sessionOf(req);
     if (session === undefined) {
       socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");

@@ -451,6 +451,59 @@ weaker than the level requires, naming what is missing.
   one place it remains is the control plane's own tenant pods, where the hop from the gateway is
   plain HTTP inside the cluster and `AGENTBOX_TRUST_GATEWAY_IDENTITY=1` is what admits it.
 
+### Sign-in limits and what a browser is held to (INV-2204 part 2, 2026-11-27)
+
+**Sign-in limits (private and public; local has none).** Every way a credential is tried asks
+one limiter (`src/web/sign-in-limits.ts`): an invite code (`POST /api/login`), the first Admin's
+code (`POST /auth/<door>`), a door's sign-in callback, a side-door token (`/mcp`), the
+installation token, and the control plane's password form (`/gateway/login`). A try is counted
+against the address it came from and, where the credential names one, the account it was for (the
+user name on the password form; the first Admin's code is one account). Five wrong tries from an
+address cost nothing (ten against an account); after that each doubles the wait — 2 s, 4 s, 8 s …
+up to 15 minutes — and an hour without a wrong try forgets the count. While waiting, the answer
+is `429` with `Retry-After` and the code `sign-in-limited`, given before the credential is looked
+at. Signing in clears the account's count, not the address's. The counts are in memory: a
+restart clears them, as it clears nothing that was durable before. Invite codes keep their own
+installation-wide cap as well (`CodeAttempts`, INV-2078).
+
+Tries that did not get in are recorded in `<home>/sign-ins.jsonl` — when, which way in, the
+address, the account if any, why, and one line when a wait begins; never the code, password or
+token tried — and `audit export` includes the file. On the control plane they are `signin.failed`
+and `signin.limited` rows in its audit, beside `signin`.
+
+**What the terminator in front must set.** `X-Forwarded-For`, with the client's address
+**appended as the last entry** — what ingress-nginx, Caddy, Traefik and the tunnels do by
+default. The server reads the last entry and never the first, which the client can write. It is
+how a person's request is told from the CLI's on the server (which carries no proxy header), and
+it is the address the limiter counts. If a second proxy stands in front of the adjacent one (a
+CDN, a cloud load balancer), configure the adjacent one to pass the real client address through
+(ingress-nginx: `use-forwarded-headers` with `proxy-real-ip-cidr`; nginx: `real_ip`), or every
+person arrives as that proxy's one address and one person's wrong tries make everyone wait.
+`X-Forwarded-Proto` is not read. A connector's OAuth callback address is built from
+`AGENTBOX_PUBLIC_URL` off local, not from the request's headers.
+
+**What a browser is held to (every level).** A request that changes something — anything but
+`GET`, `HEAD`, `OPTIONS` — and every socket upgrade must come from the installation's own page:
+its `Origin` (or, without one, its `Referer`) is the declared public address off local, or, where
+none is declared, the address the request was sent to (`http://127.0.0.1:<port>` for the app,
+the same or `localhost` in a browser). Otherwise the answer is `403`, code `cross-origin`. Not
+asked: a request with an `Authorization` header (a program's credential), a request with neither
+`Origin` nor `Referer` (not a browser), and `/hooks/<id>` (a webhook carries its own secret).
+Nothing answers with `Access-Control-Allow-Origin`. So off local **people must open the address
+in `AGENTBOX_PUBLIC_URL`**: the same server reached by another name or a port-forward shows the
+page and refuses its changes.
+
+Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and a
+content security policy (`src/web/browser-guard.ts`) that forbids framing by another site,
+plugins, a foreign `<base>`, posting a form elsewhere, and loading or connecting anywhere but the
+installation itself (images may also come from `https:`). `script-src` and `style-src` still
+allow `'unsafe-inline'`, because the page is written with inline scripts, handlers and styles: the
+policy does not yet stop an injected script.
+
+A door's sign-in is tied to the browser that started it: `/auth/<door>` sets a ten-minute
+`agentbox_signin` cookie and the callback is honoured only with it, so a finished callback link
+signs in nobody else's browser.
+
 ## The token key belongs outside the directory it protects (INV-579, 2026-09-16)
 
 Box tokens are stored encrypted. Unset, the key is minted `0600` beside `control.db` — encryption

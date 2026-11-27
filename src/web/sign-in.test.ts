@@ -80,7 +80,8 @@ test("an organisation's /login offers its Feishu door; the door's sign-in gives 
     const vendor = new URL(begin.headers.get("location")!);
     assert.equal(allowedRequest(vendor.href, base), false, "the desktop organisation view blocks the Feishu redirect");
     const state = vendor.searchParams.get("state")!;
-    return fetch(`${base}/auth/fixture/callback?state=${state}&code=${openId}`, { redirect: "manual" });
+    // The window that started the sign-in is the one the vendor sends back, with the cookie the entry gave it.
+    return fetch(`${base}/auth/fixture/callback?state=${state}&code=${openId}`, { redirect: "manual", headers: { cookie: begin.headers.getSetCookie()[0]!.split(";")[0]! } });
   };
   const known = await signIn("ou_ana");
   assert.equal(known.status, 302);
@@ -191,9 +192,15 @@ test("a DingTalk door signs in the organisation's employee as the identity their
   const login = await (await fetch(`${base}/login?lang=en`)).text();
   assert.match(login, /<a class="door"[^>]*href="\/auth\/ding"[^>]*>Sign in with DingTalk<\/a>/, "/login offers the DingTalk door");
 
+  // One browser: what the entry sets, the callback presents (the app's sign-in window keeps one cookie jar for both).
+  let browser = "";
   const begin = async (next?: string) => {
-    const response = await fetch(`${base}/auth/ding${next === undefined ? "" : `?next=${encodeURIComponent(next)}`}`, { redirect: "manual" });
+    const response = await fetch(`${base}/auth/ding${next === undefined ? "" : `?next=${encodeURIComponent(next)}`}`, { redirect: "manual", headers: browser === "" ? {} : { cookie: browser } });
     assert.equal(response.status, 302);
+    const bound = response.headers.getSetCookie()[0]!;
+    assert.match(bound, /^agentbox_signin=[0-9a-f]{32}; Path=\/auth; Secure; Max-Age=600; HttpOnly; SameSite=Lax$/, "the entry ties the sign-in to this browser, over https only");
+    if (browser !== "") assert.equal(bound.split(";")[0], browser, "a browser that already holds one keeps it, so two tabs do not undo each other");
+    browser = bound.split(";")[0]!;
     const vendor = new URL(response.headers.get("location")!);
     assert.equal(vendor.origin + vendor.pathname, "https://login.dingtalk.com/oauth2/auth");
     assert.deepEqual(
@@ -204,7 +211,7 @@ test("a DingTalk door signs in the organisation's employee as the identity their
   };
   // DingTalk returns the code as both `code` and `authCode`.
   const callback = (state: string, unionId: string) =>
-    fetch(`${base}/auth/ding/callback?state=${state}&code=${unionId}&authCode=${unionId}`, { redirect: "manual", headers: { "accept-language": "en" } });
+    fetch(`${base}/auth/ding/callback?state=${state}&code=${unionId}&authCode=${unionId}`, { redirect: "manual", headers: { "accept-language": "en", cookie: browser } });
 
   const known = await callback(await begin("/?view=settings"), "union-ana");
   assert.equal(known.status, 302);
@@ -234,6 +241,13 @@ test("a DingTalk door signs in the organisation's employee as the identity their
   const forged = await fetch(`${base}/auth/ding/callback?state=forged&code=union-ana`, { redirect: "manual" });
   assert.equal(forged.status, 400);
   assert.equal((await forged.json()).code, "sign-in-expired", "a state this server never issued is refused");
+  // A finished link handed to somebody else: their browser did not start it, so it signs nobody in — and the state is spent (INV-2204).
+  for (const other of [undefined, `agentbox_signin=${"0".repeat(32)}`]) {
+    const handed = await fetch(`${base}/auth/ding/callback?state=${await begin()}&code=union-ana`, { redirect: "manual", ...(other !== undefined ? { headers: { cookie: other } } : {}) });
+    assert.equal(handed.status, 400);
+    assert.equal(handed.headers.getSetCookie().length, 0);
+    assert.equal((await handed.json()).code, "sign-in-expired");
+  }
   const replayState = await begin();
   assert.equal((await callback(replayState, "union-ana")).status, 302);
   assert.equal((await callback(replayState, "union-ana")).status, 400, "a state is used once");

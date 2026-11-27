@@ -106,7 +106,7 @@ test("an Admin activates a person or a department and they sign in at that role;
   const scan = async (userid: string) => {
     const begin = await fetch(`${base}/auth/ding`, { redirect: "manual" });
     const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
-    const response = await fetch(`${base}/auth/ding/callback?state=${state}&code=union-${userid}`, { redirect: "manual", headers: { "accept-language": "en" } });
+    const response = await fetch(`${base}/auth/ding/callback?state=${state}&code=union-${userid}`, { redirect: "manual", headers: { "accept-language": "en", cookie: begin.headers.getSetCookie()[0]!.split(";")[0]! } }); // the browser that started it
     const cookie = response.headers.getSetCookie()[0]?.split(";")[0];
     return { status: response.status, cookie, page: cookie === undefined ? await response.text() : "" };
   };

@@ -199,7 +199,7 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
     const begin = await fetch(`${BASE}/auth/web`, { redirect: "manual" });
     assert.equal(begin.status, 302);
     const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
-    const callback = await fetch(`${BASE}/auth/web/callback?state=${state}&code=fixture`, { redirect: "manual" });
+    const callback = await fetch(`${BASE}/auth/web/callback?state=${state}&code=fixture`, { redirect: "manual", headers: { cookie: begin.headers.getSetCookie()[0]!.split(";")[0]! } }); // the browser that started it
     assert.equal(callback.status, 302, await callback.clone().text());
     const feishuHeaders = { "content-type": "application/json", cookie: callback.headers.getSetCookie()[0]!.split(";")[0]! };
     assert.equal((await fetch(`${BASE}/api/me`, { headers: feishuHeaders })).status, 200);
