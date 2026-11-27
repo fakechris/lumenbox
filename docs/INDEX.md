@@ -95,6 +95,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [09-tenancy](09-tenancy.md) | Tenancy: teams, users, and who may drive which agent | superseded by [22-domain-model](22-domain-model.md) — §3 retires per-agent visibility; §0 sets uniformity | 2026-08-19 |
 | [10-security-backlog](10-security-backlog.md) | Security backlog | current | 2026-11-19 |
 | [102-verification-reports](102-verification-reports.md) | 带录像的验证报告：场景与断言两级、时间轴、结论，在对话里是一张卡 | current | 2026-11-20 |
+| [104-axiomatic-design](104-axiomatic-design.md) | LumenBox 功能需求提取与 MIT 公理设计分析 | current | 2026-11-26 |
 | [14-from-outside-reading](14-from-outside-reading.md) | Ideas taken from outside reading | current | 2026-08-26 |
 | [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-11-01 |
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-10-20 |
