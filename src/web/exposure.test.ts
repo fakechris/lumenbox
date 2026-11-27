@@ -68,6 +68,14 @@ test("local is what it was: no token on loopback, ?token= to a cookie, the beare
   const me = await get("/api/me", { cookie: session.split(";")[0]! });
   assert.equal(me.status, 200);
   assert.equal((await me.json() as { role: string }).role, "driver");
+
+  // No sign-in limiter on the token at local (INV-2204 part 2 pins this before adding one elsewhere): a wrong token is a 401 however often.
+  for (let n = 0; n < 12; n += 1) assert.equal((await get("/api/me", { authorization: "Bearer wrong" })).status, 401);
+  assert.equal((await get("/api/me", { authorization: `Bearer ${TOKEN}` })).status, 200, "and the right one still opens");
+  // The page's own requests carry the address it was loaded from; so do the app's, which loads http://127.0.0.1:<port>/.
+  const own = new URL((await get("/login")).url).origin;
+  const fromPage = await fetch(`${own}/api/channels/invite`, { method: "POST", headers: { cookie: `agentbox_ui=${TOKEN}`, origin: own, "content-type": "application/json" }, body: JSON.stringify({ role: "viewer" }) });
+  assert.equal(fromPage.status, 200);
 });
 
 test("the level is the bind address unless the operator says otherwise, and a weak one names what is missing", async () => {
