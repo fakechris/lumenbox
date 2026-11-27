@@ -4,13 +4,25 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { inferLevel, LEVEL_MEANING, levelAllows, parseLevel } from "./autonomy-level.ts";
 
-test("the inference table: tidy → L1, analyse → L2, ordinary → L4, verified → L5, outward words cap at L4, no changing tool caps at L2", () => {
+test("the inference table: tidy → L1, analyse → L2, either one that asks for a file is the work (L4), ordinary → L4, verified → L5, outward words cap at L4, no changing tool caps at L2", () => {
   const rows: [Parameters<typeof inferLevel>[0], number, RegExp][] = [
     [{ title: "整理本周的会议记录，输出摘要" }, 1, /collect or summarise/],
     [{ title: "Summarise the three PRs for the standup" }, 1, /collect or summarise/],
     [{ title: "分析为什么构建变慢了，给出方案" }, 2, /analysis or a proposal/],
     [{ title: "Compare the two vendors and recommend one" }, 2, /analysis or a proposal/],
     [{ title: "Write the Q3 report" }, 4, /ordinary work/],
+    [{ title: "Analyze all logs and count each severity", description: "Write a CSV file /app/summary.csv with the counts." }, 4, /ordinary work/],
+    [{ title: "Summarise the incident into postmortem.md" }, 4, /ordinary work/],
+    [{ title: "分析日志里的错误，把统计结果写入 report.csv" }, 4, /ordinary work/],
+    [{ title: "Summarise the incident into postmortem.MD" }, 4, /ordinary work/],
+    [{ title: "Summarise the incident into ./postmortem.md" }, 4, /ordinary work/],
+    [{ title: "Summarise the build logs in chat" }, 1, /collect or summarise/],
+    [{ title: "Summarise notes.md in chat" }, 1, /collect or summarise/],
+    [{ title: "Summarise the notes and do not change them" }, 1, /collect or summarise/],
+    [{ title: "Summarise the notes and do not edit or modify them" }, 1, /collect or summarise/],
+    [{ title: "Summarise the notes; do not edit, rewrite, or modify them" }, 1, /collect or summarise/],
+    [{ title: "Analyze app.log and propose fixes" }, 2, /analysis or a proposal/],
+    [{ title: "Compare the two vendors; what do you recommend?" }, 2, /analysis or a proposal/],
     [{ title: "Write the Q3 report", hasContract: true }, 5, /written acceptance/],
     [{ title: "run 3 times a week", isPursuit: true }, 5, /goal with its own gate/],
     [{ title: "Email the Q3 report to the board", hasContract: true }, 4, /reaches outside/],
