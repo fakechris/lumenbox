@@ -500,6 +500,12 @@ installation itself (images may also come from `https:`). `script-src` and `styl
 allow `'unsafe-inline'`, because the page is written with inline scripts, handlers and styles: the
 policy does not yet stop an injected script.
 
+The two pages here that are somebody else's — noVNC's desktop page, served by the box, and a
+card drawn by the A2UI bundle — are checked against these rules in a real browser by
+`npm run check:desktop-page`: a disposable box and a temporary home, headless Chrome, the desktop
+as a page, as a viewer and embedded, and one card. It needs Docker and `npm run build:vendor`, so
+it is run by hand after a change to the policy, the box image's noVNC or the bundle, not in CI.
+
 A door's sign-in is tied to the browser that started it: `/auth/<door>` sets a ten-minute
 `agentbox_signin` cookie and the callback is honoured only with it, so a finished callback link
 signs in nobody else's browser.
