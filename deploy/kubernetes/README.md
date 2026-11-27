@@ -168,6 +168,12 @@ kubectl -n agentbox exec deploy/agentbox-organisation -- sh -c \
 The Ingress controller must set `X-Forwarded-For` (ingress-nginx and Traefik do): it is how the
 server tells a member's request from the CLI's.
 
+If you inspect the deployment from a Mac running the LumenBox desktop app, local port `7777` is
+already bound by your personal desktop installation (`127.0.0.1:7777`). Forward a distinct local
+port when testing with `kubectl port-forward` — for example `kubectl -n agentbox port-forward
+svc/agentbox-organisation 17777:7777` — so you reach the organisation server rather than the local
+desktop app.
+
 ## How it wires together
 
 - The control plane authenticates to the API server with its own ServiceAccount (mounted token +

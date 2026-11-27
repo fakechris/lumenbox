@@ -3058,7 +3058,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         try {
         if (!bootstrap.pending()) {
           const reason = "bootstrap-unavailable", html = wantsHtml(req.headers.accept);
-          send(res, 404, html ? signInRecoveryPage(reason, localeOf(req, url)) : apiError(reason), html ? "text/html" : "application/json"); return;
+          const personal = principals.installation().mode === "single-machine";
+          send(res, 404, html ? signInRecoveryPage(reason, localeOf(req, url), { personal }) : apiError(reason), html ? "text/html" : "application/json"); return;
         }
         const publicUrl = process.env.AGENTBOX_PUBLIC_URL, doors = webSignInDoors(channelRecords, channelCredentialsSet, publicUrl);
         const toSet = channelRecords.filter(record => signsInOnWeb(record.type)).map(record => ({ id: record.id, type: record.type as WebSignInType,
@@ -3151,7 +3152,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (req.method === "GET" && !/^\/api(?:\/|$)/.test(url.pathname) && wantsHtml(req.headers.accept)) {
           const reason = decision.reason === "access-removed" || decision.reason === "session-expired" ? decision.reason : "sign-in-required";
           const orgView = /\bLumenBoxOrgView\/1\b/.test(req.headers["user-agent"] ?? "");
-          send(res, 401, signInRecoveryPage(reason, localeOf(req, url), { orgView }), "text/html");
+          send(res, 401, signInRecoveryPage(reason, localeOf(req, url), { orgView, setup: !orgView && bootstrapPending() }), "text/html");
           return;
         }
         // Off local the token is not how a person gets in, so the answer does not offer it (INV-2204).

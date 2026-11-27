@@ -26,6 +26,9 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     stop = await start();
     const setup = async (headers: Record<string, string>) => (await (await fetch(base + "/api/mcp", { headers })).json()).setup;
     assert.deepEqual(await setup({ authorization: "Bearer fixture" }), { admins: 0, bootstrap: true });
+    const unauthRoot = await fetch(base + "/?lang=en", { headers: { accept: "text/html" } });
+    assert.equal(unauthRoot.status, 401);
+    assert.match(await unauthRoot.text(), /href="\/bootstrap">Set up the first administrator/, "landing on / before bootstrap offers the first-Admin setup link");
     assert.match(await (await fetch(base + "/login?lang=en")).text(), /href="\/bootstrap">Set up the first administrator/);
     for (const body of ["{", "null", "[]"]) {
       const malformed = await fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(1500) });
@@ -80,12 +83,15 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     const roster = new Principals().list();
     assert.equal(roster.length, 1); assert.match(roster[0]!.id, /^fixture:person[01]$/); assert.equal(roster[0]!.role, "admin");
     assert.equal((await begin(code)).status, 400);
+    assert.doesNotMatch(await (await fetch(base + "/?lang=en", { headers: { accept: "text/html" } })).text(), /href="\/bootstrap"/, "once an Admin exists, / no longer offers /bootstrap");
     assert.doesNotMatch(await (await fetch(base + "/login?lang=en")).text(), /href="\/bootstrap"/);
     const stale = await fetch(base + "/bootstrap?lang=en", { headers: { accept: "text/html" } });
     assert.equal(stale.status, 404);
     assert.equal(stale.headers.get("cache-control"), "no-store");
     assert.match(stale.headers.get("content-type")!, /^text\/html/);
-    assert.match(await stale.text(), /First administrator setup is unavailable[\s\S]+href="\/login">Go to sign-in/);
+    const staleHtml = await stale.text();
+    assert.match(staleHtml, /First administrator setup is unavailable[\s\S]+already has an administrator[\s\S]+href="\/login">Go to sign-in/);
+    assert.doesNotMatch(staleHtml, /personal desktop installation/, "an organisation server says it already has an admin, not that it is a personal desktop");
     const api = await fetch(base + "/bootstrap", { headers: { accept: "application/json" } });
     assert.equal(api.status, 404);
     assert.equal((await api.json()).code, "bootstrap-unavailable");
@@ -175,6 +181,10 @@ test("at the private level the first Admin needs no token anywhere: the environm
     for (const name of ["DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET", "FEISHU_APP_ID", "FEISHU_APP_SECRET", "https://org.example.test/auth/dingtalk/callback", "https://org.example.test/auth/feishu/callback"]) {
       assert.ok(page.includes(name), `${lang}: the page names ${name}`);
     }
-    assert.doesNotMatch(page, /token|pane=doors|<button/i, `${lang}: no token page and no button that leads nowhere`);
+    assert.doesNotMatch(page, /token|pane=doors|<button|REPLACE_WITH_PUBLIC_HOST/i, `${lang}: no token page, no dead button, and no placeholder warning when public URL is real`);
   }
+  const placeholder = await fresh({ AGENTBOX_PUBLIC_URL: "https://REPLACE_WITH_PUBLIC_HOST" });
+  const placeholderPage = await (await fetch(`${placeholder.base}/bootstrap?lang=en`, { headers: browser })).text();
+  assert.match(placeholderPage, /REPLACE_WITH_PUBLIC_HOST[\s\S]*real public HTTPS address/, "warns when manifest placeholder host has not been replaced");
+  assert.doesNotMatch(placeholderPage, /token/i);
 });
