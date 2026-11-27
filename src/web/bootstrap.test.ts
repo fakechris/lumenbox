@@ -188,3 +188,120 @@ test("at the private level the first Admin needs no token anywhere: the environm
   assert.match(placeholderPage, /REPLACE_WITH_PUBLIC_HOST[\s\S]*real public HTTPS address/, "warns when manifest placeholder host has not been replaced");
   assert.doesNotMatch(placeholderPage, /token/i);
 });
+
+test("local port-forward bootstrap breaks the 401 loop: operator unlock opens Settings -> Channels, saves publicUrl + credentials, and private exposure refuses operator unlock (INV-2260)", async t => {
+  const { resetConfigEnvForTests } = await import("../config.ts");
+  const KEYS = ["AGENTBOX_HOME", "AGENTBOX_PUBLIC_URL", "AGENTBOX_EXPOSURE", "AGENTBOX_UI_TOKEN"] as const;
+  const original = Object.fromEntries(KEYS.map(key => [key, process.env[key]]));
+  const homes: string[] = [];
+  let stop: (() => void) | undefined;
+  t.after(() => {
+    stop?.();
+    resetConfigEnvForTests();
+    for (const key of KEYS) { if (original[key] === undefined) delete process.env[key]; else process.env[key] = original[key]; }
+    for (const home of homes) rmSync(home, { recursive: true, force: true });
+  });
+
+  const home = mkdtempSync(join(tmpdir(), "bootstrap-local-pf-")); homes.push(home);
+  for (const key of KEYS) delete process.env[key];
+  resetConfigEnvForTests();
+  Object.assign(process.env, { AGENTBOX_HOME: home, AGENTBOX_EXPOSURE: "local" });
+  writeFileSync(join(home, "principals.json"), JSON.stringify({ principals: [], installation: { mode: "organisation" } }));
+  let listenUrl = "";
+  stop = await startWebServer({ port: 0, host: "0.0.0.0", useBox: false, onLog: () => {}, onReady: url => { listenUrl = url; } });
+  const port = new URL(listenUrl).port;
+  const base = `http://127.0.0.1:${port}`;
+  const uiCred = readFileSync(join(home, "ui-token"), "utf8").trim();
+
+  // 1. Unauthenticated /bootstrap shows the inline operator unlock form; clicking the channel settings link directly also offers operator unlock (never a dead loop).
+  const bootUnauth = await (await fetch(`${base}/bootstrap?lang=en`, { headers: { accept: "text/html" } })).text();
+  assert.match(bootUnauth, /id="op-unlock"[\s\S]*data-next="\/\?ui=next&amp;once=1&amp;view=settings&amp;pane=doors"/);
+  const settingsUnauth = await fetch(`${base}/?ui=next&once=1&view=settings&pane=doors&lang=en`, { headers: { accept: "text/html" } });
+  assert.equal(settingsUnauth.status, 401);
+  const recoveryHtml = await settingsUnauth.text();
+  assert.match(recoveryHtml, /id="op-unlock"[\s\S]*data-next="\/\?ui=next&amp;once=1&amp;view=settings&amp;pane=doors&amp;lang=en"/);
+  assert.doesNotMatch(recoveryHtml, /\?token=/);
+
+  // 2. Wrong credential fails with 401; correct credential sets HttpOnly cookie and returns safe redirect.
+  const wrongUnlock = await fetch(`${base}/api/operator-session`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ credential: "wrong", next: "/?ui=next&once=1&view=settings&pane=doors" }),
+  });
+  assert.equal(wrongUnlock.status, 401);
+  assert.equal((await wrongUnlock.json()).code, "operator-cred-invalid");
+
+  const okUnlock = await fetch(`${base}/api/operator-session`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ credential: uiCred, next: "/?ui=next&once=1&view=settings&pane=doors" }),
+  });
+  assert.equal(okUnlock.status, 200);
+  const unlockBody = await okUnlock.json() as { ok: boolean; redirect: string };
+  assert.equal(unlockBody.redirect, "/?ui=next&once=1&view=settings&pane=doors");
+  const opCookie = okUnlock.headers.getSetCookie()[0]!.split(";")[0]!;
+  assert.match(opCookie, /^agentbox_ui=/);
+
+  // 3. Evil next URL is neutralized to "/".
+  const evilUnlock = await fetch(`${base}/api/operator-session`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ credential: uiCred, next: "https://evil.example/steal" }),
+  });
+  assert.equal(((await evilUnlock.json()) as { redirect: string }).redirect, "/");
+
+  // 4. With opCookie, Settings -> Channels loads 200 OK, and /bootstrap no longer shows #op-unlock.
+  assert.equal((await fetch(`${base}/?ui=next&once=1&view=settings&pane=doors`, { headers: { cookie: opCookie, accept: "text/html" } })).status, 200);
+  assert.doesNotMatch(await (await fetch(`${base}/bootstrap?lang=en`, { headers: { cookie: opCookie } })).text(), /id="op-unlock"/);
+
+  // 5. Save publicUrl via POST /api/channels/public-url, validate bad URL rejection, and verify live propagation to /api/channels and /bootstrap.
+  const badUrl = await fetch(`${base}/api/channels/public-url`, {
+    method: "POST", headers: { cookie: opCookie, "content-type": "application/json" },
+    body: JSON.stringify({ publicUrl: "not-a-url" }),
+  });
+  assert.equal(badUrl.status, 400);
+  assert.equal((await badUrl.json()).code, "public-url-invalid");
+
+  const saveUrl = await fetch(`${base}/api/channels/public-url`, {
+    method: "POST", headers: { cookie: opCookie, "content-type": "application/json" },
+    body: JSON.stringify({ publicUrl: `${base}/` }),
+  });
+  assert.equal(saveUrl.status, 200);
+  assert.equal(((await saveUrl.json()) as { publicUrl: string }).publicUrl, base);
+
+  const saveDing = await fetch(`${base}/api/channels/records`, {
+    method: "POST", headers: { cookie: opCookie, "content-type": "application/json" },
+    body: JSON.stringify({ id: "dingtalk", type: "dingtalk", name: "DingTalk", appId: "ding-id", appSecret: "ding-secret" }),
+  });
+  assert.equal(saveDing.status, 200);
+
+  const channelsAfter = await (await fetch(`${base}/api/channels`, { headers: { cookie: opCookie } })).json();
+  assert.equal(channelsAfter.publicUrl, base);
+  assert.equal(channelsAfter.publicUrlLocked, false);
+  assert.equal(channelsAfter.feishuCallbackTemplate, `${base}/auth/CHANNEL_ID/callback`);
+  assert.equal(channelsAfter.records.find((r: { id: string }) => r.id === "dingtalk").credentialsSet, true);
+
+  const bootReady = await (await fetch(`${base}/bootstrap?lang=en`, { headers: { cookie: opCookie } })).text();
+  assert.match(bootReady, />Sign in with DingTalk<\/button>/);
+
+  // 6. On private exposure, POST /api/operator-session is strictly refused (403 token-not-here) and /api/channels/public-url refuses plain http://.
+  stop(); stop = undefined;
+  const privHome = mkdtempSync(join(tmpdir(), "bootstrap-priv-lock-")); homes.push(privHome);
+  for (const key of KEYS) delete process.env[key];
+  resetConfigEnvForTests();
+  Object.assign(process.env, { AGENTBOX_HOME: privHome, AGENTBOX_EXPOSURE: "private", AGENTBOX_PUBLIC_URL: "https://org.example.test" });
+  writeFileSync(join(privHome, "principals.json"), JSON.stringify({ principals: [], installation: { mode: "organisation" } }));
+  let privUrl = "";
+  stop = await startWebServer({ port: 0, host: "127.0.0.1", useBox: false, onLog: () => {}, onReady: url => { privUrl = url; } });
+  const privCred = readFileSync(join(privHome, "ui-token"), "utf8").trim();
+  const refusedUnlock = await fetch(`${privUrl}/api/operator-session`, {
+    method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https" },
+    body: JSON.stringify({ credential: privCred }),
+  });
+  assert.equal(refusedUnlock.status, 403);
+  assert.equal((await refusedUnlock.json()).code, "token-not-here");
+
+  const lockedUrl = await fetch(`${privUrl}/api/channels/public-url`, {
+    method: "POST", headers: { authorization: `Bearer ${privCred}`, "content-type": "application/json" },
+    body: JSON.stringify({ publicUrl: "https://other.example.test" }),
+  });
+  assert.equal(lockedUrl.status, 409);
+  assert.equal((await lockedUrl.json()).code, "public-url-from-env");
+});

@@ -28,7 +28,7 @@
     "test:cua": "node --experimental-transform-types scripts/cua-contract-smoke.mjs",
     "test:egress": "node --experimental-transform-types scripts/egress-confinement-check.mjs",
     "test:ci": "node scripts/test-floor.mjs",
-    "test:layout": "node scripts/ui-layout.mjs && node scripts/ui-next-layout.mjs",
+    "test:layout": "node scripts/ui-layout.mjs && node scripts/ui-next-layout.mjs && node --experimental-transform-types scripts/ui-bootstrap-e2e.mjs",
     "flaky": "node scripts/flaky.mjs",
     "eval": "node --experimental-transform-types scripts/eval-report.mjs",
     "check": "npm run typecheck && npm run lint && npm run arch && npm run test:ci",

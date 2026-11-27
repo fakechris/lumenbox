@@ -32,6 +32,32 @@ export function signInCallbackUrl(publicUrl: string | undefined, channelId: stri
 }
 
 /**
+ * Validate and normalize an installation's web sign-in base URL (`AGENTBOX_PUBLIC_URL`),
+ * or return `{ clear: true }` when cleared, or `{ error }` when invalid.
+ */
+export function parsePublicUrlInput(
+  raw: unknown,
+  requireHttps: boolean,
+): { url: string | null } | { error: "public-url-invalid" | "public-url-https" } {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (trimmed === "") return { url: null };
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { error: "public-url-invalid" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { error: "public-url-invalid" };
+  if (parsed.username !== "" || parsed.password !== "" || parsed.search !== "" || parsed.hash !== "") {
+    return { error: "public-url-invalid" };
+  }
+  const cleanPath = parsed.pathname.replace(/\/+$/, "");
+  if (cleanPath !== "") return { error: "public-url-invalid" };
+  if (requireHttps && parsed.protocol !== "https:") return { error: "public-url-https" };
+  return { url: parsed.origin };
+}
+
+/**
  * The doors a person may sign in through on the web: Feishu and DingTalk doors whose app is set
  * (INV-729), and only on an installation with a public address — the vendor sends the person back to
  * it, so without one the button would lead to a refusal (`public-url-unset`). WeCom joins when it has

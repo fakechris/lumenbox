@@ -89,7 +89,7 @@ import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
 import { modelPresets, modelTestError } from "./model-settings.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
+import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, parsePublicUrlInput, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import {
   authorize,
@@ -97,8 +97,10 @@ import {
   type AuthDecision,
   isLoopback, boxSideRefusal,
   mayDrive,
+  operatorCookieFor,
   parseCookies,
   refusalToDrive,
+  safeNext,
   type Caller,
 } from "./auth.ts";
 import {
@@ -147,7 +149,7 @@ function readToolList(value: unknown): readonly string[] | null | undefined | Er
  */
 export const RESTART_EXIT_CODE = 75;
 
-import { agentboxHome, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
+import { agentboxHome, configCredentialSource, egressRelayFromEnv, holdHostToken, isPersonalBoxQuota, trustsGatewayIdentity, loadConfig, lockedConfigEnv, reapplyConfigEnv, saveConfig, type AgentboxConfig } from "../config.ts";
 
 type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 import { ChannelManager } from "../channels/manager.ts"; import { needsEnv, STARTING } from "../channels/status-line.ts";
@@ -785,7 +787,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     return !channelRecords.some(record => record.id === door) || !principals.hasCurrentIdentity(person.id, identity);
   };
   const usableSignIns = (person: Principal) => {
-    const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
+    const doors = webSignInDoors(channelRecords, channelCredentialsSet, configuredPublicUrl());
     const now = Date.now();
     return person.identities.filter(identity => {
       if (!principals.hasCurrentIdentity(person.id, identity)) return false;
@@ -3027,10 +3029,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log };
   const orgAdmission = admission(admissionDeps);
   const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
+  const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // The web sign-in through a Feishu or DingTalk door (INV-1701, INV-729): one dispatcher in door-sign-in.ts.
   const handleDoorAuth = doorSignInHandler({
     records: () => channelRecords, envBase: channelEnvBase, env: key => process.env[key] ?? (loadConfig().env ?? {})[key],
-    publicUrl: () => process.env.AGENTBOX_PUBLIC_URL, feishuDomain: () => process.env.FEISHU_DOMAIN ?? "feishu", fetch: options.loginFetch ?? fetch,
+    publicUrl: configuredPublicUrl, feishuDomain: () => process.env.FEISHU_DOMAIN ?? "feishu", fetch: options.loginFetch ?? fetch,
     bootstrap, setupPending: bootstrapPending, principals, send, log, admit: (...who) => orgAdmission.admit(...who),
     sessionCookie: (identity, principalId) => sessionCookie(identity, sessionSecret, epochs.of(principalId), secureCookies),
   });
@@ -3061,11 +3064,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const personal = principals.installation().mode === "single-machine";
           send(res, 404, html ? signInRecoveryPage(reason, localeOf(req, url), { personal }) : apiError(reason), html ? "text/html" : "application/json"); return;
         }
-        const publicUrl = process.env.AGENTBOX_PUBLIC_URL, doors = webSignInDoors(channelRecords, channelCredentialsSet, publicUrl);
+        const isLocal = (exposure?.level ?? "local") === "local";
+        if (isLocal && decision.allow && "setCookie" in decision && decision.setCookie) res.setHeader("set-cookie", decision.setCookie);
+        const publicUrl = configuredPublicUrl(), doors = webSignInDoors(channelRecords, channelCredentialsSet, publicUrl);
         const toSet = channelRecords.filter(record => signsInOnWeb(record.type)).map(record => ({ id: record.id, type: record.type as WebSignInType,
           keys: doorSignInFor(record.type, { feishuDomain: "feishu" })!.keys(channelEnvBase(record.id)), callback: signInCallbackUrl(publicUrl, record.id) }));
+        const operatorUnlock = isLocal && Boolean(token) && !decision.allow
+          ? { credPath: join(agentboxHome(), "ui-token"), next: "/?ui=next&once=1&view=settings&pane=doors" }
+          : undefined;
         res.setHeader("referrer-policy", "no-referrer"); // INV-2227: off local no step may need a page opened with the token
-        send(res, 200, bootstrapPage({ doors, toSet, local: (exposure?.level ?? "local") === "local", locale: localeOf(req, url), codePath: bootstrap.codePath, callbackTemplate: signInCallbackUrl(publicUrl, "CHANNEL_ID") }), "text/html");
+        send(res, 200, bootstrapPage({
+          doors, toSet, local: isLocal, locale: localeOf(req, url), codePath: bootstrap.codePath,
+          callbackTemplate: signInCallbackUrl(publicUrl, "CHANNEL_ID"), ...(operatorUnlock ? { operatorUnlock } : {}),
+        }), "text/html");
         } catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }
@@ -3083,7 +3094,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       if (route === "GET /login") {
         const locale = localeOf(req, url); // a code, or a Feishu door to the same session (INV-1701)
-        send(res, 200, loginPageWithDoors(LOGIN_PAGE(locale, bootstrapPending()), webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL), locale), "text/html");
+        send(res, 200, loginPageWithDoors(LOGIN_PAGE(locale, bootstrapPending()), webSignInDoors(channelRecords, channelCredentialsSet, configuredPublicUrl()), locale), "text/html");
         return;
       }
       // The doors' sign-in (Feishu, DingTalk), also before the gate and for the same reason as
@@ -3148,11 +3159,40 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         });
         return;
       }
+      if (route === "POST /api/operator-session") {
+        if ((exposure?.level ?? "local") !== "local") { send(res, 403, apiError("token-not-here")); return; }
+        const source = `op:${req.socket.remoteAddress ?? "unknown"}`, wait = codeAttempts.waitFor(source);
+        if (wait !== undefined) { send(res, 429, apiError("code-attempts", { seconds: wait })); return; }
+        let body: Record<string, unknown>;
+        try {
+          body = await readJson(req);
+          if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid body");
+        } catch { send(res, 400, apiError("body-invalid")); return; }
+        const check = operatorCookieFor(
+          { token, host, ...(exposure !== undefined ? { level: exposure.level } : {}) },
+          typeof body.credential === "string" ? body.credential : "",
+        );
+        if (!check.allow) {
+          if (codeAttempts.failed(source)) log(`web operator unlock: too many wrong attempts from ${source}; pausing for a while`);
+          send(res, 401, apiError("operator-cred-invalid"));
+          return;
+        }
+        if ("setCookie" in check && check.setCookie) res.setHeader("set-cookie", check.setCookie);
+        const redirect = safeNext(typeof body.next === "string" ? body.next : undefined) ?? "/";
+        send(res, 200, { ok: true, redirect });
+        return;
+      }
       if (!decision.allow && route !== "POST /api/login") {
         if (req.method === "GET" && !/^\/api(?:\/|$)/.test(url.pathname) && wantsHtml(req.headers.accept)) {
           const reason = decision.reason === "access-removed" || decision.reason === "session-expired" ? decision.reason : "sign-in-required";
           const orgView = /\bLumenBoxOrgView\/1\b/.test(req.headers["user-agent"] ?? "");
-          send(res, 401, signInRecoveryPage(reason, localeOf(req, url), { orgView, setup: !orgView && bootstrapPending() }), "text/html");
+          const isLocal = (exposure?.level ?? "local") === "local";
+          const operatorUnlock = !orgView && isLocal && Boolean(token)
+            ? { credPath: join(agentboxHome(), "ui-token"), next: safeNext(url.pathname + url.search) ?? "/" }
+            : undefined;
+          send(res, 401, signInRecoveryPage(reason, localeOf(req, url), {
+            orgView, setup: !orgView && bootstrapPending(), ...(operatorUnlock ? { operatorUnlock } : {}),
+          }), "text/html");
           return;
         }
         // Off local the token is not how a person gets in, so the answer does not offer it (INV-2204).
@@ -4475,9 +4515,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/channels") {
           if (refusedRole("admin")) return;
           invites.dropWhere(invite => invite.expiresAt < Date.now());
+          const publicUrl = configuredPublicUrl();
           send(res, 200, {
             bootstrapPending: caller.userId === undefined && bootstrapPending(),
-            feishuCallbackTemplate: signInCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID"),
+            publicUrl: publicUrl ?? "",
+            publicUrlLocked: configCredentialSource("AGENTBOX_PUBLIC_URL") === "environment",
+            feishuCallbackTemplate: signInCallbackUrl(publicUrl, "CHANNEL_ID"),
             channels: channels.list(localeOf(req, url)), // each status in the reader's language (INV-1702)
             // The doors as records (docs/22 §2): what the settings dialog edits.
             // Credentials are reported as present/absent, never as values.
@@ -4501,6 +4544,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             knocks: [...knocks.values()],
             invites: invites.list().map(({ code, role, principalId, expiresAt }) => ({ code, role, principalId, expiresAt })),
           });
+          return;
+        }
+
+        if (route === "POST /api/channels/public-url") {
+          if (refusedRole("admin")) return;
+          if (configCredentialSource("AGENTBOX_PUBLIC_URL") === "environment") {
+            send(res, 409, apiError("public-url-from-env", { url: process.env.AGENTBOX_PUBLIC_URL ?? "" }));
+            return;
+          }
+          const body = await readJson(req);
+          const parsed = parsePublicUrlInput(body.publicUrl, (exposure?.level ?? "local") !== "local");
+          if ("error" in parsed) {
+            send(res, 400, apiError(parsed.error));
+            return;
+          }
+          saveConfig({ env: { AGENTBOX_PUBLIC_URL: parsed.url } });
+          reapplyConfigEnv(loadConfig());
+          log(`channels: AGENTBOX_PUBLIC_URL ${parsed.url ? `set to ${parsed.url}` : "cleared"}`);
+          send(res, 200, { publicUrl: configuredPublicUrl() ?? "" });
           return;
         }
 
@@ -4667,7 +4729,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           currentSessionIdentity: "sessionIdentity" in decision && gatewayCaller.userId === undefined ? decision.sessionIdentity : undefined,
           usableSignIns, retiredSignIn, planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, checkBoxResidents, boxResidents),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
-          doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });
+          doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: configuredPublicUrl(), callerId: () => caller.userId, log });
         if (peopleReply !== undefined) { if (peopleReply.status !== 0) send(res, peopleReply.status, peopleReply.body); return; }
         const activationReply = await activationRoute(route, url.searchParams, { ...admissionDeps, admission: orgAdmission, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req),
           callerId: () => caller.userId, doors: () => channelRecords, boxesHeld: id => personalBoxesOf(registry.listBoxes(), id).length });
