@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: organisation-onboarding
-     updated: 2026-11-27
+     updated: 2026-11-28
 -->
 # Joining an organisation: activation, a box and an agent each, the first chat, and what boxes share
 
@@ -136,8 +136,9 @@ longer opens with a token.
 | Step | State |
 |---|---|
 | Sign in through a DingTalk door; activation by person or department; leaving; the sync brake (docs/107) | Built (INV-729, INV-2202) |
-| A box made at the first page load | Built (INV-2203); replaced by "at activation" below, kept as "at first use" |
-| 1. Activation makes the person, the box and the agent, and tells them | Not built |
+| A box made at the first page load | Built (INV-2203); kept as `personalBoxAt: "first-use"` |
+| 1a. Activation makes the person, the box and the agent; the setting; activations from before become people (home format 2) | Built (INV-2220). The agent is made when its box has started, not at the reservation: an agent needs its box in the registry. The member template is a `config.json` key (`memberTemplate`), not yet a page setting. A third value, `"never"`, is what `autoPersonalBox: false` meant |
+| 1b. The page that shows a department's boxes starting and what the press asks of the cluster; telling the person through the door | Not built |
 | 2. A direct message reaches the person's own agent; `@Name` among the speaker's boxes; an agent reaches its person | Not built |
 | 3. The first conversation offers the sign-ins the organisation's skills declare | Not built |
 | 4. Organisation skills | Not built |

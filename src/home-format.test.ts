@@ -17,6 +17,10 @@ import { AgentRegistry } from "./agents/registry.ts";
 import { loadConfig } from "./config.ts";
 import { HOME_COMMANDS, HOME_FORMAT_FILE, HOME_FORMAT_LEDGER, HOME_MIGRATIONS, HOME_REFUSED_EXIT, HOMELESS_COMMANDS, type HomeMigration, HomeFormatError, openHome, opensHome, readFormatLedger } from "./home-format.ts";
 import { TaskStore } from "./host/tasks.ts";
+import { Activations } from "./host/activations.ts";
+import { directorySource } from "./host/directory.ts";
+import { enrolStandingActivations } from "./host/enrolment.ts";
+import { Principals } from "./host/principals.ts";
 
 const CURRENT = HOME_MIGRATIONS.length;
 const FIXTURE = fileURLToPath(new URL("./fixtures/home-0.4.9", import.meta.url));
@@ -320,4 +324,91 @@ test("the desktop app shows a refused home instead of restarting the server: the
   const main = readFileSync(fileURLToPath(new URL("../electron/main.cjs", import.meta.url)), "utf8");
   const handler = main.slice(main.indexOf('serverChild.on("exit"'), main.indexOf("crashRestarts += 1"));
   assert.match(handler, /if \(code === HOME_REFUSED_EXIT\) \{[\s\S]*homeRefusal\(recentLog\)[\s\S]*dialog\.showErrorBox\(refusal\.title, refusal\.message\)[\s\S]*app\.quit\(\)[\s\S]*return;/);
+});
+
+test("format 2: an activation nobody signed in on becomes a roster person, once, as the activation would have made them; a failure leaves format 1 (INV-2220)", t => {
+  const home = oldHome(t);
+  writeFileSync(join(home, HOME_FORMAT_FILE), "1\n");
+  writeFileSync(join(home, "channels.json"), JSON.stringify({ channels: [{ id: "ding", name: "DingTalk", type: "dingtalk", incarnation: 1, boxId: "default", createdAt: "2026-11-27T00:00:00.000Z" }] }));
+  const rosterPath = join(home, "principals.json"), ledgerPath = join(home, "activations.jsonl");
+  const roster = {
+    installation: { mode: "organisation" },
+    principals: [
+      { id: "p-ana", name: "Ana", role: "admin", identities: ["web:ana"] },
+      // Eve signed in on her activation under the old rule; Cat is on the roster already, at another role than her activation's.
+      { id: "ding:eve", name: "Eve", role: "driver", identities: [{ identity: "ding:eve", incarnation: 1 }] },
+      { id: "ding:cat", name: "Cat", role: "admin", identities: [{ identity: "ding:cat", incarnation: 1 }] },
+    ],
+  };
+  writeFileSync(rosterPath, JSON.stringify(roster));
+  // The ledger as the version before wrote it: activations are records, `admitted` is the sign-in that made the person.
+  let clock = Date.parse("2026-11-20T00:00:00.000Z");
+  const ledger = new Activations(ledgerPath, () => { clock += 60_000; return new Date(clock); });
+  const source = directorySource("ding", 1, "ding-app", "dingtalk"), replacedApp = directorySource("ding", 1, "old-app", "dingtalk"), replacedDoor = directorySource("ding", 2, "ding-app", "dingtalk");
+  ledger.activatePerson(replacedApp, { subject: "zed", name: "Zed" }, "driver", "p-ana", true);
+  ledger.activatePerson(source, { subject: "bob", name: "Bob" }, "viewer", "p-ana", true);
+  const snapshot = { departments: [{ vendorId: "10", name: "Engineering", parentVendorId: null }], people: ["cat", "dan", "eve"].map(subject => ({ vendorSubject: subject, name: subject[0]!.toUpperCase() + subject.slice(1), departmentVendorIds: ["10"] })) };
+  ledger.activateDepartment(source, snapshot, "10", false, "driver", "p-ana", () => false);
+  ledger.admitted(source, "eve", "ding:eve");
+  ledger.activatePerson(source, { subject: "fay", name: "Fay" }, "driver", "p-ana", true);
+  ledger.left(source, { subject: "fay", name: "Fay" });
+  ledger.activatePerson(replacedDoor, { subject: "gus", name: "Gus" }, "driver", "p-ana", true);
+  ledger.request(source, { subject: "hal", name: "Hal" });
+  const before = readFileSync(ledgerPath, "utf8");
+
+  // The home has work for format 2, so it must be writable: a read-only one is refused, saying which format it needs, and nothing is copied.
+  if (process.getuid?.() !== 0) {
+    chmodSync(home, 0o500);
+    try {
+      assert.throws(() => openHome({ home, appVersion: "0.5.0", backup: () => assert.fail("nothing is copied from a home that cannot be upgraded") }),
+        /is format 1 and has to be upgraded to format 2 \(activations nobody signed in on become roster people\) before this version can use it, but it cannot be written \(EACCES\)\. Nothing was changed/);
+    } finally { chmodSync(home, 0o700); }
+  }
+
+  // A roster that cannot be read: the migration fails, the home stays format 1 with its copy named, and nothing was written.
+  writeFileSync(rosterPath, "{ not json");
+  assert.throws(() => openHome({ home, appVersion: "0.5.0", now: at, backup: stamp => `/backups/${stamp}` }), /to format 2 \(activations nobody signed in on become roster people\) failed: .*The home is still format 1, and a copy from before the upgrade is at \/backups\//);
+  assert.equal(formatOf(home), "1\n");
+  assert.equal(readFileSync(ledgerPath, "utf8"), before);
+  assert.equal(readFileSync(rosterPath, "utf8"), "{ not json");
+
+  writeFileSync(rosterPath, JSON.stringify(roster));
+  const copies: string[] = [];
+  assert.deepEqual(openHome({ home, appVersion: "0.5.0", now: at, backup: stamp => { copies.push(stamp); return `/backups/${stamp}`; } }).applied, [2]);
+  assert.equal(copies.length, 1, "the home is copied before the roster is rewritten");
+  const people = new Principals(rosterPath).list();
+  assert.deepEqual(people.map(person => [person.id, person.name, person.role, person.identities]), [
+    ["p-ana", "Ana", "admin", ["web:ana"]],
+    ["ding:eve", "Eve", "driver", ["ding:eve"]],
+    ["ding:cat", "Cat", "admin", ["ding:cat"]], // already a person: counted, not duplicated, her role not rewritten
+    ["ding:bob", "Bob", "viewer", ["ding:bob"]],
+    ["ding:dan", "Dan", "driver", ["ding:dan"]],
+  ], "Bob and Dan are made as their activations say; Fay left, Gus was activated on a replaced door, Zed on a replaced app, Hal only asked");
+  const stored = JSON.parse(readFileSync(rosterPath, "utf8")) as { installation: unknown; principals: { id: string; identities: unknown }[] };
+  assert.deepEqual(stored.principals.find(person => person.id === "ding:bob")?.identities, [{ identity: "ding:bob", incarnation: 1 }], "the link carries the door's incarnation, as every other does");
+  assert.deepEqual(stored.installation, { mode: "organisation" });
+  const after = new Activations(ledgerPath);
+  assert.deepEqual(after.unenrolled(source), [], "and the ledger says they were made");
+  assert.match(readFileSync(ledgerPath, "utf8").trim().split("\n").at(-1)!, /"type":"enrolled".*"migrated":true/);
+  assert.equal(after.stateOf(source, "bob", true), "active");
+
+  // Run again — as after a crash between the migration and the stamp — it finds its own work and changes nothing.
+  const [rosterDone, ledgerDone] = [readFileSync(rosterPath, "utf8"), readFileSync(ledgerPath, "utf8")];
+  enrolStandingActivations(home);
+  assert.deepEqual([readFileSync(rosterPath, "utf8"), readFileSync(ledgerPath, "utf8")], [rosterDone, ledgerDone]);
+  // A crash after the roster was written and before the ledger said so: the next run only writes the line.
+  writeFileSync(ledgerPath, before);
+  enrolStandingActivations(home);
+  assert.equal(readFileSync(rosterPath, "utf8"), rosterDone, "nobody is made twice");
+  assert.deepEqual(new Activations(ledgerPath).unenrolled(source), []);
+
+  // An organisation whose activated people are all on the roster has nothing owed: format 2 is a stamp there, with no copy,
+  // and so it is for a ledger a crash tore and for a home with no ledger at all — every personal installation.
+  for (const prepare of [() => {}, () => writeFileSync(ledgerPath, `${readFileSync(ledgerPath, "utf8")}{"type":"activate-pers`), () => rmSync(ledgerPath)]) {
+    prepare();
+    writeFileSync(join(home, HOME_FORMAT_FILE), "1\n");
+    assert.deepEqual(openHome({ home, appVersion: "0.5.0", now: at, backup: () => assert.fail("nothing to change, nothing to copy") }).applied, [2]);
+    assert.equal(readFormatLedger(home).at(-1)?.backup, undefined);
+    assert.equal(readFileSync(rosterPath, "utf8"), rosterDone);
+  }
 });

@@ -4,7 +4,7 @@
      status: current
      covers: channel
      audience: user
-     updated: 2026-11-27
+     updated: 2026-11-28
 -->
 # Channels
 
@@ -39,8 +39,10 @@ Channels.
   *Sync the directory now* reads it again; it also refreshes daily. Open a department to see its
   people and where each stands: *Listed*, *Asked to join*, *Active* or *Left*. Choose a role and
   press *Activate* beside a person, or *Activate the N listed now* for a whole department, with
-  its sub-departments if you tick that. The person joins the next time they sign in through the
-  channel. Somebody who signs in before being activated sees "Your request to join is with the
+  its sub-departments if you tick that. The person is on the team at once: a message from them in
+  the channel is theirs, their own computer is made with one assistant in it if their limit allows one (a
+  few computers start at a time when a department is activated), and they sign in through the
+  channel whenever they come. Somebody who signs in before being activated sees "Your request to join is with the
   Admins" and waits under *Asked to join*, here and in Settings → Channels.
 - **Connect a service:** Settings → Channels → Connectors → *Connect* links an outside service,
   such as Notion, for the agents to use.

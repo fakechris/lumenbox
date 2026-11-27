@@ -34,6 +34,7 @@ function organisation(home: string, subjects: string[]) {
     ...deps, admission: door, refusedAdmin: () => false, readJson: async () => ({ channelId: "ding", ...body }), callerId: () => "p-ana",
     doors: () => [{ id: "ding", name: "DingTalk", type: "dingtalk" }], boxesHeld: () => 0,
   }))!;
+  /** Who holds a way in through the door: on the roster with that identity. */
   const signedIn = () => subjects.filter(subject => principals.isKnown(`ding:${subject}`));
   return { org, principals, directories, activations, tokens, epochs, source, door, call, signedIn };
 }
@@ -70,7 +71,7 @@ function dingtalkOrganisation() {
   return { people, employees, call };
 }
 
-test("an Admin activates a person or a department and they sign in at that role; anybody else has asked to join, once; a sync ends the sign-in of whoever the directory stopped listing and deletes nothing (INV-2202)", async t => {
+test("an Admin activates a person or a department and they are on the roster at once, known to the chat, and sign in at that role; anybody else has asked to join, once; a sync ends the sign-in of whoever the directory stopped listing and deletes nothing (INV-2202)", async t => {
   const home = mkdtempSync(join(tmpdir(), "inv2202-activation-"));
   const previousHome = process.env.AGENTBOX_HOME, previousUrl = process.env.AGENTBOX_PUBLIC_URL;
   process.env.AGENTBOX_HOME = home; process.env.AGENTBOX_PUBLIC_URL = "https://org.example";
@@ -139,11 +140,16 @@ test("an Admin activates a person or a department and they sign in at that role;
   assert.equal(await stateOf("20", "bob"), "asked");
   assert.equal(new Principals().list().length, 2, "a request is not a person on the roster, and neither is a directory row");
 
-  // The Admin activates that request: the next sign-in is let through, at the role chosen.
+  // The Admin activates that request: Bob is a person on the roster at once (INV-2220), and his sign-in finds him there.
   assert.equal((await api("/api/activations/person", { channelId: "ding", subject: "bob", role: "viewer" })).status, 200);
-  assert.equal(new Principals().list().length, 2, "still nobody new: the activation is a record until Bob signs in");
+  assert.deepEqual(new Principals().list().at(-1), { id: "ding:bob", name: "Bob", role: "viewer", identities: ["ding:bob"] }, "the Admin's act made him, holding the identity the door mints");
+  const signedInYet = async (department: string, subject: string) =>
+    (await api(`/api/activations/people?channelId=ding&department=${department}`)).data.people.find((person: { subject: string }) => person.subject === subject)?.signedIn;
+  assert.equal(await signedInYet("20", "bob"), false, "activated, and has not signed in yet");
   const bob = await scan("bob");
   assert.equal(bob.status, 302);
+  assert.equal(new Principals().list().length, 3, "the sign-in made nobody");
+  assert.equal(await signedInYet("20", "bob"), true);
   assert.deepEqual((({ identity, name, role }) => ({ identity, name, role }))((await me(bob.cookie!)).data), { identity: "ding:bob", name: "Bob", role: "viewer" }, "the identity the DingTalk chat mints, named as the directory names him");
   assert.equal((await api("/api/activations")).data.requests.length, 0);
   assert.equal((await api("/api/activations/person", { channelId: "ding", subject: "nobody", role: "driver" })).status, 404, "never a subject typed from nowhere");
@@ -151,6 +157,9 @@ test("an Admin activates a person or a department and they sign in at that role;
 
   // A department without its sub-departments: Gus is in Engineering, Cat in Platform under it.
   assert.deepEqual((await api("/api/activations/department", { channelId: "ding", department: "10", includeSub: false, role: "driver" })).data, { activated: 1, alreadyActive: 0 });
+  // What a chat message from Gus is asked, before he has opened the page once: a known person who may give work.
+  const chat = new Principals();
+  assert.deepEqual([chat.isKnown("ding:gus"), chat.roleOf("ding:gus")], [true, "driver"]);
   const gus = await scan("gus");
   assert.equal((await me(gus.cookie!)).data.role, "driver");
   assert.match((await scan("cat")).page, waiting, "a sub-department was not asked for");
@@ -228,10 +237,11 @@ test("an activation belongs to the door it was made against, and a request outli
   const home = mkdtempSync(join(tmpdir(), "inv2202-source-"));
   try {
     const path = join(home, "activations.jsonl");
-    const principals = new Principals(join(home, "principals.json"));
+    let incarnation = 1;
+    // The roster asks the door's incarnation as the server's does: a link made under another one resolves nobody.
+    const principals = new Principals(join(home, "principals.json"), { incarnationOf: identity => identity.startsWith("ding:") ? incarnation : 1 });
     principals.save([{ id: "p-ana", name: "Ana", role: "admin", identities: ["web:ana"] }]);
     const directories = new Directories(join(home, "directory.json"));
-    let incarnation = 1;
     const credentials = (channelId: string) => ({ source: directorySource(channelId, incarnation, "ding-app", "dingtalk"), clientId: "ding-app", clientSecret: "secret", provider: directoryProviders.dingtalk! });
     const door = () => admission({ activations: new Activations(path), directories, principals, credentials, fetch, signOut: () => {}, revokeTokens: () => {}, log: () => {} });
     const snapshot = { departments: [{ vendorId: "1", name: "Acme", parentVendorId: null }], people: [{ vendorSubject: "bob", name: "Bob", departmentVendorIds: ["1"] }, { vendorSubject: "cat", name: "Cat", departmentVendorIds: ["1"] }] };
@@ -244,14 +254,26 @@ test("an activation belongs to the door it was made against, and a request outli
     assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 1);
 
     kept.activateDepartment(credentials("ding").source, snapshot, "1", false, "driver", "p-ana", () => false);
-    // The door's app is replaced: a new incarnation is a different source, and its subjects are not presumed to be the old ones.
+    // The door's app is replaced before the roster gained anybody: a new incarnation is a different source, and its subjects are not presumed to be the old ones.
     incarnation = 2;
-    assert.equal(door().admit("ding", "bob", "Bob"), "asked", "an activation made against the old door admits nobody through the new one");
+    assert.deepEqual(door().activated(credentials("ding").source, "p-ana"), [], "an activation made against the old door makes nobody through the new one");
+    assert.equal(door().admit("ding", "bob", "Bob"), "asked");
     assert.equal(principals.list().length, 1);
     assert.equal(door().stateOf(credentials("ding").source, "bob"), "asked");
     incarnation = 1;
-    assert.equal(door().admit("ding", "bob", "Bob"), "admitted", "and it still stands for the door it was made against");
+    assert.deepEqual(door().activated(credentials("ding").source, "p-ana").map(person => person.principalId), ["ding:bob", "ding:cat"], "and it still stands for the door it was made against");
+    assert.equal(door().admit("ding", "bob", "Bob"), "admitted");
     assert.equal(principals.resolve("ding:bob").role, "driver");
+    assert.deepEqual(door().activated(credentials("ding").source, "p-ana"), [], "made once: running it again makes nobody");
+    // Replaced after they were made: the roster link carries the incarnation it was made under, and stops resolving.
+    incarnation = 2;
+    assert.equal(door().admit("ding", "bob", "Bob"), "asked", "the person the old door's activation made does not get in through the new one");
+    incarnation = 1;
+    // An Admin removes Cat before she ever signed in: the activation that made her is spent, and a restart does not bring her back.
+    principals.save(principals.list().filter(person => person.id !== "ding:cat"));
+    assert.deepEqual(door().activated(credentials("ding").source, "start"), []);
+    assert.equal(door().admit("ding", "cat", "Cat"), "asked");
+    assert.equal(door().stateOf(credentials("ding").source, "cat"), "asked");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -273,7 +295,8 @@ test("a sync that would sign many people out at once is held: nothing changes un
     principals.save([{ id: "p-ana", name: "Ana", role: "admin", identities: ["web:ana"] }]);
     org.listed = [...active, ...others];
     assert.deepEqual(await door.sync("ding"), { left: 0, held: 0 });
-    for (const subject of active) { activations.activatePerson(source, { subject, name: subject }, "driver", "p-ana", true); assert.equal(door.admit("ding", subject, subject), "admitted"); }
+    for (const subject of active) activations.activatePerson(source, { subject, name: subject }, "driver", "p-ana", true);
+    assert.equal(door.activated(source, "p-ana").length, 30);
     assert.equal(signedIn().length, 30);
 
     // One of thirty leaves: believed, applied.
@@ -344,8 +367,8 @@ test("leaving ends the sign-in the directory gave and what was made from it; a p
     await door.sync("ding");
     for (const [subject, role] of [["bob", "driver"], ["cat", "admin"], ["dan", "driver"], ["eve", "driver"]] as const) {
       activations.activatePerson(source, { subject, name: subject }, role, "p-ana", true);
-      door.admit("ding", subject, subject);
     }
+    door.activated(source, "p-ana");
     // Bob and Cat have since linked another sign-in (an invite code in a browser); Ana is gone, so Cat is the only Admin.
     principals.save(principals.list().filter(person => person.id !== "p-ana").map(person => ["ding:bob", "ding:cat"].includes(person.id) ? { ...person, identities: [...person.identities, `web:${person.name}`] } : person));
     const fromSignIn = tokens.mint("ding:bob", "made while signed in through DingTalk").token, forBob = tokens.mint("ding:bob", "made for Bob by an Admin", new Date(), "person").token;

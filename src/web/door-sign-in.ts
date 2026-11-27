@@ -275,7 +275,8 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
       // session; any other waits for an Admin — never a session for whoever the vendor knows.
       // An identity nobody holds yet is admitted by an Admin's activation and nothing else (INV-2202,
       // docs/107): activated, they become a person on the roster here; otherwise they have asked to join.
-      const admitted = deps.principals.isKnown(identity) ? "admitted" : deps.admit(channelId, vouched.subject, vouched.name ?? vouched.subject);
+      // Since INV-2220 the activation made the person when it was pressed: `admit` only finds them, and makes nobody.
+      const admitted = deps.admit(channelId, vouched.subject, vouched.name ?? vouched.subject);
       if (admitted !== "admitted") {
         const locale = requestLocaleOf(res.req);
         res.writeHead(403, { "content-type": "text/html; charset=utf-8" });

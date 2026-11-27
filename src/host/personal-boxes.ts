@@ -228,6 +228,8 @@ export class PersonalBoxes {
   list(owner: string) { return this.listed(owner).map(row => this.summary(row)); }
   /** Whether this person was ever given a personal box, deleted ones included (INV-2203). */
   known(owner: string): boolean { return this.read(db => this.records(db).some(row => row.owner === owner)); }
+  /** The request id a box was made under: how the box an installation made for a member is told from one they made by hand (INV-2220). */
+  requestOf(id: string): string | undefined { return this.read(db => this.records(db).find(row => row.id === id)?.request); }
   checkMemberRemoval(owner: string): void {
     if (this.listed(owner).some(row => row.status === "provisioning" || row.status === "deleting" || this.running(row)))
       throw new Error("Finish the pending computer operation before removing this person.");

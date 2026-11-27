@@ -24,6 +24,9 @@
  *   - **`rewrites: true` when it changes or moves stored data.** The whole home is then copied
  *     first (`backup`, the host's own snapshot), once per start, and the copy's path is in the
  *     ledger and in the message if the migration fails. A migration that only stamps needs none.
+ *   - **`needed` when most homes have nothing for it.** A rewriting migration may say whether
+ *     *this* home holds anything it would change. Where it does not, the migration is a stamp:
+ *     not run, no copy taken, and a home that cannot be written is still read (INV-2220).
  *   - **Never renumbered, never edited after a release shipped it.** A home that had migration 3
  *     has had it; changing what 3 does changes nothing there. The fix is migration 4.
  *
@@ -34,6 +37,7 @@
 import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { appendLineDurably } from "./host/jsonl.ts";
+import { enrolStandingActivations, standingActivationsOwed } from "./host/enrolment.ts";
 
 export const HOME_FORMAT_FILE = "FORMAT";
 export const HOME_FORMAT_LEDGER = "format-migrations.jsonl";
@@ -46,6 +50,12 @@ export interface HomeMigration {
   name: string;
   /** Whether it changes or moves stored data. True means a backup is taken first. */
   rewrites: boolean;
+  /**
+   * Whether this home holds anything the migration would change; absent means it always does.
+   * Asked before the copy is taken and on a home that may not be writable, so it is cheap, writes
+   * nothing, and reads a missing or torn file as nothing to do.
+   */
+  needed?(home: string): boolean;
   /** Does it. Must be safe to run again on a home it has already been run on, wholly or in part. */
   run(home: string): void;
 }
@@ -59,7 +69,17 @@ export interface HomeMigration {
  * or depends on something only a running host knows, so a 0.4.9 home may hold either form, and
  * format 1 means "either form, as 0.4.9 reads it". Nothing is rewritten: this only stamps.
  */
-export const HOME_MIGRATIONS: readonly HomeMigration[] = [{ to: 1, name: "the 0.4.9 layout, stamped as it stands", rewrites: false, run: () => {} }];
+export const HOME_MIGRATIONS: readonly HomeMigration[] = [
+  { to: 1, name: "the 0.4.9 layout, stamped as it stands", rewrites: false, run: () => {} },
+  /**
+   * Format 2 (INV-2220, docs/109 §3): an activation makes the roster person when it is pressed, not
+   * at the person's first sign-in. Every activation in `activations.jsonl` that stands, made nobody
+   * and has not left becomes a person in `principals.json`, and the ledger gains the `enrolled` line
+   * saying so (host/enrolment.ts). A home with no such activation — every personal installation,
+   * and an organisation whose activated people have all signed in — is only stamped.
+   */
+  { to: 2, name: "activations nobody signed in on become roster people", rewrites: true, needed: standingActivationsOwed, run: enrolStandingActivations },
+];
 
 /** The exit status of a command that refused the home (EX_CONFIG). Not a crash: starting again changes nothing, and the desktop app shows the message instead of retrying (electron/home-refused.cjs mirrors the number). */
 export const HOME_REFUSED_EXIT = 78;
@@ -262,7 +282,7 @@ export function openHome(options: OpenHomeOptions): OpenedHome {
     const migrations = options.migrations ?? HOME_MIGRATIONS;
     const found = readHomeFormat(home);
     const from = found === "new" ? 0 : found;
-    const owed = migrations.slice(from).find(migration => migration.rewrites);
+    const owed = migrations.slice(from).find(migration => rewritesHere(migration, home));
     const why = (error as NodeJS.ErrnoException).code;
     if (owed !== undefined) {
       throw new HomeFormatError(`The data in ${home} is format ${from} and has to be upgraded to format ${owed.to} (${owed.name}) before this version can use it, but it cannot be written (${why}). Nothing was changed.`, { cause: error });
@@ -271,6 +291,11 @@ export function openHome(options: OpenHomeOptions): OpenedHome {
     (options.log ?? (() => {}))(`home: ${home} cannot be written (${why}), so its format number was not recorded; reading it as it is`);
     return { format: from, applied: [], created: false, unstamped: true };
   }
+}
+
+/** Whether a migration changes stored data in this home: it rewrites, and has not said this home holds nothing for it. */
+function rewritesHere(migration: HomeMigration, home: string): boolean {
+  return migration.rewrites && (migration.needed === undefined || migration.needed(home));
 }
 
 /** A home that cannot be written: another user's, or a read-only mount. */
@@ -309,7 +334,9 @@ function bringForward(options: OpenHomeOptions): OpenedHome {
     const applied: number[] = [];
     let backup: string | undefined;
     for (const migration of migrations.slice(from)) {
-      if (migration.rewrites && backup === undefined) {
+      // Asked once, before anything is copied or run: a rewriting migration with nothing to change here is a stamp.
+      const rewrites = rewritesHere(migration, home), stampOnly = migration.rewrites && !rewrites;
+      if (rewrites && backup === undefined) {
         if (options.backup === undefined) throw new HomeFormatError(`Format ${migration.to} (${migration.name}) rewrites stored data and there is no way to back ${home} up first. Nothing was changed.`);
         const stamp = `${now().toISOString().slice(0, 19).replace(/:/g, "-")}-before-format-${migration.to}`;
         try {
@@ -321,7 +348,7 @@ function bringForward(options: OpenHomeOptions): OpenedHome {
         log(`home: copied to ${backup} before upgrading the stored data`);
       }
       try {
-        migration.run(home);
+        if (!stampOnly) migration.run(home);
       } catch (error) {
         throw new HomeFormatError(
           `Upgrading the data in ${home} to format ${migration.to} (${migration.name}) failed: ${error instanceof Error ? error.message : String(error)}. ` +
@@ -330,7 +357,7 @@ function bringForward(options: OpenHomeOptions): OpenedHome {
         );
       }
       // The record first, the number second: a crash between the two runs the migration again and records it twice, which is what happened.
-      record(home, { format: migration.to, from: migration.to - 1, name: migration.name, at: now().toISOString(), appVersion, ...(migration.rewrites && backup !== undefined ? { backup } : {}) });
+      record(home, { format: migration.to, from: migration.to - 1, name: migration.name, at: now().toISOString(), appVersion, ...(rewrites && backup !== undefined ? { backup } : {}) });
       writeHomeFormat(home, migration.to);
       applied.push(migration.to);
       log(`home: now format ${migration.to} (${migration.name})`);

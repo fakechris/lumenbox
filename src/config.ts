@@ -66,7 +66,9 @@ export interface AgentboxConfig {
   /** Overrides keyed by canonical principal id. */
   personBoxQuotas?: Record<string, number>;
   departmentBoxQuotas?: Record<string, number>;
-  /** Make a member's personal box at their first sign-in (organisation only; absent: on with the Kubernetes backend, INV-2203). */ autoPersonalBox?: boolean;
+  /** When an organisation makes a member's personal box (INV-2220; absent: at activation on a cluster). */ personalBoxAt?: "activation" | "first-use" | "never";
+  /** The old form of `personalBoxAt` (deprecations.ts): true is "first-use", false is "never". */ autoPersonalBox?: boolean;
+  /** A `lumenbox-template/1` file an activated member's agent is made from; absent: the built-in assistant (docs/109 §3). */ memberTemplate?: string;
   /**
    * The box image to pull when this machine has none, as a full `repo:tag` reference.
    *
@@ -361,12 +363,8 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readTurnBudget(raw.turnBudget, onWarn) !== undefined ? { turnBudget: readTurnBudget(raw.turnBudget, onWarn) } : {}),
     ...(typeof raw.longWork === "object" && raw.longWork !== null && !Array.isArray(raw.longWork) ? { longWork: raw.longWork as NonNullable<AgentboxConfig["longWork"]> } : {}),
     ...(raw.effort === "lean" || raw.effort === "standard" || raw.effort === "open" ? { effort: raw.effort } : {}),
-    ...(readHour(raw.upgradeHour, onWarn) !== undefined
-      ? { upgradeHour: readHour(raw.upgradeHour, onWarn) }
-      : {}),
-    ...(readString(raw.provider, "provider", onWarn) !== undefined
-      ? { provider: readString(raw.provider, "provider", onWarn) }
-      : {}),
+    ...(readHour(raw.upgradeHour, onWarn) !== undefined ? { upgradeHour: readHour(raw.upgradeHour, onWarn) } : {}),
+    ...(readString(raw.provider, "provider", onWarn) !== undefined ? { provider: readString(raw.provider, "provider", onWarn) } : {}),
     ...(readString(raw.model, "model", onWarn) !== undefined
       ? { model: readString(raw.model, "model", onWarn) }
       : {}),
@@ -402,6 +400,8 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(raw.personBoxQuotas !== undefined ? { personBoxQuotas: readQuotaMap(raw.personBoxQuotas, "personBoxQuotas", onWarn) } : {}),
     ...(raw.departmentBoxQuotas !== undefined ? { departmentBoxQuotas: readQuotaMap(raw.departmentBoxQuotas, "departmentBoxQuotas", onWarn) } : {}),
     ...Object.fromEntries((["startupItem", "teamMemoryReview", "autoPersonalBox"] as const).filter(key => typeof raw[key] === "boolean").map(key => [key, raw[key]])),
+    ...(["activation", "first-use", "never"].includes(raw.personalBoxAt as string) ? { personalBoxAt: raw.personalBoxAt as NonNullable<AgentboxConfig["personalBoxAt"]> } : {}),
+    ...(readString(raw.memberTemplate, "memberTemplate", onWarn) !== undefined ? { memberTemplate: readString(raw.memberTemplate, "memberTemplate", onWarn) } : {}),
     ...(typeof raw.reviewersPerClaim === "number" && raw.reviewersPerClaim >= 1 ? { reviewersPerClaim: Math.floor(raw.reviewersPerClaim) } : {}),
     ...(readInvolute(raw.involute, onWarn) !== undefined ? { involute: readInvolute(raw.involute, onWarn) } : {}),
   };
