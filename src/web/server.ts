@@ -241,7 +241,7 @@ import { Directories } from "../host/directory.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
-import { personalBoxRoute, planBoxDispositions } from "./personal-box-routes.ts";
+import { personalBoxRoute, planBoxDispositions } from "./personal-box-routes.ts"; import { AutoPersonalBoxes } from "../host/auto-personal-box.ts";
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
@@ -827,6 +827,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     detach: id => { orchestrator.detachBox(id); openDesktops.recheck(); }, residents: id => registry.agentsIn(id).length,
     driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
   }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
+  const reconnectPersonalBox = async (id: string): Promise<void> => { const entry = registry.boxById(id); if (entry) await orchestrator.reconnectBox(entry); };
+  const autoBoxes = new AutoPersonalBoxes({ home: join(agentboxHome(), "personal-boxes"), boxes: personalBoxes, quota: personalQuota, eligible: mayProvision, ready: reconnectPersonalBox, log,
+    // A member's box at first sign-in (INV-2203); by default where the boxes are the cluster's (or a given driver's), not this machine's Docker.
+    enabled: () => principals.installation().mode === "organisation" && (loadConfig().autoPersonalBox ?? (kubernetes || options.personalBoxDriver !== undefined)) });
 
   {
     const legacy = loadConfig().channelAllow ?? [];
@@ -3636,7 +3640,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           await personalBoxRoute(route, { boxes: personalBoxes, principals, identity: caller.userId, quota: personalQuota, authorize: mayProvision,
             connections: () => kubernetes ? orchestrator.boxStatus() : undefined,
             residents: boxResidents,
-            reconnect: async id => { const entry = registry.boxById(id); if (entry) await orchestrator.reconnectBox(entry); },
+            reconnect: reconnectPersonalBox, auto: autoBoxes,
             read: () => readJson(req), send: (status, body) => send(res, status, body), error: apiError });
           return;
         }
@@ -3692,6 +3696,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/me") {
           const principal = // nobody signed in: the installation's one admin — on the desktop app, its Owner (INV-1685)
             caller.userId === undefined ? principals.list().find(person => person.id === soleAdmin(principals.list())) : principals.resolve(caller.userId);
+          if (caller.userId !== undefined && principal) autoBoxes.arrive(principal, tr("ui.personal.defaultName", localeOf(req, url), { name: principal.name }));
           send(res, 200, {
             identity: caller.userId ?? null,
             name: principal?.name ?? null, label: roleLabel(principals.installation(), principal?.id, callerRole),
@@ -4966,7 +4971,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const identity = caller.userId;
             const member = callerRole === "driver" && identity && principals.isKnown(identity) ? principals.resolve(identity).id : undefined;
             const hasPersonalBox = member && principals.installation().mode === "organisation" ? personalBoxesOf(registry.listBoxes(), member).length > 0 : undefined;
-            send(res, 200, { installationId, hasPersonalBox }); return;
+            send(res, 200, { installationId, hasPersonalBox, ...(member && hasPersonalBox === false ? { autoBox: autoBoxes.view(member) } : {}) }); return;
           }
           const agents = registry.list().filter(agent => mayReadAgent(agent.id) && !agent.profile.hidden);
           const reviewed = new Set((orchestrator.tasks?.list() ?? []).filter(task => task.status === "review" || task.status === "done").map(task => task.assigneeId));

@@ -248,6 +248,7 @@ function renderPersonalComputers(view) {
     own.appendChild(el("h2", "group", t("ui.personal.mine")));
     own.appendChild(el("p", "why", computerQuota(mine)));
     if (full) own.appendChild(computerText("p", "why", t("ui.personal.full")));
+    if (mine.auto && mine.auto.state === "preparing") own.appendChild(computerText("p", "why", t("ui.personal.preparing")));
     create.disabled = !mine.canCreate || full || boxes.computerBusy;
     create.addEventListener("click", function () {
       editComputerName(t("ui.personal.create"), t("ui.personal.defaultName", { name: mine.name }), function (name) {
@@ -264,7 +265,9 @@ function renderPersonalComputers(view) {
   var teamBoxes = el("section", "setting"), allocations = el("div", "acts"), list2 = el("div", "list");
   allocations.style.flexWrap = "wrap";
   teamBoxes.appendChild(el("h2", "group", t("ui.personal.team")));
-  inventory.people.forEach(function (person) { allocations.appendChild(el("span", "chip", person.name + " · " + computerQuota(person))); });
+  inventory.people.forEach(function (person) {
+    allocations.appendChild(el("span", "chip", [person.name, computerQuota(person)].concat(person.waitingForQuota ? [t("ui.personal.waiting")] : []).join(" · ")));
+  });
   teamBoxes.appendChild(allocations);
   if (!inventory.boxes.length) list2.appendChild(el("p", "why", t("ui.personal.none")));
   inventory.boxes.forEach(function (box) { list2.appendChild(computerRow(box, false, inventory.people, false)); });

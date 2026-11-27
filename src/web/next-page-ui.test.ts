@@ -615,18 +615,31 @@ test("the member setup checklist counts only the selected box; a viewer gets no 
   assert.equal(setupCard(), null);
 });
 
-test("a driver with no visible box can start personal-box creation from setup", () => {
+test("a driver with no visible box can start personal-box creation from setup, or sees the one made at first sign-in", () => {
   let created = false;
+  const views: string[] = [];
+  const setup: { installationId: string; hasPersonalBox: boolean; autoBox?: { state: string; reason?: string } } = { installationId: "test", hasPersonalBox: false };
   const setupCard = pageFunction("setupCard", {
-    settings: { setup: { installationId: "test", hasPersonalBox: false }, me: { identity: "person" } },
-    chat: { box: "" }, canDriveAgents: () => true, canOperateInstallation: () => false,
-    localStorage: { getItem: () => null }, t: String, el: fakeEl, agentsHere: () => [], createSetupBox: () => { created = true; },
+    settings: { setup, me: { identity: "person" } },
+    chat: { box: "" }, canDriveAgents: () => true, canOperateInstallation: () => false, navigateView: (view: string) => views.push(view),
+    localStorage: { getItem: () => null }, t: (key: string, vars?: { why?: string }) => vars?.why ? `${key}: ${vars.why}` : key, el: fakeEl,
+    agentsHere: () => [], createSetupBox: () => { created = true; },
   }) as () => Fake | null;
   const card = setupCard();
   assert.ok(card);
   assert.deepEqual(card.kids.slice(1, -1).map(step => step.kids[1]!.text), ["ui.next.setup.personalBox"]);
   card.kids[1]!.kids[2]!.press!();
   assert.ok(created);
+  // INV-2203: being prepared and out of quota offer nothing to press; a failure says why and leads to where it is retried.
+  for (const state of ["preparing", "quota"]) {
+    setup.autoBox = { state };
+    assert.deepEqual(setupCard()!.kids[1]!.kids.map(part => part.text), ["○", `ui.next.setup.personalBox.${state}`]);
+  }
+  setup.autoBox = { state: "failed", reason: "ImagePullBackOff" };
+  const failed = setupCard()!.kids[1]!;
+  assert.equal(failed.kids[1]!.text, "ui.next.setup.personalBox.failed: ImagePullBackOff");
+  failed.kids[2]!.press!();
+  assert.deepEqual(views, ["boxes"]);
 });
 
 test("creating a personal box from chat clears the previous transcript before refresh renders", async () => {

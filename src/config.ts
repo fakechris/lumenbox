@@ -66,6 +66,7 @@ export interface AgentboxConfig {
   /** Overrides keyed by canonical principal id. */
   personBoxQuotas?: Record<string, number>;
   departmentBoxQuotas?: Record<string, number>;
+  /** Make a member's personal box at their first sign-in (organisation only; absent: on with the Kubernetes backend, INV-2203). */ autoPersonalBox?: boolean;
   /**
    * The box image to pull when this machine has none, as a full `repo:tag` reference.
    *
@@ -400,8 +401,7 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(raw.personalBoxQuota !== undefined ? { personalBoxQuota: readQuota(raw.personalBoxQuota, "personalBoxQuota", onWarn) } : {}),
     ...(raw.personBoxQuotas !== undefined ? { personBoxQuotas: readQuotaMap(raw.personBoxQuotas, "personBoxQuotas", onWarn) } : {}),
     ...(raw.departmentBoxQuotas !== undefined ? { departmentBoxQuotas: readQuotaMap(raw.departmentBoxQuotas, "departmentBoxQuotas", onWarn) } : {}),
-    ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
-    ...(typeof raw.teamMemoryReview === "boolean" ? { teamMemoryReview: raw.teamMemoryReview } : {}),
+    ...Object.fromEntries((["startupItem", "teamMemoryReview", "autoPersonalBox"] as const).filter(key => typeof raw[key] === "boolean").map(key => [key, raw[key]])),
     ...(typeof raw.reviewersPerClaim === "number" && raw.reviewersPerClaim >= 1 ? { reviewersPerClaim: Math.floor(raw.reviewersPerClaim) } : {}),
     ...(readInvolute(raw.involute, onWarn) !== undefined ? { involute: readInvolute(raw.involute, onWarn) } : {}),
   };

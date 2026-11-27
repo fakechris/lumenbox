@@ -46,9 +46,11 @@ function refreshSetup() {
       { done: s.door || doorSkipped, skip: "door", head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "{{ui.app.settings-channels-no-cli-yet}}", go: function () { openSettings("doors"); } },
       { done: here.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "{{ui.app.agentbox-chat}} <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
     ] : selected ? [{ done: agents.some(function (agent) { return agent.boxId === selected && !agent.hidden; }), head: t("ui.next.setup.agent"), sub: "", act: t("ui.setup.agentAct"), go: function () { openShelf(selected); } }] : [];
+    // A box made at first sign-in (INV-2203): being prepared, why it failed, or out of quota.
     if (myRole === "driver" && s.hasPersonalBox !== undefined) steps.unshift({
-      done: s.hasPersonalBox, head: t("ui.next.setup.personalBox"), sub: "", act: t("ui.next.setup.go"),
-      go: function () { openShelf(selected); $("personalcreate").focus(); },
+      done: s.hasPersonalBox, head: t("ui.next.setup.personalBox"), act: t("ui.next.setup.go"),
+      sub: s.autoBox ? t("ui.next.setup.personalBox." + s.autoBox.state, { why: s.autoBox.reason || "" }) : "",
+      go: function () { openShelf(selected); if (!s.autoBox) $("personalcreate").focus(); },
     });
     if ((established || dismissed || steps.every(function (x) { return x.done; })) && !guideForced) { card.style.display = "none"; return; }
     card.style.display = "";

@@ -38,4 +38,6 @@ export const UI_PERSONAL_COMPUTERS: Record<string, readonly [string, string]> = 
   "ui.personal.cancel": ["取消", "Cancel"],
   "ui.personal.selectDestination": ["请选择要创建 agent 的电脑。", "Choose a computer for the new agent."],
   "ui.personal.working": ["正在处理电脑操作…", "Working on the computer…"],
+  "ui.personal.preparing": ["正在为你准备第一台个人电脑。", "Your first personal computer is being prepared."],
+  "ui.personal.waiting": ["配额已满，首次登录时没有创建个人电脑", "quota full, no personal computer made at first sign-in"],
 };

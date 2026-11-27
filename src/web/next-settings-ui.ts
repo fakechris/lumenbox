@@ -135,18 +135,21 @@ function setupCard() {
     { key: "agent", done: agent, open: function () { openMember(""); } },
     { key: "door", done: state.door, optional: true, open: function () { openSettingsPane("doors"); } },
   ] : chat.box ? [{ key: "agent", done: agent, open: function () { openMember(""); } }] : [];
-  if (!admin && state.hasPersonalBox !== undefined) steps.unshift({ key: "personalBox", done: state.hasPersonalBox, open: createSetupBox });
+  // A box made at first sign-in (INV-2203): said while it is prepared, why it failed, or that the quota is used up.
+  if (!admin && state.hasPersonalBox !== undefined) steps.unshift({ key: "personalBox", done: state.hasPersonalBox, auto: state.autoBox,
+    open: !state.autoBox ? createSetupBox : state.autoBox.state === "failed" ? function () { navigateView("boxes"); } : null });
   if (!admin && steps.every(function (step) { return step.done; })) return null;
   var close = el("button", "act", t("ui.next.act.close"));
   card.appendChild(el("div", "card-head", t("ui.next.setup.title")));
   steps.forEach(function (step) {
     var row = el("div", "setup-step"), go = el("button", "act", t("ui.next.setup.go"));
     row.appendChild(el("span", step.done ? "setup-done" : "setup-todo", step.done ? "✓" : "○"));
-    row.appendChild(el("span", "body", t("ui.next.setup." + step.key) + (step.optional ? " " + t("ui.next.setup.optional") : "")));
+    var words = step.auto ? t("ui.next.setup.personalBox." + step.auto.state, { why: step.auto.reason || "" }) : t("ui.next.setup." + step.key);
+    row.appendChild(el("span", "body", words + (step.optional ? " " + t("ui.next.setup.optional") : "")));
     if (step.key === "box") row.appendChild(el("span", step.done ? "chip-run" : "chip", t(step.done ? "ui.next.box.on" : "ui.next.box.off")));
     go.disabled = step.key === "personalBox" && !!settings.creatingBox;
     go.addEventListener("click", step.open);
-    if (!step.done) row.appendChild(go);
+    if (!step.done && step.open) row.appendChild(go);
     card.appendChild(row);
   });
   close.addEventListener("click", function () { localStorage.setItem(storageKey, "1"); render(); });
