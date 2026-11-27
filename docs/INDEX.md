@@ -67,7 +67,7 @@ this file and the headers disagree. Edit the header, not this table.
 
 | doc | title | status | updated |
 |---|---|---|---|
-| [06-deployment](06-deployment.md) | Deployment | current | 2026-11-19 |
+| [06-deployment](06-deployment.md) | Deployment | current | 2026-11-27 |
 | [100-evaluation](100-evaluation.md) | The evaluation report: one corpus, k attempts, four numbers | current | 2026-11-21 |
 | [103-acceptance-stories](103-acceptance-stories.md) | Acceptance stories: the user-goal checks a release is walked through | current | 2026-11-24 |
 | [105-terminal-benchmark](105-terminal-benchmark.md) | LumenBox on a public terminal benchmark: the Harbor adapter, the eval toolset, and the first run | current | 2026-11-27 |

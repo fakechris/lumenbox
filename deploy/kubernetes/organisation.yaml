@@ -18,6 +18,12 @@ roleRef:
   kind: Role
   name: agentbox-control
 ---
+# The organisation's state, mounted at AGENTBOX_HOME (/state). Besides the roster, agents and
+# ledgers it holds `ui-token`: the operator credential the server creates on its first start
+# when AGENTBOX_UI_TOKEN is unset, and the key every browser session is signed with is derived
+# from it. Keep this claim across rollouts. Replacing it with an emptyDir, or deleting it, gives
+# the next pod a new token and signs out everyone (INV-2045). If you set AGENTBOX_UI_TOKEN in
+# agentbox-organisation-env instead, keep that Secret's value stable for the same reason.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

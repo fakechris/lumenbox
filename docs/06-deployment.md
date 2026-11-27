@@ -2,7 +2,7 @@
      title: Deployment
      family: guide
      status: current
-     updated: 2026-11-19
+     updated: 2026-11-27
 -->
 # Deployment
 
@@ -150,8 +150,11 @@ and bind the web server where the gate can reach it.
 | `BOXD_SUPERVISE_MS`, `BOXD_MAX_RESTARTS`, `BOXD_RESTART_WINDOW_MS`, `BOXD_BACKOFF_*`, `BOXD_GIVE_UP_EPISODES` | see design | Supervision tuning |
 
 For an organization web server, keep `AGENTBOX_HOME` on a persistent state volume across
-restarts. If you supply `AGENTBOX_UI_TOKEN` from a Kubernetes Secret instead, keep that Secret
-stable across rollouts. Replacing the UI token invalidates existing browser sessions.
+restarts. Browser sessions are signed with a key derived from the UI token. When the token comes
+from `$AGENTBOX_HOME/ui-token`, a pod that starts without that volume creates a new token and
+signs out the whole organization. `deploy/kubernetes/organisation.yaml` mounts a PVC at
+`/state` for this purpose. If you supply `AGENTBOX_UI_TOKEN` from a Kubernetes Secret instead,
+keep that Secret stable across rollouts. Replacing the UI token invalidates existing browser sessions.
 
 **`config.json`** for what is decided once: currently `activityLimit`, and `turnBudget`
 (`{ "calls": 60, "repeats": 3 }`, INV-1354: model calls one turn may make before handing the
