@@ -36,6 +36,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect as netConnect, type Socket } from "node:net";
 import { parseCookies, safeNext } from "../web/auth.ts";
+import { HSTS } from "../web/exposure.ts";
 import { adminRouteOf, handleAdmin } from "./admin.ts";
 import type { BoxAllocator, BoxHandle } from "./allocator.ts";
 import { isRole, type ControlStore, type Role } from "./store.ts";
@@ -166,6 +167,8 @@ export interface GatewayOptions {
   settingsDefaults?: { traceUrl?: string };
   /** True behind TLS: sets `Secure` on the cookie. */
   secureCookies?: boolean;
+  /** Private and public over https (web/exposure.ts): every response says HSTS. */
+  hsts?: boolean;
   /**
    * Where this gateway is reached by a person, for the share links it hands out (docs/29
    * §6 B). Absent, templates can be staged and served but no link is built.
@@ -266,6 +269,7 @@ export class Gateway {
   async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://gateway");
     const route = routeOf(url.pathname, req.method ?? "GET");
+    if (this.options.hsts === true) res.setHeader("strict-transport-security", HSTS);
 
     if (route.kind === "login-page") return this.sendLoginPage(res, undefined, safeNext(url.searchParams.get("next")));
     if (route.kind === "login-submit") return this.handleLogin(req, res);

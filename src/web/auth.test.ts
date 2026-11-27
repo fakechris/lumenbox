@@ -148,15 +148,16 @@ test("driving is not asked about the agent any more: authority lives on the box 
 });
 
 
-test("a published installation refuses plain HTTP unless somebody says they mean it (INV-578)", async () => {
+test("a published installation refuses plain HTTP unless somebody says only this machine reaches it (INV-578, INV-2204)", async () => {
   // docs/10 S-2 said "use TLS" for months, which is the kind of advice that is read after
   // the incident. A person's session is a person's work, and anybody on the path has it.
   const { startWebServer } = await import("./server.ts");
   const home = mkdtempSync(join(tmpdir(), "agentbox-https-"));
-  const previous = { home: process.env.AGENTBOX_HOME, url: process.env.AGENTBOX_PUBLIC_URL, insecure: process.env.AGENTBOX_INSECURE };
+  const previous = { home: process.env.AGENTBOX_HOME, url: process.env.AGENTBOX_PUBLIC_URL, insecure: process.env.AGENTBOX_INSECURE, exposure: process.env.AGENTBOX_EXPOSURE };
   process.env.AGENTBOX_HOME = home;
   delete process.env.AGENTBOX_PUBLIC_URL;
   delete process.env.AGENTBOX_INSECURE;
+  delete process.env.AGENTBOX_EXPOSURE;
   let stop: (() => void) | undefined;
   try {
     await assert.rejects(
@@ -165,14 +166,24 @@ test("a published installation refuses plain HTTP unless somebody says they mean
       "a non-loopback bind with no https address does not start"
     );
 
-    // The deliberate escape, which says so on every start rather than once.
+    // "I mean it" is no longer an answer (INV-2204): a tailnet is a network, and a server on one
+    // is held to HTTPS like any other that machines besides this one can reach.
     process.env.AGENTBOX_INSECURE = "1";
+    await assert.rejects(
+      () => startWebServer({ port: 7951, host: "0.0.0.0", token: "t0k", useBox: false, onLog: () => {} }),
+      /AGENTBOX_INSECURE=1 no longer starts/
+    );
+    delete process.env.AGENTBOX_INSECURE;
+
+    // The deliberate statement that remains — only this machine reaches the port, as with a
+    // container published on loopback — which says so on every start rather than once.
+    process.env.AGENTBOX_EXPOSURE = "local";
     const lines: string[] = [];
     stop = await startWebServer({ port: 7951, host: "0.0.0.0", token: "t0k", useBox: false, onLog: line => lines.push(line) });
-    assert.ok(lines.some(line => /without TLS because AGENTBOX_INSECURE=1/.test(line)), "and it says it out loud");
+    assert.ok(lines.some(line => /exposure local, declared, on 0\.0\.0\.0:7951: this says only this machine reaches the port/.test(line)), "and it says it out loud");
   } finally {
     stop?.();
-    for (const [key, value] of Object.entries({ AGENTBOX_HOME: previous.home, AGENTBOX_PUBLIC_URL: previous.url, AGENTBOX_INSECURE: previous.insecure })) {
+    for (const [key, value] of Object.entries({ AGENTBOX_HOME: previous.home, AGENTBOX_PUBLIC_URL: previous.url, AGENTBOX_INSECURE: previous.insecure, AGENTBOX_EXPOSURE: previous.exposure })) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
@@ -183,7 +194,8 @@ test("a published installation refuses plain HTTP unless somebody says they mean
 test("a published web server keeps member sessions across restarts without logging its operator token (INV-2045, INV-2046)", async t => {
   const { startWebServer } = await import("./server.ts");
   const home = mkdtempSync(join(tmpdir(), "agentbox-session-restart-"));
-  const set = { AGENTBOX_HOME: home, AGENTBOX_INSECURE: "1", AGENTBOX_UI_TOKEN: undefined, AGENTBOX_NO_TOKEN: undefined, AGENTBOX_PUBLIC_URL: undefined };
+  // An organisation's server as it is deployed: every interface, HTTPS in front, so private (INV-2204). The operator's calls below are the CLI's, from the server itself.
+  const set = { AGENTBOX_HOME: home, AGENTBOX_INSECURE: undefined, AGENTBOX_EXPOSURE: undefined, AGENTBOX_UI_TOKEN: undefined, AGENTBOX_NO_TOKEN: undefined, AGENTBOX_PUBLIC_URL: "https://box.example.test" };
   const previous = Object.fromEntries(Object.keys(set).map(key => [key, process.env[key]]));
   const env = (values: typeof previous) => {
     for (const [key, value] of Object.entries(values)) {

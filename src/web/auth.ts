@@ -20,6 +20,7 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { roleAtLeast, type Role } from "../host/principals.ts";
+import type { ExposureLevel } from "./exposure.ts";
 
 export const COOKIE_NAME = "agentbox_ui";
 
@@ -163,13 +164,19 @@ export interface AuthConfig {
   token?: string;
   /** What the server bound to, which decides whether no token is acceptable. */
   host: string;
+  /** Where the installation is reachable (exposure.ts). Absent is local: the rule as it always was. */
+  level?: ExposureLevel;
+  /** The control plane's gateway stands in front, so the token arrives from it and from nobody else. */
+  behindGateway?: boolean;
 }
 
 export type AuthDecision =
   /** No token configured and bound to loopback: the old justification, still true. */
   | { allow: true; reason: "loopback" }
   | { allow: true; reason: "token"; setCookie?: string }
-  | { allow: false; reason: "missing" | "wrong" };
+  | { allow: false; reason: "missing" | "wrong" }
+  /** Private and public (R2): the token was in the address, or was offered from somewhere a machine caller is not. */
+  | { allow: false; reason: "token-in-address" | "token-not-here" };
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
@@ -208,8 +215,11 @@ export function authorize(
     authorization?: string;
     cookie?: string;
     query?: string | null;
+    /** The request came from this machine itself with no proxy between (`isDirectLocal`). Only asked off local. */
+    direct?: boolean;
   }
 ): AuthDecision {
+  if (config.level !== undefined && config.level !== "local") return authorizeMachine(config, request);
   if (!config.token) {
     // Only reachable when the server chose to run without one, which it does only on
     // loopback: startWebServer generates a token otherwise.
@@ -242,6 +252,28 @@ export function authorize(
   }
 
   return { allow: false, reason: cookie || bearer || query ? "wrong" : "missing" };
+}
+
+/**
+ * The installation token off local (docs/106 §5 R2, INV-2204): a machine's credential, never a
+ * person's way in.
+ *
+ * It opens everything and names nobody, so on a network it is not offered to browsers at all. In an
+ * address it is refused whatever else the request carries — an address sits in history, in a proxy's
+ * log and in a Referer. As a cookie it is not looked at, so a browser that kept one from before is
+ * simply not signed in. As a bearer header it is what the callers that are not people present, and
+ * it is accepted from where they are: through the control plane's gateway, which adds it to every
+ * request it forwards to a tenant's box, or from this machine itself — the CLI, a script in the pod.
+ * People sign in as themselves; `admit` in the server reads their session after this says no.
+ */
+function authorizeMachine(config: AuthConfig, request: { authorization?: string; query?: string | null; direct?: boolean }): AuthDecision {
+  if (request.query !== null && request.query !== undefined && request.query.trim() !== "") return { allow: false, reason: "token-in-address" };
+  const bearer = /^Bearer\s+(.+)$/i.exec(request.authorization ?? "")?.[1]?.trim();
+  // No token cannot be reached off local — the server makes one — and must not mean "open" if it ever is.
+  if (!bearer || !config.token) return { allow: false, reason: "missing" };
+  if (!sameToken(bearer, config.token)) return { allow: false, reason: "wrong" };
+  if (config.behindGateway === true || request.direct === true) return { allow: true, reason: "token" };
+  return { allow: false, reason: "token-not-here" };
 }
 
 /**

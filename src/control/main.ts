@@ -32,6 +32,7 @@ import { DEFAULT_NAMESPACE, KubernetesAllocator } from "./kubernetes.ts";
 import { HealthNotifier, webhookDelivery } from "./notify.ts";
 import { staticPolicy } from "./policy.ts";
 import { type ControlStore, SqliteControlStore, keyWarning } from "./store.ts";
+import { resolveExposure } from "../web/exposure.ts";
 
 export interface ControlPlaneOptions {
   /** Where the gateway listens. */
@@ -62,6 +63,8 @@ export interface ControlPlaneOptions {
   /** Which provider's capabilities relayed boxes assume. The relay decides where traffic goes. */
   relayProvider?: string;
   secureCookies?: boolean;
+  /** `local`, `private` or `public` (`AGENTBOX_EXPOSURE`); absent, the bind address decides (web/exposure.ts). */
+  exposure?: string;
   /**
    * Where a person reaches this gateway — `https://box.example.com` — for the share links it
    * hands out. Absent, links are built from the listening address, which is only right on a
@@ -102,6 +105,13 @@ export async function startControlPlane(
   options: ControlPlaneOptions
 ): Promise<RunningControlPlane> {
   const out = options.out ?? (() => {});
+  // The gateway is a door people reach, held to the installation's rule (docs/106 §5 R1, docs/10
+  // S-2): on a bind other machines can reach it is private, and private without HTTPS in front —
+  // an https:// public address, or AGENTBOX_SECURE_COOKIES=1 — refuses here, before anything starts.
+  const exposure = resolveExposure({
+    host: options.host, port: options.port, declared: options.exposure ?? process.env.AGENTBOX_EXPOSURE,
+    publicUrl: options.publicUrl, tlsInFront: options.secureCookies === true,
+  });
   const home = options.statePath ?? join(agentboxHome(), "control");
   mkdirSync(home, { recursive: true });
 
@@ -279,7 +289,8 @@ export async function startControlPlane(
     ...(process.env.AGENTBOX_TRACE_URL !== undefined
       ? { settingsDefaults: { traceUrl: process.env.AGENTBOX_TRACE_URL } }
       : {}),
-    secureCookies: options.secureCookies,
+    secureCookies: exposure.secureCookies,
+    hsts: exposure.hsts,
     publicUrl: options.publicUrl ?? `http://${options.host}:${options.port}`,
     log: line => out(`  ${line}`),
   });
@@ -354,7 +365,9 @@ export async function startControlPlane(
         : `on :${options.relayPort ?? 8788} (${options.relayProvider ?? process.env.AGENTBOX_PROVIDER ?? DEFAULT_RELAY_PROVIDER}); no provider key enters a box`
     }`
   );
-  if (options.secureCookies !== true) {
+  out(`  exposure   ${exposure.level} (${exposure.source})${exposure.hsts ? ": session cookies are Secure, responses carry HSTS" : ""}`);
+  if (exposure.level === "local") for (const note of exposure.notes) out(`  ${note}`);
+  if (!exposure.secureCookies) {
     // Said plainly, because the cookie is the whole session and this is the one thing about this
     // deployment that is not safe to leave as it is.
     out("  no TLS: sessions travel in the clear. Put a TLS terminator in front before real use.");

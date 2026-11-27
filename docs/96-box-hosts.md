@@ -96,12 +96,17 @@ Use a dedicated namespace for the organisation server and its personal boxes. Th
 `agentbox`. Apply the namespace and permissions, then provision the `agentbox-organisation-env`
 Secret there with a stable `AGENTBOX_UI_TOKEN` and any provider settings using your usual secret
 management tooling. Don't put credentials in the manifest. The server binds to `0.0.0.0` inside
-the pod and refuses to start without one of these settings in that Secret:
+the pod, so its exposure level is private (docs/06, "The exposure level"), and the manifest says
+so: `AGENTBOX_EXPOSURE=private` and `AGENTBOX_PUBLIC_URL=https://REPLACE_WITH_PUBLIC_HOST`. It
+does not start until one of these is true:
 
-- For an isolated, port-forward-only deployment, set `AGENTBOX_INSECURE=1`. Keep the Service
-  internal and do not publish its HTTP port.
-- For a deployment behind a TLS-enabled ingress, set `AGENTBOX_PUBLIC_URL` to its public
-  `https://` URL and leave `AGENTBOX_INSECURE` unset. Open that public URL instead of port-forwarding.
+- Behind an Ingress that terminates TLS (the way members reach it): replace
+  `REPLACE_WITH_PUBLIC_HOST` with the Ingress's host. Open that `https://` address. The
+  installation token signs nobody in here; the first Admin opens `/bootstrap`.
+- For an isolated look around over `kubectl port-forward` only: change `AGENTBOX_EXPOSURE` to
+  `local` in the manifest and drop `AGENTBOX_PUBLIC_URL`. Keep the Service internal. The server
+  says on every start that it was told only this machine reaches it. `AGENTBOX_INSECURE=1` no
+  longer does this.
 
 Set `LUMENBOX_IMAGE` to a pullable release tag or digest that includes the organisation-server
 Kubernetes fixes. If that release is not published yet, build from this checkout and push the

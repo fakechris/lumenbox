@@ -19,9 +19,9 @@ roleRef:
   name: agentbox-control
 ---
 # The organisation's state, mounted at AGENTBOX_HOME (/state). Besides the roster, agents and
-# ledgers it holds `ui-token`: the operator credential the server creates on its first start
-# when AGENTBOX_UI_TOKEN is unset, and the key every browser session is signed with is derived
-# from it. Keep this claim across rollouts. Replacing it with an emptyDir, or deleting it, gives
+# ledgers it holds `ui-token`: the machine credential the server creates on its first start
+# when AGENTBOX_UI_TOKEN is unset — for the CLI inside the pod, not for a browser (README.md) —
+# and the key every browser session is signed with is derived from it. Keep this claim across rollouts. Replacing it with an emptyDir, or deleting it, gives
 # the next pod a new token and signs out everyone (INV-2045). If you set AGENTBOX_UI_TOKEN in
 # agentbox-organisation-env instead, keep that Secret's value stable for the same reason.
 apiVersion: v1
@@ -70,6 +70,16 @@ spec:
           env:
             - name: AGENTBOX_HOME
               value: /state
+            # Where this server is reachable (docs/106 §5): members open it from their own
+            # computers, so it is private, and private does not start without HTTPS in front.
+            # AGENTBOX_PUBLIC_URL is the https:// address of the Ingress that terminates TLS for
+            # the Service below (README.md, "The organisation server needs an Ingress with TLS").
+            # At this level the installation token signs nobody in: the first Admin opens
+            # /bootstrap, everyone else signs in as themselves.
+            - name: AGENTBOX_EXPOSURE
+              value: private
+            - name: AGENTBOX_PUBLIC_URL
+              value: https://REPLACE_WITH_PUBLIC_HOST
             - name: AGENTBOX_BOX_BACKEND
               value: kubernetes
             - name: AGENTBOX_K8S_NAMESPACE

@@ -1096,6 +1096,7 @@ async function cmdControl(argv: string[]): Promise<number> {
       relayPort: typeof relayPortFlag === "string" ? Number(relayPortFlag) : undefined,
       relayProvider: typeof flags.get("--provider") === "string" ? String(flags.get("--provider")) : undefined,
       secureCookies: process.env.AGENTBOX_SECURE_COOKIES === "1",
+      ...(process.env.AGENTBOX_EXPOSURE ? { exposure: process.env.AGENTBOX_EXPOSURE } : {}),
       ...(typeof flags.get("--public-url") === "string" ? { publicUrl: String(flags.get("--public-url")) } : process.env.AGENTBOX_PUBLIC_URL ? { publicUrl: process.env.AGENTBOX_PUBLIC_URL } : {}),
       out: line => out(line === "" ? "" : dim(line)),
     });
@@ -1448,6 +1449,11 @@ Environment:
   AGENTBOX_QUOTA_PAUSE_AT   Same unit as those rates. Unset: do not refuse. AGENTBOX_QUOTA_REMAINS=1 queries MiniMax remains (off by default; the key is never printed)
   AGENTBOX_SESSION_SECRET   Shared by two gateways so sessions survive either
   AGENTBOX_SECURE_COOKIES   1 when TLS terminates in front of the gateway
+  AGENTBOX_EXPOSURE         local | private | public: where \`web\` and \`control up\` are
+                            reachable. Unset: local on a loopback bind, private on
+                            any other. Private and public refuse to start without
+                            HTTPS in front (AGENTBOX_PUBLIC_URL=https://…) and do
+                            not take the installation token from a browser
   AGENTBOX_K8S_NAMESPACE    Namespace for kubernetes allocator boxes (default agentbox)
   AGENTBOX_K8S_STORAGE_CLASS  StorageClass for box PVCs (cluster default when unset)
   AGENTBOX_K8S_MEMORY/_STORAGE  Per-box memory and per-PVC size (default 4Gi / 10Gi)

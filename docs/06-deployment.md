@@ -415,8 +415,41 @@ box.example.com {
 AGENTBOX_PUBLIC_URL=https://box.example.com
 ```
 
-`AGENTBOX_INSECURE=1` is the deliberate escape for a tailnet, a lab or a laptop demo. It
-starts, and it says so on every start; that repetition is the point.
+### The exposure level (INV-2204, 2026-11-27)
+
+That check is now one case of a declared level (docs/106 §5): **local** — only this machine
+reaches the port; **private** — a tailnet or a company network; **public** — the Internet.
+`agentbox web` and `agentbox control up` read it once, at start, and refuse a configuration
+weaker than the level requires, naming what is missing.
+
+| Bind | `AGENTBOX_EXPOSURE` | Level |
+| --- | --- | --- |
+| loopback (the default; the desktop app) | unset | local — nothing changes |
+| any other address | unset | private |
+| any | `local`, `private` or `public` | as declared |
+
+`AGENTBOX_EXPOSURE` is an environment variable; `env` in `config.json` sets it like any other.
+
+- **Private and public need HTTPS in front**: `AGENTBOX_PUBLIC_URL=https://…` (for `control up`,
+  `--public-url` or `AGENTBOX_SECURE_COOKIES=1` also say it). Cookies are then `Secure` and every
+  response carries `Strict-Transport-Security`. `X-Forwarded-Proto` is not consulted for either.
+- **Private and public do not take the installation token from a person.** `?token=` in an
+  address is refused, the `agentbox_ui` cookie is ignored, and `Authorization: Bearer <token>` is
+  accepted only from the server's own machine — a direct loopback connection with no proxy
+  headers, which is the CLI there — or, on a tenant's box, from the control plane's gateway.
+  People sign in as themselves: the first Admin at `/bootstrap`, everyone else at `/login`. The
+  terminator must set `X-Forwarded-For` (ingress-nginx, Caddy, Traefik and the tunnels do); one
+  on the same machine that sets no proxy header makes its visitors look like the CLI.
+- **`local` on a wider bind** is the operator's statement that only this machine reaches the
+  port — a container published on loopback, a `kubectl port-forward`. It starts, and it says what
+  was claimed on every start, because nothing can check it.
+- **`private` on a loopback bind** is the Caddy example above: the proxy is on the same machine.
+  Undeclared, that server stays local and behaves as before; declare it to get the token rule.
+- **`AGENTBOX_INSECURE=1` no longer starts a server.** It used to wave a plain-HTTP server
+  through on any bind. A tailnet is a network: use `tailscale serve` (or any terminator) and an
+  `https://` address, or declare `local` if the variable was only there for a port-forward. The
+  one place it remains is the control plane's own tenant pods, where the hop from the gateway is
+  plain HTTP inside the cluster and `AGENTBOX_TRUST_GATEWAY_IDENTITY=1` is what admits it.
 
 ## The token key belongs outside the directory it protects (INV-579, 2026-09-16)
 
