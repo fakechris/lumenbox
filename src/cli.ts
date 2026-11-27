@@ -34,6 +34,7 @@ import { describePreflight, isQuiet, preflight, verifyBox } from "./box/prefligh
 import { DockerBoxProvisioner } from "./box/provisioner.ts";
 import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
+import { deprecationsInUse } from "./deprecations.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { relayOptionsFromFlags } from "./egress/relay-cli.ts";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "./egress/events.ts";
@@ -1207,6 +1208,8 @@ async function cmdWeb(argv: string[]): Promise<number> {
   // does not silently become a different company's model with no credential.
   const webConfig = loadConfig(line => err(dim(line)));
   applyConfigEnv(webConfig, line => err(dim(line)));
+  // Said at every start until the line it goes (docs/106 §7): a deprecated config key or variable this installation still uses.
+  for (const line of deprecationsInUse({ configKeys: Object.keys(webConfig), envNames: Object.keys(process.env) })) err(line);
 
   const portFlag = flags.get("--port");
   const port = typeof portFlag === "string" ? Number(portFlag) : 7777;
