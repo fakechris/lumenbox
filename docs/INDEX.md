@@ -70,6 +70,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [06-deployment](06-deployment.md) | Deployment | current | 2026-11-19 |
 | [100-evaluation](100-evaluation.md) | The evaluation report: one corpus, k attempts, four numbers | current | 2026-11-21 |
 | [103-acceptance-stories](103-acceptance-stories.md) | Acceptance stories: the user-goal checks a release is walked through | current | 2026-11-24 |
+| [105-terminal-benchmark](105-terminal-benchmark.md) | LumenBox on a public terminal benchmark: the Harbor adapter, the eval toolset, and the first run | current | 2026-11-27 |
 | [12-upgrades](12-upgrades.md) | Upgrading somebody's box | current | 2026-11-24 |
 | [13-design-review](13-design-review.md) | What goes to adversarial review before it is built | current | 2026-08-25 |
 | [17-two-agents](17-two-agents.md) | Two agents on one repository | current | 2026-08-26 |
