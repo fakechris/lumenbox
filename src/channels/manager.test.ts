@@ -30,6 +30,7 @@ import {
 } from "./manager.ts";
 import { EMPTY_REPLY_NOTE, NO_UPGRADE_WAITING, UPGRADE_IS_ADMIN_CALL } from "./strings.ts";
 import { CHAT_COMMANDS, renderHelp } from "./commands.ts";
+import { roomFactsOf } from "./dingtalk-room.ts";
 
 function testAdapter(): ChannelAdapter & {
   inject: (message: InboundMessage) => Promise<string | undefined>;
@@ -2313,6 +2314,10 @@ test("on a door that answers only when addressed, a group message that names nob
   assert.equal(asked.length, 0, "no turn");
   assert.equal(JSON.stringify(heard), JSON.stringify([{ conversation: "telegram:room", text: "lunch at noon?", agentName: "Bob" }]));
   assert.equal(decided.join(","), "m1:admitted,m1:heard");
+  // The same from DingTalk, in the shape its adapter hands over (INV-2225): heard, no turn.
+  await adapter.inject({ identity: "dingtalk:staff9", chatKey: "dingtalk:cid7", senderLabel: "Alice", text: "lunch?", ...roomFactsOf({ conversationType: "2", isInAtList: false }) });
+  assert.equal(asked.length, 0, "no turn for an unaddressed DingTalk room message");
+  assert.equal(heard.length, 2);
 
   // Said to us: runs as before.
   await adapter.inject({ identity: "telegram:7", chatKey: "telegram:room", messageId: "m2", senderLabel: "Alice", text: "@Bob status?", addressed: true });
@@ -2336,7 +2341,7 @@ test("on a door that answers only when addressed, a group message that names nob
   await second.inject({ identity: "telegram:7", chatKey: "telegram:room", senderLabel: "Alice", text: "anyone?", addressed: false });
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(asked.length, 2, "ran, because the door's rule is all");
-  assert.equal(heard.length, 1);
+  assert.equal(heard.length, 2);
 });
 
 test("a turn that chose silence posts nothing — not the reply, not the empty-reply note (INV-801)", async () => {
@@ -2598,6 +2603,12 @@ test("a door stays out of the rooms its rules exclude, and takes no guests when 
   await manager.idle();
   assert.equal(asked.length, 1);
 
+  // A direct message is in no room: an allowlist does not reach it (INV-2225), on Feishu or on DingTalk.
+  await adapter.inject({ identity: "feishu:ou_known", chatKey: "feishu:oc_p2p", senderLabel: "chris", messageId: "r5", text: "私聊一句", privateChat: true });
+  await adapter.inject({ identity: "feishu:ou_known", chatKey: "dingtalk:cid_solo", senderLabel: "chris", messageId: "r6", text: "钉钉私聊", ...roomFactsOf({ conversationType: "1" }) });
+  await manager.idle();
+  assert.equal(asked.length, 3);
+
   // A stranger in the allowed room: refused flatly, and no knock is collected.
   const stranger = await adapter.inject({ identity: "feishu:ou_stranger", chatKey: "feishu:oc_support", chatName: "[Support] billing", senderLabel: "somebody", messageId: "r4", text: "你好" });
   assert.match(String(stranger ?? ""), /不收新的申请/);
@@ -2634,11 +2645,16 @@ test("a guest's addressed group message goes to the guest turn, never to a verb,
   await adapter.inject({ identity: "feishu:ou_guest", chatKey: "feishu:oc_group", senderLabel: "guest", text: "大家好", addressed: false });
   assert.equal(guests.length, 4);
   assert.equal(knocks.length, 2);
+  // A stranger's DingTalk direct message, as the adapter hands it over (INV-2225): the knock, not a guest turn.
+  const solo = await adapter.inject({ identity: "dingtalk:stranger", chatKey: "dingtalk:cid_solo", senderLabel: "guest", text: "你好", ...roomFactsOf({ conversationType: "1" }) });
+  assert.notEqual(solo, "访客的回答");
+  assert.equal(guests.length, 4);
+  assert.deepEqual(knocks.slice(2), ["dingtalk:stranger"]);
 
   // The host says no (a personal installation, or an agent that answers members only): the knock.
   answers = false;
   await adapter.inject({ identity: "feishu:ou_guest", chatKey: "feishu:oc_group", senderLabel: "guest", text: "在吗" });
-  assert.equal(knocks.length, 3);
+  assert.equal(knocks.length, 4);
   // A member is never a guest.
   await adapter.inject({ identity: "feishu:ou_member", chatKey: "feishu:oc_group", senderLabel: "member", text: "汇总一下" });
   await manager.idle();

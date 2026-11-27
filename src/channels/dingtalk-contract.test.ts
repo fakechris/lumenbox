@@ -7,7 +7,7 @@ import type { InboundMessage } from "./manager.ts";
 runAdapterContract({
   adapterClass: "DingTalkChannel",
   prefix: "dingtalk",
-  capabilities: { chatKey: true, threads: false, messageId: true, mentions: false, duplicateSameId: "drop", duplicateDifferentContent: "drop", identityIsChat: false },
+  capabilities: { chatKey: true, threads: false, messageId: true, mentions: true, duplicateSameId: "drop", duplicateDifferentContent: "drop", identityIsChat: false },
   async make() {
     const dropped: string[] = [];
     const inbound: InboundMessage[] = [];

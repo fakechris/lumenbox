@@ -1291,8 +1291,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
 
     // Which rooms this door answers in (INV-429). Before identity, before the knock:
-    // a room the operator kept out is not a place to explain oneself in.
-    const room = roomDecision(this.deps.roomRulesFor?.(adapter.name), message.chatName);
+    // a room the operator kept out is not a place to explain oneself in; a direct message is in no room (INV-2225).
+    const room = message.privateChat === true ? "answer" : roomDecision(this.deps.roomRulesFor?.(adapter.name), message.chatName);
     if (room !== "answer" && message.chatKey !== undefined) {
       if (message.messageId !== undefined) this.deps.ingress?.decided(message.messageId, "refused", message.identity);
       this.deps.log(
