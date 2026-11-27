@@ -1,6 +1,7 @@
 /**
- * A tool the work needs that this run cannot have — the desktop that will not start, a host
- * runner that is off, a tool not on the agent's list (docs/105, INV-2196).
+ * A computer tool the work needs that this run cannot have — the desktop that will not start, a
+ * host runner that is off, one not on the agent's list (docs/105, INV-2196). Only these stop a
+ * turn; any other refused tool already lets the agent go on, eval run or not.
  *
  * With a person there, the turn stops at the first such call and tells them what to restore
  * (INV-1797): the person can fix it, and an agent that routes around a missing capability is
