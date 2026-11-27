@@ -53,6 +53,10 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "page.not-linked.your-id": ["你的 id：", "Your id: "],
   "page.not-linked.how": ["在{channel}里给本安装的 agent 发一条消息，管理员会收到放行提示；或者向管理员要一个邀请码，在聊天里发送 bind 邀请码。链接完成后回到这里重新打开即可。", "Send a message to this installation's agent in {channel} and an admin is asked to let you in; or ask an admin for an invite code and send bind followed by the code in the chat. Once linked, open this page again."],
   // Signed in with the vendor, but not as a member of the organisation the channel's app belongs to (INV-729).
+  "page.asked.title": ["你的加入申请已交给管理员", "Your request to join is with the Admins"],
+  "page.asked.who": ["你已用{channel}登录，身份是 {name}。登录只证明你是谁，是否加入由管理员决定。", "You signed in with {channel} as {name}. Signing in proves who you are; an Admin decides whether you join."],
+  "page.asked.how": ["管理员在 设置 → 团队 → 人 里激活你之后，回到这里重新登录即可。再次扫码不会产生新的申请。", "Once an Admin activates you in Settings → Team → People, come back and sign in again. Scanning again does not make another request."],
+  "page.asked.again": ["重新登录", "Sign in again"],
   "page.not-member.title": ["这个{channel}账号不在这个渠道所属的组织里", "This {channel} account is not a member of this channel's organisation"],
   "page.not-member.how": ["只有该组织的成员能从这里登录。请用组织里的账号重新扫码，或向管理员要一个邀请码。", "Only members of that organisation can sign in here. Scan again with your account in the organisation, or ask an admin for an invite code."],
   // Where a connector's authorization comes back (GET /oauth/callback).

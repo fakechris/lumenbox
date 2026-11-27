@@ -46,6 +46,17 @@ export function notLinkedPage(identity: string, channel: string, locale: Locale)
   );
 }
 
+/** Signed in with the vendor, not activated here: the request is with the Admins, and scanning again adds nothing (INV-2202). */
+export function askedToJoinPage(name: string, channel: string, locale: Locale): string {
+  const title = escapeHtml(tr("page.asked.title", locale));
+  return (
+    `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>` +
+    `<body data-page="asked-to-join" style="font:16px/1.7 system-ui;max-width:600px;margin:80px auto;padding:20px"><h1 style="font-size:22px">${title}</h1>` +
+    `<p>${escapeHtml(tr("page.asked.who", locale, { name, channel }))}</p><p>${escapeHtml(tr("page.asked.how", locale))}</p>` +
+    `<p><a href="/login">${escapeHtml(tr("page.asked.again", locale))}</a></p></body></html>`
+  );
+}
+
 /** Signed in with the vendor as somebody outside the organisation the door's app belongs to (INV-729). */
 export function notMemberPage(channel: string, locale: Locale): string {
   return (

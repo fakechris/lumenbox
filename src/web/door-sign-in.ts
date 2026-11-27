@@ -3,7 +3,8 @@
  * the vendor's authorize page, `/auth/<door>/callback` exchanges the code and signs the person in
  * **as the identity that door mints** — `<door>:<subject>`, the same string the door's chat
  * messages carry and knock/bind linked to their Principal. Nothing new is trusted: an identity
- * nobody linked gets the knock instructions, not a session.
+ * nobody linked gets a session only if an Admin activated that person (INV-2202); otherwise they
+ * have asked to join, and wait.
  *
  * One dispatcher, one sign-in per door type. What every type shares lives here once: the state
  * (one use, ten minutes, bound to the door's app and incarnation), the safe return address, the
@@ -24,7 +25,7 @@ import type { ServerResponse } from "node:http";
 import { apiError } from "./api-error.ts";
 import { safeNext } from "./auth.ts";
 import { requestLocaleOf, localeOf } from "./page-locale.ts";
-import { notLinkedPage, notMemberPage, signInRecoveryPage } from "./server-pages.ts";
+import { askedToJoinPage, notLinkedPage, notMemberPage, signInRecoveryPage } from "./server-pages.ts";
 import { signInCallbackUrl, signsInOnWeb, wantsHtml, type WebSignInType } from "./sign-in.ts";
 
 const STATE_TTL_MS = 10 * 60_000;
@@ -132,6 +133,8 @@ export interface DoorSignInDeps {
   bootstrap: { accepts(code: string): boolean; redeem(code: string, identity: string, name: string, incarnation: number): boolean };
   setupPending(): boolean;
   principals: { reload(): void; isKnown(identity: string): boolean; resolve(identity: string): { id: string; name: string } };
+  /** For an identity nobody holds: an Admin's activation makes them a roster person now, or they have asked to join (activation-routes.ts). */
+  admit(channelId: string, subject: string, name: string): "admitted" | "asked" | "refused";
   /** The session cookie for a person on the roster. */
   sessionCookie(identity: string, principalId: string): string;
   send(res: ServerResponse, status: number, body: unknown, type?: string): void;
@@ -224,11 +227,15 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
         deps.log("First administrator enrolled through authenticated sign-in.");
       }
       // The one rule that decides admission here: an identity linked to a Principal gets a
-      // session; any other is told how to ask — never a session for whoever the vendor knows.
-      if (!deps.principals.isKnown(identity)) {
+      // session; any other waits for an Admin — never a session for whoever the vendor knows.
+      // An identity nobody holds yet is admitted by an Admin's activation and nothing else (INV-2202,
+      // docs/107): activated, they become a person on the roster here; otherwise they have asked to join.
+      const admitted = deps.principals.isKnown(identity) ? "admitted" : deps.admit(channelId, vouched.subject, vouched.name ?? vouched.subject);
+      if (admitted !== "admitted") {
+        const locale = requestLocaleOf(res.req);
         res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
-        res.end(notLinkedPage(identity, channelName, requestLocaleOf(res.req)));
-        deps.log(`web login refused: ${identity} signed in via ${channelId} but is not linked`);
+        res.end(admitted === "asked" ? askedToJoinPage(vouched.name ?? vouched.subject, channelName, locale) : notLinkedPage(identity, channelName, locale));
+        deps.log(`web login refused: ${identity} signed in via ${channelId} but is not ${admitted === "asked" ? "activated" : "linked"}`);
         return;
       }
       // The session, and only the session: a credential issued to *this person*, not the
