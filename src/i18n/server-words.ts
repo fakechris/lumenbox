@@ -49,9 +49,12 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "page.recovery.login": ["前往登录", "Go to sign-in"],
   "page.recovery.desktop": ["在 LumenBox 桌面应用中，切换到个人安装，打开设置 → 组织，断开此组织，然后用组织地址或管理员提供的新邀请链接重新加入。", "In the LumenBox desktop app, switch to your personal installation and open Settings → Organisations. Disconnect this organisation, then rejoin using its address or a fresh invite link from your admin."],
   // A sign-in this installation does not know yet.
-  "page.not-linked.title": ["这个飞书账号还没有链接到本安装", "This Feishu account is not linked to this installation yet"],
+  "page.not-linked.title": ["这个{channel}账号还没有链接到本安装", "This {channel} account is not linked to this installation yet"],
   "page.not-linked.your-id": ["你的 id：", "Your id: "],
-  "page.not-linked.how": ["在飞书里给本安装的 agent 发一条消息，管理员会收到放行提示；或者向管理员要一个邀请码，在聊天里发送 bind 邀请码。链接完成后回到这里重新打开即可。", "Send a message to this installation's agent in Feishu and an admin is asked to let you in; or ask an admin for an invite code and send bind followed by the code in the chat. Once linked, open this page again."],
+  "page.not-linked.how": ["在{channel}里给本安装的 agent 发一条消息，管理员会收到放行提示；或者向管理员要一个邀请码，在聊天里发送 bind 邀请码。链接完成后回到这里重新打开即可。", "Send a message to this installation's agent in {channel} and an admin is asked to let you in; or ask an admin for an invite code and send bind followed by the code in the chat. Once linked, open this page again."],
+  // Signed in with the vendor, but not as a member of the organisation the channel's app belongs to (INV-729).
+  "page.not-member.title": ["这个{channel}账号不在这个渠道所属的组织里", "This {channel} account is not a member of this channel's organisation"],
+  "page.not-member.how": ["只有该组织的成员能从这里登录。请用组织里的账号重新扫码，或向管理员要一个邀请码。", "Only members of that organisation can sign in here. Scan again with your account in the organisation, or ask an admin for an invite code."],
   // Where a connector's authorization comes back (GET /oauth/callback).
   "page.oauth.connected": ["已连接 {provider}", "Connected {provider}"],
   "page.oauth.connected-how": ["token 已存进这台机器的密钥库。可以关掉这个标签页，到 设置 → 渠道 → 连接器 里把它授权给谁。", "The token is in this machine's vault. You can close this tab and grant it in Settings → Channels → Connectors."],

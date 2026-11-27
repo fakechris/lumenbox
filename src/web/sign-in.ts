@@ -1,8 +1,8 @@
 /**
  * How a person comes in through the web (INV-1701). There is one sign-in, with two ways to
- * present yourself: an invite code (`POST /api/login`), or a Feishu door (`/auth/<door>`, the
- * OAuth dance in `handleFeishuAuth`). Either way the answer is the same session cookie, issued to
- * a person already on the roster or admitted by the code; a Feishu account nobody linked gets the
+ * present yourself: an invite code (`POST /api/login`), or a Feishu or DingTalk door (`/auth/<door>`,
+ * the OAuth dance in `door-sign-in.ts`). Either way the answer is the same session cookie, issued to
+ * a person already on the roster or admitted by the code; an account nobody linked gets the
  * knock instructions, never a session. Who the person is and what they may do is then
  * `GET /api/me` — the app's join window (electron/organisations.cjs) reads it, and so will an
  * organisation issuing node credentials to its Admins (INV-1697).
@@ -26,23 +26,29 @@ export function wantsHtml(accept: string | undefined): boolean {
   });
 }
 
-export function feishuCallbackUrl(publicUrl: string | undefined, channelId: string): string | undefined {
+export function signInCallbackUrl(publicUrl: string | undefined, channelId: string): string | undefined {
   const base = publicUrl?.trim().replace(/\/+$/, "");
   return base ? `${base}/auth/${channelId}/callback` : undefined;
 }
 
 /**
- * The doors a person may sign in through on the web: Feishu doors whose app is set, and only on an
- * installation with a public address — the vendor sends the person back to it, so without one the
- * button would lead to a refusal (`public-url-unset`). DingTalk joins when INV-729 lands.
+ * The doors a person may sign in through on the web: Feishu and DingTalk doors whose app is set
+ * (INV-729), and only on an installation with a public address — the vendor sends the person back to
+ * it, so without one the button would lead to a refusal (`public-url-unset`). WeCom joins when it has
+ * a door.
  */
+/** The door types a person can sign in through on the web; `door-sign-in.ts` has one sign-in per type. */
+export const WEB_SIGN_IN_TYPES = ["feishu", "dingtalk"] as const;
+export type WebSignInType = (typeof WEB_SIGN_IN_TYPES)[number];
+export const signsInOnWeb = (type: string): type is WebSignInType => (WEB_SIGN_IN_TYPES as readonly string[]).includes(type);
+
 export function webSignInDoors(
   records: readonly { id: string; name: string; type: string }[],
   credentialsSet: (record: { id: string; type: string }) => boolean,
   publicUrl: string | undefined,
 ): SignInDoor[] {
   if (publicUrl === undefined || publicUrl.trim() === "") return [];
-  return records.filter(record => record.type === "feishu" && credentialsSet(record)).map(record => ({ id: record.id, name: record.name || record.id }));
+  return records.filter(record => signsInOnWeb(record.type) && credentialsSet(record)).map(record => ({ id: record.id, name: record.name || record.id }));
 }
 
 function escapeHtml(value: string): string {

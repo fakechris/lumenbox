@@ -4,7 +4,7 @@
      status: current
      covers: channel
      audience: user
-     updated: 2026-11-06
+     updated: 2026-11-27
 -->
 # Channels
 
@@ -61,6 +61,12 @@ credentials in `~/.agentbox/config.json`.
 - A channel's id is chosen once; it becomes part of the name of everyone it lets in. Its
   display name and default agent can change at any time.
 - *Add channel* offers Feishu and DingTalk.
+- Signing in to the web page with a chat account works for Feishu and DingTalk channels, only on an
+  installation with a public address (`AGENTBOX_PUBLIC_URL`), and only for an account already let
+  in; anyone else is told how to ask. For DingTalk, only members of the organisation the app
+  belongs to can sign in, and the app needs `<public address>/auth/<channel id>/callback` as its
+  login redirect address and the permissions to read a member's contact profile and member
+  information. WeCom has no channel yet.
 - A personal installation has only you. Inviting a person, letting someone in who wrote,
   adding a person by hand and syncing a directory are all refused there, with the sentence
   "This is your personal installation; it has only you. To work with others, join or create

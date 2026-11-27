@@ -89,7 +89,7 @@ import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
 import { modelPresets, modelTestError } from "./model-settings.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, notLinkedPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { feishuCallbackUrl, invitationLink, loginPageWithDoors, webSignInDoors, wantsHtml } from "./sign-in.ts";
+import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, invitationLink, loginPageWithDoors, webSignInDoors, wantsHtml } from "./sign-in.ts";
 import {
   authorize,
   callerOf,
@@ -98,7 +98,6 @@ import {
   mayDrive,
   parseCookies,
   refusalToDrive,
-  safeNext,
   type Caller,
 } from "./auth.ts";
 import {
@@ -868,7 +867,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * nonce; in memory like the knocks, and for the same reason — a dance that
    * does not survive a restart costs the person one more click.
    */
-  const oauthStates = new Map<string, { channelId: string; next: string; at: number; appId: string; incarnation: number; bootstrapCode?: string }>();
   const invites = new InviteStore(join(agentboxHome(), "invites.json"), line => log(line));
   // Wrong codes, bounded per source and overall, so a code that lives a week cannot be guessed (INV-2078).
   const codeAttempts = new CodeAttempts();
@@ -3016,134 +3014,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
 
-  /**
-   * The web-app sign-in for a Feishu door: `/auth/<door>` redirects to the vendor's
-   * authorize page, `/auth/<door>/callback` exchanges the code for an open_id and
-   * signs the person in **as the identity that door mints** — `<door>:ou_x`, the
-   * same string knock/bind linked to their Principal. Nothing new is trusted: an
-   * open_id whose identity nobody linked gets the knock instructions, not a session.
-   */
-  async function handleFeishuAuth(url: URL, res: ServerResponse, bootstrapCode?: string): Promise<void> {
-    const parts = url.pathname.split("/").filter(Boolean); // ["auth", door, "callback"?]
-    const channelId = parts[1] ?? "";
-    const record = channelRecords.find(
-      entry => entry.id === channelId && entry.type === "feishu"
-    );
-    if (record === undefined || parts.length > 3) {
-      send(res, 404, apiError("feishu-channel-unknown", { channel: channelId }));
-      return;
-    }
-    const base = channelEnvBase(channelId);
-    const savedEnv = loadConfig().env ?? {};
-    const appId = process.env[`${base}_APP_ID`] ?? savedEnv[`${base}_APP_ID`];
-    const appSecret = process.env[`${base}_APP_SECRET`] ?? savedEnv[`${base}_APP_SECRET`];
-    const redirectUri = feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, channelId);
-    if (typeof appId !== "string" || appId === "" || typeof appSecret !== "string" || appSecret === "") {
-      send(res, 503, apiError("channel-app-unset", { base }));
-      return;
-    }
-    if (redirectUri === undefined) {
-      send(res, 503, apiError("public-url-unset"));
-      return;
-    }
-    const lark = process.env.FEISHU_DOMAIN === "lark";
-    const accountsHost = lark ? "accounts.larksuite.com" : "accounts.feishu.cn";
-    const apiHost = lark ? "open.larksuite.com" : "open.feishu.cn";
-
-    if (parts[2] === undefined) {
-      if (bootstrapCode !== undefined && !bootstrap.accepts(bootstrapCode)) {
-        send(res, 400, apiError("bootstrap-code-invalid")); return;
-      }
-      // Entry: remember where they were going, hand them to the vendor.
-      for (const [key, pending] of oauthStates) {
-        if (Date.now() - pending.at > 10 * 60_000) oauthStates.delete(key);
-      }
-      // A path on this origin only: anything else would make this an open redirect (INV-724).
-      const next = safeNext(url.searchParams.get("next")) ?? "/";
-      const state = randomBytes(16).toString("hex");
-      oauthStates.set(state, { channelId, next, at: Date.now(), appId, incarnation: record.incarnation, ...(bootstrapCode !== undefined ? { bootstrapCode } : {}) });
-      const target =
-        `https://${accountsHost}/open-apis/authen/v1/authorize?client_id=${encodeURIComponent(appId)}` +
-        `&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
-      if (bootstrapCode !== undefined) { send(res, 200, { url: target }); return; }
-      res.writeHead(302, { location: target });
-      res.end();
-      return;
-    }
-    if (parts[2] !== "callback") {
-      send(res, 404, apiError("sign-in-path-unknown", { path: url.pathname }));
-      return;
-    }
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state") ?? "";
-    const pending = oauthStates.get(state);
-    oauthStates.delete(state);
-    if (code === null || pending === undefined || pending.channelId !== channelId || pending.appId !== appId || pending.incarnation !== record.incarnation ||
-        Date.now() - pending.at > 10 * 60_000) {
-      if (wantsHtml(res.req.headers.accept)) send(res, 400, signInRecoveryPage("sign-in-expired", localeOf(res.req, url), { setup: bootstrapPending() }), "text/html");
-      else send(res, 400, apiError("sign-in-expired"));
-      return;
-    }
-    try {
-      const tokenResponse = await (options.loginFetch ?? fetch)(`https://${apiHost}/open-apis/authen/v2/oauth/token`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          grant_type: "authorization_code",
-          client_id: appId,
-          client_secret: appSecret,
-          code,
-          redirect_uri: redirectUri,
-        }),
-      });
-      const tokenBody = (await tokenResponse.json()) as {
-        access_token?: string;
-        error_description?: string;
-        error?: string;
-      };
-      if (!tokenResponse.ok || tokenBody.access_token === undefined) {
-        throw new Error(tokenBody.error_description ?? tokenBody.error ?? `HTTP ${tokenResponse.status}`);
-      }
-      const infoResponse = await (options.loginFetch ?? fetch)(`https://${apiHost}/open-apis/authen/v1/user_info`, {
-        headers: { authorization: `Bearer ${tokenBody.access_token}` },
-      });
-      const info = (await infoResponse.json()) as { code?: number; data?: { open_id?: string; name?: string } };
-      const openId = info.data?.open_id;
-      if (!infoResponse.ok || info.code !== 0 || typeof openId !== "string" || openId === "") throw new Error("user_info returned no authenticated identity");
-      const identity = `${channelId}:${openId}`;
-      const currentDoor = channelRecords.find(entry => entry.id === channelId);
-      const currentEnv = loadConfig().env ?? {};
-      if (!currentDoor || currentDoor.incarnation !== pending.incarnation || (process.env[`${base}_APP_ID`] ?? currentEnv[`${base}_APP_ID`]) !== pending.appId) {
-        send(res, 409, apiError("sign-in-channel-changed")); return;
-      }
-      if (pending.bootstrapCode !== undefined) {
-        if (!bootstrap.redeem(pending.bootstrapCode, identity, info.data?.name ?? openId, currentDoor.incarnation)) {
-          send(res, 409, apiError("bootstrap-gone")); return;
-        }
-        principals.reload();
-        log("First administrator enrolled through authenticated sign-in.");
-      }
-
-      if (!principals.isKnown(identity)) {
-        // Signed in with the vendor, unknown here: the answer is the knock path, said
-        // as a page a person can act on — not a session for whoever the vendor knows.
-        res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
-        res.end(notLinkedPage(identity, requestLocaleOf(res.req)));
-        log(`web login refused: ${identity} signed in via ${channelId} but is not linked`);
-        return;
-      }
-      // The session, and only the session: what this browser gets is a credential issued
-      // to *this person*, not the installation's token (which is what it used to be
-      // handed, full power and all).
-      res.writeHead(302, { "set-cookie": [sessionCookie(identity, sessionSecret, epochs.of(principals.resolve(identity).id), secureCookies)], location: pending.next });
-      res.end();
-      log(`web login: ${identity} via feishu door ${channelId} (${principals.resolve(identity).name})`);
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      log(`feishu sign-in via ${channelId} failed: ${detail}`);
-      send(res, 502, apiError("sign-in-failed", { detail }));
-    }
-  }
+  // The web sign-in through a Feishu or DingTalk door (INV-1701, INV-729): one dispatcher in door-sign-in.ts.
+  const handleDoorAuth = doorSignInHandler({
+    records: () => channelRecords, envBase: channelEnvBase, env: key => process.env[key] ?? (loadConfig().env ?? {})[key],
+    publicUrl: () => process.env.AGENTBOX_PUBLIC_URL, feishuDomain: () => process.env.FEISHU_DOMAIN ?? "feishu", fetch: options.loginFetch ?? fetch,
+    bootstrap, setupPending: bootstrapPending, principals, send, log,
+    sessionCookie: (identity, principalId) => sessionCookie(identity, sessionSecret, epochs.of(principalId), secureCookies),
+  });
 
   const server = createServer((req, res) => {
     void (async () => {
@@ -3170,7 +3047,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
         const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
         res.setHeader("referrer-policy", "no-referrer");
-        send(res, 200, bootstrapPage(doors, localeOf(req, url), bootstrap.codePath, feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID")), "text/html");
+        send(res, 200, bootstrapPage(doors, localeOf(req, url), bootstrap.codePath, signInCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID")), "text/html");
         } catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }
@@ -3182,7 +3059,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         } catch { send(res, 400, apiError("body-invalid")); return; }
         const code = typeof body.bootstrapCode === "string" ? body.bootstrapCode.trim() : "";
         if (code.length > 128) { send(res, 400, apiError("bootstrap-code-malformed")); return; }
-        try { await handleFeishuAuth(url, res, code); }
+        try { await handleDoorAuth(url, res, code); }
         catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }
@@ -3191,13 +3068,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         send(res, 200, loginPageWithDoors(LOGIN_PAGE(locale, bootstrapPending()), webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL), locale), "text/html");
         return;
       }
-      // The Feishu doors' sign-in, also before the gate and for the same reason as
-      // /login: a person arriving from a Feishu chat holds no UI token, and the OAuth
+      // The doors' sign-in (Feishu, DingTalk), also before the gate and for the same reason as
+      // /login: a person arriving from a chat holds no UI token, and the OAuth
       // dance *is* the authentication. Per door, because open_id is per app — the
       // same person is feishu:ou_a under one app and feishu-zongheng:ou_b under the
       // other, which is exactly what identities already model (docs/22 §4).
       if (req.method === "GET" && url.pathname.startsWith("/auth/")) {
-        await handleFeishuAuth(url, res);
+        await handleDoorAuth(url, res);
         return;
       }
       // The side door, before the UI's gate and deliberately so: it carries its own
@@ -4583,7 +4460,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           invites.dropWhere(invite => invite.expiresAt < Date.now());
           send(res, 200, {
             bootstrapPending: caller.userId === undefined && bootstrapPending(),
-            feishuCallbackTemplate: feishuCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID"),
+            feishuCallbackTemplate: signInCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID"),
             channels: channels.list(localeOf(req, url)), // each status in the reader's language (INV-1702)
             // The doors as records (docs/22 §2): what the settings dialog edits.
             // Credentials are reported as present/absent, never as values.
