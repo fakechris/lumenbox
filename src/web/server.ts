@@ -1297,9 +1297,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       const base = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
       if (base === undefined || base === "") return DESKTOP_NOT_PUBLIC;
-      const direct =
-        `/desktop/${index}/vnc.html?autoconnect=1&resize=scale` +
-        `&path=desktop/${index}/websockify`;
+      const at = registry.boxOf(agent.id).id === registry.box.id ? `desktop/${index}` : `desktop/b/${registry.boxOf(agent.id).id}/${index}`; // the agent's own box (INV-2221)
+      const direct = `/${at}/vnc.html?autoconnect=1&resize=scale&path=${at}/websockify`;
       // Asked through a feishu door, the link routes through that door's own
       // sign-in: the person lands on the desktop already being who the roster
       // says they are — not whoever holds a URL.
@@ -1331,7 +1330,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // A door opens into one box; its roster is that box's agents (docs/39 §1).
       return rosterText(
         chatRoute.reachable(principals.resolve(message.identity).id).map(entry => entry.agent)
-          .filter(record => record.profile.hidden !== true && (door?.boxId === undefined || registry.boxOf(record.id).id === door.boxId))
+          .filter(record => record.profile.hidden !== true && (door?.boxId === undefined || registry.boxOf(record.id).id === door.boxId || record.id === answers))
           .map(record => ({ name: record.profile.name, ...(record.profile.title ? { title: record.profile.title } : {}), isDefault: record.id === answers }))
       );
     },
@@ -1710,7 +1709,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const task = ownerOf(orchestrator.tasks?.list() ?? [], conversationIdFor(threadKey));
         if (task === undefined) return undefined;
         orchestrator.tasks?.followUpDelivered(task.id, messageId);
-        return { taskId: task.id, title: task.title };
+        const theirs = task.assigneeId === undefined ? undefined : registry.tryGet(task.assigneeId); // the follow-up is the task's agent's, not whoever answers the writer (INV-2221)
+        return { taskId: task.id, title: task.title, ...(theirs !== undefined ? { agent: { id: theirs.id, name: theirs.profile.name } } : {}) };
       },
       handedBack: taskId => orchestrator.tasks?.get(taskId)?.followUp?.handedBack?.reason,
       // "看板": the room's plate right now, grouped by what a person does about each
@@ -3783,7 +3783,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // A person chooses which of the agents they may reach answers their direct messages (INV-2221, docs/109 §4).
         if (route === "POST /api/me/home-agent") {
           if (refusedRole("driver")) return;
-          const agentId = String((await readJson(req)).agentId ?? ""), chosen = caller.userId === undefined ? undefined : chatRoute.chooseHome(principals.resolve(caller.userId).id, agentId);
+          const me = caller.userId === undefined ? soleAdmin(principals.list()) : principals.resolve(caller.userId).id; // nobody signed in: the installation's one admin, as GET /api/me
+          const agentId = String((await readJson(req)).agentId ?? ""), chosen = me === undefined ? undefined : chatRoute.chooseHome(me, agentId);
           if (chosen === undefined) { send(res, 404, apiError("agent-named-unknown", { agent: agentId })); return; }
           send(res, 200, { homeAgentId: chosen.id }); return;
         }

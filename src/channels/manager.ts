@@ -591,7 +591,7 @@ export interface ChannelManagerDeps {
     revalidate?: (taskId: string, identity: string) => { status: "ok" | "stale" | "withdrawn" | "unknown"; reasons?: string[]; reauthorised?: string[] };
     withdraw?: (taskId: string, identity: string) => void; // A person's stop withdraws the task's mandate for good.
     /** The task that owns a thread's follow-ups (INV-1462), when one does; the message is delivered to it. */
-    ownerOf?: (threadKey: string, messageId: string) => { taskId: string; title: string } | undefined;
+    ownerOf?: (threadKey: string, messageId: string) => { taskId: string; title: string; agent?: { id: string; name: string } } | undefined; // agent: the task's own, who gets its follow-up (INV-2221)
     /** Whether that task's agent handed the follow-up back, with why; the message is then routed as new work. */
     handedBack?: (taskId: string) => string | undefined;
     started: (taskId: string) => void;
@@ -1656,7 +1656,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     if (owner !== undefined) {
       const mandate = this.deps.board?.revalidate?.(owner.taskId, message.identity);
       if (mandate?.status === "stale") return reauthorisationNeeded(owner.taskId, mandate);
-      const followUp = this.runTask(adapter, message, agentName ?? to.fallback?.id, followUpPrompt({ id: owner.taskId, title: owner.title }, text), undefined, { existingTaskId: owner.taskId, cardTitle: `跟进：${owner.title}` })
+      if (owner.agent !== undefined) this.agentNames.set(owner.agent.id, owner.agent.name);
+      const followUp = this.runTask(adapter, message, agentName ?? owner.agent?.id ?? to.fallback?.id, followUpPrompt({ id: owner.taskId, title: owner.title }, text), undefined, { existingTaskId: owner.taskId, cardTitle: `跟进：${owner.title}` })
         .then(() => { const why = this.deps.board?.handedBack?.(owner.taskId); if (why !== undefined) { this.deps.log(`channel ${adapter.name}: ${owner.taskId} handed the follow-up back (${why}); routing it as new work`); return this.runTask(adapter, {...message,id:`reroute:${message.id}`,requestOf:message.id}, agentName ?? to.fallback?.id, text, undefined, { cardTitle: firstLine(text) }); } return undefined; })
         .catch(error => { this.deps.log(`channel ${adapter.name}: follow-up failed (${error instanceof Error ? error.message : String(error)})`); })
         .finally(() => { this.inflight.delete(followUp); this.inflightContexts.delete(followUp); });
