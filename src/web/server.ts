@@ -6827,13 +6827,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (watching === undefined) return;
       // The stream is open when the box says so; from then on what moves on it is counted, and how it ends is recorded.
       const ended = (reason: StreamEnd) => () => watching.held.stream?.end(reason);
-      upstream.once("data", first => {
-        if (!first.toString("latin1", 0, 12).startsWith("HTTP/1.1 101") || clientSocket.destroyed) return;
+      // The answer's first line may arrive in pieces: wait for enough of it to read.
+      let answer = Buffer.alloc(0);
+      const answered = (chunk: Buffer): void => {
+        answer = Buffer.concat([answer, chunk]);
+        if (answer.length < 12) return;
+        upstream.off("data", answered);
+        if (!answer.toString("latin1", 0, 12).startsWith("HTTP/1.1 101") || clientSocket.destroyed) return;
         const stream = desktopStreams.opened(watching.open, clientSocket);
         watching.held.stream = stream;
-        upstream.on("data", (chunk: Buffer) => stream.moved("down", chunk));
-        clientSocket.on("data", (chunk: Buffer) => stream.moved("up", chunk));
-      });
+        upstream.on("data", (more: Buffer) => stream.moved("down", more));
+        clientSocket.on("data", (more: Buffer) => stream.moved("up", more));
+      };
+      upstream.on("data", answered);
       upstream.once("close", ended("box-gone"));
       // A browser that goes away half-closes first; the socket itself closes only once the box has let go.
       clientSocket.once("end", ended("left")).once("close", ended("left"));

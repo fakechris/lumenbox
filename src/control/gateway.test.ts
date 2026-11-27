@@ -659,6 +659,7 @@ test("the password form waits after wrong tries, by address and by name, and a c
     const audit = store.recentAudit(100);
     assert.ok(audit.some(row => row.action === "signin.failed" && row.actor === "alice" && (row.detail as { address: string }).address === "203.0.113.1"), "a failed try is where sign-ins are: who, and from where the proxy saw it");
     assert.ok(audit.some(row => row.action === "signin.limited" && row.actor === "bob"));
+    assert.ok(audit.some(row => row.action === "signin" && row.actor === "alice" && (row.detail as { address?: string }).address === "203.0.113.2"), "and a sign-in that worked says from where too");
     assert.ok(!JSON.stringify(audit).includes("guess"), "never the password tried");
 
     const session = (await signIn("alice", "secret", "203.0.113.2")).headers.get("set-cookie")!.split(";")[0]!;

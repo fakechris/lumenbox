@@ -114,7 +114,7 @@ test("a stream is recorded when it opens and when it ends, once, with why; quiet
     { at: "2026-11-27T10:01:30.000Z", event: "closed", person: "ann", box: "box-1", display: 1, agent: "agent-7", mode: "control", by: "session", reason: "left", seconds: 90, input: true },
   ], "who, whose desktop, which mode; then why, how long, and whether anything was pressed — and the first reason is the reason");
   assert.equal(lines[0]!.stream, lines[1]!.stream, "the two lines are one stream");
-  assert.ok(!JSON.stringify(lines).includes("61"), "never the key");
+  assert.deepEqual(Object.keys(lines[1]!).sort(), ["agent", "at", "box", "by", "display", "event", "input", "mode", "person", "reason", "seconds", "stream"], "one yes/no about input, and nowhere a key could be kept");
 
   // Without a limit — local — nothing is closed for being quiet.
   now += 10 * DESKTOP_IDLE_MS;
@@ -263,7 +263,12 @@ async function installation(t: TestContext, env: Partial<Record<(typeof KEYS)[nu
     if (req.url === "/displays/ensure") { res.end(JSON.stringify({ index: 1 })); return; }
     res.end(JSON.stringify({ entries: [], skills: [], recordings: [], sessions: [], stdout: "", stderr: "", exit_code: 0 }));
   });
-  daemon.on("upgrade", (req, socket: Socket) => { asked.push(req.url ?? ""); upstreams.push(socket); sockets.push(socket); socket.resume(); socket.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"); });
+  // Its answer arrives in two pieces, split inside the status line, as a network may deliver it.
+  daemon.on("upgrade", (req, socket: Socket) => {
+    asked.push(req.url ?? ""); upstreams.push(socket); sockets.push(socket); socket.resume(); socket.setNoDelay(true);
+    socket.write("HTTP/1.");
+    setTimeout(() => { if (!socket.destroyed) socket.write("1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n"); }, 15);
+  });
   await new Promise<void>(resolve => daemon.listen(0, "127.0.0.1", resolve));
   const daemonUrl = `http://127.0.0.1:${(daemon.address() as { port: number }).port}`;
   let stop: (() => void) | undefined;
@@ -304,7 +309,12 @@ async function installation(t: TestContext, env: Partial<Record<(typeof KEYS)[nu
       socket.write(`GET ${path} HTTP/1.1\r\nHost: ${address.host}\r\n${Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("")}Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
     });
     sockets.push(socket);
-    const answer = await new Promise<string>((resolve, reject) => { socket.once("data", data => resolve(String(data))); socket.once("error", reject); socket.once("close", () => resolve("closed")); });
+    // The whole head of the answer, however many pieces it came in.
+    const answer = await new Promise<string>((resolve, reject) => {
+      let head = "";
+      const more = (data: Buffer) => { head += String(data); if (head.includes("\r\n\r\n")) { socket.off("data", more); resolve(head); } };
+      socket.on("data", more); socket.once("error", reject); socket.once("close", () => resolve(head === "" ? "closed" : head));
+    });
     return { status: `${answer.split("\r\n")[0]} ${answer.split("\r\n\r\n")[1]?.trim() ?? ""}`.trim(), stream: asked[before], socket };
   };
   const sessions = (): DesktopSessionRecord[] => {
@@ -448,8 +458,10 @@ test("through the control plane's gateway: the tenant's page is sent to itself w
   const upgrade = (path: string) => new Promise<string>(resolve => {
     const socket = connect(Number(address.port), address.hostname, () => socket.write(`GET ${path} HTTP/1.1\r\nHost: ${address.host}\r\nCookie: ${session}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`));
     sockets.push(socket);
-    socket.once("data", data => resolve(`${String(data).split("\r\n")[0]} ${String(data).split("\r\n\r\n")[1]?.trim() ?? ""}`.trim()));
-    socket.once("close", () => resolve("closed"));
+    let head = "";
+    const done = () => resolve(head === "" ? "closed" : `${head.split("\r\n")[0]} ${head.split("\r\n\r\n")[1]?.trim() ?? ""}`.trim());
+    socket.on("data", data => { head += String(data); if (head.includes("\r\n\r\n")) done(); });
+    socket.once("close", done);
   });
   assert.equal(await upgrade(`/desktop/${box.index}/websockify`), "HTTP/1.1 403 Forbidden ticket-missing");
   assert.equal(await upgrade(socketPath), "HTTP/1.1 101 Switching Protocols", "the ticket in the socket's address survives the gateway");
