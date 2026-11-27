@@ -165,6 +165,14 @@ Every file in `docs/` opens with a header block naming what it is:
   `--write-baseline` only lowers. On a conflict, take `main`'s file and run `npm run arch`: it
   prints the numbers to raise. A pull request touching the prompt or a tool's definition also gets
   a CI notice pointing at the comparison the pull request template asks for; that is a hint, not a gate.
+- **What somebody outside depends on only grows, unless the deprecation list says otherwise.**
+  `surface-baseline.json` (checked by `npm run arch`, `scripts/surface-ratchet.mjs`, INV-2201) holds
+  the stable surface of docs/106 §3, read off the code: the commands for running an installation and
+  their flags, `config.json` keys, the variables `agentbox help` lists, the MCP side door's tools and
+  fields, webhook headers, skill frontmatter keys, rule fields, the template format. An addition
+  fails until `node scripts/surface-ratchet.mjs --write-baseline` records it, and needs a line in
+  the release notes. A removal or a changed type fails unless `src/deprecations.ts` — the one
+  deprecation list — has the item and the release line has reached its `removableFrom`.
 - **A flaky fix is believed at 16 runs, 4 at a time.** A test that failed only sometimes was
   green for its author and red under the loaded suite; a fix for one is merged only with the
   output of `npm run flaky -- <file>` (16/16) in the PR. The script runs the file the way

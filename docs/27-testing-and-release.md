@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: testing-and-release
-     updated: 2026-10-26
+     updated: 2026-11-27
 -->
 # Testing and release stability: ours, against OpenClaw and Hermes
 
@@ -190,3 +190,26 @@ first line:
   `network: NOT denied by the OS — <why>` and goes on with the in-process layer alone; the
   self-test then reports the gap instead of asserting the deny. `AGENTBOX_TEST_NO_SANDBOX=1`
   switches the OS layer off on purpose. CI (Linux) has it on.
+
+## The stable surface only grows (INV-2201, 2026-11-27)
+
+What somebody outside may depend on — the Stable list of docs/106 §3 — is held the way the prompt
+is: `surface-baseline.json`, one item to a line, checked by `npm run arch`
+(`scripts/surface-ratchet.mjs`). It is read off the code, not kept by hand: the commands for
+running an installation and their flags (from `src/cli.ts`'s dispatch), `AgentboxConfig`'s keys and
+declared types, the variables `agentbox help` lists, the MCP side door's tools, input fields,
+capability map and task states, the webhook authentication headers, skill frontmatter keys, rule
+fields and the template format.
+
+- **An addition fails until the baseline has it.** `node scripts/surface-ratchet.mjs
+  --write-baseline` writes it, and the release notes get a line: an addition is a promise from
+  then on.
+- **A removal or a changed type fails**, unless the item is in the deprecation list
+  (`src/deprecations.ts`: what, since which line, what replaces it, removable from) and the
+  release line has reached `removableFrom`. Only then does `--write-baseline` let go of the entry.
+- **The deprecation list is the one place** "deprecated" is said. `agentbox web` reports at start
+  any deprecated `config.json` key or environment variable the installation still uses; the
+  release notes for a line are written from the same list.
+
+Not held, so the tick is not read as more: exit statuses, the files `audit export` writes, HTTP
+status codes, a flag read by a helper outside the command's own function, and the client API.
