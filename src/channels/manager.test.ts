@@ -2017,7 +2017,7 @@ test("question ownership checks identity, room, agent, expiry and one-shot consu
   assert.equal(asks[0]?.questionId, undefined, "unrelated input must not clear the pending question");
   await adapter.inject({ ...room, text: "us", questionId: "q1" });
   await manager.idle();
-  assert.equal(asks[1]?.agent, "Ada");
+  assert.equal(asks[1]?.agent, "a1", "the answer goes to the agent that asked, by id: another box may hold an agent of the same name (INV-2221)");
   assert.equal(asks[1]?.questionId, "q1");
   assert.match(asks[1]!.text, /Which region/);
   assert.match(String(await adapter.inject({ ...room, text: "/answer q1 again" })), /已失效/);

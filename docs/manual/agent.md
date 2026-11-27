@@ -4,7 +4,7 @@
      status: current
      covers: agent
      audience: user
-     updated: 2026-11-06
+     updated: 2026-11-27
 -->
 # Agent
 
@@ -36,7 +36,8 @@ Configure.
 
 - `@name <message>` — give the message to that agent.
 - `团队` (or `team`) — list who works here.
-- A message that names nobody goes to the channel's default agent.
+- A message that names nobody goes to the channel's default agent; in an organisation, a
+  direct message goes to your own agent.
 
 ### From the command line
 

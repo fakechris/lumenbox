@@ -30,7 +30,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [109-organisation-onboarding](109-organisation-onboarding.md) | Joining an organisation: activation, a box and an agent each, the first chat, and what boxes share | current | 2026-11-28 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
-| [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-07 |
+| [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-27 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-11-27 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-12 |
@@ -43,7 +43,7 @@ this file and the headers disagree. Edit the header, not this table.
 
 | doc | title | status | updated |
 |---|---|---|---|
-| [manual/agent](manual/agent.md) | Agent | current | 2026-11-06 |
+| [manual/agent](manual/agent.md) | Agent | current | 2026-11-27 |
 | [manual/approvals](manual/approvals.md) | Approvals | current | 2026-11-19 |
 | [manual/automations](manual/automations.md) | Automations | current | 2026-11-20 |
 | [manual/box](manual/box.md) | Box | current | 2026-11-06 |
