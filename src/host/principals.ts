@@ -76,6 +76,13 @@ export interface Principal {
    * message is matched by a link with its incarnation, never by an old id.
    */
   aliases?: string[];
+  /**
+   * The agent a direct message to this person reaches (INV-2220, docs/109 §4): the one made for them
+   * in their personal box when an Admin activated them, until they choose another. A fact about the
+   * person, not about a box — they may hold several boxes, or none. It may name an agent that has
+   * since been deleted: a reader checks the registry. Kept by every save; changed by `setHomeAgent`.
+   */
+  homeAgentId?: string;
 }
 
 /**
@@ -105,6 +112,7 @@ interface StoredPrincipal {
   links: IdentityLink[];
   anchors: string[];
   aliases: string[];
+  homeAgentId?: string;
 }
 
 interface PrincipalsFile {
@@ -121,6 +129,8 @@ interface PrincipalsFile {
     anchors?: string[];
     /** Ids folded into this one by a merge (INV-1698). Absent on older files. */
     aliases?: string[];
+    /** The person's home agent (INV-2220). Absent until one is made for them. */
+    homeAgentId?: string;
   }>;
 }
 
@@ -211,7 +221,7 @@ export class Principals {
           ),
         ];
         const aliases = [...new Set((Array.isArray(raw.aliases) ? raw.aliases : []).filter((a): a is string => typeof a === "string" && a !== "" && a !== raw.id))];
-        const principal: StoredPrincipal = { id: raw.id, name: raw.name, role, links, anchors, aliases };
+        const principal: StoredPrincipal = { id: raw.id, name: raw.name, role, links, anchors, aliases, ...(typeof raw.homeAgentId === "string" && raw.homeAgentId !== "" ? { homeAgentId: raw.homeAgentId } : {}) };
         this.stored.push(principal);
         for (const alias of aliases) if (!this.byAlias.has(alias)) this.byAlias.set(alias, principal);
         for (const anchor of anchors) {
@@ -239,6 +249,7 @@ export class Principals {
       identities: principal.links.map(link => link.identity),
       ...(principal.anchors.length > 0 ? { anchors: [...principal.anchors] } : {}),
       ...(principal.aliases.length > 0 ? { aliases: [...principal.aliases] } : {}),
+      ...(principal.homeAgentId !== undefined ? { homeAgentId: principal.homeAgentId } : {}),
     };
   }
 
@@ -332,6 +343,8 @@ export class Principals {
     const previous = new Map<string, number>();
     // Aliases are the merge's record, not something the People dialog edits: a save keeps them.
     const aliasesOf = new Map(this.stored.map(principal => [principal.id, principal.aliases]));
+    // Nor the home agent: a roster sent without it keeps it; an empty one (`setHomeAgent`) clears it.
+    const homeOf = new Map(this.stored.map(principal => [principal.id, principal.homeAgentId]));
     for (const principal of this.stored) {
       for (const link of principal.links) {
         previous.set(`${principal.id} ${link.identity}`, link.incarnation);
@@ -346,6 +359,7 @@ export class Principals {
         role: principal.role,
         anchors: [...new Set((principal.anchors ?? []).map(a => a.trim().toLowerCase()).filter(Boolean))],
         aliases: [...new Set(principal.aliases ?? aliasesOf.get(principal.id) ?? [])],
+        ...((principal.homeAgentId ?? homeOf.get(principal.id)) ? { homeAgentId: principal.homeAgentId ?? homeOf.get(principal.id) } : {}),
         links: [...new Set(principal.identities.map(identity => identity.trim()).filter(Boolean))]
           .filter(identity => {
             if (claimed.has(identity)) {
@@ -377,6 +391,7 @@ export class Principals {
         identities: principal.links,
         anchors: principal.anchors,
         ...(principal.aliases.length > 0 ? { aliases: principal.aliases } : {}),
+        ...(principal.homeAgentId !== undefined ? { homeAgentId: principal.homeAgentId } : {}),
       })),
     };
     writeFileSync(temp, `${JSON.stringify(file, null, 2)}\n`, {
@@ -387,6 +402,14 @@ export class Principals {
     chmodSync(this.path, 0o600);
     this.reload();
     });
+  }
+
+  /** Sets or clears (undefined) a roster person's home agent. False when nobody has that id. Who may do what is unchanged, so nothing is rechecked. */
+  setHomeAgent(principalId: string, agentId: string | undefined): boolean {
+    this.reload();
+    if (!this.stored.some(principal => principal.id === principalId)) return false;
+    this.write(this.list().map(principal => principal.id === principalId ? { ...principal, homeAgentId: agentId ?? "" } : principal));
+    return true;
   }
 
   /**

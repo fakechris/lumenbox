@@ -24,8 +24,10 @@ export interface Deprecation {
   removableFrom: string;
 }
 
-/** Empty at 0.4: nothing on the stable list has been deprecated yet. */
-export const DEPRECATIONS: readonly Deprecation[] = [];
+export const DEPRECATIONS: readonly Deprecation[] = [
+  // INV-2220: when a member's box is made became a choice of three, not a switch. Still read: true as "first-use", false as "never".
+  { item: "config/autoPersonalBox", since: "0.4", replacement: 'config.json "personalBoxAt": "activation", "first-use" (what true meant) or "never" (what false meant)', removableFrom: "0.6" },
+];
 
 /** "0.4.9" → "0.4": the release line a version belongs to. */
 export function releaseLine(version: string): string {

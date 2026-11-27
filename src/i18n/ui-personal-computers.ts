@@ -3,6 +3,7 @@ export const UI_PERSONAL_COMPUTERS: Record<string, readonly [string, string]> = 
   "ui.personal.team": ["团队的个人电脑", "Team personal computers"],
   "ui.personal.create": ["创建我的个人电脑", "Create my personal computer"],
   "ui.personal.defaultName": ["{name} 的电脑", "{name}’s computer"],
+  "ui.personal.assistant": ["助手", "Assistant"],
   "ui.personal.name": ["电脑名称", "Computer name"],
   "ui.personal.saveName": ["保存名称", "Save name"],
   "ui.personal.rename": ["重命名", "Rename"],

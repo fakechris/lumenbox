@@ -23,11 +23,11 @@ this file and the headers disagree. Edit the header, not this table.
 | [02-product](02-product.md) | Product | current | 2026-11-06 |
 | [03-architecture](03-architecture.md) | Architecture | current | 2026-11-19 |
 | [04-design](04-design.md) | Design | current | 2026-11-19 |
-| [05-data](05-data.md) | Data | current | 2026-11-27 |
+| [05-data](05-data.md) | Data | current | 2026-11-28 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-11-06 |
 | [101-speaking-unprompted](101-speaking-unprompted.md) | Speaking unprompted: what a member says to a person nobody asked it to say | current | 2026-11-20 |
 | [106-stable-surface-and-client-api](106-stable-surface-and-client-api.md) | What stays stable: release lines, the stable list, remote access, and the client API | current | 2026-11-27 |
-| [109-organisation-onboarding](109-organisation-onboarding.md) | Joining an organisation: activation, a box and an agent each, the first chat, and what boxes share | current | 2026-11-27 |
+| [109-organisation-onboarding](109-organisation-onboarding.md) | Joining an organisation: activation, a box and an agent each, the first chat, and what boxes share | current | 2026-11-28 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-07 |
@@ -47,7 +47,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [manual/approvals](manual/approvals.md) | Approvals | current | 2026-11-19 |
 | [manual/automations](manual/automations.md) | Automations | current | 2026-11-20 |
 | [manual/box](manual/box.md) | Box | current | 2026-11-06 |
-| [manual/channels](manual/channels.md) | Channels | current | 2026-11-27 |
+| [manual/channels](manual/channels.md) | Channels | current | 2026-11-28 |
 | [manual/memory](manual/memory.md) | Memory | current | 2026-11-06 |
 | [manual/README](manual/README.md) | The LumenBox manual | current | 2026-11-24 |
 | [manual/reference-commands](manual/reference-commands.md) | Reference: what you can say in a chat | current | generated |

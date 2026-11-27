@@ -6,6 +6,11 @@ import { join } from "node:path";
 import { startWebServer } from "./server.ts";
 import { Principals } from "../host/principals.ts";
 import { PersonalBoxStartError, type PersonalBoxDriver } from "../host/personal-boxes.ts";
+import { AgentRegistry } from "../agents/registry.ts";
+import { STARTING_AT_ONCE, personalBoxAt } from "../host/auto-personal-box.ts";
+import { deprecationsInUse } from "../deprecations.ts";
+import { STARTER_TEAM } from "../host/orchestrator.ts";
+import { directorySource } from "../host/directory.ts";
 
 // These requests carry identity the way the hosted gateway sends it (INV-1543).
 process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
@@ -16,8 +21,11 @@ const roster = [
   { id: "operator", name: "Operator", role: "admin" as const, identities: ["web:operator"] },
 ];
 
+/** The DingTalk door `withDoor` gives an organisation: its directory lists `p01`…`p30` in Engineering and `v01` in Sales. */
+const staff = Array.from({ length: 30 }, (_, index) => `p${String(index + 1).padStart(2, "0")}`);
+
 /** An organisation server on a temporary home, with a fake box backend that counts what it was asked to start. */
-async function organisation(t: { after(fn: () => void): void }, options: { config?: Record<string, unknown>; start?: () => Promise<string> } = {}) {
+async function organisation(t: { after(fn: () => void): void }, options: { config?: Record<string, unknown>; start?: (name: string) => Promise<string>; withDoor?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), "auto-personal-box-"));
   const previous = process.env.AGENTBOX_HOME;
   process.env.AGENTBOX_HOME = home;
@@ -28,10 +36,20 @@ async function organisation(t: { after(fn: () => void): void }, options: { confi
     rmSync(home, { recursive: true, force: true });
   });
   new Principals().save(roster);
-  if (options.config) writeFileSync(join(home, "config.json"), JSON.stringify(options.config));
+  if (options.withDoor) {
+    // A door with an app behind it and a directory synced a moment ago, as an Admin's "sync now" leaves them.
+    writeFileSync(join(home, "channels.json"), JSON.stringify({ channels: [{ id: "ding", name: "DingTalk", type: "dingtalk", incarnation: 1, boxId: "default", createdAt: new Date().toISOString() }] }));
+    const people = [...staff.map(subject => ({ vendorSubject: subject, name: subject.toUpperCase(), departmentVendorIds: ["10"] })), { vendorSubject: "v01", name: "V01", departmentVendorIds: ["20"] }];
+    writeFileSync(join(home, "directory.json"), JSON.stringify({ ding: {
+      source: directorySource("ding", 1, "ding-app", "dingtalk"), syncedAt: new Date().toISOString(),
+      snapshot: { departments: [{ vendorId: "10", name: "Engineering", parentVendorId: null }, { vendorId: "20", name: "Sales", parentVendorId: null }], people },
+    } }));
+  }
+  const config = { ...(options.withDoor ? { env: { DING_CLIENT_ID: "ding-app", DING_CLIENT_SECRET: "secret" } } : {}), ...options.config };
+  if (Object.keys(config).length > 0) writeFileSync(join(home, "config.json"), JSON.stringify(config));
   const started: string[] = [];
   const driver: PersonalBoxDriver = {
-    start: async record => { started.push(record.displayName ?? record.name); return (options.start ?? (async () => "http://127.0.0.1:1"))(); },
+    start: async record => { const name = record.displayName ?? record.name; started.push(name); return (options.start ?? (async () => "http://127.0.0.1:1"))(name); },
     remove: async () => {},
   };
   const dial = async () => { throw new Error("unexpected Docker lookup"); };
@@ -92,7 +110,10 @@ test("INV-2203: a driver's first sign-in makes one personal box, once, across ta
   await request("/api/me", "web:alice");
   assert.equal(org.started.length, 1, "a restarted server makes none again");
 
-  const removed = await request("/api/personal-boxes/remove", "web:alice", { id: mine.boxes[0].id, deleteData: true });
+  // Her box has her agent in it now (INV-2220), so deleting it names that agent; another agent lives elsewhere on the installation.
+  assert.equal(mine.boxes[0].agents.length, 1);
+  new AgentRegistry(join(org.home, "agents")).create({ name: "Shared" });
+  const removed = await request("/api/personal-boxes/remove", "web:alice", { id: mine.boxes[0].id, deleteData: true, deleteAgents: true, agentIds: mine.boxes[0].agentIds });
   assert.equal(removed.status, 200);
   assert.equal(removed.data.boxes.length, 0);
   org.stopAll();
@@ -133,6 +154,10 @@ test("INV-2203: out of quota makes none, says why, shows the Admins, and is not 
 });
 
 test("INV-2203: the switch off makes none; a personal installation is untouched", async (t) => {
+  // The old switch is read as what it meant, the new setting wins over it, and with neither a cluster makes the box at activation.
+  assert.deepEqual([personalBoxAt({ autoPersonalBox: true }, true), personalBoxAt({ autoPersonalBox: false }, true), personalBoxAt({ autoPersonalBox: false, personalBoxAt: "activation" }, false), personalBoxAt({}, true), personalBoxAt({}, false)],
+    ["first-use", "never", "activation", "activation", "never"]);
+  assert.match(deprecationsInUse({ configKeys: ["autoPersonalBox"], envNames: [] })[0] ?? "", /"autoPersonalBox".*Use instead: config\.json "personalBoxAt"/);
   const off = await organisation(t, { config: { autoPersonalBox: false } });
   const request = await off.boot();
   await request("/api/me", "web:alice");
@@ -148,4 +173,98 @@ test("INV-2203: the switch off makes none; a personal installation is untouched"
   assert.equal((await owner("/api/me", "web:owner")).status, 200);
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(personal.started.length, 0);
+});
+
+/** Waits until no personal box of the installation is being started or cleaned up, and nothing more is on its way. */
+async function allSettled(request: Awaited<ReturnType<Awaited<ReturnType<typeof organisation>>["boot"]>>, boxes: number) {
+  for (let i = 0; i < 400; i++) {
+    const rows = (await request("/api/personal-boxes/admin", "web:operator")).data.boxes as Array<{ owner: string; status: string; stateReason?: string; agents: string[]; agentIds: string[]; id: string; name: string }>;
+    if (rows.length >= boxes && !rows.some(box => box.status === "provisioning" || box.status === "deleting")) return rows;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.fail("the personal boxes never settled");
+}
+
+test("INV-2220: activating a person makes their box and one agent in it, written down as their home agent; a viewer and a person out of quota get neither", async (t) => {
+  let open: () => void = () => {};
+  const gate = new Promise<void>(resolve => { open = resolve; });
+  const org = await organisation(t, { withDoor: true, config: { personBoxQuotas: { "ding:p03": 0 } }, start: async () => { await gate; return "http://127.0.0.1:1"; } });
+  const request = await org.boot();
+  assert.equal((await request("/api/activations/person", "web:operator", { channelId: "ding", subject: "p01", role: "driver" })).status, 200);
+  assert.deepEqual(new Principals().byId("ding:p01"), { id: "ding:p01", name: "P01", role: "driver", identities: ["ding:p01"] }, "on the roster at once, while her box is still starting");
+  open();
+  const [box] = await allSettled(request, 1);
+  assert.deepEqual([box!.owner, box!.status, box!.name], ["ding:p01", "ready", "P01 的电脑"], "her own, made through the member's path, named in the door's language");
+  for (let i = 0; i < 100 && new Principals().byId("ding:p01")?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  const home = new Principals().byId("ding:p01")!.homeAgentId!;
+  const registry = new AgentRegistry(join(org.home, "agents"));
+  assert.deepEqual(registry.agentsIn(box!.id).map(agent => agent.id), [home], "one agent in it, and it is the one the roster names");
+  const assistant = registry.get(home).profile;
+  assert.deepEqual([assistant.name, assistant.title, assistant.tools, assistant.ownerUserId], ["助手", STARTER_TEAM[0]!.title, [...STARTER_TEAM[0]!.tools!], "ding:p01"], "the starter team's first agent, alone, under the assistant's name");
+  // Their first page load finds the box and makes nothing more.
+  assert.equal((await request("/api/me", "ding:p01")).data.role, "driver");
+  assert.deepEqual((await request("/api/personal-boxes", "ding:p01")).data.boxes.map((row: { id: string }) => row.id), [box!.id]);
+  assert.equal(org.started.length, 1);
+
+  // A viewer is on the roster and gets no box and no agent; so is a person whose quota is 0, and the Admins are shown why.
+  assert.equal((await request("/api/activations/person", "web:operator", { channelId: "ding", subject: "v01", role: "viewer" })).status, 200);
+  assert.equal((await request("/api/activations/person", "web:operator", { channelId: "ding", subject: "p03", role: "driver" })).status, 200);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(org.started.length, 1);
+  const roster = new Principals();
+  assert.deepEqual(["ding:v01", "ding:p03"].map(id => [roster.byId(id)?.role, roster.byId(id)?.homeAgentId]), [["viewer", undefined], ["driver", undefined]]);
+  const people = (await request("/api/personal-boxes/panel", "web:operator")).data.inventory.people as Array<{ id: string; waitingForQuota?: boolean }>;
+  assert.deepEqual(["ding:v01", "ding:p03"].map(id => people.find(person => person.id === id)?.waitingForQuota), [undefined, true]);
+  assert.deepEqual((await request("/api/setup", "ding:p03")).data.autoBox, { state: "quota" }, "and her own page says so");
+  // The ledger says who asked for a box on whose behalf.
+  const acts = (await request("/api/activations/audit", "web:operator")).data.acts as Array<{ type: string; by?: string; people?: unknown }>;
+  assert.deepEqual(acts.filter(act => act.type === "boxes").map(act => [act.by, act.people]), [["web:operator", ["ding:p01"]]]);
+});
+
+test("INV-2220: a department of thirty is on the roster at once; their boxes start a few at a time, and one that fails says why and stops nobody", async (t) => {
+  let inFlight = 0, most = 0, open: () => void = () => {};
+  const gate = new Promise<void>(resolve => { open = resolve; });
+  const org = await organisation(t, { withDoor: true, start: async name => {
+    inFlight += 1; most = Math.max(most, inFlight);
+    await gate; await new Promise(resolve => setTimeout(resolve, 5));
+    inFlight -= 1;
+    if (name.startsWith("P07")) throw new PersonalBoxStartError("pull failed", "ImagePullBackOff", "Check the image.");
+    return "http://127.0.0.1:1";
+  } });
+  const request = await org.boot();
+  assert.deepEqual((await request("/api/activations/department", "web:operator", { channelId: "ding", department: "10", includeSub: false, role: "driver" })).data, { activated: 30, alreadyActive: 0 });
+  const roster = new Principals();
+  assert.equal(staff.filter(subject => roster.isKnown(`ding:${subject}`) && roster.roleOf(`ding:${subject}`) === "driver").length, 30, "thirty people, before one box is up");
+  for (let i = 0; i < 200 && org.started.length < STARTING_AT_ONCE; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(org.started.length, STARTING_AT_ONCE, "the rest wait their turn");
+  open();
+  const boxes = await allSettled(request, 30);
+  assert.ok(most <= STARTING_AT_ONCE, `at most ${STARTING_AT_ONCE} starting together, saw ${most}`);
+  assert.equal(org.started.length, 30);
+  const failed = boxes.filter(box => box.status !== "ready");
+  assert.deepEqual(failed.map(box => [box.owner, box.status, box.stateReason]), [["ding:p07", "failed", "ImagePullBackOff"]], "the platform's reason, on the one that failed");
+  assert.deepEqual((await request("/api/setup", "ding:p07")).data.autoBox, { state: "failed", reason: "ImagePullBackOff" });
+  assert.equal(new Principals().isKnown("ding:p07"), true, "and that person still exists and can sign in");
+  // Nothing is tried again: not by a page load, not by a restart.
+  await request("/api/me", "ding:p07");
+  org.stopAll();
+  const again = await org.boot();
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(org.started.length, 30);
+  assert.equal((await again("/api/personal-boxes/admin", "web:operator")).data.boxes.length, 30);
+});
+
+test("INV-2220: with boxes at first use, activation makes the person and no box; their first page load makes the box and the agent", async (t) => {
+  const org = await organisation(t, { withDoor: true, config: { personalBoxAt: "first-use" } });
+  const request = await org.boot();
+  assert.equal((await request("/api/activations/person", "web:operator", { channelId: "ding", subject: "p02", role: "driver" })).status, 200);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(new Principals().isKnown("ding:p02"), true);
+  assert.equal(org.started.length, 0, "nothing is held for somebody who has not come");
+  assert.equal((await request("/api/me", "ding:p02")).status, 200);
+  const [box] = await allSettled(request, 1);
+  assert.deepEqual([box!.owner, box!.status], ["ding:p02", "ready"]);
+  for (let i = 0; i < 100 && new Principals().byId("ding:p02")?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(new AgentRegistry(join(org.home, "agents")).agentsIn(box!.id).map(agent => agent.id), [new Principals().byId("ding:p02")!.homeAgentId]);
 });

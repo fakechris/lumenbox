@@ -34,6 +34,7 @@
 import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { appendLineDurably } from "./host/jsonl.ts";
+import { enrolStandingActivations } from "./host/enrolment.ts";
 
 export const HOME_FORMAT_FILE = "FORMAT";
 export const HOME_FORMAT_LEDGER = "format-migrations.jsonl";
@@ -59,7 +60,16 @@ export interface HomeMigration {
  * or depends on something only a running host knows, so a 0.4.9 home may hold either form, and
  * format 1 means "either form, as 0.4.9 reads it". Nothing is rewritten: this only stamps.
  */
-export const HOME_MIGRATIONS: readonly HomeMigration[] = [{ to: 1, name: "the 0.4.9 layout, stamped as it stands", rewrites: false, run: () => {} }];
+export const HOME_MIGRATIONS: readonly HomeMigration[] = [
+  { to: 1, name: "the 0.4.9 layout, stamped as it stands", rewrites: false, run: () => {} },
+  /**
+   * Format 2 (INV-2220, docs/109 §3): an activation makes the roster person when it is pressed, not
+   * at the person's first sign-in. Every activation in `activations.jsonl` that stands, made nobody
+   * and has not left becomes a person in `principals.json`, and the ledger gains the `enrolled` line
+   * saying so (host/enrolment.ts). A home with no organisation ledger is only stamped.
+   */
+  { to: 2, name: "activations nobody signed in on become roster people", rewrites: true, run: enrolStandingActivations },
+];
 
 /** The exit status of a command that refused the home (EX_CONFIG). Not a crash: starting again changes nothing, and the desktop app shows the message instead of retrying (electron/home-refused.cjs mirrors the number). */
 export const HOME_REFUSED_EXIT = 78;

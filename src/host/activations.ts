@@ -1,12 +1,13 @@
 /**
- * Admission to an organisation by an Admin's activation (INV-2202, docs/107 §2–§4).
+ * Admission to an organisation by an Admin's activation (INV-2202, INV-2220, docs/109 §2–§3).
  *
  * Signing in through a door proves who somebody is; it does not let them in. An Admin activates a
- * person, or everybody a department lists at that moment, and **the activation is a record, not a
- * roster row**: the directory source, the person's subject in it, the role, who activated and when,
- * and the department it came from. It becomes a person on the roster only when that subject signs in
- * and the vendor vouches for it (`src/web/activation-routes.ts`), so the rule on `Directories` — a
- * directory row never creates or merges a Principal — still stands.
+ * person, or everybody a department lists at that moment, and **the Admin's act makes the person**:
+ * the roster gains them at once (`enrolment.ts`), holding the identity the directory gives, so their
+ * box can be made and the chat knows them before they have signed in anywhere. This ledger keeps
+ * what the roster does not: the directory source, the person's subject in it, who activated and
+ * when, the department it came from, that the roster person was made (`enrolled`) and that they
+ * have since signed in (`admitted`). A directory row alone still makes nobody.
  *
  * `activations.jsonl` is append-only and never compacted: one line per act, which makes it the
  * audit too. A department activation is one line naming the department, how many people and which
@@ -36,7 +37,12 @@ export type ActivationEvent =
   | (Stamp & { type: "activate-department"; by: string; role: Role; department: { vendorId: string; name: string }; includeSub: boolean; count: number; alreadyActive: number; people: Named[] })
   | (Stamp & Named & { type: "request" })
   | (Stamp & { type: "dismiss"; by: string; subject: string })
+  /** The roster people an activation made (INV-2220): one line for the act, however many. `migrated`: made by home format 2 from an activation older than that rule. */
+  | (Stamp & { type: "enrolled"; people: { subject: string; principalId: string }[]; migrated?: true })
+  /** The activated person's first sign-in through the door. Before INV-2220 this was also when the roster gained them. */
   | (Stamp & { type: "admitted"; subject: string; principalId: string })
+  /** Personal boxes asked for on these roster people's behalf: `by` the Admin who activated them, or `start` for the ones a server start caught up on. */
+  | (Stamp & { type: "boxes"; by: string; count: number; people: string[] })
   /** Activated before the directory listed them, and a later sync did. */
   | (Stamp & { type: "listed"; subjects: string[] })
   | (Stamp & Named & { type: "left"; principalId?: string })
@@ -78,8 +84,11 @@ export interface Activation extends Named {
   department?: { vendorId: string; name: string };
   /** The directory has listed this person since the activation: only then can a sync say they left. */
   listed: boolean;
-  /** The roster person the sign-in made, and came back to. */
+  /** The roster person the activation made, and comes back to. */
   principalId?: string;
+  /** When the roster gained them: at the activation, or at their first sign-in for one older than INV-2220. */
+  enrolledAt?: string;
+  /** Their first sign-in through the door. */
   admittedAt?: string;
   leftAt?: string;
 }
@@ -129,7 +138,7 @@ export function departmentTree(snapshot: DirectorySnapshot): DepartmentNode[] {
   });
 }
 
-interface SourceState { activations: Map<string, Activation>; requests: Map<string, JoinRequest>; held?: HeldSync }
+interface SourceState { source: DirectorySource; lastAt: string; activations: Map<string, Activation>; requests: Map<string, JoinRequest>; held?: HeldSync }
 
 export class Activations {
   private readonly sources = new Map<string, SourceState>();
@@ -146,12 +155,13 @@ export class Activations {
   private of(source: DirectorySource): SourceState {
     const key = sourceKey(source);
     let state = this.sources.get(key);
-    if (state === undefined) { state = { activations: new Map(), requests: new Map() }; this.sources.set(key, state); }
+    if (state === undefined) { state = { source, lastAt: "", activations: new Map(), requests: new Map() }; this.sources.set(key, state); }
     return state;
   }
 
   private apply(event: ActivationEvent): void {
     const state = this.of(event.source);
+    if (event.at > state.lastAt) state.lastAt = event.at;
     const activate = (person: Named, role: Role, by: string, listed: boolean, department?: { vendorId: string; name: string }) => {
       const before = state.activations.get(person.subject);
       state.activations.set(person.subject, {
@@ -164,7 +174,13 @@ export class Activations {
     else if (event.type === "activate-department") for (const person of event.people) activate(person, event.role, event.by, true, event.department);
     else if (event.type === "request") state.requests.set(event.subject, { subject: event.subject, name: event.name, at: event.at });
     else if (event.type === "dismiss") state.requests.delete(event.subject);
-    else if (event.type === "hold") state.held = { at: event.at, reason: event.reason, standing: event.standing, people: event.people };
+    else if (event.type === "boxes") { /* the audit's, not the state's */ }
+    else if (event.type === "enrolled") {
+      for (const person of event.people) {
+        const activation = state.activations.get(person.subject);
+        if (activation !== undefined) { activation.principalId = person.principalId; activation.enrolledAt = event.at; }
+      }
+    } else if (event.type === "hold") state.held = { at: event.at, reason: event.reason, standing: event.standing, people: event.people };
     else if (event.type === "hold-dismissed") delete state.held;
     else if (event.type === "left-confirmed") {
       delete state.held;
@@ -175,7 +191,7 @@ export class Activations {
         const activation = state.activations.get(subject);
         if (activation === undefined) continue;
         if (event.type === "listed") activation.listed = true;
-        else if (event.type === "admitted") { activation.principalId = event.principalId; activation.admittedAt = event.at; }
+        else if (event.type === "admitted") { activation.principalId = event.principalId; activation.admittedAt = event.at; activation.enrolledAt ??= event.at; }
         else activation.leftAt = event.at;
       }
     }
@@ -192,20 +208,36 @@ export class Activations {
   activations(source: DirectorySource): Activation[] { return [...this.of(source).activations.values()]; }
   requests(source: DirectorySource): JoinRequest[] { return [...this.of(source).requests.values()]; }
 
-  /** An activation nobody has signed in on yet, or whose person left and was activated again: the one a sign-in may use. */
-  pending(source: DirectorySource, subject: string): Activation | undefined {
-    const activation = this.activation(source, subject);
-    return activation !== undefined && activation.admittedAt === undefined && activation.leftAt === undefined ? activation : undefined;
+  /**
+   * Per door, the source its newest line was written against. Every line is stamped with the door's
+   * app as it was when the line was written, so this is the last app the door was seen with — the
+   * nearest a reader without the door's credentials gets to "the door as it is now".
+   */
+  latestSources(): DirectorySource[] {
+    const latest = new Map<string, SourceState>();
+    for (const state of this.sources.values()) {
+      const seen = latest.get(state.source.channelId);
+      if (seen === undefined || state.lastAt > seen.lastAt) latest.set(state.source.channelId, state);
+    }
+    return [...latest.values()].map(state => state.source);
+  }
+
+  /**
+   * Standing activations whose roster person has not been made: the act that was interrupted between
+   * the ledger and the roster, or one older than INV-2220 that nobody signed in on. `enrol` makes them.
+   */
+  unenrolled(source: DirectorySource): Activation[] {
+    return this.activations(source).filter(activation => activation.enrolledAt === undefined && activation.leftAt === undefined);
   }
 
   /**
    * Where a directory person stands. `onRoster`: their identity from this door is a roster person's
-   * now. An activation somebody signed in on whose identity is no longer anybody's — an Admin removed
-   * them, or a sync found them gone — is `left`, and admits nobody until an Admin activates again.
+   * now. An activation that made a roster person whose identity is no longer anybody's — an Admin
+   * removed them, or a sync found them gone — is `left`, and makes nobody until an Admin activates again.
    */
   stateOf(source: DirectorySource, subject: string, onRoster: boolean): DirectoryPersonState {
     const state = this.of(source), activation = state.activations.get(subject);
-    const left = activation !== undefined && (activation.leftAt !== undefined || (activation.admittedAt !== undefined && !onRoster));
+    const left = activation !== undefined && (activation.leftAt !== undefined || (activation.enrolledAt !== undefined && !onRoster));
     if (activation !== undefined && !left) return "active";
     if (onRoster) return "active";
     if (state.requests.has(subject)) return "asked";
@@ -250,8 +282,18 @@ export class Activations {
     return true;
   }
 
+  enrolled(source: DirectorySource, people: { subject: string; principalId: string }[], migrated = false): void {
+    if (people.length > 0) this.record({ type: "enrolled", source, people, ...(migrated ? { migrated: true as const } : {}) });
+  }
+
+  /** The first sign-in on a standing activation, once: what "activated, has not signed in yet" is read from. */
   admitted(source: DirectorySource, subject: string, principalId: string): void {
-    this.record({ type: "admitted", source, subject, principalId });
+    const activation = this.activation(source, subject);
+    if (activation !== undefined && activation.leftAt === undefined && activation.admittedAt === undefined) this.record({ type: "admitted", source, subject, principalId });
+  }
+
+  boxesAsked(source: DirectorySource, by: string, people: string[]): void {
+    if (people.length > 0) this.record({ type: "boxes", source, by, count: people.length, people });
   }
 
   listed(source: DirectorySource, subjects: string[]): void {

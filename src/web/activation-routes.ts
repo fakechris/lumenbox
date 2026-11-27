@@ -1,12 +1,14 @@
 /**
- * Letting people into an organisation by activation (INV-2202, docs/107): the directory an Admin
- * reads in Settings → Team → People as a department tree, activating a person or a department,
+ * Letting people into an organisation by activation (INV-2202, INV-2220, docs/109): the directory an
+ * Admin reads in Settings → Team → People as a department tree, activating a person or a department,
  * what happens at the door's sign-in, and what a sync does to somebody the directory stopped listing.
  *
- * Three things meet here and nowhere else:
- * - **the sign-in** (`admit`): an activation nobody has used yet becomes a person on the roster at
- *   the activation's role, linked to the identity the door mints (`<door>:<subject>`, the same string
- *   the door's chat messages carry). Anybody else has asked to join: one request, however many scans.
+ * Four things meet here and nowhere else:
+ * - **the activation** (`activated`): the Admin's act makes the roster person at once, at the role
+ *   chosen, holding the identity the door mints (`<door>:<subject>`, the same string the door's chat
+ *   messages carry) — `enrolment.ts` — and asks for their personal box (`boxes`).
+ * - **the sign-in** (`admit`): somebody the roster holds gets a session; it makes nobody. Anybody
+ *   else has asked to join: one request, however many scans.
  * - **the sync** (`sync`): the same sync the quotas use, then *left* for everybody whose activation
  *   names this source and whom it no longer lists: the sign-in this directory gave them is taken
  *   off, and with it what was made from it. They stay on the roster as the owner of what they have,
@@ -20,6 +22,7 @@
 import { departmentScope, departmentTree, holdReason, type Activation, type Activations, activationRole, type DirectoryPersonState } from "../host/activations.ts";
 import type { Directories, DirectorySnapshot, DirectorySource } from "../host/directory.ts";
 import type { Principal, Principals, Role } from "../host/principals.ts";
+import { enrol, type Enrolled } from "../host/enrolment.ts";
 import type { DirectoryCredentials } from "../channels/directory-sources.ts";
 import { apiError } from "./api-error.ts";
 
@@ -34,6 +37,11 @@ export interface AdmissionDeps {
   /** Every token of these ids (a person, a sign-in); `signInOnly`: only those made from that sign-in. */
   revokeTokens: (ids: readonly string[], signInOnly?: boolean) => void;
   log: (line: string) => void;
+  /**
+   * Personal boxes for people an activation made, where the installation makes them at activation
+   * (auto-personal-box.ts): queued, a few starting at a time. Returns the ids it queued. Absent: none are made here.
+   */
+  boxes?: (people: readonly { id: string; name: string }[], channelId: string) => string[];
 }
 
 const PAGE = 50;
@@ -49,30 +57,51 @@ export function admission(deps: AdmissionDeps) {
   const stateOf = (source: DirectorySource, subject: string): DirectoryPersonState => activations.stateOf(source, subject, onRoster(source, subject));
 
   /**
-   * At the door's sign-in, for an identity that is nobody's yet. `admitted`: the roster now holds
-   * them. `asked`: their request is with the Admins. `refused`: this installation admits nobody this
-   * way (a personal installation, or a door with no app behind it).
+   * At the door's sign-in. `admitted`: the roster holds them — an Admin's activation made them, or
+   * they were let in another way — and nobody is made here. `asked`: their request is with the
+   * Admins. `refused`: this installation admits nobody this way (a personal installation, or a door
+   * with no app behind it). The first sign-in on an activation is written down, once.
    */
   function admit(channelId: string, subject: string, name: string): "admitted" | "asked" | "refused" {
     principals.reload();
-    const source = deps.credentials(channelId)?.source;
-    if (source === undefined || principals.installation().mode === "single-machine") return "refused";
-    const identity = identityOf(source, subject);
-    const activation = activations.pending(source, subject);
-    if (activation === undefined) {
-      if (activations.request(source, { subject, name })) deps.log(`asked to join: ${identity} (${name}) signed in via ${channelId} and is not activated`);
-      return "asked";
+    const source = deps.credentials(channelId)?.source, identity = `${channelId}:${subject}`;
+    if (principals.isKnown(identity)) {
+      if (source !== undefined) activations.admitted(source, subject, principals.resolve(identity).id);
+      return "admitted";
     }
-    // Somebody who left and was activated again comes back as the person they were, with what they own.
-    const roster = principals.list(), back = principals.byId(activation.principalId ?? identity);
-    principals.save(back !== undefined
-      ? roster.map(person => person.id === back.id ? { ...person, role: activation.role, identities: [...person.identities, identity] } : person)
-      : [...roster, { id: identity, name: activation.name || name, role: activation.role, identities: [identity] }]);
-    if (!principals.isKnown(identity)) return "asked";
-    const person = principals.resolve(identity);
-    activations.admitted(source, subject, person.id);
-    deps.log(`activation used: ${identity} is ${person.name} (${person.id}) as ${activation.role}, activated by ${activation.by}`);
-    return "admitted";
+    if (source === undefined || principals.installation().mode === "single-machine") return "refused";
+    if (activations.request(source, { subject, name })) deps.log(`asked to join: ${identity} (${name}) signed in via ${channelId} and is not activated`);
+    return "asked";
+  }
+
+  /**
+   * After an activation was written to the ledger: the roster people it is owed are made, and their
+   * boxes asked for. Also what a server start runs for every door, which finishes an activation a
+   * crash interrupted and queues the boxes of people activated before boxes were made at activation.
+   */
+  function activated(source: DirectorySource, by: string): Enrolled[] {
+    const made = enrol(activations, principals, source, { log: deps.log });
+    for (const person of made) deps.log(`on the roster by activation: ${identityOf(source, person.subject)} is ${person.principalId}`);
+    askBoxes(source, by, made.map(person => person.principalId));
+    return made;
+  }
+  function askBoxes(source: DirectorySource, by: string, ids: readonly string[]): void {
+    const people = ids.flatMap(id => { const person = principals.byId(id); return person !== undefined ? [{ id: person.id, name: person.name }] : []; });
+    const queued = deps.boxes?.(people, source.channelId) ?? [];
+    activations.boxesAsked(source, by, queued);
+    if (queued.length > 0) deps.log(`personal boxes asked for ${queued.length} activated ${queued.length === 1 ? "person" : "people"} of ${source.channelId} by ${by}`);
+  }
+  function catchUp(channelIds: readonly string[]): void {
+    if (principals.installation().mode === "single-machine") return;
+    for (const channelId of channelIds) {
+      const source = deps.credentials(channelId)?.source;
+      if (source === undefined) continue;
+      try {
+        const made = new Set(activated(source, "start").map(person => person.principalId));
+        const standing = activations.activations(source).filter(activation => activation.leftAt === undefined && activation.principalId !== undefined && !made.has(activation.principalId) && onRoster(source, activation.subject));
+        askBoxes(source, "start", standing.map(activation => activation.principalId!));
+      } catch (error) { deps.log(`activations of ${channelId} not caught up at start: ${error instanceof Error ? error.message : String(error)}`); }
+    }
   }
 
   /**
@@ -165,7 +194,7 @@ export function admission(deps: AdmissionDeps) {
     }
   }
 
-  return { admit, applySync, confirmHeld, sync, refreshStale, stateOf, snapshotOf, onRoster };
+  return { admit, activated, catchUp, applySync, confirmHeld, sync, refreshStale, stateOf, snapshotOf, onRoster };
 }
 
 export interface ActivationRouteDeps extends AdmissionDeps {
@@ -251,10 +280,12 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
         total: members.length, offset,
         people: members.slice(offset, offset + PAGE).map(person => {
           const state = stateOf(source, person.vendorSubject), activation = activations.activation(source, person.vendorSubject);
-          const role = onRoster(source, person.vendorSubject) ? principals.resolve(identityOf(source, person.vendorSubject)).role : state === "active" ? activation?.role : undefined;
+          const known = onRoster(source, person.vendorSubject), role = known ? principals.resolve(identityOf(source, person.vendorSubject)).role : state === "active" ? activation?.role : undefined;
+          // "Activated, has not signed in yet" is read from the ledger's first sign-in, not from the roster: activation puts them there at once.
+          const standing = activation !== undefined && activation.leftAt === undefined;
           return {
             subject: person.vendorSubject, name: person.name, ...(person.title !== undefined ? { title: person.title } : {}), state,
-            ...(role !== undefined ? { role } : {}), signedIn: onRoster(source, person.vendorSubject),
+            ...(role !== undefined ? { role } : {}), signedIn: known && (!standing || activation.admittedAt !== undefined),
           };
         }),
       },
@@ -288,6 +319,7 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
     if (!already) {
       activations.activatePerson(source, { subject, name: row?.name ?? asked!.name }, role, by, row !== undefined);
       deps.log(`activated: ${identityOf(source, subject)} (${row?.name ?? asked!.name}) as ${role} by ${by}`);
+      deps.admission.activated(source, by);
     }
     return { status: 200, body: { state: "active", already } };
   }
@@ -299,6 +331,7 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
   const department = String(body.department ?? ""), includeSub = body.includeSub === true;
   const done = activations.activateDepartment(source, snapshot, department, includeSub, role, by, subject => onRoster(source, subject));
   if (done === undefined) return { status: 404, body: apiError("directory-department-unknown") };
+  deps.admission.activated(source, by);
   deps.log(`activated department ${department} of ${source.channelId}${includeSub ? " with its sub-departments" : ""}: ${done.activated} as ${role} by ${by}, ${done.alreadyActive} already active`);
   return { status: 200, body: done };
 }

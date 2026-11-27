@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-11-27
+     updated: 2026-11-28
 -->
 # Data
 
@@ -40,7 +40,8 @@ skill-provenance.jsonl      which agent the host saw write each skill (skill-pro
 hooks.json                  lifecycle hooks in Claude Code's dialect (hooks.ts); read on mtime
 org-knowledge.jsonl         the organisation's knowledge, L1: one extended memory record per line (org-knowledge.ts, INV-1726)
 memory-conflicts.jsonl      pairs of items of different layers that disagree, by version (memory-conflicts.ts, INV-1732)
-activations.jsonl           an organisation's admissions: who an Admin activated, who asked to join, who left (activations.ts, INV-2202)
+activations.jsonl           an organisation's admissions: who an Admin activated, who asked to join, who left (activations.ts, INV-2202, INV-2220)
+principals.json             the roster: each person, their role, the identities they hold, and their home agent (§2.2g)
 agents/<agentId>/
   profile.json              identity and persona
   config-versions.jsonl     every version of its configuration, and where conversations and tasks switched (INV-1669)
@@ -120,6 +121,22 @@ lazy or depends on what only a running host knows: the MiniMax key rename in `co
 read, channel grants re-keyed to principals (when the channels are connected), `memory.md` imported
 once into `memory.jsonl`, and a transcript moved under `.epochs/` by its first `/new`. They stay
 where they are; a future change that needs one of them finished everywhere is a numbered migration.
+
+**Format 2 makes roster people of activations nobody signed in on** (INV-2220, docs/109 §3). Until
+it, an activation was a record that became a person at their first web sign-in; from it, the
+Admin's act makes the person. The migration (`enrolStandingActivations`, `src/host/enrolment.ts`)
+reads `activations.jsonl` and, for every activation that stands, made nobody and has not left,
+adds the person to `principals.json` exactly as an activation now does — id and identity
+`<door>:<subject>`, the name and role the activation carries, the link stamped with the door's
+incarnation — and appends one `enrolled` line with `migrated: true` (§2.2f). It rewrites the
+roster, so the home is copied first. It is limited to a door `channels.json` still has at the
+activation's incarnation, and to the app that door's newest ledger line names; it reads only the
+home, so an app replaced since that line under the same door id is the one case it cannot tell.
+Somebody already on the roster through that identity is not duplicated and keeps their role. A
+roster that cannot be parsed fails the migration and the home stays format 1. A home with no
+`activations.jsonl` is copied and stamped, nothing else. It makes no box: the running server
+queues those afterwards (`personalBoxAt`, §2.5). Because format 2 rewrites, a home below it that
+cannot be written is refused, where a format 0 home used to be read as it was.
 
 **The upgrade fixture.** `src/fixtures/home-0.4.9/` is a home 0.4.9 wrote — two agents, a
 conversation with a tool call, a memory record, a plan, a task, `config.json` — produced by
@@ -495,7 +512,7 @@ line supersedes nothing until a person approves it.
 The prompt renders the pairs under "These disagree", higher layer first, newest pair first, in
 1,200 characters, the rest counted.
 
-### 2.2f `activations.jsonl` — admission by activation (INV-2202, docs/107)
+### 2.2f `activations.jsonl` — admission by activation (INV-2202, INV-2220, docs/109)
 
 One line per act, on an organisation installation, append-only and never compacted, so it is the
 state and the audit at once. Every line carries `at` and the directory `source` it was made against
@@ -509,21 +526,39 @@ not apply to another.
 | `activate-department` | an Admin activated everybody a department listed at that moment: `department` (`vendorId`, `name`), `includeSub`, `role`, `count`, `alreadyActive`, and the `people` it covered. One line for the bulk act, never one per person |
 | `request` | `subject` signed in through the door without an activation: asked to join. One per person until it is answered, however often they scan |
 | `dismiss` | an Admin put a request away |
-| `admitted` | the activated subject signed in and became `principalId` on the roster |
+| `enrolled` | the roster people an activation made: `people` (`subject`, `principalId`), one line for the act however many. `migrated: true` when home format 2 made them from an activation older than INV-2220 (§2.0) |
+| `admitted` | the activated subject's first sign-in through the door, as `principalId`. In a ledger written before INV-2220 it is also when the roster gained them |
+| `boxes` | personal boxes were asked for on behalf of the roster people in `people` (`count` of them): `by` the Admin whose activation it followed, or `start` for the ones a server start caught up on. What became of each is the box's own record |
 | `listed` | a sync listed people who had been activated before the directory showed them |
 | `left` | a sync no longer listed an activated person: the sign-in this source gave them was ended (`principalId` when they had signed in). Nothing else was changed |
 | `hold` | a sync was not believed and changed nothing: `reason` (`empty`: it listed nobody; `halved`: fewer than half the people of the one before; `many`: more than 5 people and more than 10% of the source's `standing` activations would leave) and the `people` it would have ended |
 | `hold-dismissed` | the hold was put away, `by` an Admin or by a later sync that was believed (`sync`) |
 | `left-confirmed` | an Admin (`by`) confirmed a hold: exactly its `people` left, `count` of them, as one line |
 
-An activation is a record, not a roster row: `principals.json` gains the person only at `admitted`.
-A person whose line says `admitted` and whose identity nobody holds any more — an Admin removed
-them, or `left` — is *left*, and the activation admits nobody until an Admin activates again.
+**The Admin's act makes the person** (INV-2220): the activation line is written, then
+`principals.json` gains everybody it named in one write, then `enrolled` says who was made. A
+start that finds a standing activation with no `enrolled` line finishes it, so a crash between the
+steps loses nothing; one whose `enrolled` line exists is never made again. The door's sign-in makes
+nobody: it finds the person, and writes `admitted` the first time, which is what "activated, has
+not signed in yet" is read from. A person whose line says `enrolled` (or, in an older ledger,
+`admitted`) and whose identity nobody holds any more — an Admin removed them, or `left` — is
+*left*, and the activation makes nobody until an Admin activates again.
 `left` is written only for an activation of that source; the first Admin, an invite code and a chat
 request leave no line here, so a sync never touches them. Leaving removes the identity
 `<channelId>:<subject>` from the person and nothing else of theirs: with another identity they keep
 their role, and only when none remains do they become a viewer with no sign-in who still owns their
 boxes. The rule that holds a sync is `holdReason` in `src/host/activations.ts`, and only there.
+
+### 2.2g `principals.json` — the roster, and a person's home agent (INV-2220)
+
+`{ installation?, bootstrap?, principals: [{ id, name, role, identities, anchors, aliases?, homeAgentId? }] }`
+(`src/host/principals.ts`). `identities` are links stamped with the incarnation of the door they
+were made under. `homeAgentId` is the agent a direct message to the person reaches (docs/109 §4):
+the one made for them in their personal box, when that box first came up, from the organisation's
+member template (`memberTemplate`, §2.5) or else the built-in assistant
+(`src/host/member-agent.ts`). It is on the person and not on a box because a person may hold
+several boxes or none and may choose another agent; it is kept by every roster save and changed
+only by `Principals.setHomeAgent`. It may name an agent since deleted — a reader checks the registry.
 
 ### 2.2b `memory.jsonl`
 
@@ -756,6 +791,14 @@ a file nobody remembers to update.
 ```jsonc
 { "activityLimit": 400 }
 ```
+
+`personalBoxAt` says when an organisation makes a member's personal box (INV-2220):
+`"activation"` — as soon as an Admin activates them, queued so that at most three are starting at
+once; `"first-use"` — at their first page load; `"never"` — the member makes their own. Absent, it
+is `"activation"` where boxes are a cluster's and `"never"` where they would be this machine's
+Docker. `autoPersonalBox` is its deprecated form (`src/deprecations.ts`) and is still read: `true`
+as `"first-use"`, `false` as `"never"`. `memberTemplate` is the path of a `lumenbox-template/1`
+file a member's first agent is made from; absent, the built-in assistant.
 
 Read once at startup, written with defaults on first start so the settings are discoverable in
 an editor. Read defensively: a mistyped value falls back and says so, an out-of-range one is

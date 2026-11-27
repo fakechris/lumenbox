@@ -28,7 +28,12 @@ function validSnapshot(value: unknown): value is DirectorySnapshot {
     && new Set(snapshot.people.map(row => row.vendorSubject)).size === snapshot.people.length;
 }
 
-/** Directory rows never create or merge Principals. Only authenticated roster links are consulted. */
+/**
+ * A directory row alone never creates or merges a Principal: being listed lets nobody in. An Admin's
+ * activation does create one (INV-2220, `enrolment.ts`), and takes from the row only the subject
+ * and the name — the identity `<door>:<subject>` is one only the vendor can vouch for, at a
+ * sign-in or in a chat event. For quotas, only roster links are consulted.
+ */
 export class Directories {
   private readonly syncing = new Set<string>();
   constructor(private readonly path = join(agentboxHome(), "directory.json")) {}

@@ -82,7 +82,7 @@ import { RELAY_PATH } from "../host/model-relay.ts";
 import { IdempotencyStore } from "./idempotency.ts";
 import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
-import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
+import { ALL_TOOLS, Orchestrator, STARTER_TEAM } from "../host/orchestrator.ts";
 import { describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
 import { modelConfigured } from "../host/model-readiness.ts";
 import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
@@ -246,7 +246,7 @@ import { Directories } from "../host/directory.ts"; import { Activations } from 
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
-import { personalBoxRoute, planBoxDispositions } from "./personal-box-routes.ts"; import { AutoPersonalBoxes } from "../host/auto-personal-box.ts";
+import { personalBoxRoute, planBoxDispositions } from "./personal-box-routes.ts"; import { AUTO_REQUEST, AutoPersonalBoxes, personalBoxAt } from "../host/auto-personal-box.ts"; import { ensureHomeAgent } from "../host/member-agent.ts";
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
@@ -832,10 +832,22 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     detach: id => { orchestrator.detachBox(id); openDesktops.recheck(); }, residents: id => registry.agentsIn(id).length,
     driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
   }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
-  const reconnectPersonalBox = async (id: string): Promise<void> => { const entry = registry.boxById(id); if (entry) await orchestrator.reconnectBox(entry); };
+  /** The language a person is written to before they have opened anything: their door's. */
+  const localeOfPerson = (id: string) => resolveLocale({ channelType: channelRecords.find(record => record.id === (principals.byId(id)?.identities[0] ?? "").split(":")[0])?.type });
+  // A personal box that came up is reconnected; in the one the installation made for a member, their one agent is made if they have none (INV-2220, member-agent.ts).
+  const reconnectPersonalBox = async (id: string): Promise<void> => {
+    try { const entry = registry.boxById(id); if (entry) await orchestrator.reconnectBox(entry); }
+    finally {
+      try {
+        if (personalBoxes.requestOf(id) === AUTO_REQUEST) ensureHomeAgent(id, { registry, principals, log, templatePath: () => loadConfig().memberTemplate,
+          assistant: owner => ({ ...STARTER_TEAM[0]!, name: tr("ui.personal.assistant", localeOfPerson(owner)) }),
+          importTemplate: (template, boxId, owner) => orchestrator.importTemplate(template, { caller: { userId: owner }, boxId, connected: ["browser", ...channelRecords.map(record => record.type)], log }).agent });
+      } catch (error) { log(`home agent in ${id}: not made (${error instanceof Error ? error.message : String(error)})`); }
+    }
+  };
   const autoBoxes = new AutoPersonalBoxes({ home: join(agentboxHome(), "personal-boxes"), boxes: personalBoxes, quota: personalQuota, eligible: mayProvision, ready: reconnectPersonalBox, log,
-    // A member's box at first sign-in (INV-2203); by default where the boxes are the cluster's (or a given driver's), not this machine's Docker.
-    enabled: () => principals.installation().mode === "organisation" && (loadConfig().autoPersonalBox ?? (kubernetes || options.personalBoxDriver !== undefined)) });
+    // At activation or at the first page load (INV-2220, INV-2203); by default where the boxes are the cluster's (or a given driver's), not this machine's Docker.
+    when: () => principals.installation().mode === "organisation" ? personalBoxAt(loadConfig(), kubernetes || options.personalBoxDriver !== undefined) : "never" });
 
   {
     const legacy = loadConfig().channelAllow ?? [];
@@ -3045,8 +3057,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
-    signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log };
+    signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log,
+    boxes: (people: readonly { id: string; name: string }[]) => autoBoxes.activated(people, person => tr("ui.personal.defaultName", localeOfPerson(person.id), { name: person.name })) };
   const orgAdmission = admission(admissionDeps);
+  orgAdmission.catchUp(channelRecords.map(record => record.id)); // an activation a crash interrupted is finished, and boxes owed from before are queued (INV-2220)
   const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // The web sign-in through a Feishu or DingTalk door (INV-1701, INV-729): one dispatcher in door-sign-in.ts.
