@@ -14,8 +14,18 @@ import { agentboxHome } from "../src/config.ts";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { buildWakePrompt } from "../src/host/prompt.ts";
+import { KubernetesBoxDriver } from "../src/box/kubernetes-box.ts";
+import { KubeBoxes } from "../src/control/kube-box.ts";
+import { staticDecision } from "../src/control/policy.ts";
+import { fakeKubeApi } from "../src/control/testing/fake-kube.ts";
 
-new Principals().save([{ id: "layout-viewer", name: "Layout reader", role: "admin", identities: ["web:layout-viewer"] }]);
+// --personal-boxes: two members with Kubernetes computers on a fake cluster, one stuck on its image (INV-2042).
+const personal = process.argv.includes("--personal-boxes"), member = (id: string, name: string) => ({ id, name, role: "driver" as const, identities: [`web:${id}`] });
+new Principals().save([{ id: "layout-viewer", name: "Layout reader", role: "admin", identities: ["web:layout-viewer"] },
+  ...(personal ? [member("alice", "Alice"), member("bob", "Bob")] : [])]);
+const cluster: { waitingReason?: string } = {}, image = "fakechris/lumenbox:0.4.9";
+const personalBoxDriver = personal ? new KubernetesBoxDriver({ image, decision: staticDecision({}),
+  boxes: new KubeBoxes({ api: fakeKubeApi(cluster).api, namespace: "fixture", defaultImage: () => image, pollIntervalMs: 1, startTimeoutMs: 50 }) }) : undefined;
 const registry = new AgentRegistry(join(agentboxHome(), "agents"));
 const agent = registry.create({ name: "Nova" });
 registry.appendTranscript(agent.id, { role: "assistant", text: "Anonymous layout fixture", at: new Date().toISOString() });
@@ -71,6 +81,19 @@ if (process.argv.includes("--needs")) {
   tasks.update(release.id, { status: "blocked", options: ["Send it", "Don't send"], note: "Please approve: Send the renewal notice to 214 customers\nWhy you: It goes out under your name." }, agent.id);
 }
 let base = "";
-const stop = await startWebServer({ port: 0, host: "127.0.0.1", useBox: false, token: "layout-fixture", onLog: () => {}, onReady: url => { base = url; } });
+const stop = await startWebServer({ port: 0, host: "127.0.0.1", useBox: false, token: "layout-fixture", onLog: () => {}, onReady: url => { base = url; },
+  ...(personalBoxDriver ? { personalBoxDriver } : {}) });
+if (personal) {
+  const as = async (who: string, path: string, body: unknown) => {
+    const response = await fetch(base + path, { method: "POST", body: JSON.stringify(body),
+      headers: { authorization: "Bearer layout-fixture", "content-type": "application/json", "x-agentbox-user": `web:${who}` } });
+    if (!response.ok) throw new Error(`${path} as ${who}: ${response.status} ${await response.text()}`);
+  };
+  await as("layout-viewer", "/api/quotas", { personBoxQuotas: { alice: 1, bob: 2 } });
+  await as("alice", "/api/personal-boxes/create", { requestId: "alice-1", name: "Alice’s computer" });
+  await as("bob", "/api/personal-boxes/create", { requestId: "bob-1", name: "Bob’s computer" });
+  cluster.waitingReason = "ImagePullBackOff";
+  await as("bob", "/api/personal-boxes/create", { requestId: "bob-2", name: "Bob’s second computer" });
+}
 process.stdout.write(JSON.stringify({ base, agent: agent.id, task: task.id }) + "\n");
 process.on("SIGTERM", () => { stop(); process.exit(); });

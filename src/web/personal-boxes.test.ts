@@ -424,6 +424,7 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const ben = registry.create({ name: "Ben", boxId: bobSecond });
     principals.save(people.map(person => person.id === "bob" ? { ...person, role: "viewer" } : person));
     assert.equal((await call(collection + "/remove", { id: bob, deleteData: true, deleteAgents: true }, "bob")).status, 403);
+    assert.equal((await call(collection + "/admin", undefined, "bob")).status, 403, "a viewer is refused the team's computers (INV-2042)");
     assert.ok(registry.has(bea.id));
     assert.ok(fake.pods.has(resource(bob)));
     principals.save(people);
@@ -457,9 +458,10 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
       image, createdAt: own.mine.boxes[0].createdAt, retained: false, orphaned: false, pendingRemoval: false, dataRetained: false,
       agents: ["Bea"], agentIds: [bea.id],
     });
-    const quota = (await call("/api/quotas")).data.people;
-    assert.equal(inventory.data.people.find((person: { id: string }) => person.id === "bob").held,
-      quota.find((person: { id: string }) => person.id === "bob").held);
+    assert.equal((row(inventory.data.boxes, alice) as { ownerName?: string } | undefined)?.ownerName, "Alice", "a second owner's computer is on the same list");
+    // What the page shows beside each person is what the quota settings count, for everyone (INV-2042).
+    const counted = (people: { id: string; quota: number | null; held: number }[]) => people.map(({ id, quota, held }) => ({ id, quota, held }));
+    assert.deepEqual(counted(inventory.data.people), counted((await call("/api/quotas")).data.people));
 
     const roster = people.filter(person => person.id !== "bob");
     const keepBob = { action: "keep", boxIds: [bob] };
