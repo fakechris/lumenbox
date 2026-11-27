@@ -30,6 +30,9 @@ export const LEVEL_MEANING: Record<Level, string> = {
 const OUTWARD = /\b(send|email|mail|publish|post|tweet|deploy|release|pay|purchase|buy|order|delete|remove|drop|merge|push|invite|cancel)\b|发送|发邮件|发布|推送|部署|上线|付款|支付|购买|下单|删除|删掉|合并|取消|邀请|群发/i;
 const TIDY = /\b(summari[sz]e|summary|digest|collect|gather|list|catalog|transcribe|extract|organi[sz]e|tidy)\b|总结|摘要|整理|汇总|收集|归档|提取|列出/i;
 const PLAN = /\b(analy[sz]e|analysis|assess|evaluate|compare|investigate|research|propose|proposal|plan|recommend|option|design|review|audit|diagnose|estimate)\b|分析|评估|对比|调研|研究|方案|建议|计划|设计|评审|审计|诊断|估算|选型/i;
+/** Words that ask for the work itself, or a file it should leave behind (INV-2192: "analyze the logs … write /app/summary.csv" is a job, not a proposal). */
+const DO = /\b(do|implement|build|write the code|fix|ship|create|generate|save|edit|modify|install|configure|convert)\b|\b(write|save|export|output)\b[^.\n]{0,40}\bfile\b|实现|修复|落地|开发|编写代码|写入|保存|生成|创建|修改/i;
+const FILE = /(?:^|[\s"'`(（])[~./a-z0-9_-]*[a-z0-9_-]\.(?:md|csv|tsv|json|jsonl|txt|ya?ml|html?|py|ts|js|sh|sql|xlsx?|docx?|pptx?|pdf|png|svg|toml)\b/;
 
 export interface LevelInput {
   title: string;
@@ -53,10 +56,10 @@ export interface Inferred {
 export function inferLevel(input: LevelInput): Inferred {
   const words = `${input.title}\n${input.description ?? ""}`;
   const reasons: string[] = [];
-  let level: Level;
-  if (TIDY.test(words) && !PLAN.test(words) && !OUTWARD.test(words)) {
+  let level: Level; const asksForWork = DO.test(words) || FILE.test(words);
+  if (TIDY.test(words) && !PLAN.test(words) && !OUTWARD.test(words) && !asksForWork) {
     level = 1; reasons.push("asks to collect or summarise, not to act");
-  } else if (PLAN.test(words) && !OUTWARD.test(words) && !/\b(do|implement|build|write the code|fix|ship)\b|实现|修复|落地|开发|编写代码/i.test(words)) {
+  } else if (PLAN.test(words) && !OUTWARD.test(words) && !asksForWork) {
     level = 2; reasons.push("asks for analysis or a proposal, not for the work itself");
   } else if (input.isPursuit === true || input.hasContract === true) {
     level = 5; reasons.push(input.isPursuit === true ? "a goal with its own gate: verified before it is called done" : "has a written acceptance the gate can verify");
