@@ -83,8 +83,8 @@ waiting. Decided with Chris on 2026-11-27; not built yet.
 
 | Item | State |
 |---|---|
-| See every member's box: owner, state, image version, age, quota used; restart and delete from the page | INV-2042, committed, not fixed |
-| Sessions survive a server restart or rollout | INV-2045, committed, not fixed |
+| See every member's box: owner, state, image version, age, quota used; stop, delete and restore from the page | Built in 0.4.8 (INV-2042): Computers → Team personal computers, Admins only. Not yet rerun on a cluster |
+| Sessions survive a server restart or rollout | Built in 0.4.8 (INV-2045): the token and the session key live on the state volume, which `organisation.yaml` mounts. Not yet rerun on a cluster |
 | HTTPS in front, and the server refusing an organisation start without it (docs/106 R1, R2) | Not built; the guide says to add an Ingress |
 | One replica, a short stop on upgrade: said in the guide, with the pre-pull step and a backup and restore procedure for the state volume | Guide exists for the control plane; to be written for the organisation server |
 | An acceptance run of the organisation stories with DingTalk in place of Feishu | Not run; 0.4.7's run used Feishu |
