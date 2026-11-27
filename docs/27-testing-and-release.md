@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: testing-and-release
-     updated: 2026-10-26
+     updated: 2026-11-27
 -->
 # Testing and release stability: ours, against OpenClaw and Hermes
 
@@ -84,11 +84,22 @@ installers with three packages in node_modules and every new user's first launch
    and `:latest` as linux/amd64 + linux/arm64 manifests using the `lumenbox-release`
    docker-container builder. Cross-platform builds need binfmt/QEMU or native builder nodes.
    `npm run build:image` remains a single-platform local developer build, not a release push.
+   **A release that carries fewer engines says so** (INV-2201): `LUMENBOX_RELEASE_ENGINES`, a
+   comma-separated list of `opencode`, `claude`, `pi`, `mcode`; unset means all four, which is
+   every release so far. A commercial build is `LUMENBOX_RELEASE_ENGINES=pi` with only
+   `PI_VERSION` exported — Claude Code may not be redistributed, and the other engines are
+   installed by the operator under their own licences (docs/106 §3). The build refuses a pin
+   for an engine the declaration leaves out, so a `CLAUDE_CODE_VERSION` still exported from the
+   last full build stops the build instead of going into the image. Export the same variable
+   for step 2: `release:check` then requires exactly the declared engines in the published
+   image's `/etc/lumenbox/contract.json` — a declared engine missing fails, and so does an
+   engine nobody declared. Publish such an image under its own repository or tag
+   (`--image`, `AGENTBOX_IMAGE_REPO`), never over the full one.
    The app pins its pull at the package version — an app published before its tag
    exists breaks every fresh install of that version on the first start.
 2. **`npm run release:check`**, which now also refuses to bless a release whose packaged
    zips do not carry the full production dependency closure, whose dmg is missing beside a
-   zip, or whose image tag is absent from Docker Hub or lacks either Linux architecture (skippable with
+   zip, whose image carries other engines than the release declares, or whose image tag is absent from Docker Hub or lacks either Linux architecture (skippable with
    `RELEASE_CHECK_SKIP_IMAGE=1`, which CI sets — the gate belongs to the publishing machine).
 3. **Build the app** (`npm run dist:mac`, …), and upload only artifacts the check above
    saw. Overriding `AGENTBOX_DIST_DIR` points the check at a candidate directory. The
@@ -119,6 +130,35 @@ installers with three packages in node_modules and every new user's first launch
 | Suite-shrink guard | floor 200 → **975, and staleness now reports itself every run** | none | structural: OS-marker lanes fail on "no tests collected" |
 | Release script | none (open) | version alignment, appcast floors, pack contents — and **the gate itself is unit-tested** | a changelog formatter that gates on nothing |
 | Self-heal | `agentbox box doctor` exists, not wired to updates | `doctor --non-interactive --fix` runs **automatically after every update** | `hermes doctor` / `hermes verify`, manual |
+
+## A stable line (INV-2201, docs/106 §2)
+
+`main` moves fast and promises one thing: data from the previous release loads. A **stable line**
+is what somebody builds on. The promises of docs/106 §3 are made for stable lines only.
+
+- **The branch** is `stable/0.N`, cut from a `main` release that passed the acceptance run
+  ([86](86-onboarding-acceptance.md)). Its releases are tagged `0.N.z`. A new `N` is a new line.
+- **It receives fixes only**: security, data loss, crashes, and a Stable interface that stopped
+  working. No features, no prompt or behaviour tuning.
+- **Fixes flow one way.** A fix is merged to `main` first, with its test, and then picked to the
+  stable branch (`git cherry-pick -x`, in a pull request against `stable/0.N`). A fix that exists
+  only on the stable branch is a fix the next line loses.
+- **The stable branch is checked on its own**, never on `main`'s word: its own `npm test`, its own
+  `npm run release:check`, and its own acceptance run, before a tag. Everything under "What guards
+  a release" applies to it unchanged.
+- **A line lasts 12 months** from its cut and overlaps the next by at least three.
+- **No stored-data change inside a line.** The home's format number (docs/05 §2.0) does not move
+  between `0.N.z` releases, so any `z` reads any other `z`'s home. Across lines it moves by numbered
+  migrations, run in order at start after a backup; an older binary refuses a newer home.
+- **Each line leaves a fixture behind.** Before the next line is cut, the last release of this one
+  writes its home with `scripts/upgrade-fixture.ts` (run from that release's tag; the script says
+  how) into `src/fixtures/home-<version>/`, and a test in `src/home-format.test.ts` opens it with
+  the current code and reads it back. `home-0.4.9` is the first. A fixture is never regenerated:
+  it is what that release wrote.
+
+Not yet part of the acceptance run: "install the previous line, use it, upgrade, check" on a real
+box and its volumes. The fixture covers the home; the volumes are covered by the update path
+(docs/12) and nothing automatic.
 
 ## What changed today
 
@@ -190,3 +230,26 @@ first line:
   `network: NOT denied by the OS — <why>` and goes on with the in-process layer alone; the
   self-test then reports the gap instead of asserting the deny. `AGENTBOX_TEST_NO_SANDBOX=1`
   switches the OS layer off on purpose. CI (Linux) has it on.
+
+## The stable surface only grows (INV-2201, 2026-11-27)
+
+What somebody outside may depend on — the Stable list of docs/106 §3 — is held the way the prompt
+is: `surface-baseline.json`, one item to a line, checked by `npm run arch`
+(`scripts/surface-ratchet.mjs`). It is read off the code, not kept by hand: the commands for
+running an installation and their flags (from `src/cli.ts`'s dispatch), `AgentboxConfig`'s keys and
+declared types, the variables `agentbox help` lists, the MCP side door's tools, input fields,
+capability map and task states, the webhook authentication headers, skill frontmatter keys, rule
+fields and the template format.
+
+- **An addition fails until the baseline has it.** `node scripts/surface-ratchet.mjs
+  --write-baseline` writes it, and the release notes get a line: an addition is a promise from
+  then on.
+- **A removal or a changed type fails**, unless the item is in the deprecation list
+  (`src/deprecations.ts`: what, since which line, what replaces it, removable from) and the
+  release line has reached `removableFrom`. Only then does `--write-baseline` let go of the entry.
+- **The deprecation list is the one place** "deprecated" is said. `agentbox web` reports at start
+  any deprecated `config.json` key or environment variable the installation still uses; the
+  release notes for a line are written from the same list.
+
+Not held, so the tick is not read as more: exit statuses, the files `audit export` writes, HTTP
+status codes, a flag read by a helper outside the command's own function, and the client API.

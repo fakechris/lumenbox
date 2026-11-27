@@ -242,6 +242,18 @@ export function signatureMatches(body: string, presented: string, secret: string
   return timingSafeEqual(Buffer.from(expected, "hex"), Buffer.from(offered.toLowerCase(), "hex"));
 }
 
+/**
+ * The header names a sender may authenticate with, in the order each is looked for (docs/106 S6).
+ * One list: the three readers below take their names from it, and the surface snapshot
+ * (`surface-baseline.json`) holds it, so a name cannot leave without a deprecation.
+ */
+export const WEBHOOK_AUTH_HEADERS = {
+  /** The shared secret: `Authorization: Bearer …`, or the dedicated header for a sender that cannot set it. */
+  secret: ["authorization", "x-lumenbox-hook-secret"],
+  signature: ["x-hub-signature-256", "x-signature-256", "x-lumenbox-signature"],
+  timestamp: ["x-lumenbox-timestamp", "x-signature-timestamp"],
+} as const;
+
 /** How far from now a signed timestamp may be: Stripe's default, and enough for any clock a phone keeps. */
 export const REPLAY_WINDOW_MS = 5 * 60_000;
 
@@ -249,7 +261,7 @@ export const REPLAY_WINDOW_MS = 5 * 60_000;
 export function presentedTimestamp(
   headers: Record<string, string | string[] | undefined>
 ): string | undefined {
-  const value = headers["x-lumenbox-timestamp"] ?? headers["x-signature-timestamp"];
+  const value = WEBHOOK_AUTH_HEADERS.timestamp.map(name => headers[name]).find(found => found !== undefined);
   return Array.isArray(value) ? value[0] : value;
 }
 
@@ -277,7 +289,7 @@ export function presentedSignature(
     const value = headers[name];
     return Array.isArray(value) ? value[0] : value;
   };
-  return first("x-hub-signature-256") ?? first("x-signature-256") ?? first("x-lumenbox-signature");
+  return WEBHOOK_AUTH_HEADERS.signature.map(first).find(found => found !== undefined);
 }
 
 /**
@@ -321,13 +333,13 @@ export function presentedSecret(
     const value = headers[name];
     return Array.isArray(value) ? value[0] : value;
   };
-  const authorization = first("authorization");
+  const authorization = first(WEBHOOK_AUTH_HEADERS.secret[0]);
   const bearer =
     authorization === undefined ? undefined : /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim();
   // Some senders cannot set Authorization (a webhook field in somebody's SaaS, a form post).
   // A dedicated header is the same secret by another door; the query string is not offered,
   // because URLs are logged by everything they pass through.
-  return bearer ?? first("x-lumenbox-hook-secret")?.trim();
+  return bearer ?? first(WEBHOOK_AUTH_HEADERS.secret[1])?.trim();
 }
 
 /**

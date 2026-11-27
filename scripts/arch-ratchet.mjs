@@ -18,7 +18,9 @@
  *
  * Beside the two, `scripts/registry-guard.mjs` holds the three registries (chat commands, Settings
  * panes, the rules grammar) to their one home each, and `scripts/prompt-ratchet.mjs` holds the bytes
- * of prompt and tool list an agent is sent (`prompt-baseline.json`); their problems are this check's problems.
+ * of prompt and tool list an agent is sent (`prompt-baseline.json`), and `scripts/surface-ratchet.mjs`
+ * holds what somebody outside may depend on (`surface-baseline.json`, docs/106 §3); their problems are
+ * this check's problems.
  *
  * Three ways to fail: a new violation; a baseline entry added or a ceiling raised (checked
  * against the merge base's copy when git can show one); an entry that no longer violates and
@@ -167,7 +169,8 @@ export function lowered(baseline, files) {
  * The guards that run as their own process because they import the TypeScript product: the registry
  * guard (INV-1660) — a chat command, a Settings pane or a rule-file key outside its one home — and
  * the prompt ratchet (INV-1857) — the bytes of prompt and tool list an agent is sent, held in
- * `prompt-baseline.json`. Their problems are this check's problems; what one says when it passes is passed on.
+ * `prompt-baseline.json` — and the surface ratchet (INV-2201) — the stable list of docs/106 §3, held in
+ * `surface-baseline.json`. Their problems are this check's problems; what one says when it passes is passed on.
  */
 function guard(root, script, args = []) {
   const run = spawnSync(process.execPath, [join(root, "scripts", script), ...args], { cwd: root, encoding: "utf8" });
@@ -213,7 +216,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   }
   const previous = previousBaseline(root);
   const prompt = guard(root, "prompt-ratchet.mjs");
-  const problems = [...verify(baseline, files, previous), ...guard(root, "registry-guard.mjs").problems, ...prompt.problems];
+  const surface = guard(root, "surface-ratchet.mjs"); // the stable surface (INV-2201): additions by saying so, removals through src/deprecations.ts
+  const problems = [...verify(baseline, files, previous), ...guard(root, "registry-guard.mjs").problems, ...prompt.problems, ...surface.problems];
   if (problems.length > 0) {
     console.error(`[arch] ${problems.length} problem(s):\n  ${problems.join("\n  ")}`);
     process.exit(1);
@@ -221,5 +225,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const over = Object.keys(baseline.size?.files ?? {}).length;
   const wide = Object.values(baseline.width?.files ?? {}).reduce((sum, count) => sum + count, 0);
   console.log(`[arch] ok: ${files.length} production files; ${over} over the limit and held at their ceilings; ${wide} over-wide line(s) held and falling; ${(baseline.env?.files ?? []).length} env reader(s) held outside the layers${previous === undefined ? " (no merge base to compare the baseline with)" : ""}`);
-  for (const line of prompt.said) console.log(line);
+  for (const line of [...prompt.said, ...surface.said]) console.log(line);
 }

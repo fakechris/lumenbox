@@ -31,6 +31,7 @@ const {
   shell,
 } = require("electron");
 const { execFile, spawn } = require("node:child_process");
+const { HOME_REFUSED_EXIT, homeRefusal } = require("./home-refused.cjs");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -183,9 +184,22 @@ function startServer() {
   serverChild.stdout.on("data", remember);
   serverChild.stderr.on("data", remember);
 
+  const child = serverChild;
   serverChild.on("exit", (code, signal) => {
     serverChild = null;
     if (quitting) return;
+
+    if (code === HOME_REFUSED_EXIT) {
+      // The data is newer than this app, or could not be upgraded (docs/05 §2.0). Starting again changes
+      // nothing, so no retry: the server's own sentence is shown, once its output has all arrived, and the app quits.
+      child.once("close", () => {
+        const refusal = homeRefusal(recentLog);
+        log(`server refused the home: ${refusal.message}`);
+        dialog.showErrorBox(refusal.title, refusal.message);
+        app.quit();
+      });
+      return;
+    }
 
     if (code === RESTART_EXIT_CODE) {
       // The settings dialog asked for this. Not a crash; the counter resets.

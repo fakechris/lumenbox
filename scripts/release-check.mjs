@@ -34,7 +34,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assess, macArtifacts } from "./notarization.mjs";
-import { publishedEngineContract, requireReleasePlatforms } from "./image-release.mjs";
+import { publishedEngineContract, releaseEngines, requireDeclaredEngines, requireReleasePlatforms } from "./image-release.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const failures = [];
@@ -219,24 +219,20 @@ check("every packaged dmg exists beside its zip (same staged app, same tree)", (
   if (problems.length > 0) throw new Error(problems.join("; "));
 });
 
-check("the image at this version carries every delegated engine (the 0.3.7 engine-less box)", () => {
+check("the image at this version carries the delegated engines this release declares, and no other (the 0.3.7 engine-less box)", () => {
   // Read from the image itself, not the build log: /etc/lumenbox/contract.json is what the
   // Dockerfile writes from its pins, so an empty field is an engine the box does not have.
   const repo = process.env.AGENTBOX_IMAGE_REPO ?? "fakechris/lumenbox";
   const image = `${repo}:${version}`;
+  // What the release declared (LUMENBOX_RELEASE_ENGINES; all four when unset). Read before the image is,
+  // so a mistyped declaration fails here even where the image gate is skipped.
+  const declared = releaseEngines(process.env);
   const contract = publishedEngineContract(args => execFileSync("docker", args, {
     encoding: "utf8", timeout: 10 * 60_000, stdio: ["ignore", "pipe", "pipe"],
   }), image, { skipImage: process.env.RELEASE_CHECK_SKIP_IMAGE === "1", requireEngines: process.env.RELEASE_CHECK_REQUIRE_ENGINES === "1" }, note);
   if (contract === undefined) return;
-  const engines = contract.engines ?? {};
-  const missing = ["opencode", "claude", "pi", "mcode"].filter(engine => !engines[engine]);
-  if (missing.length > 0) {
-    throw new Error(
-      `${image} carries no ${missing.join(", ")}: rebuild with the *_VERSION pins exported ` +
-        "(see build-image.mjs; LUMENBOX_RELEASE_IMAGE=1 refuses an unpinned release build)."
-    );
-  }
-  note(`${image} carries ${Object.entries(engines).map(([name, v]) => `${name} ${v}`).join(", ")}`);
+  // No less and no more: an engine missing is the 0.3.7 box, an engine nobody declared is one that may not be shipped.
+  note(`${image} carries ${requireDeclaredEngines(contract, declared, image).join(", ")}; declared: ${declared.join(", ")}`);
 });
 
 check("every macOS app and dmg of this version is notarized and stapled", () => {

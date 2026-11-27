@@ -1,0 +1,11 @@
+[
+  {
+    "id": "box_14866f18-2d35-48b9-b5b0-c834da5a7737",
+    "name": "agentbox-box",
+    "kind": "docker",
+    "displayFloor": 1,
+    "workDir": "/home/box/work",
+    "members": "everyone",
+    "createdAt": "2026-11-27T06:42:39.925Z"
+  }
+]

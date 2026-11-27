@@ -1,19 +1,63 @@
 export const RELEASE_PLATFORMS = ["linux/amd64", "linux/arm64"];
 
+/** Each delegated engine the image can carry, as the contract names it, with the build pin that puts it there. */
+export const ENGINE_PINS = { opencode: "OPENCODE_VERSION", claude: "CLAUDE_CODE_VERSION", pi: "PI_VERSION", mcode: "MCODE_VERSION" };
+
+/**
+ * Which engines this release carries (INV-2201): `LUMENBOX_RELEASE_ENGINES`, a comma-separated
+ * list of contract names, e.g. `pi` for a commercial build — Claude Code may not be
+ * redistributed. Unset means all of them, which is every release so far. The build's pin check
+ * and the release check both read this, so what was declared is what is built and what is checked.
+ */
+export function releaseEngines(env) {
+  const declared = env.LUMENBOX_RELEASE_ENGINES;
+  if (declared === undefined) return Object.keys(ENGINE_PINS);
+  const names = [...new Set(declared.split(",").map(name => name.trim()).filter(name => name !== ""))];
+  const unknown = names.filter(name => !(name in ENGINE_PINS));
+  if (unknown.length) throw new Error(`LUMENBOX_RELEASE_ENGINES names ${unknown.join(", ")}, which is not an engine; the engines are ${Object.keys(ENGINE_PINS).join(", ")}`);
+  if (names.length === 0) throw new Error(`LUMENBOX_RELEASE_ENGINES is empty: name the engines this release carries (${Object.keys(ENGINE_PINS).join(", ")}), or unset it for all of them`);
+  return names;
+}
+
 export function engineBuildArgs(env, say = console.log) {
+  const declared = releaseEngines(env);
   const args = [];
   const missing = [];
-  for (const name of ["OPENCODE_VERSION", "CLAUDE_CODE_VERSION", "PI_VERSION", "MCODE_VERSION"]) {
+  const undeclared = [];
+  for (const [engine, name] of Object.entries(ENGINE_PINS)) {
+    if (!declared.includes(engine)) {
+      if (env[name]) undeclared.push(`${engine} (${name})`);
+      continue;
+    }
     if (env[name]) {
       args.push("--build-arg", `${name}=${env[name]}`);
       say(`${name} pinned at ${env[name]}`);
     } else missing.push(name);
   }
+  // Refused in any build, not only a release: the declaration and the pins disagree, and building what was pinned would put in the image the engine the declaration left out.
+  if (undeclared.length) throw new Error(`LUMENBOX_RELEASE_ENGINES=${env.LUMENBOX_RELEASE_ENGINES} does not carry ${undeclared.join(", ")}, but its pin is set: unset the pin, or declare the engine`);
   if (missing.length) {
     if (env.LUMENBOX_RELEASE_IMAGE === "1") throw new Error(`LUMENBOX_RELEASE_IMAGE=1: refusing an unpinned release image; missing ${missing.join(", ")}`);
     say(`NOT in this image: ${missing.join(", ")} — a release image pins all of them.`);
   }
+  if (declared.length < Object.keys(ENGINE_PINS).length) say(`This image carries ${declared.join(", ")} only (LUMENBOX_RELEASE_ENGINES).`);
   return args;
+}
+
+/**
+ * Holds an image's contract to what the release declared: every declared engine present, and
+ * none that was not declared. The second half is the one a single-engine build exists for — a
+ * commercial image that carries Claude Code is the error, however well it works.
+ */
+export function requireDeclaredEngines(contract, declared, image) {
+  const engines = contract.engines ?? {};
+  const missing = declared.filter(engine => !engines[engine]);
+  const extra = Object.keys(engines).filter(engine => engines[engine] && !declared.includes(engine));
+  const problems = [];
+  if (missing.length) problems.push(`carries no ${missing.join(", ")}: rebuild with ${missing.map(engine => ENGINE_PINS[engine] ?? engine).join(", ")} exported (see build-image.mjs; LUMENBOX_RELEASE_IMAGE=1 refuses an unpinned release build)`);
+  if (extra.length) problems.push(`carries ${extra.map(engine => `${engine} ${engines[engine]}`).join(", ")}, which this release does not declare (it declares ${declared.join(", ")}): rebuild without ${extra.map(engine => ENGINE_PINS[engine] ?? engine).join(", ")}, or add the engine to LUMENBOX_RELEASE_ENGINES if it may be shipped`);
+  if (problems.length) throw new Error(`${image} ${problems.join("; and ")}.`);
+  return Object.entries(engines).filter(([, version]) => version).map(([name, version]) => `${name} ${version}`);
 }
 
 export function publicationTarget(args, repo, version) {
