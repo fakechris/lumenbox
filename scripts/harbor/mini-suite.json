@@ -51,7 +51,7 @@
           "# The task container is the wall: boxd runs as it does inside a LumenBox box, not under the host sandbox.",
           "BOXD_BIND=127.0.0.1 BOXD_PORT=13390 BOXD_TOKEN=$TOK AGENTBOX_WORK_DIR=\"$WORK\" BOXD_JOBS_DIR=\"$STATE/box/jobs\" BOXD_TEACH_DIR=\"$STATE/box/teach\" DISPLAY= nohup $NODE $LBX/boxd.cjs >\"$LOGS/boxd.log\" 2>&1 &",
           "for i in $(seq 1 60); do curl -sf http://127.0.0.1:13390/health >/dev/null 2>&1 && break; sleep 1; done",
-          "export AGENTBOX_HOME=\"$STATE/home\" AGENTBOX_BOXD_URL=http://127.0.0.1:13390 AGENTBOX_TOKEN=$TOK AGENTBOX_PROVIDER=minimax AGENTBOX_MODEL=MiniMax-M3.1-Flash",
+          "export AGENTBOX_EVAL=1 AGENTBOX_HOME=\"$STATE/home\" AGENTBOX_BOXD_URL=http://127.0.0.1:13390 AGENTBOX_TOKEN=$TOK AGENTBOX_PROVIDER=minimax AGENTBOX_MODEL=MiniMax-M3.1-Flash",
           "trap 'cp -R \"$STATE/home\" \"$LOGS/home\" 2>/dev/null || true' EXIT",
           "$NODE $LBX/cli.mjs chat </dev/null >/dev/null 2>&1 || true",
           "\"$NODE\" -e 'const fs=require(\"fs\"),p=require(\"path\"),d=p.join(process.env.AGENTBOX_HOME,\"agents\");const off=t=>t===\"computer\"||t.startsWith(\"browser_\")||t===\"HandOverDesktop\"||t===\"WaitForControl\";for(const a of fs.readdirSync(d)){const f=p.join(d,a,\"profile.json\");if(!fs.existsSync(f))continue;const j=JSON.parse(fs.readFileSync(f,\"utf8\"));if(Array.isArray(j.tools)){j.tools=j.tools.filter(t=>!off(t));fs.writeFileSync(f,JSON.stringify(j,null,2))}}'",

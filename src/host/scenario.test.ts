@@ -396,6 +396,32 @@ test("user installation resumes to a verified artifact after failure; a hundred 
   episode.cleanup();
 });
 
+test("in an eval run a missing tool is the agent's to route around: told once, never retried, the work goes on to its file (docs/105, INV-2196)", async () => {
+  const { WorkAttention } = await import("../agents/work-attention.ts");
+  const focus = new WorkAttention(); const answers: string[] = []; let rounds = 0;
+  const episode = await runEpisode({
+    evalMode: true, workAttention: focus, team: [{ name: "Mia", tools: ["write_file", "read_file", "NothingToSay"] }], says: [],
+    script: ({ messages }) => {
+      const last = messages.at(-1); const blocks = last && Array.isArray(last.content) ? last.content : [];
+      for (const block of blocks) if (block.type === "tool_result") answers.push(JSON.stringify(block.content));
+      rounds += 1;
+      if (rounds <= 2) return { call: "bash", input: { command: "wc -l /home/box/work/logs/app.log" } };
+      if (rounds === 3) return { call: "write_file", input: { path: "/home/box/work/summary.csv", content: "period,count\ntotal,3\n" } };
+      return { say: "Wrote /home/box/work/summary.csv; bash was not available, so the count was taken from the file I read." };
+    },
+    drive: async ({ registry, bus, frontId, files }) => {
+      bus.sendFromUser(frontId, "Count the log lines and write /home/box/work/summary.csv", { messageId: "eval-task" });
+      await bus.wake(frontId); await bus.idle();
+      assert.equal(rounds, 4, "the turn went on past the missing tool instead of stopping for a person");
+      assert.match(answers[0]!, /bash is unavailable in this run .*nobody can restore it.*do not say it was done/);
+      assert.equal(answers[1], answers[0], "the second call gets the same answer without being tried again");
+      assert.equal(files.get("/home/box/work/summary.csv"), "period,count\ntotal,3\n", "the deliverable was written after the missing tool");
+      assert.doesNotMatch(JSON.stringify(registry.readTranscript(frontId)), /This request is waiting|No unrelated work may replace it/);
+    },
+  });
+  episode.cleanup();
+});
+
 test("an admitted collaborator can return before the owner finishes without losing the result or taking over its plan (INV-1797)", async () => {
   const { WorkAttention, workStateConversation } = await import("../agents/work-attention.ts");
   const focus = new WorkAttention(); let ownerRounds = 0; let returned = false;

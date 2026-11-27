@@ -2,7 +2,7 @@ import type { ResultChecks } from "./result-check-policy.ts";
 import {workBox} from "./work-executor.ts";
 import { taskHoldsAttention } from "./task-attention.ts";
 import { POPPY_TOOLS } from "./poppy-tools.ts";
-import { needsComputer } from "./tool-capabilities.ts";
+import { needsComputer } from "./tool-capabilities.ts"; import { MissingTools } from "./missing-tools.ts";
 import { SIDE_TURN_NOTE, sideTurnBudget } from "../agents/side-work.ts";
 import { MODEL_AUTH_REJECTED, whyWaiting, workHistoryConversation, workRegistry } from "../agents/work-attention.ts";
 import { progressContext as openProgressContext, selectedProgressBinding } from "./progress-admission.ts";
@@ -529,7 +529,7 @@ export interface TurnDeps {
   /** Who has taken which piece of work, so two agents do not take the same one. */
   claims?: Claims;
   /** The door out of the box, when an operator built one. Absent means no host tool. */
-  hostRunner?: HostRunner;
+  hostRunner?: HostRunner; evalMode?: boolean; // a missing tool is routed around, not a stop (host/missing-tools.ts)
   /** The credential vault, for secrets a host command asks for by grant. */
   vault?: Vault;
   /** The OAuth gate (INV-422): which connected services this agent may call, and their bearers. */
@@ -1437,7 +1437,7 @@ async function runContextTurn(agent: AgentRecord, inbound: readonly InboundMessa
     ? inbound.map(message => message.work).find(stamp => stamp && bus.workAttention!.valid(stamp, agent.id)) ??
       (inbound[0]?.goal ? bus.workAttention.existing(agent.id, conversation, inbound[0].goal.workId, inbound[0].goal.taskId) : deps.resumeOf?.workId ? bus.workAttention.existing(agent.id, conversation, deps.resumeOf.workId) : undefined) : undefined;
   const historyConversation = workHistoryConversation(work, agent.id, conversation);
-  let blockedCapability: string | undefined; let confirmationPending = false, questionDelivered = false;
+  let blockedCapability: string | undefined; let confirmationPending = false, questionDelivered = false; const missing = new MissingTools(deps.evalMode === true);
   const registry = workRegistry(deps.registry, agent.id, conversation, historyConversation, work, entry => personAuthoredText(entry as HistoryEntry) ?? (givesTasks(entryChannel(entry as HistoryEntry)) ? entry.text : undefined));
   const audit = admittedAudit(inbound);
   const auditValid = () => !audit || !!audit.planId && !!deps.tasks?.get(audit.taskId) && auditCurrent(audit, agent.id, conversation, deps.tasks) && deps.resultChecks?.active(deps.tasks.get(audit.taskId)!, audit.planId, agent.id) === true;
@@ -3287,13 +3287,12 @@ ${outcome.text}`;
 
       if (signal.aborted || work && !bus.workAttention!.valid(work, agent.id)) throw new TurnAborted();
       let outcome: ToolOutcome;
-      if (blockedCapability) {
-        outcome = { text: "Not executed: this user work is waiting for its required tool. No unrelated work may replace it.", isError: true };
-      } else if (audit && (!auditValid() || !auditToolAllowed(audit, toolUse.name, toolInput))) {
+      if (blockedCapability) outcome = { text: "Not executed: this user work is waiting for its required tool. No unrelated work may replace it.", isError: true };
+      else if (audit && (!auditValid() || !auditToolAllowed(audit, toolUse.name, toolInput))) {
         outcome = { text: "Review refused: this audit may only read its current evidence. It cannot create probe tasks, change work, send messages or write memory.", isError: true };
-      } else if (isolated || ((effectiveTools !== undefined || PERSON_FACING_TOOLS.has(toolUse.name)) && !offeredHere || !!work && requiredComputerTool && !offeredCapability)) {
-        if (work && !isolated && requiredComputerTool) { blockedCapability = calledTool; bus.workAttention?.capability(work, agent.id, calledTool, false); }
-        outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : calledTool === "RunOnHost" && !deps.hostRunner?.enabled ? HOST_EXECUTION_UNAVAILABLE : "This tool is unavailable in the current execution context.", isError: true };
+      } else if (isolated || missing.known(calledTool) || ((effectiveTools !== undefined || PERSON_FACING_TOOLS.has(toolUse.name)) && !offeredHere || !!work && requiredComputerTool && !offeredCapability)) {
+        if (work && !isolated && requiredComputerTool) { bus.workAttention?.capability(work, agent.id, calledTool, false); if (!missing.note(calledTool, "not offered in this run")) blockedCapability = calledTool; }
+        outcome = { text: isolated ? `Tools are disabled in ${contextMode} context.` : missing.known(calledTool) ? missing.answer(calledTool) : calledTool === "RunOnHost" && !deps.hostRunner?.enabled ? HOST_EXECUTION_UNAVAILABLE : "This tool is unavailable in the current execution context.", isError: true };
       } else if (goal?.verify !== undefined && toolUse.name === "bash" && !commandIsConfirmed(goal, String((toolInput as { command?: unknown }).command ?? ""))) {
         // A verifier runs what the person confirmed and nothing else (review R3): the checklist
         // was written by a model, and a model-written command is a proposal until a person says.
@@ -3384,7 +3383,8 @@ ${outcome.text}`;
           isError: true, outcome: boxErrorOutcome(error) ?? "failed",
         };
       }
-      if (work && outcome.unavailable) { blockedCapability = outcome.unavailable; bus.workAttention?.capability(work, agent.id, outcome.unavailable, false); }
+      const routed = work && outcome.unavailable ? (bus.workAttention?.capability(work, agent.id, outcome.unavailable, false), missing.route(outcome.unavailable, outcome.text)) : undefined;
+      if (routed) outcome = { ...outcome, text: routed }; else if (work && outcome.unavailable) blockedCapability = outcome.unavailable; // an eval run goes on (host/missing-tools.ts)
       if (work && requiredComputerTool && !outcome.isError) bus.workAttention?.capability(work, agent.id, calledTool, true);
       if (!outcome.isError && ["AskUser", "AskSecret", "HandOverDesktop"].includes(toolUse.name)) { confirmationPending = true; questionDelivered ||= toolUse.name === "AskUser"; }
       if (outcome.approval !== undefined) {

@@ -104,7 +104,7 @@ import type { ResolutionConfig, DesktopResources } from "../protocol/index.ts";
 import { runTurn, TurnAborted, type TurnDeps, type TurnEvent } from "./turn.ts";
 import { readHandoff, type ToolContext } from "./tools.ts";
 import { JobWatch } from "./job-watch.ts"; import { ConversationState } from "./conversation-state.ts"; import { AgentFacts } from "../web/agent-facts.ts"; import { memberNow } from "../web/member-now.ts";
-import { loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNames } from "./provider-fallback.ts"; import { setRejectionNote } from "./provider-rest.ts";
+import { evalMode, loadConfig } from "../config.ts"; import { FallbackRuntimes, fallbackNames } from "./provider-fallback.ts"; import { setRejectionNote } from "./provider-rest.ts";
 import { McpManager } from "./mcp.ts";
 import { mcpServersFrom } from "./mcp-connectors.ts";
 import { CapabilityLedger } from "./mcp-capabilities.ts";
@@ -210,7 +210,7 @@ export interface OrchestratorOptions {
    * execution, and — because the tool is offered only when this is present — an agent
    * never learns it might have asked.
    */
-  hostRunner?: HostRunner;
+  hostRunner?: HostRunner; evalMode?: boolean; // an eval run (docs/105); absent reads AGENTBOX_EVAL
   /** The credential vault, for secrets a host command may ask for by grant. */
   vault?: Vault;
   /** The OAuth gate (INV-422), when the web server built one over the vault. */
@@ -1904,7 +1904,7 @@ export class Orchestrator {
       display: this.display,
       resolution: this.resolutions.get(agentBoxId) ?? this.resolution,
       ...(this.boxAccesses.get(agentBoxId) !== undefined ? { boxAccess: this.boxAccesses.get(agentBoxId)! } : {}),
-      hostRunner: this.options.hostRunner,
+      hostRunner: this.options.hostRunner, evalMode: this.options.evalMode ?? evalMode(),
       vault: this.options.vault,
       oauth: this.options.oauth,
       tasks: this.tasks,
