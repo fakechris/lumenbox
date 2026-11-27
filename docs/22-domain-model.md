@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: identity-and-authority
-     updated: 2026-11-07
+     updated: 2026-11-27
 -->
 # The domain model: people, doors, workers, rooms
 
@@ -210,10 +210,19 @@ gone → a reported dead letter, never a silent run and never a silent drop. The
 admission acceptance matrix (§7 item 6) includes these initiators, not only the
 interactive surfaces.
 
-**Routing.** The door's `defaultAgent` answers unaddressed messages — falling back
-to the box's only agent, an error when ambiguous, never `registry.list()[0]`.
-`@Name` and the roster verb resolve against the box's agents: what a door shows
-and what it routes is the box's list, always.
+**Routing.** Who a message reaches is decided from who wrote it, in one place
+(`src/host/chat-route.ts`, INV-2221, docs/109 §4). A message that names nobody: in a
+direct message, the writer's home agent; else, unless their own box is still starting
+(they are told so), the door's `defaultAgent` when they may enter its box; else the one
+agent they may reach, when there is exactly one. In a group chat, the door's
+`defaultAgent`. With none of these nobody answers and the chat is told — a group once —
+never `registry.list()[0]`; the exception is a single-machine installation, where one
+person holds every agent and the first one answers as it always did. `@Name` and the
+roster verb resolve among the agents in boxes the speaker may enter, a box that is
+theirs alone first: what a door shows a person and what it routes for them is one list.
+A name that exists only in a box the speaker may not enter is answered exactly as a name
+that does not exist. The door's `boxId` narrows the roster verb and is not read for
+routing.
 
 **What a second door delivers, said plainly**: a second door on today's box is
 *the same authority through another entrance* — same workers, same roster; either

@@ -164,6 +164,8 @@ export class AutoPersonalBoxes {
   /** What the page says about it while it matters: being prepared, why it failed, or out of quota. */
   view(owner: string): AutoPersonalBoxView | undefined {
     if (this.options.when() === "never") return;
+    // Waiting in the queue here is being prepared too: the page and the chat (INV-2221) say so before a box record exists.
+    if (this.queue.some(entry => entry.person.id === owner)) return { state: "preparing" };
     const outcome = this.outcome(owner), box = this.options.boxes.list(owner)[0];
     // Out of quota stops mattering once the person has a box, however they got it.
     if (outcome === "quota") return box ? undefined : { state: "quota" };
