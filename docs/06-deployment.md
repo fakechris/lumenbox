@@ -15,7 +15,9 @@
 | A checkout | yes | no, once the image is built |
 | A browser | to watch | the only thing needed |
 
-The image is Debian 12, about 1.6GB, and builds on `amd64` and `arm64`.
+The image is Debian 12, about 1.6GB, and builds on `amd64` and `arm64`. For CPU, memory and disk
+sizing across Kubernetes clusters, box desktops and the Electron desktop app, see
+[108-resource-requirements.md](108-resource-requirements.md).
 
 ## 2. Ports
 

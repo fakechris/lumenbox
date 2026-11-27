@@ -161,7 +161,9 @@ named `agentbox-smoke-*` and removed afterwards.
 
 ## 6. Capacity
 
-Three layers, independent:
+See [docs/108-resource-requirements.md](../../docs/108-resource-requirements.md) for the full CPU,
+memory and disk sizing breakdown (including the box desktop + Chromium memory floor and node
+density). Three layers, independent:
 
 1. **Per box** — `AGENTBOX_K8S_MEMORY` (default 4Gi, request *and* limit, so the scheduler
    reserves it) and `AGENTBOX_K8S_STORAGE` (default 10Gi per PVC, three PVCs per box). Values must
