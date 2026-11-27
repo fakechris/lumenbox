@@ -198,13 +198,13 @@ box, from the control plane's gateway. R4–R8 are not built.
 
 The first party to build on this is an organisation: the server on their Kubernetes, members
 signing in with DingTalk, one box per member, our own page and desktop app as the clients
-(docs/107). That fixes the order: remote access at the **private** level is needed before the
+(docs/109). That fixes the order: remote access at the **private** level is needed before the
 first delivery; the client API is needed only when they show the board on a screen of their own.
 
 | Step | Contents | State |
 |---|---|---|
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
-| 2. Organisation sign-in | docs/107: DingTalk sign-in, activation by an Admin, a box on first sign-in | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
+| 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
 | 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 part 1): the declared level and its start-up check, R1, R2, and S-2 closed for private. R4–R8 not built. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
 | 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`; service and personal tokens with scopes and views; OpenAPI + contract tests | Not built. Paged work list, resumable event stream and stable error codes exist internally |
 | 5. Client API, the rest; remote access, public level | Conversations, decisions, deliverables, device pairing, desktop tickets; R9–R10 | Not built |
