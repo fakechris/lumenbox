@@ -65,6 +65,11 @@ waiting. Decided with Chris on 2026-11-27; not built yet.
   person their DingTalk chat messages belong to. The sign-in identity and the directory's
   identity are not the same string at the vendor; the mapping is made at sign-in through the
   vendor's own lookup and is the first thing to verify against a real DingTalk organisation.
+- **A sync only ends what the directory started.** *Left* by sync applies to a person whose
+  activation names that directory source. The first Admin (bootstrap code) and anyone admitted by
+  an invite code or a chat request are not in that set: a sync never signs them out, and they can
+  be linked to their directory row later by signing in with DingTalk. A sync never removes the
+  last Admin either: if the only Admin is no longer listed, they stay and the page says so.
 - **A changed door is a different source.** The directory source already carries the door's
   incarnation and tenant; an activation made against one does not apply to another.
 - **Bulk acts are audited as bulk acts**: who, which department, how many people, which role.

@@ -22,8 +22,9 @@ document says what such a party may depend on, how we keep it true, and in what 
 | **Preview** | Shipped and documented, may change in any release, listed as preview where it is discovered | Anyone who accepts that |
 | **Internal** | No promise at all | Our own app and daemons only |
 
-An interface not named in §3 is Internal. That sentence is the rule that stops a promise being
-made by accident.
+An interface is Stable only if §3 names it, and Preview only if it is listed where it is
+discovered (`meta.preview` for the client API, the release notes for anything else). Everything
+else is Internal. That sentence is the rule that stops a promise being made by accident.
 
 ## 2. Release lines
 
@@ -194,7 +195,7 @@ first delivery; the client API is needed only when they show the board on a scre
 |---|---|---|
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
 | 2. Organisation sign-in | docs/107: DingTalk sign-in, activation by an Admin, a box on first sign-in | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
-| 3. Remote access, private level | §5 R1–R8 at **private**; sessions that survive a restart (INV-2045); Admins see and manage every member's box (INV-2042) | Not built. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
+| 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); sessions that survive a restart (INV-2045); Admins see and manage every member's box (INV-2042) | Not built. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
 | 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`; service and personal tokens with scopes and views; OpenAPI + contract tests | Not built. Paged work list, resumable event stream and stable error codes exist internally |
 | 5. Client API, the rest; remote access, public level | Conversations, decisions, deliverables, device pairing, desktop tickets; R9–R10 | Not built |
 | 6. Shared storage for an organisation; mobile apps | A design of its own each; mobile in its own repository | Not started |
