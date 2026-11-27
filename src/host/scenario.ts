@@ -318,7 +318,7 @@ function message(content: Anthropic.ContentBlock[], stop: Anthropic.Message["sto
 
 export interface EpisodeOptions {
   /** The ceiling on what the host continues on its own (INV-1823); absent means the defaults. Needs `goalLoop` and `tasks`. */
-  longWork?: { continuations?: number; activeHours?: number };
+  longWork?: { continuations?: number; activeHours?: number }; evalMode?: boolean; // an eval run: a missing tool is routed around (host/missing-tools.ts)
   workAttention?: import("../agents/work-attention.ts").WorkAttention;
   /** The agents the episode starts with. The first is the one the person talks to. */
   team: { name: string; description?: string; tools?: readonly string[]; toolPermissions?: ToolPermissions }[];
@@ -523,7 +523,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       client,
       ...(options.provider !== undefined ? { provider: options.provider } : {}),
       ...(options.policy !== undefined ? { policy: options.policy } : {}), ...(options.boxKind !== undefined ? { boxKind: options.boxKind } : {}),
-      ...(options.claims !== undefined ? { claims: options.claims } : {}),
+      ...(options.claims !== undefined ? { claims: options.claims } : {}), ...(options.evalMode === true ? { evalMode: true } : {}),
       ...(options.onEvent !== undefined ? { onEvent: options.onEvent } : {}),
       ...(options.turns !== undefined ? { turns: options.turns } : {}),
       ...(options.usage !== undefined ? { usage: options.usage } : {}),

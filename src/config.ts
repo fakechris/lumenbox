@@ -650,9 +650,9 @@ export function chosenBoxCpus(env: NodeJS.ProcessEnv = process.env): string | un
  * Off, `x-agentbox-user` and `x-agentbox-role` are ignored: on a desktop the UI token is the
  * operator's own, and a box that reached it could otherwise claim to be anyone, as admin.
  */
-export function trustsGatewayIdentity(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.AGENTBOX_TRUST_GATEWAY_IDENTITY === "1";
-}
+export function trustsGatewayIdentity(env: NodeJS.ProcessEnv = process.env): boolean { return env.AGENTBOX_TRUST_GATEWAY_IDENTITY === "1"; }
+
+/** An eval run (docs/105), set by the benchmark adapter: see host/missing-tools.ts. */ export const evalMode = (env: NodeJS.ProcessEnv = process.env): boolean => env.AGENTBOX_EVAL === "1";
 
 /**
  * This machine's own web credential, kept out of what agents are shown (INV-1543): the UI token

@@ -56,6 +56,19 @@ as switching them **off** in the agent's tool chips (`AgentProfile.tools`, host/
 `WebFetch` and `WebSearch` stay: the network is allowed and they need no desktop. Nothing else
 changes: the policy gate, the autonomy level, the consent rules are the product's.
 
+### An eval run: a missing tool is routed around
+
+The run also sets `AGENTBOX_EVAL=1` (`evalMode()` in src/config.ts, host/missing-tools.ts). With
+a person there, a call to a tool the work needs and cannot have — the desktop will not start,
+the host runner is off, the tool is not on the agent's list — stops the turn and tells the person
+what to restore (INV-1797): they can fix it, and an agent that routes around a missing
+capability is one that may claim what it could not do. In an eval run nobody can restore
+anything before the benchmark's timeout, so the agent is told instead: the tool is unavailable
+for this run, do the rest another way if there is one (WebFetch and WebSearch read the web; bash
+and the file tools work on files), and if there is not, say so and stop without claiming it was
+done. The same call later in the turn gets the same answer without being tried again, and the
+work is still marked as lacking the tool. Nothing else changes; an installation never sets it.
+
 ## How to run it
 
 ```bash
