@@ -63,9 +63,18 @@ owns it. A home with content and no `FORMAT` is **format 0** — every installat
 0.4.9 or earlier. A home that does not exist yet is created and stamped with the current number.
 
 Changes to stored data are **numbered migrations**, `HOME_MIGRATIONS` in that file: migration `n`
-brings a home from `n - 1` to `n`. At start, before any command reads or writes the home
-(`src/cli.ts`'s `main`, the one place every command passes; `help`, `where`, `providers`, `probe`,
-`mcp` and `skill` have no home and skip it), each migration the home has not had runs in order:
+brings a home from `n - 1` to `n`. At start, in `src/cli.ts`'s `main` — the one place every command
+passes — a command that uses the installation's home has each migration the home has not had run
+in order, before it reads or writes anything.
+
+Which commands those are is a list (`HOME_COMMANDS`), and every command the dispatch knows is on
+it or on `HOMELESS_COMMANDS`; a test holds the dispatch to the two. A word that is no command
+makes no home. Homeless: `help`, `where`, `providers`, `probe`; `mcp` and `skill`, which a client
+machine runs against somebody else's installation; `node` (an organisation's node has a state
+directory of its own and never a personal installation, INV-1697), `box connect` (a machine being
+given to another installation), `box build` / `box push`, `watchdog` and `supervise` (clients of
+the side door), and `supervision` (started by the app once the server answers, which has opened
+the home by then). None of these made `~/.agentbox` before the number existed, and none does now.
 
 1. If the migration rewrites stored data (`rewrites: true`) and no copy has been taken in this
    start, the whole home is copied first with the host's own snapshot (`backup.ts`), named
@@ -82,6 +91,20 @@ meet its own half-finished work**, and is never edited or renumbered once a rele
 it: a home that had migration 3 has had it, and the fix for a wrong one is migration 4. One
 process brings a home forward at a time (`FORMAT.lock` names its holder; a lock a crash left is
 taken over, a live holder stops the second start with a message).
+
+**A home that cannot be written.** When stamping fails because the home is read-only or another
+user's (`EACCES`, `EPERM`, `EROFS`), the format is at or below the current one, and no migration
+that rewrites is owed, the command says so once on stderr and goes on: `usage`, `agents`,
+`audit export` and the like read such a home as they did before there was a number. If a
+rewriting migration is owed, the layout is not one this version reads, and the command stops with
+a message saying which. A newer home is refused whether or not it can be written.
+
+**What a refusal looks like.** A refused home ends the command with exit status 78
+(`HOME_REFUSED_EXIT`) and one `error:` line. The desktop app treats that status apart from a crash
+(`electron/home-refused.cjs`): it does not restart the server, it shows that line in a dialog
+titled "LumenBox cannot open its data", and quits. "Another process is upgrading" is the one
+refusal that is an ordinary failure (exit 1), because starting again a moment later is the answer —
+the app's restart does exactly that.
 
 **The downgrade fence, for the whole home.** A binary that finds a number higher than it knows
 stops before reading anything else, saying which format it found, which version wrote it (from

@@ -61,11 +61,44 @@ export interface HomeMigration {
  */
 export const HOME_MIGRATIONS: readonly HomeMigration[] = [{ to: 1, name: "the 0.4.9 layout, stamped as it stands", rewrites: false, run: () => {} }];
 
+/** The exit status of a command that refused the home (EX_CONFIG). Not a crash: starting again changes nothing, and the desktop app shows the message instead of retrying (electron/home-refused.cjs mirrors the number). */
+export const HOME_REFUSED_EXIT = 78;
+
+/**
+ * Which commands open the installation's home, and so pass through `openHome` first. Every command
+ * `src/cli.ts` dispatches is in one of the two lists (home-format.test.ts holds the dispatch to them),
+ * so a new command is a decision, and a word that is no command at all makes no home.
+ */
+export const HOME_COMMANDS: ReadonlySet<string> = new Set([
+  "box", "backup", "agents", "agent", "template", "eval", "skills", "improve", "bundle", "routines", "host", "chat", "control", "egress", "web",
+  "golden", "extensions", "recover-work", "usage", "day", "digest", "audit", "scan-records",
+]);
+/**
+ * Commands with no installation behind them. Help and the like; the two a client machine runs
+ * against somebody else's installation (`mcp`, `skill`); and the three that run on a machine
+ * that need not be one: `node` (an organisation's node keeps a state directory of its own and
+ * refuses to run beside an installation, INV-1697), `watchdog` and `supervise` (clients of the
+ * side door by URL and token; `supervise` writes only its own `supervisor/<run>` directory).
+ * `supervision` is the app's child beside the server: it is started once the server answers, so
+ * the home has been opened by then, and run alone on a machine with no home it never made one.
+ */
+export const HOMELESS_COMMANDS: ReadonlySet<string> = new Set(["help", "--help", "-h", "where", "providers", "probe", "mcp", "skill", "node", "watchdog", "supervise", "supervision"]);
+/** `box` subcommands that touch no installation: building and pushing the image, and giving this machine's box to another installation (which refuses when there is one here). */
+const HOMELESS_BOX = new Set(["build", "push", "connect"]);
+
+export function opensHome(command: string | undefined, sub?: string): boolean {
+  if (command === undefined || !HOME_COMMANDS.has(command)) return false;
+  return !(command === "box" && sub !== undefined && HOMELESS_BOX.has(sub));
+}
+
 /** A home this binary must not open: newer than it knows, unreadable, or being upgraded by another process. */
 export class HomeFormatError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
+  /** True when starting again a moment later may succeed: another process is bringing the home forward right now. */
+  readonly transient: boolean;
+  constructor(message: string, options?: { cause?: unknown; transient?: boolean }) {
     super(message, options);
     this.name = "HomeFormatError";
+    this.transient = options?.transient === true;
   }
 }
 
@@ -99,6 +132,8 @@ export interface OpenedHome {
   applied: number[];
   /** True when there was no home and one was made. */
   created: boolean;
+  /** True when the number could not be written because the home is read-only, and nothing but the stamp was owed. */
+  unstamped?: true;
 }
 
 /** The ledger, oldest first. A torn last line — what a crash leaves — is skipped, as every reader here does. */
@@ -195,7 +230,7 @@ function lock(home: string): () => void {
         // gone between the two calls: try again
       }
       if (Number.isInteger(holder) && holder > 0 && holder !== process.pid && alive(holder)) {
-        throw new HomeFormatError(`Another LumenBox process (pid ${holder}) is upgrading the data in ${home}. Start again when it has finished; nothing was changed by this one.`);
+        throw new HomeFormatError(`Another LumenBox process (pid ${holder}) is upgrading the data in ${home}. Start again when it has finished; nothing was changed by this one.`, { transient: true });
       }
       if (attempt >= 2) throw new HomeFormatError(`${path} could not be taken. Remove it if no LumenBox process is running, then start again.`);
       rmSync(path, { force: true });
@@ -218,6 +253,30 @@ function checked(migrations: readonly HomeMigration[]): number {
  * job is to print it and not go on.
  */
 export function openHome(options: OpenHomeOptions): OpenedHome {
+  try {
+    return bringForward(options);
+  } catch (error) {
+    if (error instanceof HomeFormatError || !READ_ONLY.has((error as NodeJS.ErrnoException)?.code ?? "")) throw error;
+    // The home cannot be written. Whether that matters depends on what was owed.
+    const { home } = options;
+    const migrations = options.migrations ?? HOME_MIGRATIONS;
+    const found = readHomeFormat(home);
+    const from = found === "new" ? 0 : found;
+    const owed = migrations.slice(from).find(migration => migration.rewrites);
+    const why = (error as NodeJS.ErrnoException).code;
+    if (owed !== undefined) {
+      throw new HomeFormatError(`The data in ${home} is format ${from} and has to be upgraded to format ${owed.to} (${owed.name}) before this version can use it, but it cannot be written (${why}). Nothing was changed.`, { cause: error });
+    }
+    // Only the stamp was owed, and the layout is one this version reads: a command that only reads goes on, as it did before there was a number.
+    (options.log ?? (() => {}))(`home: ${home} cannot be written (${why}), so its format number was not recorded; reading it as it is`);
+    return { format: from, applied: [], created: false, unstamped: true };
+  }
+}
+
+/** A home that cannot be written: another user's, or a read-only mount. */
+const READ_ONLY: ReadonlySet<string> = new Set(["EACCES", "EPERM", "EROFS"]);
+
+function bringForward(options: OpenHomeOptions): OpenedHome {
   const { home, appVersion } = options;
   const migrations = options.migrations ?? HOME_MIGRATIONS;
   const log = options.log ?? (() => {});
@@ -246,7 +305,7 @@ export function openHome(options: OpenHomeOptions): OpenedHome {
     // Read again under the lock: the process that held it a moment ago may have done all of this.
     const start = readHomeFormat(home);
     const from = start === "new" ? 0 : start;
-    if (from > current) return openHome(options);
+    if (from > current) return bringForward(options);
     const applied: number[] = [];
     let backup: string | undefined;
     for (const migration of migrations.slice(from)) {

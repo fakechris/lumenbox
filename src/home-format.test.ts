@@ -6,15 +6,16 @@
  * (scripts/upgrade-fixture.ts says how), opened here by the code as it is now.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { AgentRegistry } from "./agents/registry.ts";
 import { loadConfig } from "./config.ts";
-import { HOME_FORMAT_FILE, HOME_FORMAT_LEDGER, HOME_MIGRATIONS, type HomeMigration, HomeFormatError, openHome, readFormatLedger } from "./home-format.ts";
+import { HOME_COMMANDS, HOME_FORMAT_FILE, HOME_FORMAT_LEDGER, HOME_MIGRATIONS, HOME_REFUSED_EXIT, HOMELESS_COMMANDS, type HomeMigration, HomeFormatError, openHome, opensHome, readFormatLedger } from "./home-format.ts";
 import { TaskStore } from "./host/tasks.ts";
 
 const CURRENT = HOME_MIGRATIONS.length;
@@ -168,23 +169,155 @@ test("the home 0.4.9 wrote opens with this code: migrated, stamped, and its agen
   assert.deepEqual(names(FIXTURE).filter(name => ["token", "ui-token", "box-owner", HOME_FORMAT_FILE, HOME_FORMAT_LEDGER].includes(name)), []);
 });
 
-test("the command line passes through it: a home it cannot read stops the command, a 0.4.9 home is stamped and answered from, help needs no home", t => {
-  const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
-  const run = (home: string, ...args: string[]) => spawnSync(process.execPath, ["--experimental-transform-types", "--no-warnings", cli, ...args], { encoding: "utf8", env: { PATH: process.env.PATH ?? "", HOME: scratch(t), AGENTBOX_TEST: "1", AGENTBOX_HOME: home } });
+const CLI = fileURLToPath(new URL("./cli.ts", import.meta.url));
+/** The command line as a person runs it. `home` undefined leaves AGENTBOX_HOME unset, so the default is `<HOME>/.agentbox` — in a scratch HOME. */
+function cli(t: { after(fn: () => void): void }, home: string | undefined, args: string[], userHome = scratch(t)): Promise<{ status: number | null; stdout: string; stderr: string; userHome: string }> {
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, ["--experimental-transform-types", "--no-warnings", CLI, ...args], { stdio: ["ignore", "pipe", "pipe"], env: { PATH: process.env.PATH ?? "", HOME: userHome, ...(home !== undefined ? { AGENTBOX_HOME: home, AGENTBOX_TEST: "1" } : {}) } });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += String(chunk); });
+    child.stderr.on("data", chunk => { stderr += String(chunk); });
+    child.on("close", status => resolve({ status, stdout, stderr, userHome }));
+  });
+}
 
+test("the command line passes through it: a home it cannot read stops the command with its own exit status, a 0.4.9 home is stamped and answered from", async t => {
   const newer = oldHome(t);
   writeFileSync(join(newer, HOME_FORMAT_FILE), "99\n");
-  const refused = run(newer, "agents");
-  assert.equal(refused.status, 1);
-  assert.match(refused.stderr, /error: The data in .* is format 99\. A newer LumenBox wrote this home/);
-  assert.equal(refused.stdout, "", "the command did not run");
-  assert.equal(run(newer, "help").status, 0, "help is not held hostage by a home");
-  assert.equal(formatOf(newer), "99\n");
-
   const home = join(scratch(t), "home");
   cpSync(FIXTURE, home, { recursive: true });
-  const listed = run(home, "agents");
+  const [refused, help, listed] = await Promise.all([cli(t, newer, ["agents"]), cli(t, newer, ["help"]), cli(t, home, ["agents"])]);
+
+  assert.equal(refused.status, HOME_REFUSED_EXIT, "not the status of a crash");
+  assert.match(refused.stderr, /error: The data in .* is format 99\. A newer LumenBox wrote this home/);
+  assert.equal(refused.stdout, "", "the command did not run");
+  assert.equal(help.status, 0, "help is not held hostage by a home");
+  assert.equal(formatOf(newer), "99\n");
+
   assert.equal(listed.status, 0, listed.stderr);
   assert.match(listed.stdout, /Nova/);
   assert.equal(formatOf(home), `${CURRENT}\n`);
+});
+
+test("a command that has no installation behind it makes no home: a word that is no command, a node, a box given away, the door's clients", async t => {
+  // Every command the dispatch knows is on one list or the other, so a new one is a decision rather than a default.
+  const source = readFileSync(CLI, "utf8");
+  const dispatched = [...source.slice(source.indexOf("async function main()")).matchAll(/^ {4}case "([^"]+)":|; case "([^"]+)":/gm)].map(match => match[1] ?? match[2]!);
+  assert.ok(dispatched.includes("web") && dispatched.includes("routines") && dispatched.length > 30, "the dispatch was read");
+  for (const command of dispatched) assert.equal(Number(HOME_COMMANDS.has(command)) + Number(HOMELESS_COMMANDS.has(command)), 1, `${command} is on exactly one of HOME_COMMANDS and HOMELESS_COMMANDS`);
+  assert.deepEqual([opensHome("box", "up"), opensHome("box", "connect"), opensHome("box", "build"), opensHome("frobnicate"), opensHome(undefined)], [true, false, false, false, false]);
+
+  // On a machine with nothing in it: each of these stops at its own usage line, as before, and leaves no ~/.agentbox behind.
+  const runs = await Promise.all([["frobnicate"], ["node", "run"], ["box", "connect"], ["watchdog"], ["supervise"], ["mcp"]].map(args => cli(t, undefined, args)));
+  for (const run of runs) {
+    assert.equal(run.status, 1, run.stderr);
+    assert.equal(existsSync(join(run.userHome, ".agentbox")), false, `a home was made: ${readdirSync(run.userHome).join(", ")}`);
+  }
+  assert.match(runs[0]!.stderr, /Unknown command: frobnicate/);
+  // And a command that does use one makes it, stamped.
+  const made = await cli(t, undefined, ["agents"]);
+  assert.equal(made.status, 0, made.stderr);
+  assert.equal(formatOf(join(made.userHome, ".agentbox")), `${CURRENT}\n`);
+});
+
+test("a home that cannot be written still answers a command that only reads; what would need writing still stops", { skip: process.getuid?.() === 0 ? "root writes anywhere" : false }, async t => {
+  const home = join(scratch(t), "home");
+  cpSync(FIXTURE, home, { recursive: true });
+  chmodSync(home, 0o500);
+  try {
+  const said: string[] = [];
+  assert.deepEqual(openHome({ home, appVersion: "0.4.9", log: line => said.push(line) }), { format: 0, applied: [], created: false, unstamped: true });
+  assert.equal(said.length, 1, "said once");
+  assert.match(said[0]!, /cannot be written \(EACCES\), so its format number was not recorded; reading it as it is/);
+  assert.equal(existsSync(join(home, HOME_FORMAT_FILE)), false);
+
+  const listed = await cli(t, home, ["agents"]);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, /Nova/, "the command ran, as it did before there was a number");
+  assert.match(listed.stderr, /cannot be written/);
+
+  // A migration that rewrites cannot be skipped: the layout would not be the one this version reads.
+  const rewriting: HomeMigration[] = [{ to: 1, name: "stamp", rewrites: false, run: () => {} }, { to: 2, name: "split the ledger", rewrites: true, run: () => assert.fail("not run") }];
+  assert.throws(() => openHome({ home, appVersion: "0.5.0", migrations: rewriting, backup: () => "/b" }), (error: unknown) => {
+    assert.ok(error instanceof HomeFormatError);
+    assert.match(error.message, /is format 0 and has to be upgraded to format 2 \(split the ledger\) before this version can use it, but it cannot be written \(EACCES\)\. Nothing was changed/);
+    return true;
+  });
+  // And a newer home is refused whether or not it can be written.
+  chmodSync(home, 0o700);
+  writeFileSync(join(home, HOME_FORMAT_FILE), "99\n");
+  chmodSync(home, 0o500);
+  assert.throws(() => openHome({ home, appVersion: "0.4.9" }), /is format 99\. A newer LumenBox wrote this home/);
+  } finally {
+    chmodSync(home, 0o700); // so the scratch directory can be removed
+  }
+});
+
+test("two starts at once: the second is told another process is upgrading while the first lives, reads plainly once it is done, and takes over if it was killed", async t => {
+  // A process that takes the lock and stays in its migration until told to go on (or killed).
+  const holder = (home: string) => {
+    const script = `
+      import { openHome } from ${JSON.stringify(pathToFileURL(fileURLToPath(new URL("./home-format.ts", import.meta.url))).href)};
+      import { existsSync } from "node:fs";
+      const wait = () => { while (!existsSync(${JSON.stringify(join(home, "go"))})) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); };
+      const opened = openHome({ home: ${JSON.stringify(home)}, appVersion: "0.4.9", migrations: [{ to: 1, name: "slow stamp", rewrites: false, run: () => { console.log("holding"); wait(); } }] });
+      console.log(JSON.stringify(opened));`;
+    const child = spawn(process.execPath, ["--experimental-transform-types", "--no-warnings", "--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    const holding = new Promise<void>(resolve => child.stdout.on("data", chunk => { out += String(chunk); if (out.includes("holding")) resolve(); }));
+    const done = new Promise<number | null>(resolve => child.on("close", status => resolve(status)));
+    t.after(() => child.kill("SIGKILL"));
+    return { child, holding, done, said: () => out };
+  };
+  const slow: HomeMigration[] = [{ to: 1, name: "slow stamp", rewrites: false, run: () => {} }];
+
+  const home = oldHome(t);
+  const first = holder(home);
+  await first.holding;
+  assert.throws(() => openHome({ home, appVersion: "0.4.9", migrations: slow }), (error: unknown) => {
+    assert.ok(error instanceof HomeFormatError);
+    assert.equal(error.transient, true, "starting again a moment later is the answer, so this is not the refused-home status");
+    assert.match(error.message, new RegExp(`Another LumenBox process \\(pid ${first.child.pid}\\) is upgrading the data`));
+    return true;
+  });
+  assert.equal(existsSync(join(home, HOME_FORMAT_FILE)), false, "the second start changed nothing");
+  writeFileSync(join(home, "go"), "");
+  assert.equal(await first.done, 0);
+  assert.match(first.said(), /"applied":\[1\]/);
+  assert.deepEqual(openHome({ home, appVersion: "0.4.9", migrations: slow }), { format: 1, applied: [], created: false }, "a third start is a plain read");
+  assert.equal(readFormatLedger(home).length, 1, "brought forward once");
+  assert.equal(existsSync(join(home, "FORMAT.lock")), false);
+
+  // Killed while it held the lock: the lock names a process that is gone, and the next start takes it over.
+  const abandoned = oldHome(t);
+  const killed = holder(abandoned);
+  await killed.holding;
+  killed.child.kill("SIGKILL");
+  await killed.done;
+  assert.equal(readFileSync(join(abandoned, "FORMAT.lock"), "utf8").trim(), String(killed.child.pid), "the lock was left behind");
+  assert.deepEqual(openHome({ home: abandoned, appVersion: "0.4.9", migrations: slow }).applied, [1]);
+  assert.equal(existsSync(join(abandoned, "FORMAT.lock")), false);
+});
+
+test("the desktop app shows a refused home instead of restarting the server: the status is its own, and the dialog is the server's sentence", async t => {
+  const shell = createRequire(import.meta.url)("../electron/home-refused.cjs") as { HOME_REFUSED_EXIT: number; homeRefusal(recentLog: string[]): { title: string; message: string } };
+  assert.equal(shell.HOME_REFUSED_EXIT, HOME_REFUSED_EXIT, "the shell and the server agree on the number");
+
+  // What the shell does with the server it starts: `web --desktop`, its output kept line by line.
+  const newer = oldHome(t);
+  writeFileSync(join(newer, HOME_FORMAT_FILE), "99\n");
+  writeFileSync(join(newer, HOME_FORMAT_LEDGER), `${JSON.stringify({ format: 99, from: 98, name: "later", at: "2027-06-01T00:00:00.000Z", appVersion: "0.6.3" })}\n`);
+  const server = await cli(t, newer, ["web", "--port", "0", "--desktop"]);
+  assert.equal(server.status, HOME_REFUSED_EXIT, server.stderr);
+  const recentLog = `${server.stdout}${server.stderr}`.split("\n").filter(line => line.trim() !== "");
+  const dialog = shell.homeRefusal(recentLog);
+  assert.equal(dialog.title, "LumenBox cannot open its data");
+  assert.match(dialog.message, /^The data in .* is format 99, written by LumenBox 0\.6\.3\. A newer LumenBox wrote this home: .*Install LumenBox 0\.6\.3 or later to use it\. Nothing was changed/);
+  assert.match(shell.homeRefusal([]).message, /did not say why/, "and a server that said nothing is still not a blank dialog");
+
+  // The shell's exit handler takes that path before its crash counter: no retry, the dialog, then quit.
+  const main = readFileSync(fileURLToPath(new URL("../electron/main.cjs", import.meta.url)), "utf8");
+  const handler = main.slice(main.indexOf('serverChild.on("exit"'), main.indexOf("crashRestarts += 1"));
+  assert.match(handler, /if \(code === HOME_REFUSED_EXIT\) \{[\s\S]*homeRefusal\(recentLog\)[\s\S]*dialog\.showErrorBox\(refusal\.title, refusal\.message\)[\s\S]*app\.quit\(\)[\s\S]*return;/);
 });
