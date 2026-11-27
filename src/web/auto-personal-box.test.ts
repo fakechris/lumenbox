@@ -11,6 +11,8 @@ import { STARTING_AT_ONCE, personalBoxAt } from "../host/auto-personal-box.ts";
 import { deprecationsInUse } from "../deprecations.ts";
 import { STARTER_TEAM } from "../host/orchestrator.ts";
 import { directorySource } from "../host/directory.ts";
+import { Activations } from "../host/activations.ts";
+import { enrolStandingActivations } from "../host/enrolment.ts";
 
 // These requests carry identity the way the hosted gateway sends it (INV-1543).
 process.env.AGENTBOX_TRUST_GATEWAY_IDENTITY = "1";
@@ -267,4 +269,27 @@ test("INV-2220: with boxes at first use, activation makes the person and no box;
   assert.deepEqual([box!.owner, box!.status], ["ding:p02", "ready"]);
   for (let i = 0; i < 100 && new Principals().byId("ding:p02")?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(new AgentRegistry(join(org.home, "agents")).agentsIn(box!.id).map(agent => agent.id), [new Principals().byId("ding:p02")!.homeAgentId]);
+});
+
+test("INV-2220: somebody activated before the upgrade keeps a box at their first use, whatever the setting; somebody activated after it gets theirs at once", async (t) => {
+  const org = await organisation(t, { withDoor: true, config: { personalBoxAt: "activation" } });
+  // The home as 0.4.10 left it: P05 activated and never signed in. Then the upgrade's migration, then the server.
+  new Activations(join(org.home, "activations.jsonl")).activatePerson(directorySource("ding", 1, "ding-app", "dingtalk"), { subject: "p05", name: "P05" }, "driver", "web:operator", true);
+  enrolStandingActivations(org.home);
+  assert.equal(new Principals().isKnown("ding:p05"), true, "the migration made her a person");
+  let request = await org.boot();
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(org.started.length, 0, "an upgrade starts no box for somebody who has not come");
+  // Somebody activated now gets theirs at once; she still has none, across a restart too.
+  assert.equal((await request("/api/activations/person", "web:operator", { channelId: "ding", subject: "p06", role: "driver" })).status, 200);
+  assert.deepEqual((await allSettled(request, 1)).map(box => box.owner), ["ding:p06"]);
+  org.stopAll();
+  request = await org.boot();
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(org.started.length, 1);
+  // Her first page load is her first use.
+  assert.equal((await request("/api/me", "ding:p05")).status, 200);
+  assert.deepEqual((await allSettled(request, 2)).map(box => box.owner).sort(), ["ding:p05", "ding:p06"]);
+  for (let i = 0; i < 100 && new Principals().byId("ding:p05")?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(new Principals().byId("ding:p05")?.homeAgentId, "with her agent in it");
 });

@@ -37,7 +37,7 @@ export type ActivationEvent =
   | (Stamp & { type: "activate-department"; by: string; role: Role; department: { vendorId: string; name: string }; includeSub: boolean; count: number; alreadyActive: number; people: Named[] })
   | (Stamp & Named & { type: "request" })
   | (Stamp & { type: "dismiss"; by: string; subject: string })
-  /** The roster people an activation made (INV-2220): one line for the act, however many. `migrated`: made by home format 2 from an activation older than that rule. */
+  /** The roster people an activation made (INV-2220): one line for the act, however many. `migrated`: made after the fact, by home format 2 or by a server start, from an activation that had made nobody. */
   | (Stamp & { type: "enrolled"; people: { subject: string; principalId: string }[]; migrated?: true })
   /** The activated person's first sign-in through the door. Before INV-2220 this was also when the roster gained them. */
   | (Stamp & { type: "admitted"; subject: string; principalId: string })
@@ -90,6 +90,12 @@ export interface Activation extends Named {
   enrolledAt?: string;
   /** Their first sign-in through the door. */
   admittedAt?: string;
+  /**
+   * Made a roster person after the fact — by home format 2 from an activation older than INV-2220,
+   * or by a server start finishing one — and not by the Admin's press itself. No box is asked for
+   * on their behalf: they get theirs at their first use, whatever `personalBoxAt` says now.
+   */
+  migrated?: true;
   leftAt?: string;
 }
 export interface JoinRequest extends Named { at: string }
@@ -178,7 +184,7 @@ export class Activations {
     else if (event.type === "enrolled") {
       for (const person of event.people) {
         const activation = state.activations.get(person.subject);
-        if (activation !== undefined) { activation.principalId = person.principalId; activation.enrolledAt = event.at; }
+        if (activation !== undefined) { activation.principalId = person.principalId; activation.enrolledAt = event.at; if (event.migrated === true) activation.migrated = true; }
       }
     } else if (event.type === "hold") state.held = { at: event.at, reason: event.reason, standing: event.standing, people: event.people };
     else if (event.type === "hold-dismissed") delete state.held;

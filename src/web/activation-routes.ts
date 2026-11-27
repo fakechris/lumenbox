@@ -76,13 +76,15 @@ export function admission(deps: AdmissionDeps) {
 
   /**
    * After an activation was written to the ledger: the roster people it is owed are made, and their
-   * boxes asked for. Also what a server start runs for every door, which finishes an activation a
-   * crash interrupted and queues the boxes of people activated before boxes were made at activation.
+   * boxes asked for. Also what a server start runs for every door (`catchUp`): it finishes an
+   * activation a crash interrupted, and asks again for boxes a stopped server left queued. Never for
+   * somebody home format 2 made from an older activation: nobody asked for a box when they were
+   * activated, so they get theirs at their first use, as they would have.
    */
-  function activated(source: DirectorySource, by: string): Enrolled[] {
-    const made = enrol(activations, principals, source, { log: deps.log });
+  function activated(source: DirectorySource, by: string, afterTheFact = false): Enrolled[] {
+    const made = enrol(activations, principals, source, { log: deps.log, migrated: afterTheFact });
     for (const person of made) deps.log(`on the roster by activation: ${identityOf(source, person.subject)} is ${person.principalId}`);
-    askBoxes(source, by, made.map(person => person.principalId));
+    if (!afterTheFact) askBoxes(source, by, made.map(person => person.principalId));
     return made;
   }
   function askBoxes(source: DirectorySource, by: string, ids: readonly string[]): void {
@@ -97,8 +99,10 @@ export function admission(deps: AdmissionDeps) {
       const source = deps.credentials(channelId)?.source;
       if (source === undefined) continue;
       try {
-        const made = new Set(activated(source, "start").map(person => person.principalId));
-        const standing = activations.activations(source).filter(activation => activation.leftAt === undefined && activation.principalId !== undefined && !made.has(activation.principalId) && onRoster(source, activation.subject));
+        // Whoever a start makes is made after the fact, like the migration's people: this cannot tell an activation a crash interrupted from an older one.
+        activated(source, "start", true);
+        const standing = activations.activations(source).filter(activation => activation.leftAt === undefined && activation.migrated !== true
+          && activation.principalId !== undefined && onRoster(source, activation.subject));
         askBoxes(source, "start", standing.map(activation => activation.principalId!));
       } catch (error) { deps.log(`activations of ${channelId} not caught up at start: ${error instanceof Error ? error.message : String(error)}`); }
     }

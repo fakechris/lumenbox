@@ -65,22 +65,35 @@ export function enrol(activations: Activations, principals: Roster, source: Dire
  * No box is made here: the running server does that afterwards.
  */
 export function enrolStandingActivations(home: string): void {
-  const ledger = join(home, "activations.jsonl"), rosterPath = join(home, "principals.json");
-  if (!existsSync(ledger) || !existsSync(rosterPath)) return;
-  const incarnations = new Map<string, number>();
-  const channelsPath = join(home, "channels.json");
-  if (existsSync(channelsPath)) {
-    const rows = (JSON.parse(readFileSync(channelsPath, "utf8")) as { channels?: unknown }).channels;
-    for (const row of Array.isArray(rows) ? rows as { id?: unknown; incarnation?: unknown }[] : []) {
-      if (typeof row?.id === "string" && typeof row.incarnation === "number") incarnations.set(row.id, row.incarnation);
-    }
-  }
+  const rosterPath = join(home, "principals.json");
+  const owed = standing(home);
+  if (owed === undefined || owed.sources.length === 0) return;
   // The roster must be readable before it is rewritten: `Principals` reads a broken file as empty, and a save would then replace it.
   JSON.parse(readFileSync(rosterPath, "utf8"));
-  const activations = new Activations(ledger);
-  const principals = new Principals(rosterPath, { incarnationOf: identity => incarnations.get(identity.split(":")[0] ?? "") ?? 1, warn: () => {} });
-  for (const source of activations.latestSources()) {
-    if (incarnations.get(source.channelId) !== source.incarnation) continue;
-    enrol(activations, principals, source, { migrated: true });
+  const principals = new Principals(rosterPath, { incarnationOf: identity => owed.incarnations.get(identity.split(":")[0] ?? "") ?? 1, warn: () => {} });
+  for (const source of owed.sources) enrol(owed.activations, principals, source, { migrated: true });
+}
+
+/**
+ * Whether format 2 has anything to do in this home: at least one activation it would make a roster
+ * person of. Asked before the home is copied, and of a home that may not be writable: it only
+ * reads, and a home with no ledger, no roster, or door records it cannot read has nothing owed —
+ * which is every personal installation.
+ */
+export function standingActivationsOwed(home: string): boolean {
+  try { return (standing(home)?.sources.length ?? 0) > 0; } catch { return false; }
+}
+
+/** The ledger, and the doors in it whose standing activations made nobody yet. Reads only; a torn ledger line is skipped by the ledger itself. */
+function standing(home: string): { activations: Activations; incarnations: Map<string, number>; sources: DirectorySource[] } | undefined {
+  const ledger = join(home, "activations.jsonl"), channelsPath = join(home, "channels.json");
+  if (!existsSync(ledger) || !existsSync(join(home, "principals.json")) || !existsSync(channelsPath)) return undefined;
+  const incarnations = new Map<string, number>();
+  const rows = (JSON.parse(readFileSync(channelsPath, "utf8")) as { channels?: unknown }).channels;
+  for (const row of Array.isArray(rows) ? rows as { id?: unknown; incarnation?: unknown }[] : []) {
+    if (typeof row?.id === "string" && typeof row.incarnation === "number") incarnations.set(row.id, row.incarnation);
   }
+  const activations = new Activations(ledger);
+  const sources = activations.latestSources().filter(source => incarnations.get(source.channelId) === source.incarnation && activations.unenrolled(source).length > 0);
+  return { activations, incarnations, sources };
 }

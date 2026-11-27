@@ -78,11 +78,13 @@ given to another installation), `box build` / `box push`, `watchdog` and `superv
 the side door), and `supervision` (started by the app once the server answers, which has opened
 the home by then). None of these made `~/.agentbox` before the number existed, and none does now.
 
-1. If the migration rewrites stored data (`rewrites: true`) and no copy has been taken in this
-   start, the whole home is copied first with the host's own snapshot (`backup.ts`), named
+1. If the migration rewrites stored data (`rewrites: true`), has work in this home (its optional
+   `needed(home)` — absent means it always has), and no copy has been taken in this start, the whole home is copied first with the host's own snapshot (`backup.ts`), named
    `<time>-before-format-<n>` beside the other backups. That name is not a dated snapshot's, so
    the nightly prune neither counts nor removes it. A migration that only stamps takes no copy.
-2. The migration runs.
+2. The migration runs. A rewriting migration whose `needed` says this home holds nothing for it
+   is a stamp here: it is not run and no copy is taken. `needed` only reads, and reads a missing
+   or torn file as nothing to do.
 3. A line is appended to `format-migrations.jsonl`: `{ format, from, name, at, appVersion, backup? }`.
 4. `FORMAT` is replaced atomically with `n`.
 
@@ -96,7 +98,7 @@ taken over, a live holder stops the second start with a message).
 
 **A home that cannot be written.** When stamping fails because the home is read-only or another
 user's (`EACCES`, `EPERM`, `EROFS`), the format is at or below the current one, and no migration
-that rewrites is owed, the command says so once on stderr and goes on: `usage`, `agents`,
+that rewrites and has work in this home is owed, the command says so once on stderr and goes on: `usage`, `agents`,
 `audit export` and the like read such a home as they did before there was a number. If a
 rewriting migration is owed, the layout is not one this version reads, and the command stops with
 a message saying which. A newer home is refused whether or not it can be written.
@@ -129,14 +131,17 @@ reads `activations.jsonl` and, for every activation that stands, made nobody and
 adds the person to `principals.json` exactly as an activation now does — id and identity
 `<door>:<subject>`, the name and role the activation carries, the link stamped with the door's
 incarnation — and appends one `enrolled` line with `migrated: true` (§2.2f). It rewrites the
-roster, so the home is copied first. It is limited to a door `channels.json` still has at the
+roster, so the home is copied first — but only where there is such an activation
+(`standingActivationsOwed`). Every personal installation, and an organisation whose activated
+people have all signed in, is stamped: no copy, and a home that cannot be written is read as
+before. It is limited to a door `channels.json` still has at the
 activation's incarnation, and to the app that door's newest ledger line names; it reads only the
 home, so an app replaced since that line under the same door id is the one case it cannot tell.
 Somebody already on the roster through that identity is not duplicated and keeps their role. A
-roster that cannot be parsed fails the migration and the home stays format 1. A home with no
-`activations.jsonl` is copied and stamped, nothing else. It makes no box: the running server
-queues those afterwards (`personalBoxAt`, §2.5). Because format 2 rewrites, a home below it that
-cannot be written is refused, where a format 0 home used to be read as it was.
+roster that cannot be parsed fails the migration and the home stays format 1. It makes no box, and
+neither does the server afterwards on these people's behalf: somebody made by the migration keeps
+what they were activated under, a box at their first use, whatever `personalBoxAt` (§2.5) says. A
+home that has such activations and cannot be written is refused until it is upgraded writable.
 
 **The upgrade fixture.** `src/fixtures/home-0.4.9/` is a home 0.4.9 wrote — two agents, a
 conversation with a tool call, a memory record, a plan, a task, `config.json` — produced by
@@ -526,9 +531,9 @@ not apply to another.
 | `activate-department` | an Admin activated everybody a department listed at that moment: `department` (`vendorId`, `name`), `includeSub`, `role`, `count`, `alreadyActive`, and the `people` it covered. One line for the bulk act, never one per person |
 | `request` | `subject` signed in through the door without an activation: asked to join. One per person until it is answered, however often they scan |
 | `dismiss` | an Admin put a request away |
-| `enrolled` | the roster people an activation made: `people` (`subject`, `principalId`), one line for the act however many. `migrated: true` when home format 2 made them from an activation older than INV-2220 (§2.0) |
+| `enrolled` | the roster people an activation made: `people` (`subject`, `principalId`), one line for the act however many. `migrated: true` when they were made after the fact — by home format 2 from an activation older than INV-2220 (§2.0), or by a server start finishing an activation that had made nobody: no box is asked for on their behalf, and they get theirs at their first use |
 | `admitted` | the activated subject's first sign-in through the door, as `principalId`. In a ledger written before INV-2220 it is also when the roster gained them |
-| `boxes` | personal boxes were asked for on behalf of the roster people in `people` (`count` of them): `by` the Admin whose activation it followed, or `start` for the ones a server start caught up on. What became of each is the box's own record |
+| `boxes` | personal boxes were asked for on behalf of the roster people in `people` (`count` of them): `by` the Admin whose activation it followed, or `start` for people a stopped server had left queued. What became of each is the box's own record |
 | `listed` | a sync listed people who had been activated before the directory showed them |
 | `left` | a sync no longer listed an activated person: the sign-in this source gave them was ended (`principalId` when they had signed in). Nothing else was changed |
 | `hold` | a sync was not believed and changed nothing: `reason` (`empty`: it listed nobody; `halved`: fewer than half the people of the one before; `many`: more than 5 people and more than 10% of the source's `standing` activations would leave) and the `people` it would have ended |
@@ -537,8 +542,8 @@ not apply to another.
 
 **The Admin's act makes the person** (INV-2220): the activation line is written, then
 `principals.json` gains everybody it named in one write, then `enrolled` says who was made. A
-start that finds a standing activation with no `enrolled` line finishes it, so a crash between the
-steps loses nothing; one whose `enrolled` line exists is never made again. The door's sign-in makes
+start that finds a standing activation with no `enrolled` line finishes it (marked `migrated`, so
+with a box at first use), so a crash between the steps loses nobody; one whose `enrolled` line exists is never made again. The door's sign-in makes
 nobody: it finds the person, and writes `admitted` the first time, which is what "activated, has
 not signed in yet" is read from. A person whose line says `enrolled` (or, in an older ledger,
 `admitted`) and whose identity nobody holds any more — an Admin removed them, or `left` — is

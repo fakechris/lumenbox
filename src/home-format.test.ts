@@ -61,13 +61,10 @@ test("a home newer than this binary is refused, naming the format found and the 
 
 test("a home with no FORMAT is format 0: brought to current in order, stamped and recorded; a new home is stamped current with nothing run", t => {
   const home = oldHome(t);
-  // Format 1 only stamps; format 2 rewrites the roster (INV-2220), so the way to current takes one copy, and the stamp's own line names none.
-  const copies: string[] = [];
-  const opened = openHome({ home, appVersion: "0.4.9", now: at, backup: stamp => { copies.push(stamp); return `/backups/${stamp}`; } });
+  const opened = openHome({ home, appVersion: "0.4.9", now: at, backup: () => assert.fail("a stamp needs no backup") });
   assert.deepEqual(opened, { format: CURRENT, applied: HOME_MIGRATIONS.map(migration => migration.to), created: false });
   assert.equal(formatOf(home), `${CURRENT}\n`);
   assert.deepEqual(readFormatLedger(home)[0], { format: 1, from: 0, name: HOME_MIGRATIONS[0]!.name, at: at().toISOString(), appVersion: "0.4.9" });
-  assert.deepEqual(copies, ["2027-01-02T03-04-05-before-format-2"]);
   assert.equal(readFileSync(join(home, "config.json"), "utf8"), "{}\n", "what was there is as it was");
   assert.deepEqual(openHome({ home, appVersion: "0.4.9" }), { format: CURRENT, applied: [], created: false }, "the next start has nothing to do");
   assert.equal(readFormatLedger(home).length, CURRENT);
@@ -130,7 +127,7 @@ test("one process upgrades a home at a time: a live holder is named and nothing 
 
   const dead = spawnSync(process.execPath, ["-e", "console.log(process.pid)"], { encoding: "utf8" }).stdout.trim();
   writeFileSync(join(home, "FORMAT.lock"), `${dead}\n`);
-  assert.equal(openHome({ home, appVersion: "0.4.9", backup: stamp => join(home, "..", stamp) }).format, CURRENT);
+  assert.equal(openHome({ home, appVersion: "0.4.9" }).format, CURRENT);
   assert.equal(existsSync(join(home, "FORMAT.lock")), false);
 });
 
@@ -233,29 +230,16 @@ test("a home that cannot be written still answers a command that only reads; wha
   cpSync(FIXTURE, home, { recursive: true });
   chmodSync(home, 0o500);
   try {
-  // Only a stamp owed: read as it is, and said once.
-  const stampOnly: HomeMigration[] = [{ to: 1, name: "stamp", rewrites: false, run: () => {} }];
   const said: string[] = [];
-  assert.deepEqual(openHome({ home, appVersion: "0.4.9", migrations: stampOnly, log: line => said.push(line) }), { format: 0, applied: [], created: false, unstamped: true });
+  assert.deepEqual(openHome({ home, appVersion: "0.4.9", log: line => said.push(line) }), { format: 0, applied: [], created: false, unstamped: true });
   assert.equal(said.length, 1, "said once");
   assert.match(said[0]!, /cannot be written \(EACCES\), so its format number was not recorded; reading it as it is/);
   assert.equal(existsSync(join(home, HOME_FORMAT_FILE)), false);
 
-  // The way to this version's format rewrites the roster (format 2), so a 0.4.9 home that cannot be written is refused, by the command line too …
-  assert.throws(() => openHome({ home, appVersion: "0.5.0", backup: () => "/b" }), /is format 0 and has to be upgraded to format 2 .* but it cannot be written \(EACCES\)\. Nothing was changed/);
-  const refused = await cli(t, home, ["agents"]);
-  assert.equal(refused.status, HOME_REFUSED_EXIT, refused.stderr);
-  // … and once it has been brought forward while it could be written, it answers a command that only reads.
-  chmodSync(home, 0o700);
-  assert.equal(openHome({ home, appVersion: "0.5.0", backup: stamp => join(home, "..", stamp) }).format, CURRENT);
-  chmodSync(home, 0o500);
-  assert.deepEqual(openHome({ home, appVersion: "0.5.0" }), { format: CURRENT, applied: [], created: false });
   const listed = await cli(t, home, ["agents"]);
   assert.equal(listed.status, 0, listed.stderr);
-  assert.match(listed.stdout, /Nova/, "the command ran");
-  chmodSync(home, 0o700);
-  rmSync(join(home, HOME_FORMAT_FILE)); rmSync(join(home, HOME_FORMAT_LEDGER)); // a 0.4.9 home again, for what follows
-  chmodSync(home, 0o500);
+  assert.match(listed.stdout, /Nova/, "the command ran, as it did before there was a number");
+  assert.match(listed.stderr, /cannot be written/);
 
   // A migration that rewrites cannot be skipped: the layout would not be the one this version reads.
   const rewriting: HomeMigration[] = [{ to: 1, name: "stamp", rewrites: false, run: () => {} }, { to: 2, name: "split the ledger", rewrites: true, run: () => assert.fail("not run") }];
@@ -372,6 +356,15 @@ test("format 2: an activation nobody signed in on becomes a roster person, once,
   ledger.request(source, { subject: "hal", name: "Hal" });
   const before = readFileSync(ledgerPath, "utf8");
 
+  // The home has work for format 2, so it must be writable: a read-only one is refused, saying which format it needs, and nothing is copied.
+  if (process.getuid?.() !== 0) {
+    chmodSync(home, 0o500);
+    try {
+      assert.throws(() => openHome({ home, appVersion: "0.5.0", backup: () => assert.fail("nothing is copied from a home that cannot be upgraded") }),
+        /is format 1 and has to be upgraded to format 2 \(activations nobody signed in on become roster people\) before this version can use it, but it cannot be written \(EACCES\)\. Nothing was changed/);
+    } finally { chmodSync(home, 0o700); }
+  }
+
   // A roster that cannot be read: the migration fails, the home stays format 1 with its copy named, and nothing was written.
   writeFileSync(rosterPath, "{ not json");
   assert.throws(() => openHome({ home, appVersion: "0.5.0", now: at, backup: stamp => `/backups/${stamp}` }), /to format 2 \(activations nobody signed in on become roster people\) failed: .*The home is still format 1, and a copy from before the upgrade is at \/backups\//);
@@ -408,4 +401,14 @@ test("format 2: an activation nobody signed in on becomes a roster person, once,
   enrolStandingActivations(home);
   assert.equal(readFileSync(rosterPath, "utf8"), rosterDone, "nobody is made twice");
   assert.deepEqual(new Activations(ledgerPath).unenrolled(source), []);
+
+  // An organisation whose activated people are all on the roster has nothing owed: format 2 is a stamp there, with no copy,
+  // and so it is for a ledger a crash tore and for a home with no ledger at all — every personal installation.
+  for (const prepare of [() => {}, () => writeFileSync(ledgerPath, `${readFileSync(ledgerPath, "utf8")}{"type":"activate-pers`), () => rmSync(ledgerPath)]) {
+    prepare();
+    writeFileSync(join(home, HOME_FORMAT_FILE), "1\n");
+    assert.deepEqual(openHome({ home, appVersion: "0.5.0", now: at, backup: () => assert.fail("nothing to change, nothing to copy") }).applied, [2]);
+    assert.equal(readFormatLedger(home).at(-1)?.backup, undefined);
+    assert.equal(readFileSync(rosterPath, "utf8"), rosterDone);
+  }
 });
