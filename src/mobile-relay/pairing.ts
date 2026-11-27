@@ -8,10 +8,10 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import {
-  type X25519Keypair,
-  X25519_KEY_BYTES,
   generateX25519Keypair,
   isCanonicalX25519PublicKey,
+  X25519_KEY_BYTES,
+  type X25519Keypair,
   x25519KeypairFromPrivate,
 } from "./noise.ts";
 

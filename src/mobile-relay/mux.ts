@@ -16,11 +16,11 @@ import type { NoiseSession } from "./noise.ts";
 import {
   DEFAULT_MAX_RECORD_BYTES,
   type DecodedRecord,
+  openRecord,
   RECORD_KIND_BINARY,
   RECORD_KIND_CONTROL,
   RECORD_KIND_TEXT,
   type RecordKind,
-  openRecord,
   sealRecord,
 } from "./records.ts";
 
@@ -366,7 +366,11 @@ export class RelayMux {
   private handleControlPayload(payload: Uint8Array): void {
     let frame: ControlFrame;
     try {
-      frame = JSON.parse(Buffer.from(payload).toString("utf8")) as ControlFrame;
+      const parsed: unknown = JSON.parse(Buffer.from(payload).toString("utf8"));
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new Error("Control payload must be a JSON object");
+      }
+      frame = parsed as ControlFrame;
     } catch (err) {
       const error = err instanceof Error ? err : new Error("Invalid control JSON");
       this.close(error);

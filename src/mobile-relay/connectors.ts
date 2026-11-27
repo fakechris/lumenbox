@@ -9,22 +9,22 @@ import { type HostMuxHandlers, RelayMux } from "./mux.ts";
 import {
   LUMENBOX_RELAY_PROLOGUE,
   NoiseError,
-  type X25519Keypair,
   respondIk,
   respondNk,
   startIkInitiator,
   startNkInitiator,
+  type X25519Keypair,
 } from "./noise.ts";
 import {
+  fromBase64Url,
   type PairedDeviceRecord,
   type PairedDeviceStore,
   type PairingOfferManager,
   type ParsedPairingOffer,
-  fromBase64Url,
   selectCandidateTransportUrl,
   toBase64Url,
 } from "./pairing.ts";
-import { type MinimalWebSocket, connectWebSocket, upgradeServerSocket } from "./ws-wire.ts";
+import { connectWebSocket, type MinimalWebSocket, upgradeServerSocket } from "./ws-wire.ts";
 
 export interface HostConnectorOptions {
   readonly routeId: string;
@@ -48,6 +48,16 @@ interface HostSessionChannel {
   sendHandshakeText(jsonText: string): void;
   sendEncryptedBinary(wire: Uint8Array): void;
   rejectSession(reason: string): void;
+}
+
+function parseObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
 function attachHostSessionAdmission(
@@ -79,10 +89,8 @@ function attachHostSessionAdmission(
         channel.rejectSession("Duplicate handshake");
         return;
       }
-      let env: { type?: unknown; message?: unknown };
-      try {
-        env = JSON.parse(text) as typeof env;
-      } catch {
+      const env = parseObject(text);
+      if (!env) {
         channel.rejectSession("Malformed handshake JSON");
         return;
       }
@@ -100,22 +108,19 @@ function attachHostSessionAdmission(
             message1: msg1,
             prologue: LUMENBOX_RELAY_PROLOGUE,
             responsePayload: (clientPayload) => {
-              const req = JSON.parse(Buffer.from(clientPayload).toString("utf8")) as {
-                pairSecret?: string;
-                deviceStaticPub?: string;
-                deviceName?: string;
-                platform?: "ios" | "android" | "other";
-              };
-              if (!req.pairSecret || !req.deviceStaticPub) {
+              const req = parseObject(Buffer.from(clientPayload).toString("utf8"));
+              if (!req || typeof req.pairSecret !== "string" || typeof req.deviceStaticPub !== "string") {
                 throw new NoiseError("invalid_pair_request", "Missing pairSecret or deviceStaticPub");
               }
               if (!options.offerManager.consumeSecret(fromBase64Url(req.pairSecret))) {
                 throw new NoiseError("pair_secret_rejected", "Pairing secret expired or already used");
               }
+              const platform =
+                req.platform === "ios" || req.platform === "android" ? req.platform : "other";
               registeredDevice = options.deviceStore.register({
                 publicKey: fromBase64Url(req.deviceStaticPub),
-                deviceName: req.deviceName ?? "Phone",
-                platform: req.platform ?? "other",
+                deviceName: typeof req.deviceName === "string" ? req.deviceName : "Phone",
+                platform,
               });
               return Buffer.from(
                 JSON.stringify({
@@ -212,18 +217,14 @@ export async function startHostRelayConnector(
     await new Promise<void>((resolve, reject) => {
       let registered = false;
       ws.onText((text) => {
-        let msg: { type?: string; sessionId?: string; payload?: string };
-        try {
-          msg = JSON.parse(text) as typeof msg;
-        } catch {
-          return;
-        }
+        const msg = parseObject(text);
+        if (!msg) return;
         if (!registered && msg.type === "host_registered") {
           registered = true;
           resolve();
           return;
         }
-        const sid = msg.sessionId ?? "";
+        const sid = typeof msg.sessionId === "string" ? msg.sessionId : "";
         if (msg.type === "session_open" && sid) {
           const handler = attachHostSessionAdmission(
             {
@@ -336,12 +337,15 @@ async function openClientTransportChannel(options: {
     let connected = false;
     ws.onText((text) => {
       if (connected) return;
-      const msg = JSON.parse(text) as { type?: string; reason?: string };
+      const msg = parseObject(text);
+      if (!msg) return;
       if (msg.type === "client_connected") {
         connected = true;
         resolve();
       } else if (msg.type === "relay_error") {
-        reject(new Error(`Relay rejected client: ${msg.reason ?? "unknown"}`));
+        reject(
+          new Error(`Relay rejected client: ${typeof msg.reason === "string" ? msg.reason : "unknown"}`),
+        );
       }
     });
     ws.onClose((code, reason) => {
@@ -389,12 +393,22 @@ export async function pairPhoneWithOffer(options: {
         ws.onText((text) => {
           if (done) return;
           try {
-            const env = JSON.parse(text) as { type?: string; message?: string };
-            if (env.type !== "pair_ready" || !env.message) return;
+            const env = parseObject(text);
+            if (env?.type !== "pair_ready" || typeof env.message !== "string" || !env.message) return;
             done = true;
             const { payload, session } = state.completeMessage2(fromBase64Url(env.message));
             session.destroy();
-            resolve(JSON.parse(Buffer.from(payload).toString("utf8")));
+            const replyObj = parseObject(Buffer.from(payload).toString("utf8"));
+            if (!replyObj || typeof replyObj.deviceId !== "string" || typeof replyObj.connId !== "string") {
+              throw new Error("Invalid pairing response payload");
+            }
+            resolve({
+              deviceId: replyObj.deviceId,
+              connId: replyObj.connId,
+              scopes: Array.isArray(replyObj.scopes)
+                ? replyObj.scopes.filter((s): s is string => typeof s === "string")
+                : [],
+            });
           } catch (err) {
             done = true;
             reject(err instanceof Error ? err : new Error(String(err)));
@@ -458,18 +472,25 @@ export async function connectPhoneIk(options: {
     ws.onText((text) => {
       if (ready) return;
       try {
-        const env = JSON.parse(text) as { type?: string; message?: string };
+        const env = parseObject(text);
+        if (!env) return;
         if (env.type === "host_offline") {
           ready = true;
           reject(new Error("Host offline"));
           return;
         }
-        if (env.type !== "ik_ready" || !env.message) return;
+        if (env.type !== "ik_ready" || typeof env.message !== "string" || !env.message) return;
         ready = true;
         const { payload, session } = state.completeMessage2(fromBase64Url(env.message));
-        const info = JSON.parse(Buffer.from(payload).toString("utf8")) as {
-          deviceId: string;
-          scopes: string[];
+        const infoObj = parseObject(Buffer.from(payload).toString("utf8"));
+        if (!infoObj || typeof infoObj.deviceId !== "string") {
+          throw new Error("Invalid Noise_IK server admission payload");
+        }
+        const info = {
+          deviceId: infoObj.deviceId,
+          scopes: Array.isArray(infoObj.scopes)
+            ? infoObj.scopes.filter((s): s is string => typeof s === "string")
+            : [],
         };
         const mux = new RelayMux({
           role: "client",

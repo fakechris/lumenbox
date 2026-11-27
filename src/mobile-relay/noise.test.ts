@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   CipherState,
-  LUMENBOX_RELAY_PROLOGUE,
-  NoiseError,
   generateX25519Keypair,
   isCanonicalX25519PublicKey,
+  LUMENBOX_RELAY_PROLOGUE,
+  NoiseError,
   respondIk,
   respondNk,
   startIkInitiator,
@@ -16,10 +16,10 @@ import {
   CHUNK_FLAG_FINAL,
   CHUNK_FLAG_FIRST,
   MAX_CHUNK_DATA_BYTES,
+  openRecord,
   RECORD_KIND_BINARY,
   RECORD_KIND_TEXT,
   RecordFrameError,
-  openRecord,
   sealRecord,
 } from "./records.ts";
 

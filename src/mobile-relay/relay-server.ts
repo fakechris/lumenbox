@@ -84,18 +84,24 @@ export interface RunningRelayServer {
   close(): Promise<void>;
 }
 
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Validates the unencrypted Noise handshake envelope at the relay before forwarding it:
  * checks message1/message2's leading 32-byte ephemeral X25519 key for canonical encoding and
  * rejects low-order points without inspecting or holding any static keys or secrets.
  */
 function validateHandshakeEnvelopeText(text: string): boolean {
-  let msg: { type?: unknown; message?: unknown };
-  try {
-    msg = JSON.parse(text) as { type?: unknown; message?: unknown };
-  } catch {
-    return false;
-  }
+  const msg = parseJsonObject(text);
+  if (!msg) return false;
   if (
     msg.type !== "pair_hello" &&
     msg.type !== "pair_ready" &&
@@ -183,10 +189,8 @@ export async function startRelayServer(
       }
 
       if (role === "unassigned") {
-        let init: { type?: unknown; routeId?: unknown };
-        try {
-          init = JSON.parse(text) as { type?: unknown; routeId?: unknown };
-        } catch {
+        const init = parseJsonObject(text);
+        if (!init) {
           ws.close(4001, "Invalid routing JSON");
           return;
         }
@@ -256,10 +260,8 @@ export async function startRelayServer(
       }
 
       if (role === "host" && boundSlot) {
-        let env: { type?: unknown; sessionId?: unknown; payload?: unknown; reason?: unknown };
-        try {
-          env = JSON.parse(text) as typeof env;
-        } catch {
+        const env = parseJsonObject(text);
+        if (!env) {
           ws.close(4001, "Invalid host envelope");
           return;
         }

@@ -5,14 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
-  PairingError,
-  PairingOfferManager,
   connectPhoneIk,
   connectWebSocket,
   createPairedDeviceStore,
   extractClientIp,
   generateX25519Keypair,
   loadOrCreateHostIdentity,
+  PairingError,
+  PairingOfferManager,
   pairPhoneWithOffer,
   parsePairingOfferUri,
   startHostRelayConnector,
@@ -284,6 +284,16 @@ test("Direct LAN/tailnet candidate is preferred when reachable and falls back to
       const res = await fallbackSession.mux.request({ method: "GET", path: "/api/v1/ping", headers: {} });
       assert.equal(res.status, 200);
       fallbackSession.close();
+
+      // Relay ingress rejects non-object JSON frames ("null", primitives) without crashing!
+      for (const nonObjectJson of ["null", "123", '"hello"', "[]"]) {
+        const badWs = await connectWebSocket(relay.url);
+        const badCode = await new Promise<number>((resolve) => {
+          badWs.onClose((code) => resolve(code));
+          badWs.sendText(nonObjectJson);
+        });
+        assert.equal(badCode, 4001);
+      }
 
       // Relay ingress rejects handshake frames carrying an all-zero (low-order) ephemeral key!
       const rawWs = await connectWebSocket(relay.url);
