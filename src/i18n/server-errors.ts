@@ -30,6 +30,8 @@ export const SERVER_ERRORS = {
   "err.hook-too-often": ["这个 hook 触发得太频繁了。请 {seconds} 秒后再试。", "This hook has fired too often. Try again in {seconds}s."],
   "err.webhook-unknown": ["没有叫 \"{slug}\" 的 webhook 例行任务。", "No webhook routine \"{slug}\"."],
   // ── signing in and the first Admin ───────────────────────────────────────────────────────────
+  "err.sign-in-limited": ["尝试次数太多。请 {seconds} 秒后再试。", "Too many attempts. Try again in {seconds}s."],
+  "err.cross-origin": ["这个请求不是从本安装自己的页面发出的，已被拒绝。请从 LumenBox 的页面操作。", "This request did not come from this installation's own page and was refused. Use the LumenBox page."],
   "err.sign-in-needed": ["请先登录：打开 /login。", "Sign in first: open /login."],
   "err.token-in-address": ["地址里的令牌（?token=）在这个安装上不被接受。请去掉它，然后在 /login 登录。", "A token in the address (?token=) is refused on this installation. Remove it and sign in at /login."],
   "err.token-not-here": ["安装令牌在这里不能用来登录：它只接受来自服务器本机的请求。请在 /login 以自己的身份登录。", "The installation token does not sign anyone in here: it is accepted only from the server itself. Sign in as yourself at /login."],

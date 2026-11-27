@@ -616,3 +616,62 @@ test("a suspended person is refused even with a valid cookie", async () => {
     cleanup();
   }
 });
+
+test("the password form waits after wrong tries, by address and by name, and a cross-site request cannot spend the session (INV-2204)", async () => {
+  const { signInGuard, SignInLimiter } = await import("../web/sign-in-limits.ts");
+  const { store, cleanup } = fixture();
+  const box = await fakeBoxUi("the-ui-token");
+  let now = Date.now();
+  const OURS = "https://gateway.example.test";
+  const gateway = new Gateway({
+    store,
+    allocator: new StaticAllocator(store, { boxdUrl: "http://127.0.0.1:1", uiUrl: box.url, tokens: { box: "the-box-token", ui: "the-ui-token" } }),
+    identity: PasswordListIdentity.parse("alice:secret:acme"),
+    sessionSecret: Buffer.from("b".repeat(32)),
+    image: "agentbox/box:test",
+    publicOrigin: OURS,
+    behindProxy: true,
+    // As control/main.ts wires it off local: the limiter, and the store's audit as the record.
+    signIns: signInGuard({
+      enabled: true, limiter: new SignInLimiter(() => now), log: () => {},
+      record: entry => store.audit({ tenantId: undefined, actor: entry.account ?? "", action: `signin.${entry.outcome}`, target: "gateway", detail: { address: entry.address, reason: entry.reason, seconds: entry.seconds } }),
+    }),
+  });
+  const server = await serve(gateway);
+  try {
+    const signIn = (username: string, password: string, address: string, more: Record<string, string> = {}) =>
+      fetch(`${server.url}/gateway/login`, { method: "POST", body: new URLSearchParams({ username, password }), redirect: "manual", headers: { "x-forwarded-for": `198.51.100.250, ${address}`, ...more } });
+
+    for (let n = 0; n < 6; n += 1) assert.equal((await signIn("alice", "guess", "203.0.113.1")).status, 401);
+    const waiting = await signIn("alice", "secret", "203.0.113.1");
+    assert.equal(waiting.status, 429, "refused before the password is compared — the right one learns nothing either");
+    assert.equal(waiting.headers.get("retry-after"), "2");
+    assert.equal(waiting.headers.get("set-cookie"), null);
+    assert.equal((await signIn("alice", "secret", "203.0.113.2")).status, 302, "alice herself, from her own address, is not locked out by it");
+    now += 3_000;
+    assert.equal((await signIn("alice", "guess", "203.0.113.1")).status, 401, "after the wait, one more try");
+    assert.equal((await signIn("alice", "secret", "203.0.113.1")).headers.get("retry-after"), "4", "and a wrong one doubles it");
+
+    // Many addresses at one name: the name waits, whoever asks.
+    for (let n = 0; n < 11; n += 1) await signIn("bob", "guess", `192.0.2.${n + 1}`);
+    assert.equal((await signIn("bob", "guess", "192.0.2.99")).status, 429);
+
+    const audit = store.recentAudit(100);
+    assert.ok(audit.some(row => row.action === "signin.failed" && row.actor === "alice" && (row.detail as { address: string }).address === "203.0.113.1"), "a failed try is where sign-ins are: who, and from where the proxy saw it");
+    assert.ok(audit.some(row => row.action === "signin.limited" && row.actor === "bob"));
+    assert.ok(!JSON.stringify(audit).includes("guess"), "never the password tried");
+
+    const session = (await signIn("alice", "secret", "203.0.113.2")).headers.get("set-cookie")!.split(";")[0]!;
+    const change = (headers: Record<string, string>) => fetch(`${server.url}/api/agents`, { method: "POST", headers: { cookie: session, ...headers }, body: "{}" });
+    assert.equal((await change({ origin: "https://evil.example" })).status, 403, "another site's page cannot spend alice's session");
+    assert.equal((await change({ origin: OURS })).status, 200);
+    assert.equal((await signIn("alice", "secret", "203.0.113.2", { origin: "https://evil.example" })).status, 403, "nor sign her in from a form of its own");
+    const page = await fetch(`${server.url}/gateway/login`);
+    assert.match(page.headers.get("content-security-policy") ?? "", /form-action 'self'/);
+    assert.equal(page.headers.get("x-content-type-options"), "nosniff");
+  } finally {
+    server.close();
+    box.close();
+    cleanup();
+  }
+});

@@ -165,8 +165,48 @@ kubectl -n agentbox exec deploy/agentbox-organisation -- sh -c \
      -d "{\"role\":\"admin\"}" http://127.0.0.1:7777/api/channels/invite'
 ```
 
-The Ingress controller must set `X-Forwarded-For` (ingress-nginx and Traefik do): it is how the
-server tells a member's request from the CLI's.
+The Ingress controller must set `X-Forwarded-For` with the client's address as its last entry
+(ingress-nginx and Traefik do): it is how the server tells a member's request from the CLI's, and
+the address its sign-in limiter counts. Behind a second proxy (a cloud load balancer, a CDN), let
+the controller pass the real client address through (`use-forwarded-headers` and
+`proxy-real-ip-cidr` on ingress-nginx), or everyone shares one address and one person's wrong
+tries make everyone wait. Members must open the host in `AGENTBOX_PUBLIC_URL`: reached by another
+name, the page loads and its changes are refused as cross-origin (docs/06, "Sign-in limits and
+what a browser is held to").
+
+Tell the server who its proxy is, and admit only that. Set `AGENTBOX_TRUSTED_PROXIES` in
+`agentbox-organisation-env` to the range the Ingress controller's pods get their addresses from
+(or the controller's own addresses): the forwarded address is then believed only from there, and
+a pod that reaches port 7777 directly is counted as itself. And keep it from reaching the port at
+all: The selectors
+below are ingress-nginx's defaults; use your controller's namespace and labels:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentbox-organisation-ingress
+  namespace: agentbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agentbox-organisation
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - port: web
+```
+
+Personal boxes reach the server too (their agents' MCP face and model relay): if the policy above
+cuts them off, add a second `from` selecting the box pods. It needs a CNI that enforces
+NetworkPolicy.
 
 If you inspect the deployment from a Mac running the LumenBox desktop app, local port `7777` is
 already bound by your personal desktop installation (`127.0.0.1:7777`). Forward a distinct local

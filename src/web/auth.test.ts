@@ -85,6 +85,9 @@ test("cookies are parsed the way a browser sends them", () => {
   assert.equal(cookies.get("other"), "1");
   assert.equal(parseCookies(undefined).size, 0);
   assert.equal(parseCookies("malformed").size, 0);
+  // Another application's cookie on the same host that does not decode is kept as sent, not thrown on.
+  assert.equal(parseCookies(`pref=100%; ${COOKIE_NAME}=abc`).get(COOKIE_NAME), "abc");
+  assert.equal(parseCookies("pref=100%").get("pref"), "100%");
 });
 
 // ── who is asking, and what they may do ────────────────────────────────────────────────

@@ -49,23 +49,26 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     const expired = await fetch(base + "/auth/fixture/callback?state=lost&code=unused&lang=en", { headers: { accept: "text/html" } });
     assert.equal(expired.status, 400);
     assert.match(await expired.text(), /Your sign-in QR code expired[\s\S]+href="\/bootstrap"/);
-    const begin = async (bootstrapCode: string) => fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bootstrapCode, identity: "attacker:chosen", role: "admin" }), redirect: "manual" });
+    const begin = async (bootstrapCode: string, headers: Record<string, string> = {}) => fetch(base + "/auth/fixture", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ bootstrapCode, identity: "attacker:chosen", role: "admin" }), redirect: "manual" });
     assert.equal((await begin("wrong")).status, 400);
     const refusedStart = await begin(code);
+    // The first Admin's page asks by fetch, then navigates: the reply's cookie is what the callback must present (INV-2204).
+    const browser = { cookie: refusedStart.headers.getSetCookie()[0]!.split(";")[0]! };
+    assert.match(browser.cookie, /^agentbox_signin=[0-9a-f]{32}$/);
     const refusedData = await refusedStart.json() as { url: string };
     const refusedState = new URL(refusedData.url).searchParams.get("state")!;
     vendorCode = 999;
-    assert.equal((await fetch(base + `/auth/fixture/callback?state=${refusedState}&code=not-authenticated`, { redirect: "manual" })).status, 502);
+    assert.equal((await fetch(base + `/auth/fixture/callback?state=${refusedState}&code=not-authenticated`, { redirect: "manual", headers: browser })).status, 502);
     assert.equal(new Principals().list().length, 0, "vendor error cannot create an admin or consume the bootstrap");
     vendorCode = 0;
     const states: string[] = [];
     for (let i = 0; i < 2; i++) {
-      const response = await begin(code); assert.equal(response.status, 200);
+      const response = await begin(code, browser); assert.equal(response.status, 200);
       const data = await response.json() as { url: string };
       assert.equal(data.url.includes(code), false);
       states.push(new URL(data.url).searchParams.get("state")!);
     }
-    const results = await Promise.all(states.map((state, i) => fetch(base + `/auth/fixture/callback?state=${state}&code=person${i}`, { redirect: "manual" })));
+    const results = await Promise.all(states.map((state, i) => fetch(base + `/auth/fixture/callback?state=${state}&code=person${i}`, { redirect: "manual", headers: browser })));
     assert.deepEqual(results.map(response => response.status).sort(), [302, 409]);
     const winner = results.find(response => response.status === 302)!;
     const cookie = winner.headers.getSetCookie().map(value => value.split(";")[0]).join("; ");

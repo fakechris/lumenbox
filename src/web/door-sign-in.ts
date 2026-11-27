@@ -7,7 +7,8 @@
  * have asked to join, and wait.
  *
  * One dispatcher, one sign-in per door type. What every type shares lives here once: the state
- * (one use, ten minutes, bound to the door's app and incarnation), the safe return address, the
+ * (one use, ten minutes, bound to the door's app and incarnation, and to the browser that started —
+ * `BINDING_COOKIE`), the safe return address, the
  * first-Admin code, and the rule that only a linked identity gets a session. What differs is a
  * `DoorSignIn`: where the vendor's authorize page is, and how a code becomes the subject the chat
  * side uses.
@@ -29,6 +30,30 @@ import { askedToJoinPage, notLinkedPage, notMemberPage, signInRecoveryPage } fro
 import { signInCallbackUrl, signsInOnWeb, wantsHtml, type WebSignInType } from "./sign-in.ts";
 
 const STATE_TTL_MS = 10 * 60_000;
+
+/**
+ * What ties a sign-in to the browser that started it (docs/106 §5 R5, INV-2204).
+ *
+ * The state alone lived on the server, so a callback address was good in anybody's browser:
+ * somebody could start a sign-in, authorize as themselves at the vendor, and hand the finished
+ * callback link to another person, whose browser would then be signed in as the sender. The entry
+ * now gives the browser a random value in a cookie, the state remembers it, and the callback is
+ * honoured only from a browser that presents the same one. HttpOnly, SameSite=Lax (the vendor's
+ * redirect back is a top-level navigation, which Lax carries), ten minutes like the state, and
+ * only under `/auth`. A browser that already holds one keeps it, so two sign-in tabs do not
+ * invalidate each other.
+ */
+export const BINDING_COOKIE = "agentbox_signin";
+// Read on its own, undecoded: the value is hex, and decoding every cookie in the header would let
+// one malformed cookie of somebody else's (`pref=100%`) fail the sign-in. The last one wins, as in parseCookies.
+const bindingOf = (cookieHeader: string | undefined): string | undefined => {
+  let value: string | undefined;
+  for (const part of (cookieHeader ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === BINDING_COOKIE) value = part.slice(at + 1).trim();
+  }
+  return value !== undefined && /^[0-9a-f]{32}$/.test(value) ? value : undefined;
+};
 
 /** Who the vendor vouches for, in the door's own subject — or that they are outside its organisation. */
 export type Vouched = { subject: string; name?: string } | { notMember: true };
@@ -139,9 +164,17 @@ export interface DoorSignInDeps {
   sessionCookie(identity: string, principalId: string): string;
   send(res: ServerResponse, status: number, body: unknown, type?: string): void;
   log(line: string): void;
+  /** Whether cookies say `Secure` (the installation is reached over https). */
+  secureCookies?(): boolean;
+  /**
+   * The sign-in limiter and record, for the callback (sign-in-limits.ts). `blocked` is the seconds
+   * this request's address must wait, asked before anything is exchanged; `failed` records a
+   * callback that did not sign anyone in, and counts it unless `counts` is false.
+   */
+  attempts?: { blocked(res: ServerResponse): number | undefined; failed(res: ServerResponse, reason: string, account?: string, counts?: boolean): void };
 }
 
-interface PendingSignIn { channelId: string; next: string; at: number; appId: string; incarnation: number; bootstrapCode?: string }
+interface PendingSignIn { channelId: string; next: string; at: number; appId: string; incarnation: number; binding: string; bootstrapCode?: string }
 
 /** The handler for `/auth/<door>` and `/auth/<door>/callback`; `bootstrapCode` is the first Admin's (POST). */
 export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerResponse, bootstrapCode?: string) => Promise<void> {
@@ -182,10 +215,13 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
       // A path on this origin only: anything else would make this an open redirect (INV-724).
       const next = safeNext(url.searchParams.get("next")) ?? "/";
       const state = randomBytes(16).toString("hex");
-      states.set(state, { channelId, next, at: Date.now(), appId, incarnation: record.incarnation, ...(bootstrapCode !== undefined ? { bootstrapCode } : {}) });
+      const binding = bindingOf(res.req.headers.cookie) ?? randomBytes(16).toString("hex");
+      states.set(state, { channelId, next, at: Date.now(), appId, incarnation: record.incarnation, binding, ...(bootstrapCode !== undefined ? { bootstrapCode } : {}) });
       const target = door.authorizeUrl({ appId, redirectUri }, state);
-      if (bootstrapCode !== undefined) { send(res, 200, { url: target }); return; }
-      res.writeHead(302, { location: target });
+      const bound = `${BINDING_COOKIE}=${binding}; Path=/auth; ${deps.secureCookies?.() === true ? "Secure; " : ""}Max-Age=${STATE_TTL_MS / 1000}; HttpOnly; SameSite=Lax`;
+      // The first Admin's page asks by fetch and then navigates: the cookie rides the fetch's reply.
+      if (bootstrapCode !== undefined) { res.setHeader("set-cookie", bound); send(res, 200, { url: target }); return; }
+      res.writeHead(302, { location: target, "set-cookie": bound });
       res.end();
       return;
     }
@@ -196,9 +232,17 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
     // DingTalk sends the code as both `code` and `authCode`; Feishu as `code`.
     const code = url.searchParams.get("code") ?? url.searchParams.get("authCode");
     const state = url.searchParams.get("state") ?? "";
+    const wait = deps.attempts?.blocked(res);
+    if (wait !== undefined) {
+      res.setHeader("retry-after", String(wait));
+      send(res, 429, apiError("sign-in-limited", { seconds: wait }));
+      return;
+    }
     const pending = states.get(state);
     states.delete(state);
-    if (code === null || pending === undefined || pending.channelId !== channelId || pending.appId !== appId || pending.incarnation !== record.incarnation || expired(pending)) {
+    const sameBrowser = pending !== undefined && bindingOf(res.req.headers.cookie) === pending.binding;
+    if (code === null || pending === undefined || !sameBrowser || pending.channelId !== channelId || pending.appId !== appId || pending.incarnation !== record.incarnation || expired(pending)) {
+      deps.attempts?.failed(res, pending !== undefined && !sameBrowser ? "another-browser" : "state-unknown");
       if (wantsHtml(res.req.headers.accept)) send(res, 400, signInRecoveryPage("sign-in-expired", localeOf(res.req, url), { setup: deps.setupPending() }), "text/html");
       else send(res, 400, apiError("sign-in-expired"));
       return;
@@ -210,6 +254,7 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
         res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
         res.end(notMemberPage(channelName, requestLocaleOf(res.req)));
         deps.log(`web login refused: signed in via ${channelId} as somebody outside the door's organisation`);
+        deps.attempts?.failed(res, "not-a-member", undefined, false);
         return;
       }
       const identity = `${channelId}:${vouched.subject}`;
@@ -236,6 +281,7 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
         res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
         res.end(admitted === "asked" ? askedToJoinPage(vouched.name ?? vouched.subject, channelName, locale) : notLinkedPage(identity, channelName, locale));
         deps.log(`web login refused: ${identity} signed in via ${channelId} but is not ${admitted === "asked" ? "activated" : "linked"}`);
+        deps.attempts?.failed(res, admitted === "asked" ? "not-activated" : "not-linked", identity, false);
         return;
       }
       // The session, and only the session: a credential issued to *this person*, not the
@@ -247,6 +293,7 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       deps.log(`${record.type} sign-in via ${channelId} failed: ${detail}`);
+      deps.attempts?.failed(res, "vendor-refused");
       send(res, 502, apiError("sign-in-failed", { detail }));
     }
   };

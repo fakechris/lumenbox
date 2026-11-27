@@ -210,7 +210,12 @@ export function parseCookies(header: string | undefined): Map<string, string> {
   for (const part of (header ?? "").split(";")) {
     const at = part.indexOf("=");
     if (at <= 0) continue;
-    cookies.set(part.slice(0, at).trim(), decodeURIComponent(part.slice(at + 1).trim()));
+    const raw = part.slice(at + 1).trim();
+    // A value that does not decode is kept as it was sent: one stray cookie of another application's
+    // on the same host (`pref=100%`) must not make every request to this one throw.
+    let value = raw;
+    try { value = decodeURIComponent(raw); } catch { /* not percent-encoded; raw is the value */ }
+    cookies.set(part.slice(0, at).trim(), value);
   }
   return cookies;
 }

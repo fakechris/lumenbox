@@ -33,6 +33,7 @@ import { HealthNotifier, webhookDelivery } from "./notify.ts";
 import { staticPolicy } from "./policy.ts";
 import { type ControlStore, SqliteControlStore, keyWarning } from "./store.ts";
 import { resolveExposure } from "../web/exposure.ts";
+import { signInGuard, trustedProxies } from "../web/sign-in-limits.ts";
 
 export interface ControlPlaneOptions {
   /** Where the gateway listens. */
@@ -112,6 +113,7 @@ export async function startControlPlane(
     host: options.host, port: options.port, declared: options.exposure ?? process.env.AGENTBOX_EXPOSURE,
     publicUrl: options.publicUrl, tlsInFront: options.secureCookies === true,
   });
+  const proxies = trustedProxies(process.env.AGENTBOX_TRUSTED_PROXIES);
   const home = options.statePath ?? join(agentboxHome(), "control");
   mkdirSync(home, { recursive: true });
 
@@ -291,6 +293,15 @@ export async function startControlPlane(
       : {}),
     secureCookies: exposure.secureCookies,
     hsts: exposure.hsts,
+    ...(exposure.publicOrigin !== undefined ? { publicOrigin: exposure.publicOrigin } : {}),
+    behindProxy: exposure.level !== "local",
+    ...(proxies !== undefined ? { trustedProxies: proxies } : {}),
+    // Tries at the password form that did not get in go where sign-ins already go: the store's audit.
+    signIns: signInGuard({
+      enabled: exposure.level !== "local",
+      record: entry => store.audit({ tenantId: undefined, actor: entry.account ?? "", action: `signin.${entry.outcome}`, target: "gateway", detail: { address: entry.address, reason: entry.reason, seconds: entry.seconds } }),
+      log: line => out(`  ${line}`),
+    }),
     publicUrl: options.publicUrl ?? `http://${options.host}:${options.port}`,
     log: line => out(`  ${line}`),
   });

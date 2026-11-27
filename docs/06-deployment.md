@@ -451,6 +451,82 @@ weaker than the level requires, naming what is missing.
   one place it remains is the control plane's own tenant pods, where the hop from the gateway is
   plain HTTP inside the cluster and `AGENTBOX_TRUST_GATEWAY_IDENTITY=1` is what admits it.
 
+### Sign-in limits and what a browser is held to (INV-2204 part 2, 2026-11-27)
+
+**Sign-in limits (private and public; local has none).** Every way a credential is tried asks
+one limiter (`src/web/sign-in-limits.ts`): an invite code (`POST /api/login`), the first Admin's
+code (`POST /auth/<door>`), a door's sign-in callback, a side-door token (`/mcp`), the
+installation token, and the control plane's password form (`/gateway/login`). A try is counted
+against the address it came from and, where the credential names one, the account it was for (the
+user name on the password form; the first Admin's code is one account). Five wrong tries from an
+address cost nothing (ten against an account); after that each doubles the wait — 2 s, 4 s, 8 s …
+up to 15 minutes — and an hour without a wrong try forgets the count. While waiting, the answer
+is `429` with `Retry-After` and the code `sign-in-limited`, given before the credential is looked
+at. Signing in clears the account's count, not the address's. The counts are in memory: a
+restart clears them, as it clears nothing that was durable before. Invite codes keep their own
+installation-wide cap as well (`CodeAttempts`, INV-2078).
+
+Tries that did not get in are recorded in `<home>/sign-ins.jsonl` — when, which way in, the
+address, the account if any, why, and one line when a wait begins; never the code, password or
+token tried — and `audit export` includes the file. On the control plane they are `signin.failed`
+and `signin.limited` rows in its audit, beside `signin`.
+
+**What the terminator in front must set.** `X-Forwarded-For`, with the client's address
+**appended as the last entry** — what ingress-nginx, Caddy, Traefik and the tunnels do by
+default. The server reads the last entry and never the first, which the client can write. It is
+how a person's request is told from the CLI's on the server (which carries no proxy header), and
+it is the address the limiter counts. If a second proxy stands in front of the adjacent one (a
+CDN, a cloud load balancer), configure the adjacent one to pass the real client address through
+(ingress-nginx: `use-forwarded-headers` with `proxy-real-ip-cidr`; nginx: `real_ip`), or every
+person arrives as that proxy's one address and one person's wrong tries make everyone wait.
+**Say which proxies are in front: `AGENTBOX_TRUSTED_PROXIES`.** Addresses and CIDR ranges,
+comma-separated (`10.42.0.0/16, 192.0.2.10`): the Ingress controller's pod range, the load
+balancer's address. With it set, `X-Forwarded-For` is believed only from one of them or from the
+server's own machine; any other machine that reaches the port is counted, and recorded, as the
+peer it is, whatever it wrote. A list that cannot be read refuses the start.
+
+**Unset, the server's port must be reachable only through the terminator.** Then the server
+cannot tell its proxy from another machine, so a client that
+reaches the port directly (another pod in the cluster, a host on the same network) writes its own
+`X-Forwarded-For` and is counted, and recorded, under any address it likes. What still holds
+against it: the per-account counts and the invite-code cap do not depend on the address, the
+tokens it could try are not guessable, and each line of `sign-ins.jsonl` keeps the connection's
+real other end as `peer` when it differs from `address` — on a correct deployment `peer` is always
+the proxy. Close the path: a NetworkPolicy admitting only the Ingress controller (the example is
+in `deploy/kubernetes/README.md`), a firewall rule, or a loopback bind with the proxy on the same
+machine.
+
+`X-Forwarded-Proto` is not read. A connector's OAuth callback address is built from
+`AGENTBOX_PUBLIC_URL` off local, not from the request's headers.
+
+**What a browser is held to (every level).** A request that changes something — anything but
+`GET`, `HEAD`, `OPTIONS` — and every socket upgrade must come from the installation's own page:
+its `Origin` (or, without one, its `Referer`) is the declared public address off local, or, where
+none is declared, the address the request was sent to (`http://127.0.0.1:<port>` for the app,
+the same or `localhost` in a browser). Otherwise the answer is `403`, code `cross-origin`. Not
+asked: a request with an `Authorization` header (a program's credential), a request with neither
+`Origin` nor `Referer` (not a browser), and `/hooks/<id>` (a webhook carries its own secret).
+Nothing answers with `Access-Control-Allow-Origin`. So off local **people must open the address
+in `AGENTBOX_PUBLIC_URL`**: the same server reached by another name or a port-forward shows the
+page and refuses its changes.
+
+Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and a
+content security policy (`src/web/browser-guard.ts`) that forbids framing by another site,
+plugins, a foreign `<base>`, posting a form elsewhere, and loading or connecting anywhere but the
+installation itself (images may also come from `https:`). `script-src` and `style-src` still
+allow `'unsafe-inline'`, because the page is written with inline scripts, handlers and styles: the
+policy does not yet stop an injected script.
+
+The two pages here that are somebody else's — noVNC's desktop page, served by the box, and a
+card drawn by the A2UI bundle — are checked against these rules in a real browser by
+`npm run check:desktop-page`: a disposable box and a temporary home, headless Chrome, the desktop
+as a page, in a viewer's session and embedded, and one card. It needs Docker and `npm run build:vendor`, so
+it is run by hand after a change to the policy, the box image's noVNC or the bundle, not in CI.
+
+A door's sign-in is tied to the browser that started it: `/auth/<door>` sets a ten-minute
+`agentbox_signin` cookie and the callback is honoured only with it, so a finished callback link
+signs in nobody else's browser.
+
 ## The token key belongs outside the directory it protects (INV-579, 2026-09-16)
 
 Box tokens are stored encrypted. Unset, the key is minted `0600` beside `control.db` — encryption

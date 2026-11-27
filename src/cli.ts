@@ -1454,6 +1454,9 @@ Environment:
                             any other. Private and public refuse to start without
                             HTTPS in front (AGENTBOX_PUBLIC_URL=https://…) and do
                             not take the installation token from a browser
+  AGENTBOX_TRUSTED_PROXIES  Addresses and ranges (10.42.0.0/16, 192.0.2.10) of the
+                            proxies in front. Set: X-Forwarded-For is believed only
+                            from them or from this machine. Unset: from any peer
   AGENTBOX_K8S_NAMESPACE    Namespace for kubernetes allocator boxes (default agentbox)
   AGENTBOX_K8S_STORAGE_CLASS  StorageClass for box PVCs (cluster default when unset)
   AGENTBOX_K8S_MEMORY/_STORAGE  Per-box memory and per-PVC size (default 4Gi / 10Gi)

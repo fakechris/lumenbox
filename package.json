@@ -23,6 +23,7 @@
     "scenario": "node --experimental-transform-types scripts/scenario-live.mjs",
     "agentbox": "node --experimental-transform-types src/cli.ts",
     "smoke": "node --experimental-transform-types scripts/smoke.mjs",
+    "check:desktop-page": "node --experimental-transform-types scripts/desktop-page-check.mjs",
     "lint": "biome lint src/ scripts/",
     "lint:fix": "biome lint --write src/ scripts/",
     "test:cua": "node --experimental-transform-types scripts/cua-contract-smoke.mjs",

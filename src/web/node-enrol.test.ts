@@ -71,7 +71,7 @@ test("an Admin's sign-in on the node enrols it; a member's cannot; its Docker bo
   const signIn = async (openId: string): Promise<string> => {
     const begin = await fetch(`${base}/auth/fixture`, { redirect: "manual" });
     const state = new URL(begin.headers.get("location")!).searchParams.get("state")!;
-    const back = await fetch(`${base}/auth/fixture/callback?state=${state}&code=${openId}`, { redirect: "manual" });
+    const back = await fetch(`${base}/auth/fixture/callback?state=${state}&code=${openId}`, { redirect: "manual", headers: { cookie: begin.headers.getSetCookie()[0]!.split(";")[0]! } }); // one window, one cookie jar
     const cookies = back.headers.getSetCookie().map(line => { const [pair] = line.split(";"); const at = pair!.indexOf("="); return { name: pair!.slice(0, at), value: pair!.slice(at + 1) }; });
     return orgs.sessionTokenIn(cookies)!;
   };

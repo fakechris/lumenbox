@@ -91,6 +91,8 @@ import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, parsePublicUrlInput, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
+import { originRefusal, securityHeaders } from "./browser-guard.ts";
+import { clientAddress, signInGuard, signInLedger, trustedProxies, SIGN_INS_LEDGER, type SignInDoor, type SignInGuard } from "./sign-in-limits.ts";
 import {
   authorize,
   callerOf,
@@ -2960,6 +2962,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }
 
   function oauthCallbackUrl(req: IncomingMessage): string {
+    // Off local the address is the declared one, not what the request's headers claim (INV-2204).
+    if (exposure?.publicOrigin !== undefined) return `${exposure.publicOrigin}/oauth/callback`;
     const proto = String(req.headers["x-forwarded-proto"] ?? "").split(",")[0]?.trim() || "http";
     return `${proto}://${req.headers.host ?? "localhost"}/oauth/callback`;
   }
@@ -2982,6 +2986,21 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let secureCookies = false;
   /** Where this installation is reachable and what that requires (exposure.ts); set before the server listens. */
   let exposure: Exposure | undefined;
+  /** Sign-in limits and their record (sign-in-limits.ts, R4): nothing at local; set with the level, before the server listens. */
+  let signIns: SignInGuard = signInGuard({ enabled: false, record: () => {}, log });
+  /** The proxies whose forwarded address is believed (AGENTBOX_TRUSTED_PROXIES); unset, any peer's is. Read at start, where a bad list refuses. */
+  let proxies: ReturnType<typeof trustedProxies>;
+  /** One try at one way in, from wherever this request came: the proxy's word off local, the peer otherwise. */
+  const attemptFrom = (req: IncomingMessage, door: SignInDoor, account?: string) =>
+    ({ door, address: clientAddress(req, exposure !== undefined && exposure.level !== "local" && !exposure.behindGateway, proxies), peer: clientAddress(req, false), ...(account !== undefined ? { account } : {}) });
+  /** Answers 429 with Retry-After when this try has to wait; true when it answered. */
+  const mustWait = (req: IncomingMessage, res: ServerResponse, door: SignInDoor, account?: string): boolean => {
+    const seconds = signIns.blocked(attemptFrom(req, door, account));
+    if (seconds === undefined) return false;
+    res.setHeader("retry-after", String(seconds));
+    send(res, 429, apiError("sign-in-limited", { seconds }));
+    return true;
+  };
   // Which generation of each person's sign-ins is still good (INV-537).
   const epochs = new SessionEpochs(undefined, () => openDesktops.recheck());
 
@@ -3036,6 +3055,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     publicUrl: configuredPublicUrl, feishuDomain: () => process.env.FEISHU_DOMAIN ?? "feishu", fetch: options.loginFetch ?? fetch,
     bootstrap, setupPending: bootstrapPending, principals, send, log, admit: (...who) => orgAdmission.admit(...who),
     sessionCookie: (identity, principalId) => sessionCookie(identity, sessionSecret, epochs.of(principalId), secureCookies),
+    secureCookies: () => secureCookies,
+    attempts: { blocked: res => signIns.blocked(attemptFrom(res.req, "door")), failed: (res, reason, account, counts) => signIns.failed(attemptFrom(res.req, "door", account), reason, counts) },
   });
 
   const server = createServer((req, res) => {
@@ -3044,6 +3065,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const route = `${req.method} ${url.pathname}`;
       if (process.env.AGENTBOX_LOG_HTTP === "1") log(`web: ${route} from ${req.socket.remoteAddress}`);
       if (exposure?.hsts === true) res.setHeader("strict-transport-security", HSTS);
+      for (const [name, value] of Object.entries(securityHeaders(req, exposure?.publicOrigin))) res.setHeader(name, value);
+      // A request that changes something comes from this installation's own page, or is refused (browser-guard.ts, R5).
+      if (originRefusal(req, exposure?.publicOrigin, false, exposure?.hsts === true) !== undefined) { send(res, 403, apiError("cross-origin")); return; }
       const boxSide = boxSideRefusal(req.headers.host, url.pathname); if (boxSide !== undefined) { send(res, 403, { error: boxSide }); return; } // INV-1543
 
       const poppyAnswer = await poppyRoute(route, url, orchestrator.poppy?.poppyManager); if (poppyAnswer !== undefined) { send(res, poppyAnswer.status, poppyAnswer.body, poppyAnswer.type); return; } // docs/poppy.md
@@ -3088,7 +3112,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         } catch { send(res, 400, apiError("body-invalid")); return; }
         const code = typeof body.bootstrapCode === "string" ? body.bootstrapCode.trim() : "";
         if (code.length > 128) { send(res, 400, apiError("bootstrap-code-malformed")); return; }
-        try { await handleDoorAuth(url, res, code); }
+        // The first Admin's code is one secret for the whole installation: tries are counted by address and against the code itself.
+        if (code !== "" && mustWait(req, res, "bootstrap", "bootstrap")) return;
+        try {
+          if (code !== "" && !bootstrap.accepts(code)) signIns.failed(attemptFrom(req, "bootstrap", "bootstrap"), "wrong-code");
+          await handleDoorAuth(url, res, code);
+        }
         catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }
@@ -3108,10 +3137,15 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       // The side door, before the UI's gate and deliberately so: it carries its own
       // credential, issued to a person, and the UI token is not it.
+      if (url.pathname === "/mcp" && req.method === "POST" && mustWait(req, res, "side-door")) return;
       if (
         await handleMcpRequest(req, res, {
           tools: sideDoorTools(),
-          principalFor: presented => mcpTokens.personFor(presented, principals),
+          principalFor: presented => {
+            const person = mcpTokens.personFor(presented, principals);
+            if (person === undefined && presented !== undefined) signIns.failed(attemptFrom(req, "side-door"), "unknown-token");
+            return person;
+          },
           log: line => log(line),
           idempotency: sideDoorIdempotency,
         })
@@ -3183,6 +3217,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return;
       }
       if (!decision.allow && route !== "POST /api/login") {
+        // A token that was offered and refused is a try at one: counted by address and made to wait, whatever kind of answer follows.
+        const offered = decision.reason === "wrong" && req.headers.authorization !== undefined ? "wrong-token" : decision.reason === "token-in-address" || decision.reason === "token-not-here" ? decision.reason : undefined;
+        if (offered !== undefined && signIns.enabled) {
+          if (mustWait(req, res, "installation-token")) return;
+          signIns.failed(attemptFrom(req, "installation-token"), offered);
+        }
         if (req.method === "GET" && !/^\/api(?:\/|$)/.test(url.pathname) && wantsHtml(req.headers.accept)) {
           const reason = decision.reason === "access-removed" || decision.reason === "session-expired" ? decision.reason : "sign-in-required";
           const orgView = /\bLumenBoxOrgView\/1\b/.test(req.headers["user-agent"] ?? "");
@@ -3785,14 +3825,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // because one code for two surfaces is the whole point — a person the owner
         // invited can arrive either way and be the same principal either way.
         if (route === "POST /api/login") {
-          const source = `web:${req.socket.remoteAddress ?? "unknown"}`, wait = codeAttempts.waitFor(source);
-          if (wait !== undefined) { send(res, 429, apiError("code-attempts", { seconds: wait })); return; }
+          const from = attemptFrom(req, "invite-code"), source = `web:${from.address}`, wait = codeAttempts.waitFor(source);
+          if (mustWait(req, res, "invite-code")) return;
+          if (wait !== undefined) { if (signIns.enabled) res.setHeader("retry-after", String(wait)); send(res, 429, apiError("code-attempts", { seconds: wait })); return; }
           const body = await readJson(req);
           const code = String(body.code ?? "").trim().toUpperCase();
           const invite = invites.get(code);
           if (invite === undefined || invite.expiresAt < Date.now()) {
             invites.delete(code);
             if (codeAttempts.failed(source)) log(`web login: too many wrong codes from ${source}; refusing codes for a while`); // never the code
+            signIns.failed(from, "wrong-code");
             send(res, 400, {
               ...apiError("code-not-live"),
             });
@@ -6613,6 +6655,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    */
   server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
     const [pathname, query] = (req.url ?? "").split("?");
+    // A socket a page on another site opened would carry this browser's cookie: only our own page may (browser-guard.ts, R5).
+    if (originRefusal(req, exposure?.publicOrigin, true, exposure?.hsts === true) !== undefined) { clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
     // The RFB socket carries the screen, so it needs the same check. A browser sends the
     // cookie on an upgrade but cannot set a header, which is why the cookie exists. Asked again
     // whenever who may do what changes, because the socket outlives the moment it was let in (INV-2071).
@@ -6746,6 +6790,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   sessionSecret = sessionKey(token);
   // Under TLS the cookie says so, and a browser stops sending it over plain HTTP.
   secureCookies = exposure.secureCookies;
+  proxies = trustedProxies(process.env.AGENTBOX_TRUSTED_PROXIES);
+  signIns = signInGuard({ enabled: exposure.level !== "local", record: signInLedger(join(agentboxHome(), SIGN_INS_LEDGER), log), log });
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
   // Where a job in the box reaches this server (docs/33 §1), and the lease renewal that ends a
   // route when its job is gone.

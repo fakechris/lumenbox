@@ -10,24 +10,25 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const KEYS = ["AGENTBOX_HOME", "AGENTBOX_UI_TOKEN", "AGENTBOX_NO_TOKEN", "AGENTBOX_PUBLIC_URL", "AGENTBOX_INSECURE", "AGENTBOX_EXPOSURE", "AGENTBOX_TRUST_GATEWAY_IDENTITY"] as const;
+const KEYS = ["AGENTBOX_HOME", "AGENTBOX_TRUSTED_PROXIES", "AGENTBOX_UI_TOKEN", "AGENTBOX_NO_TOKEN", "AGENTBOX_PUBLIC_URL", "AGENTBOX_INSECURE", "AGENTBOX_EXPOSURE", "AGENTBOX_TRUST_GATEWAY_IDENTITY"] as const;
 type Env = Partial<Record<(typeof KEYS)[number], string>>;
 const ORIGINAL = Object.fromEntries(KEYS.map(key => [key, process.env[key]]));
 const restore = () => { for (const key of KEYS) { if (ORIGINAL[key] === undefined) delete process.env[key]; else process.env[key] = ORIGINAL[key]; } };
 
 /** A real server on a temporary home with exactly `env` of the settings a level is read from; an organisation's roster, so people can be invited. */
-async function serve(t: TestContext, options: { host?: string; token?: string }, env: Env = {}) {
+async function serve(t: TestContext, options: { host?: string; token?: string; prepare?: (home: string) => void; loginFetch?: typeof fetch }, env: Env = {}) {
   const { startWebServer } = await import("./server.ts");
   const home = mkdtempSync(join(tmpdir(), "agentbox-exposure-"));
   for (const key of KEYS) delete process.env[key];
   Object.assign(process.env, env, { AGENTBOX_HOME: home });
   writeFileSync(join(home, "principals.json"), JSON.stringify({ principals: [], installation: { mode: "organisation" } }));
+  options.prepare?.(home);
   const logs: string[] = [];
   let base = "";
   let stop: (() => void) | undefined;
   // The settings stay for the test: the server reads some of them on each request.
   t.after(() => { stop?.(); restore(); rmSync(home, { recursive: true, force: true }); });
-  stop = await startWebServer({ port: 0, host: options.host ?? "127.0.0.1", ...(options.token !== undefined ? { token: options.token } : {}), useBox: false, onLog: line => logs.push(line), onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); } });
+  stop = await startWebServer({ port: 0, host: options.host ?? "127.0.0.1", ...(options.token !== undefined ? { token: options.token } : {}), useBox: false, ...(options.loginFetch !== undefined ? { loginFetch: options.loginFetch } : {}), onLog: line => logs.push(line), onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); } });
   const get = (path: string, headers: Record<string, string> = {}) => fetch(base + path, { headers, redirect: "manual" });
   /** A person invited by the operator's machine credential and signed in with the code: their Set-Cookie line. */
   const signIn = async (name: string, role: string, operator: Record<string, string>) => {
@@ -68,6 +69,14 @@ test("local is what it was: no token on loopback, ?token= to a cookie, the beare
   const me = await get("/api/me", { cookie: session.split(";")[0]! });
   assert.equal(me.status, 200);
   assert.equal((await me.json() as { role: string }).role, "driver");
+
+  // No sign-in limiter on the token at local (INV-2204 part 2 pins this before adding one elsewhere): a wrong token is a 401 however often.
+  for (let n = 0; n < 12; n += 1) assert.equal((await get("/api/me", { authorization: "Bearer wrong" })).status, 401);
+  assert.equal((await get("/api/me", { authorization: `Bearer ${TOKEN}` })).status, 200, "and the right one still opens");
+  // The page's own requests carry the address it was loaded from; so do the app's, which loads http://127.0.0.1:<port>/.
+  const own = new URL((await get("/login")).url).origin;
+  const fromPage = await fetch(`${own}/api/channels/invite`, { method: "POST", headers: { cookie: `agentbox_ui=${TOKEN}`, origin: own, "content-type": "application/json" }, body: JSON.stringify({ role: "viewer" }) });
+  assert.equal(fromPage.status, 200);
 });
 
 test("the level is the bind address unless the operator says otherwise, and a weak one names what is missing", async () => {
@@ -211,4 +220,105 @@ test("the organisation manifest starts with the settings it ships, and the contr
     /Refusing to serve 0\.0\.0\.0:0 without TLS/,
     "the gateway on every interface with no HTTPS in front does not start"
   );
+});
+
+/** The first line of the answer to a socket upgrade, or "closed" when the server just hung up. */
+async function upgrade(base: string, path: string, headers: Record<string, string>): Promise<string> {
+  const { connect } = await import("node:net");
+  const { port, hostname } = new URL(base);
+  return new Promise(resolve => {
+    const socket = connect(Number(port), hostname, () => {
+      const lines = Object.entries({ host: `${hostname}:${port}`, connection: "Upgrade", upgrade: "websocket", "sec-websocket-version": "13", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", ...headers });
+      socket.write(`GET ${path} HTTP/1.1\r\n${lines.map(([name, value]) => `${name}: ${value}`).join("\r\n")}\r\n\r\n`);
+    });
+    let answer = "";
+    socket.on("data", chunk => { answer += String(chunk); socket.destroy(); });
+    socket.on("close", () => resolve(answer === "" ? "closed" : answer.split("\r\n")[0]!));
+    socket.on("error", () => resolve("closed"));
+  });
+}
+
+test("private: every way in waits after a few wrong tries and records them without the credential; a browser's change comes from the installation's own page", async t => {
+  const { readFileSync } = await import("node:fs");
+  const TOKEN = "0rganisation-t0ken", OURS = "https://box.example.test";
+  const { base, home, get, signIn } = await serve(t, {
+    host: "0.0.0.0", token: TOKEN,
+    // A Feishu door, so the first Admin's code and the sign-in callback have somewhere to be tried.
+    prepare: dir => {
+      writeFileSync(join(dir, "channels.json"), JSON.stringify({ channels: [{ id: "fixture", name: "Fixture", type: "feishu", incarnation: 1, boxId: "default", createdAt: new Date().toISOString() }] }));
+      writeFileSync(join(dir, "config.json"), JSON.stringify({ env: { FIXTURE_APP_ID: "app", FIXTURE_APP_SECRET: "secret" } }));
+    },
+  }, { AGENTBOX_PUBLIC_URL: OURS });
+  // As the TLS terminator hands a request over: whatever the client claimed, then the address the proxy saw.
+  const via = (address: string) => ({ "x-forwarded-for": `198.51.100.250, ${address}`, "x-forwarded-proto": "https" });
+  const post = (path: string, body: unknown, headers: Record<string, string>) => fetch(base + path, { method: "POST", redirect: "manual", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  /** Tries until it is told to wait: the statuses of the tries that were looked at, then the refusal. */
+  const until429 = async (attempt: () => Promise<Response>) => {
+    const looked: number[] = [];
+    for (let n = 0; n < 20; n += 1) {
+      const response = await attempt();
+      if (response.status === 429) return { looked, retryAfter: response.headers.get("retry-after"), code: (await response.json() as { code?: string }).code };
+      looked.push(response.status);
+    }
+    throw new Error(`never limited: ${looked.join(",")}`);
+  };
+  const limited = (statuses: number[], status: number) => ({ looked: statuses.map(() => status), retryAfter: "2", code: "sign-in-limited" });
+  const six = [0, 1, 2, 3, 4, 5];
+
+  // Five free, the sixth starts a wait, and the seventh is refused before it is looked at — with how long.
+  assert.deepEqual(await until429(() => post("/api/login", { code: "WRONG1", name: "x" }, via("203.0.113.1"))), limited(six, 400), "an invite code");
+  assert.equal((await post("/api/login", { code: "WRONG1", name: "x" }, via("203.0.113.2"))).status, 400, "another address is not held by the first");
+  assert.deepEqual(await until429(() => get("/api/me", { ...via("203.0.113.3"), authorization: "Bearer bad-token" })), limited(six, 401), "the installation token");
+  assert.equal((await get("/api/me", { authorization: `Bearer ${TOKEN}` })).status, 200, "the CLI on the server is another address, and not waiting");
+  assert.deepEqual(await until429(() => get(`/?token=${TOKEN}`, { ...via("203.0.113.9"), accept: "text/html" })), limited(six, 401), "the token in a page's address, which answers with the sign-in page, counts the same");
+  assert.deepEqual(await until429(() => post("/mcp", { jsonrpc: "2.0", id: 1, method: "initialize" }, { ...via("203.0.113.4"), authorization: "Bearer lmbx_bad-token" })), limited(six, 401), "a side-door token");
+  assert.deepEqual(await until429(() => get("/auth/fixture/callback?state=forged&code=x", via("203.0.113.5"))), limited(six, 400), "a door's sign-in callback");
+  // The first Admin's code is one secret: one address is stopped at its own limit, and many addresses at the code's.
+  assert.deepEqual(await until429(() => post("/auth/fixture", { bootstrapCode: "n0t-the-c0de" }, via("203.0.113.6"))), limited(six, 400), "the first Admin's code");
+  for (let n = 0; n < 5; n += 1) assert.equal((await post("/auth/fixture", { bootstrapCode: "n0t-the-c0de" }, via("203.0.113.7"))).status, 400);
+  assert.equal((await post("/auth/fixture", { bootstrapCode: "n0t-the-c0de" }, via("203.0.113.8"))).status, 429, "an address that never tried waits too: the code itself is being guessed at");
+
+  const record = readFileSync(join(home, "sign-ins.jsonl"), "utf8");
+  const lines = record.trim().split("\n").map(line => JSON.parse(line) as { door: string; outcome: string; address: string; account?: string; reason?: string });
+  for (const door of ["invite-code", "installation-token", "side-door", "door", "bootstrap"]) {
+    assert.ok(lines.some(line => line.door === door && line.outcome === "failed"), `${door}: the wrong tries are recorded`);
+    assert.ok(lines.some(line => line.door === door && line.outcome === "limited"), `${door}: and so is the wait`);
+  }
+  assert.ok(lines.some(line => line.address === "203.0.113.1") && lines.every(line => line.address !== "198.51.100.250"), "by the address the proxy saw, not the one the client claimed");
+  assert.ok(lines.every(line => (line as { peer?: string }).peer === "127.0.0.1"), "with the connection's own other end beside it, which is how a forged one shows");
+  for (const secret of ["WRONG1", "bad-token", "n0t-the-c0de", TOKEN]) assert.ok(!record.includes(secret), "never what was presented");
+
+  // R5. Ana is signed in; her browser sends her cookie with any request to this address, whoever wrote the page.
+  const cookie = (await signIn("Ana", "admin", { authorization: `Bearer ${TOKEN}` })).split(";")[0]!;
+  const invite = (headers: Record<string, string>) => post("/api/channels/invite", { role: "viewer" }, { ...via("203.0.113.20"), ...headers });
+  const crossSite = await invite({ cookie, origin: "https://evil.example" });
+  assert.equal(crossSite.status, 403, "a page on another site cannot spend it");
+  assert.equal((await crossSite.json() as { code: string }).code, "cross-origin");
+  assert.equal(crossSite.headers.get("access-control-allow-origin"), null, "and no other site is told it may read anything");
+  assert.equal((await invite({ cookie, origin: OURS })).status, 200, "her own page can");
+  assert.equal((await invite({ cookie, origin: `http://${new URL(base).host}` })).status, 403, "the address behind the proxy is not the one people open");
+  assert.equal((await invite({ cookie })).status, 200, "a program with her session names no origin and is not a browser");
+  assert.equal((await post("/api/channels/invite", { role: "viewer" }, { authorization: `Bearer ${TOKEN}`, origin: "https://evil.example" })).status, 200, "a bearer credential is not ambient: exempt");
+  assert.notEqual((await post("/hooks/abcdef123456", {}, { ...via("203.0.113.21"), origin: "https://ci.example" })).status, 403, "a webhook answers for itself");
+  assert.equal((await post("/api/login", { code: "NOCODE", name: "x" }, { ...via("203.0.113.22"), origin: "https://evil.example" })).status, 403, "signing in is from our own page too");
+  assert.equal(await upgrade(base, "/desktop/1/websockify", { cookie, origin: "https://evil.example" }), "HTTP/1.1 403 Forbidden", "nor can another site's page open the desktop's socket");
+  assert.notEqual(await upgrade(base, "/desktop/1/websockify", { cookie, origin: OURS }), "HTTP/1.1 403 Forbidden", "her own page's socket gets past the check");
+
+  const page = await get("/login", via("203.0.113.23"));
+  assert.match(page.headers.get("content-security-policy") ?? "", /frame-ancestors 'self'/);
+  assert.equal(page.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(page.headers.get("referrer-policy"), "same-origin");
+});
+
+test("local: a page on another site cannot change anything either, and the page carries the same headers", async t => {
+  const TOKEN = "l0cal-t0ken";
+  const { base, get } = await serve(t, { token: TOKEN });
+  const own = new URL(base).origin;
+  const invite = (headers: Record<string, string>) => fetch(`${base}/api/channels/invite`, { method: "POST", headers: { cookie: `agentbox_ui=${TOKEN}`, "content-type": "application/json", ...headers }, body: JSON.stringify({ role: "viewer" }) });
+  assert.equal((await invite({ origin: "https://evil.example" })).status, 403, "the cookie the app's page holds is not another page's to spend");
+  assert.equal((await invite({ origin: "http://127.0.0.1:3000" })).status, 403, "another program's page on this machine is another site");
+  assert.equal((await invite({ origin: own })).status, 200);
+  assert.equal(await upgrade(base, "/desktop/1/websockify", { cookie: `agentbox_ui=${TOKEN}`, origin: "https://evil.example" }), "HTTP/1.1 403 Forbidden");
+  assert.notEqual(await upgrade(base, "/desktop/1/websockify", { cookie: `agentbox_ui=${TOKEN}`, origin: own }), "HTTP/1.1 403 Forbidden");
+  assert.match((await get("/login")).headers.get("content-security-policy") ?? "", /object-src 'none'/);
 });
