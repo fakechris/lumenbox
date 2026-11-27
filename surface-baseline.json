@@ -63,6 +63,7 @@
   "cli/web/--provider": "flag",
   "cli/web/--token": "flag",
   "config/activityLimit": "number",
+  "config/autoPersonalBox": "boolean, optional",
   "config/baseUrl": "string, optional",
   "config/boxCpus": "string, optional",
   "config/boxImage": "string, optional",
