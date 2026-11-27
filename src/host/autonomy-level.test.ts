@@ -18,6 +18,7 @@ test("the inference table: tidy → L1, analyse → L2, either one that asks for
     [{ title: "Summarise notes.md in chat" }, 1, /collect or summarise/],
     [{ title: "Summarise the notes and do not change them" }, 1, /collect or summarise/],
     [{ title: "Summarise the notes and do not edit or modify them" }, 1, /collect or summarise/],
+    [{ title: "Summarise the notes; do not edit, rewrite, or modify them" }, 1, /collect or summarise/],
     [{ title: "Analyze app.log and propose fixes" }, 2, /analysis or a proposal/],
     [{ title: "Compare the two vendors; what do you recommend?" }, 2, /analysis or a proposal/],
     [{ title: "Write the Q3 report", hasContract: true }, 5, /written acceptance/],
