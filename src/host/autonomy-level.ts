@@ -34,12 +34,12 @@ const PLAN = /\b(analy[sz]e|analysis|assess|evaluate|compare|investigate|researc
  * an instruction puts a verb — opening a line or list item or clause, or after and / then / also / please: "… and build the parser" asks for it, "the build logs" and "how to implement" do not.
  * ARTIFACT — a verb that leaves something behind, or a file named as the output ("summarise notes.md" only reads it) — counts anywhere. Both guard L1 and L2.
  * "do not change them" is struck out first, so a refusal never reads as a request. */
-const WORK = /(?:^[ \t]*(?:[-*•]|\d+[.)])?[ \t]*|[.;:!?,，。；]\s*|\b(?:and|then|also|please)\s+)(?:do (?:it|this|that|the|them)|implement|build|write the code|fix|ship)\b|实现|修复|落地|开发|编写代码/im;
+const WORK = /(?:^[ \t]*(?:[-+*•]|\d+[.)])?[ \t]*|[.;:!?,，。；]\s*|\b(?:and|then|also|please)\s+)(?:do (?:it|this|that|the|them)|implement|build|write the code|fix|ship)\b|实现|修复|落地|开发|编写代码/im;
 const ARTIFACT = /\b(create|generate|save|edit|modify|install|configure|convert)\b|\b(write|save|export|output)\b[^.\n]{0,40}\bfile\b|写入|保存|生成|创建|修改/i;
 const OUTPUT_VERB = /(?:\b(?:write|writes|save|export|output|into|create|generate|produce)\b|写入|写到|保存到|输出到|生成)[^.\n。]{0,40}?/.source;
 const FILE_NAME = /(?:\.{1,2}\/)?[\w~/-]*[\w~-]\.(?:md|csv|tsv|json|jsonl|txt|ya?ml|html?|py|ts|js|sh|sql|xlsx?|docx?|pptx?|pdf|png|svg|toml)\b/.source;
 const OUTPUT_FILE = new RegExp(OUTPUT_VERB + FILE_NAME, "i");
-const HOW_TO = /\bhow to\s+\w+(?:\s*(?:,|\band\b|\bor\b)\s*\w+)*/gi; // a verb in "how to …" is the subject, not an instruction
+const HOW_TO = /\bhow to\s+\w+(?:\s*(?:,|\band\b|\bor\b)\s*(?!(?:then|also|please)\b)\w+)*/gi; // a verb in "how to …" is the subject, not an instruction
 const NEGATED = /\b(?:do not|don't|never|without)\s+\w+(?:(?:\s*,\s*(?:(?:or|and|nor)\s+)?|\s+(?:or|and|nor)\s+)\w+)*|(?:不要|不用|无需|别|不)(?:修改|创建|生成|保存|写入|改动)/gi;
 
 export interface LevelInput {

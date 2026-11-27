@@ -23,6 +23,8 @@ test("the inference table: tidy → L1, analyse → L2, either one that asks for
     [{ title: "Research how to implement SSO" }, 2, /analysis or a proposal/],
     [{ title: "Analyze the outage", description: "  - fix the parser\n  2. ship it" }, 4, /ordinary work/],
     [{ title: "Summarise how to build and implement the parser" }, 1, /collect or summarise/],
+    [{ title: "Analyze the outage", description: "+ fix the parser" }, 4, /ordinary work/],
+    [{ title: "Summarise how to build, then implement the parser" }, 4, /ordinary work/],
     [{ title: "Summarise notes.md in chat" }, 1, /collect or summarise/],
     [{ title: "Summarise the notes and do not change them" }, 1, /collect or summarise/],
     [{ title: "Summarise the notes and do not edit or modify them" }, 1, /collect or summarise/],
