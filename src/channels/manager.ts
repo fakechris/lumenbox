@@ -65,7 +65,7 @@ import {
   consentFallbackText,
   accepted,
   filesSaved,
-  guestsClosed,
+  guestsClosed, viewerOnly,
   notYours,
   questionTerms,
   questionText,
@@ -365,11 +365,12 @@ export interface ChannelManagerDeps {
   }) => void;
   /**
    * Whether this identity may command the agents from a channel, read fresh each
-   * message so a role change needs no restart. A viewer (or an unknown sender) is
-   * refused and told their id; a driver or admin is let through. Permission is a
+   * message so a role change needs no restart. A viewer is refused and told so (`known`),
+   * a stranger knocks; a driver or admin is let through. Permission is a
    * property of the person, which is why this takes an identity and not a chat.
    */
   mayDrive: (identity: string) => boolean;
+  known?: (identity: string) => boolean; // on the roster at any role: one who may not drive is a viewer, told so, never knocked (INV-2226)
   /**
    * Current incarnation of a chatKey's channel, by prefix (docs/22 §4). Absent means
    * 1 for everything — true while `ensureChannelRecords` pins every incarnation.
@@ -1307,9 +1308,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (message.messageId !== undefined) {
         this.deps.ingress?.decided(message.messageId, "refused", message.identity);
       }
-      this.deps.log(
-        `channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`
-      );
+      this.deps.log(`channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`);
+      if (this.deps.known?.(message.identity) === true) return viewerOnly(); // a viewer is not a stranger: no knock, no guest turn (INV-2226)
       // A door with guests turned off does not collect knocks: in a room of strangers every
       // knock is noise for whoever would have to triage it (INV-429).
       if (this.deps.guestFor?.(adapter.name) === "off") {

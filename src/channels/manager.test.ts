@@ -28,7 +28,7 @@ import {
   type InboundMessage,
   type TaskCardState,
 } from "./manager.ts";
-import { EMPTY_REPLY_NOTE, NO_UPGRADE_WAITING, UPGRADE_IS_ADMIN_CALL } from "./strings.ts";
+import { EMPTY_REPLY_NOTE, NO_UPGRADE_WAITING, UPGRADE_IS_ADMIN_CALL, viewerOnly } from "./strings.ts";
 import { CHAT_COMMANDS, renderHelp } from "./commands.ts";
 import { roomFactsOf } from "./dingtalk-room.ts";
 
@@ -604,13 +604,16 @@ test("a one-word reply answers the approval that was pushed to that chat", async
   assert.deepEqual(answered, [], "a stray word later approves nothing");
 });
 
-test("a stranger's knock is recorded, and the refusal says the owner was told", async () => {
+test("a stranger's knock is recorded, and the refusal says the owner was told; a viewer on the roster is told they are a viewer (INV-2226)", async () => {
   const adapter = testAdapter();
   const knocks: { identity: string; senderLabel: string; channel: string }[] = [];
+  const guests: string[] = [];
   const manager = new ChannelManager({
     mayDrive: () => false,
+    known: identity => identity === "feishu:ou_viewer",
     ask: async () => "x",
     knock: request => knocks.push(request),
+    guestTurn: async (_door, message) => { guests.push(message.identity); return undefined; },
     log: () => {},
   });
   manager.register(adapter, true, "test");
@@ -626,6 +629,16 @@ test("a stranger's knock is recorded, and the refusal says the owner was told", 
   ]);
   assert.match(reply ?? "", /owner has been notified/);
   assert.match(reply ?? "", /feishu:ou_9/, "the manual path still shows the id");
+
+  // On the roster as a viewer: one plain answer, in a direct message and in a group alike — no knock an
+  // Admin could not approve (the identity is already known), no guest turn, never "not on the list".
+  for (const where of [{ privateChat: true }, { chatKey: "feishu:oc_group" }]) {
+    const viewer = await adapter.inject({ identity: "feishu:ou_viewer", senderLabel: "watcher", text: "帮我跑一下", ...where });
+    assert.equal(viewer, viewerOnly());
+    assert.match(viewer ?? "", /观察者/);
+  }
+  assert.equal(knocks.length, 1, "the viewer left no knock");
+  assert.deepEqual(guests, [], "and was not offered a guest turn");
 });
 
 test("bind <code> is redeemed before the allow list, and a sentence is not a code", async () => {

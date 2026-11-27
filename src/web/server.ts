@@ -1327,6 +1327,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       );
     },
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+    known: identity => principals.isKnown(identity),
     mayAdmin: identity => roleAtLeast(principals.roleOf(identity), "admin"),
     // The answer to the upgrade notice, coming back the way it was asked: the same shared
     // update Settings → Boxes → Apply update runs (box-update.ts), which waits for work in
