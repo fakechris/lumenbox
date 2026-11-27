@@ -131,6 +131,19 @@ export function mayDrive(caller: Caller): boolean {
 }
 
 /**
+ * Whether a person is joined to a desktop's driving stream rather than its view-only one (INV-2228).
+ *
+ * `mayDrive` asks only what a gateway asserted, and reads no assertion as yes — right for the
+ * operator holding the installation's credential, wrong for a person who signed in here: their
+ * role is the roster's, there is no header, and a roster viewer was handed the keyboard. So the
+ * roster role of a signed-in person counts as well. Where a gateway speaks too, both must allow
+ * it: a gateway's word can lower what the roster gives and never raise it.
+ */
+export function mayDriveDesktop(gateway: Caller, rosterRole: Role | undefined): boolean {
+  return mayDrive(gateway) && (rosterRole === undefined || roleAtLeast(rosterRole, "driver"));
+}
+
+/**
  * Whether this caller may drive at all, and why not if not.
  *
  * One function, called from every route that changes something, rather than a check per

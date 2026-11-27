@@ -96,7 +96,7 @@ import {
   callerOf,
   type AuthDecision,
   isLoopback, boxSideRefusal,
-  mayDrive,
+  mayDrive, mayDriveDesktop,
   operatorCookieFor,
   parseCookies,
   refusalToDrive,
@@ -3375,7 +3375,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (url.pathname.startsWith("/desktop/")) {
           // Same choice as the upgrade: the page and the socket it opens must come from the same
           // stack, or a viewer would be served a page pointing at a stream they are refused.
-          const desktop = desktopRouteOf(url.pathname, url.search, mayDrive(caller));
+          const desktop = desktopRouteOf(url.pathname, url.search, mayDriveDesktop(gatewayCaller, webIdentity === undefined ? undefined : principals.roleOf(webIdentity)));
           if (!desktop) {
             send(res, 404, apiError("desktop-path-unknown", { path: url.pathname }));
             return;
@@ -6622,10 +6622,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // And the role, not only the token: this socket is bidirectional, so authorising it as though
       // it only carried pixels is what let someone who may only watch drive the desktop instead.
       const gateway = callerOf(req.headers, decision.allow, trustsGatewayIdentity());
-      const route = desktopRouteOf(pathname ?? "", query ? `?${query}` : "", mayDrive(gateway));
-      if (!route) return 404;
-      const identity = gateway.userId ?? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
+      // A person signed in here is who the roster says, whatever a header does or does not say (INV-2228).
+      const session = readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
       principals.reload();
+      const route = desktopRouteOf(pathname ?? "", query ? `?${query}` : "", mayDriveDesktop(gateway, session === undefined ? undefined : principals.roleOf(session)));
+      if (!route) return 404;
+      const identity = gateway.userId ?? session;
       const targetBox = registry.boxById(route.boxId ?? registry.box.id);
       return !targetBox || (identity !== undefined && !mayEnterBox(targetBox, principals.resolve(identity).id)) ? 403 : route;
     };
