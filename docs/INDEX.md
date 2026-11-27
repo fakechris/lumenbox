@@ -34,7 +34,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-11-27 |
 | [57-agent-consumer-contract](57-agent-consumer-contract.md) | Agent 消费者合同：谁去拉，谁保证，不同架构怎么统一 | current | 2026-09-15 |
 | [92-web-ui](92-web-ui.md) | The web UI's visual rules: type, spacing, components | current | 2026-11-12 |
-| [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-19 |
+| [93-skills](93-skills.md) | Skills: the SKILL.md contract, where skills live, and how a skill becomes a routine | current | 2026-11-28 |
 | [94-catalog](94-catalog.md) | The catalog: experts, crews, connectors and shelf templates | current | 2026-11-05 |
 | [99-user-work](99-user-work.md) | A person's work: requests, work, and what happens inside it | current | 2026-11-20 |
 | [glossary](glossary.md) | Glossary and controlled vocabulary | current | 2026-11-07 |
@@ -57,7 +57,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [manual/reference-skills](manual/reference-skills.md) | Reference: the skills that ship | current | generated |
 | [manual/reference-templates](manual/reference-templates.md) | Reference: the template shelf | current | generated |
 | [manual/reference-tools](manual/reference-tools.md) | Reference: the built-in tools | current | generated |
-| [manual/skills](manual/skills.md) | Skills | current | 2026-11-06 |
+| [manual/skills](manual/skills.md) | Skills | current | 2026-11-28 |
 | [manual/supervision](manual/supervision.md) | Supervision | current | 2026-11-06 |
 | [manual/tasks-and-records](manual/tasks-and-records.md) | Tasks and records | current | 2026-11-24 |
 | [manual/teams/media-desk](manual/teams/media-desk.md) | Media desk: one source, three forms | current | 2026-11-06 |

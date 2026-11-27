@@ -147,6 +147,21 @@ export interface Skill {
    * discovered halfway through by the agent. A statement, never a grant.
    */
   needs?: SkillNeeds;
+  /** Set on a skill read from the organisation's directory in the box (INV-2222): published by an Admin, the same in every box, read-only here. */
+  origin?: "organisation";
+  /** The Admin marked it required: it is read even when the box has a skill of its own by that name. */
+  required?: true;
+  /** The SKILL.md of the same name that is not read because this one is, when one of the two is the organisation's. */
+  shadows?: string;
+}
+
+/**
+ * The organisation's skills as one box holds them (INV-2222, docs/93 §1a): the directory the server
+ * places them in, and the slugs an Admin marked required.
+ */
+export interface OrgSkillRoot {
+  root: string;
+  required: ReadonlySet<string>;
 }
 
 /** What a skill says it needs to run, from `connectors:` and `secrets:` (docs/93 §2). */
@@ -503,10 +518,7 @@ export function visibleTo(skills: readonly Skill[], agentName: string): Skill[] 
  */
 export function renderSkills(skills: readonly Skill[]): string {
   if (skills.length === 0) return "";
-  const lines: string[] = [];
-  const unlisted: Skill[] = [];
-  let used = 0;
-  for (const skill of skills) {
+  const lineOf = (skill: Skill): string => {
     const when =
       (skill.schedule === undefined ? "" : ` — runs ${describeSchedule(skill.schedule)}`) +
       (skill.paused === true ? " (paused until a person turns it on)" : "") +
@@ -517,23 +529,42 @@ export function renderSkills(skills: readonly Skill[]): string {
       skill.helpers.length === 0
         ? ""
         : ` — with ${skill.helpers.join(", ")} in the same directory`;
-    const line = `- **${skill.name}** — ${indexDescription(skill.description)}${when}\n  \`${skill.path}\`${helpers}`;
-    // Past the budget the rest are named, not described: the agent still knows they exist and where,
-    // which is what the index is for, and the prompt stops growing with the directory.
-    if (used + line.length > SKILL_INDEX_CHARS) {
-      unlisted.push(skill);
-      continue;
-    }
+    return `- **${skill.name}** — ${indexDescription(skill.description)}${when}${whoseOf(skill)}\n  \`${skill.path}\`${helpers}`;
+  };
+  // Past the budget the rest are named, not described: the agent still knows they exist and where,
+  // which is what the index is for, and the prompt stops growing with the directory.
+  // Who is described first when it does not all fit (INV-2222): a skill the organisation requires,
+  // then the box's own and the shipped ones in the order given, then the organisation's other
+  // skills. The shipped descriptions are the ones the skill evals measured (INV-760) and a box's own
+  // are what its agents wrote for their work, so a publish to everybody never turns one of those
+  // into a bare name; "required" is the Admin saying this one is worth that. With no organisation
+  // skill the order is the order given, as it always was.
+  const rank = (skill: Skill) => (skill.origin !== "organisation" ? 1 : skill.required === true ? 0 : 2);
+  const described = new Map<Skill, string>();
+  let used = 0;
+  for (const skill of [...skills].sort((a, b) => rank(a) - rank(b))) {
+    const line = lineOf(skill);
+    if (used + line.length > SKILL_INDEX_CHARS) continue;
     used += line.length;
-    lines.push(line);
+    described.set(skill, line);
   }
-  if (unlisted.length > 0) {
-    // The box's own directory, from where the skills were found: on a host box it is not the image's.
-    const root = posix.dirname(posix.dirname(unlisted[0]!.path));
+  const lines = skills.filter(skill => described.has(skill)).map(skill => described.get(skill)!);
+  // Named by the directory they were found in: on a host box it is not the image's, and the organisation's is its own.
+  const unlisted = new Map<string, Skill[]>();
+  for (const skill of skills) {
+    if (described.has(skill)) continue;
+    const root = posix.dirname(posix.dirname(skill.path));
+    unlisted.set(root, [...(unlisted.get(root) ?? []), skill]);
+  }
+  for (const [root, rest] of unlisted) {
     lines.push(
-      `- (${unlisted.length} more not described here because the index is full — ` +
-        `${unlisted.map(skill => skill.slug).join(", ")}; each is at \`${root}/<slug>/${SKILL_FILENAME}\`)`
+      `- (${rest.length} more not described here because the index is full — ` +
+        `${rest.map(skill => skill.slug).join(", ")}; each is at \`${root}/<slug>/${SKILL_FILENAME}\`)`
     );
+  }
+  const organisation = skills.find(skill => skill.origin === "organisation");
+  if (organisation !== undefined) {
+    lines.push("", `Skills under \`${posix.dirname(posix.dirname(organisation.path))}\` are the organisation's: the same in every box and read-only here. Use them as written; an Admin changes them.`);
   }
   // Framed as a step before acting, not as reference to consult "when one applies" (INV-715).
   // Measured on the live skill evals: the old framing opened the right skill 18/39 times, this
@@ -596,6 +627,14 @@ export function renderSkills(skills: readonly Skill[]): string {
   ].join("\n");
 }
 
+/** What the index says of whose a skill is: nothing for a box's own with no namesake, which is every skill of an installation with no organisation skills. */
+function whoseOf(skill: Skill): string {
+  if (skill.origin === "organisation") {
+    return (skill.required === true ? " — required by the organisation" : "") + (skill.shadows === undefined ? "" : ` — read instead of this box's own \`${skill.shadows}\``);
+  }
+  return skill.shadows === undefined ? "" : " — this box's own, read instead of the organisation's skill of the same name";
+}
+
 /** The frontmatter-and-body file for a new skill, so everything writes them the same way. */
 export function composeSkillFile(input: {
   name: string;
@@ -651,7 +690,9 @@ export async function loadSkills(
   /** Further directories to search after the box's own, in order (R26). */
   extraRoots: readonly string[] = [],
   /** The box's own skills directory: `skillsDir(box)`. */
-  dir: string = SKILLS_DIR
+  dir: string = SKILLS_DIR,
+  /** The organisation's skills in this box, when the installation is an organisation (INV-2222). */
+  org?: OrgSkillRoot
 ): Promise<SkillsLoad> {
   let entries: { name: string; type: string }[];
   try {
@@ -665,6 +706,7 @@ export async function loadSkills(
   const skills: Skill[] = [];
   const problems: string[] = [];
   const seen = new Map<string, string>();
+  const fromOrg = (root: string) => org !== undefined && root === org.root;
   const readRoot = async (root: string, list: { name: string; type: string }[]) => {
     for (const entry of list) {
       if (entry.type !== "directory") continue;
@@ -687,6 +729,9 @@ export async function loadSkills(
       const earlier = seen.get(entry.name);
       if (earlier !== undefined) {
         problems.push(`${entry.name}: also in ${root}, shadowed by the one in ${earlier}.`);
+        // Between a box's own and the organisation's, the index says which is read (docs/109 §7).
+        const read = fromOrg(root) || fromOrg(earlier) ? skills.find(skill => skill.slug === entry.name) : undefined;
+        if (read !== undefined) read.shadows = `${root}/${entry.name}/${SKILL_FILENAME}`;
         continue;
       }
       // A skill that names the host's own records is not loaded, whoever wrote it: see
@@ -698,15 +743,22 @@ export async function loadSkills(
       }
       const result = skillFrom(entry.name, parseSkillFile(text), helpers, root);
       if ("skill" in result) {
-        skills.push(result.skill);
+        skills.push(fromOrg(root) ? { ...result.skill, origin: "organisation", ...(org!.required.has(entry.name) ? { required: true as const } : {}) } : result.skill);
         seen.set(entry.name, root);
         if (result.note !== undefined) problems.push(result.note);
       } else problems.push(result.problem);
     }
   };
+  // The one rule for a name both have (docs/93 §1a): a skill the organisation requires is read
+  // and the box's own is not; any other organisation skill gives way to the box's own, as an
+  // installed one always has. An organisation's directory that is not there yet is a box not
+  // synced yet, or an organisation with no skills: nothing, and nothing to say.
+  const orgList = org === undefined ? [] : await source.listDir(org.root).then(listed => listed.entries, () => []);
+  await readRoot(org?.root ?? dir, orgList.filter(entry => org!.required.has(entry.name)));
   await readRoot(dir, entries);
+  await readRoot(org?.root ?? dir, orgList.filter(entry => !org!.required.has(entry.name)));
   for (const root of extraRoots) {
-    if (root === dir) continue;
+    if (root === dir || root === org?.root) continue;
     let list: { name: string; type: string }[];
     try {
       list = (await source.listDir(root)).entries;
@@ -750,7 +802,9 @@ export class SkillCache {
     private readonly ttlMs = envNumber("AGENTBOX_SKILL_TTL_MS", 5_000),
     private readonly now: () => number = Date.now,
     /** The box's own skills directory, read at each refresh: a box's record may change under it. */
-    private readonly dir: () => string = () => SKILLS_DIR
+    private readonly dir: () => string = () => SKILLS_DIR,
+    /** The organisation's skills in this box, read at each refresh: undefined on a personal installation (INV-2222). */
+    private readonly org: () => OrgSkillRoot | undefined = () => undefined
   ) {}
 
   /** What was last read. Synchronous, because prompt assembly is. */
@@ -793,7 +847,7 @@ export class SkillCache {
     this.started += 1;
     this.inFlight = (async () => {
       try {
-        const loaded = await loadSkills(source, this.roots(), this.dir());
+        const loaded = await loadSkills(source, this.roots(), this.dir(), this.org());
         // Only replaced when the directory was actually read. A box that is restarting must not make
         // an agent believe its skills were deleted — and since the list is in the prompt, an empty
         // one reads as "you have none" rather than "we could not check".

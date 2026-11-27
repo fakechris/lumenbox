@@ -4,7 +4,7 @@
      status: current
      covers: skill
      audience: user
-     updated: 2026-11-06
+     updated: 2026-11-28
 -->
 # Skills
 
@@ -17,6 +17,9 @@ of when it applies, and the steps. An agent reads a skill when a request matches
 description. Agents write skills themselves when they work something out; every box also starts
 with a set of starter skills. A skill with a `schedule:` or a `trigger:` is a routine (see
 [automations](automations.md)).
+
+In an organisation, an Admin can publish a skill to everybody: an **organisation skill** is
+available in every box, the same everywhere, and read-only there.
 
 An imported skill is not an installed one: `agentbox skills import` makes each skill a teaching
 draft, and a person publishes it. Check *Teaching drafts* at the top of the app.
@@ -31,6 +34,11 @@ Code or Codex a skill that drives LumenBox through its MCP endpoint.
 - **See the skills:** type `/` at the start of the chat box. A menu lists the skills in this
   agent's box; picking one writes "Use the … skill." in the chat box for you to send.
 - **Review imported skills:** press *Teaching drafts* at the top of the app.
+- **Publish a skill to the whole organisation** (Admins): Settings → Team → *Organisation
+  skills* → *Publish or update a skill*. Choose a skill folder on your computer, a skill of a
+  template file, or a skill in a box you may enter, and press *Publish*. Publishing a name that
+  is already there makes a new version. *Withdraw* removes it from every box. Tick *Required*
+  to have it read even in a box that has its own skill of the same name.
 
 ### In a chat
 
@@ -55,12 +63,20 @@ The app must be running.
 
 - The `/` menu in the chat box.
 - The agent's *Files* tab, under `skills/`.
+- Settings → Team → *Organisation skills*: each skill's version, who published it and when, how
+  many boxes are up to date, and by name every box that is behind, not connected, or where the
+  skill was changed from inside (it is written over).
 - The [skills that ship](reference-skills.md) reference: every starter skill, generated from
   the code.
 
 ## Limits
 
-- A skill lives in one box. Agents in another box do not see it.
+- A skill lives in one box. Agents in another box do not see it, unless an Admin published it
+  as an organisation skill.
+- An organisation skill cannot carry a password or a key, a schedule or a trigger; publishing
+  one is refused and says why. A box that is not connected gets it when it comes back.
+- A member cannot yet offer their own skill to the organisation; an Admin publishes it from
+  their box.
 - A starter skill is updated by a release only if nobody changed it.
 - An MCP token is shown once. Copy it when you issue it; revoking it stops it at once.
 

@@ -24,6 +24,7 @@
  * Writes through `bash` are not seen here; skill-provenance records them.
  */
 import { createHash } from "node:crypto";
+import { orgSkillsBeside } from "./box-paths.ts";
 import { credentialIn } from "./secret-scan.ts";
 import { skillSlugOf } from "./skill-provenance.ts";
 import { SKILLS_DIR } from "./skills.ts";
@@ -235,6 +236,10 @@ export async function skillWriteRefusal(
   /** The box's skills directory: `skillsDir(box)` (INV-1719). */
   skills: string = SKILLS_DIR
 ): Promise<string | undefined> {
+  // The organisation's skills are the server's to write (INV-2222): the same in every box, and written over at the next sync.
+  if ((skills === SKILLS_DIR ? absolutePath.replace(/^~\/work\//, "/home/box/work/") : absolutePath).startsWith(`${orgSkillsBeside(skills)}/`)) {
+    return `That is one of the organisation's skills: read-only in every box, and written over from the server. An Admin changes it by publishing a new version. For a variant of your own, write a skill under ${skills}.`;
+  }
   const slug = skillSlugOf(absolutePath, skills);
   if (slug === undefined) return undefined;
   const dir = `${skills}/${slug}`;

@@ -44,6 +44,8 @@ export interface BoxPaths {
   work: string;
   /** The box's skills directory, projected into each engine's own skills place. */
   skills: string;
+  /** Where the server places the organisation's skills, read-only (INV-2222): a projection, never a source. */
+  orgSkills: string;
   /** Where each agent's memory is mirrored as files, `<memory>/<agent id>` (INV-1734). */
   memory: string;
   /** Where each agent's standing files are mirrored, `<standing>/<agent id>` (INV-777, INV-1736). */
@@ -157,6 +159,20 @@ export function skillsDir(box: BoxPlace): string {
   return lumenboxDirs(workDir(box)).skills;
 }
 
+/**
+ * Where the organisation's skills are placed in a box (INV-2222, docs/93 §1a): beside the box's own
+ * skills directory and not in it, so nothing that lists, seeds or writes the box's skills meets
+ * them. The server writes it at every sync and reads it for nothing but drift.
+ */
+export function orgSkillsDir(box: BoxPlace): string {
+  return lumenboxDirs(workDir(box)).orgSkills;
+}
+
+/** The same directory, from the box's skills directory: for a caller that was handed only that. */
+export function orgSkillsBeside(skills: string): string {
+  return lumenboxDirs(posix.dirname(skills)).orgSkills;
+}
+
 /** The box's memory mirror (INV-1734): `memoryMirrorDir` puts each agent's files under it. */
 export function memoryDir(box: BoxPlace): string {
   return lumenboxDirs(workDir(box)).memory;
@@ -188,10 +204,11 @@ export function inBox(text: string, box: BoxPlace): string {
   return work === DOCKER_WORK ? text : text.replaceAll(DOCKER_WORK, work);
 }
 
-function lumenboxDirs(work: string): Pick<BoxPaths, "work" | "skills" | "memory" | "standing" | "engines" | "enginesBin" | "mcpFaces" | "reports"> {
+function lumenboxDirs(work: string): Pick<BoxPaths, "work" | "skills" | "orgSkills" | "memory" | "standing" | "engines" | "enginesBin" | "mcpFaces" | "reports"> {
   return {
     work,
     skills: `${work}/skills`,
+    orgSkills: `${work}/.lumenbox/org-skills`,
     memory: `${work}/memory`,
     standing: `${work}/standing`,
     engines: `${work}/.lumenbox/engines`,
