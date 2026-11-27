@@ -15,6 +15,8 @@ test("the inference table: tidy → L1, analyse → L2, either one that asks for
     [{ title: "Summarise the incident into postmortem.md" }, 4, /ordinary work/],
     [{ title: "分析日志里的错误，把统计结果写入 report.csv" }, 4, /ordinary work/],
     [{ title: "Summarise the incident into postmortem.MD" }, 4, /ordinary work/],
+    [{ title: "Summarise the incident into ./postmortem.md" }, 4, /ordinary work/],
+    [{ title: "Summarise the build logs in chat" }, 1, /collect or summarise/],
     [{ title: "Summarise notes.md in chat" }, 1, /collect or summarise/],
     [{ title: "Summarise the notes and do not change them" }, 1, /collect or summarise/],
     [{ title: "Summarise the notes and do not edit or modify them" }, 1, /collect or summarise/],

@@ -30,10 +30,14 @@ export const LEVEL_MEANING: Record<Level, string> = {
 const OUTWARD = /\b(send|email|mail|publish|post|tweet|deploy|release|pay|purchase|buy|order|delete|remove|drop|merge|push|invite|cancel)\b|发送|发邮件|发布|推送|部署|上线|付款|支付|购买|下单|删除|删掉|合并|取消|邀请|群发/i;
 const TIDY = /\b(summari[sz]e|summary|digest|collect|gather|list|catalog|transcribe|extract|organi[sz]e|tidy)\b|总结|摘要|整理|汇总|收集|归档|提取|列出/i;
 const PLAN = /\b(analy[sz]e|analysis|assess|evaluate|compare|investigate|research|propose|proposal|plan|recommend|option|design|review|audit|diagnose|estimate)\b|分析|评估|对比|调研|研究|方案|建议|计划|设计|评审|审计|诊断|估算|选型/i;
-/** Words that ask for the work itself, or for a file it should leave behind (INV-2192: "analyze the logs … write /app/summary.csv" is a job, not a proposal). A file only
- * counts after a word that makes it the output ("summarise notes.md" reads it); "do not change them" is struck out first, so a refusal never reads as a request. */
-const DO = /\b(do (?:it|this|that|the|them)|implement|build|write the code|fix|ship|create|generate|save|edit|modify|install|configure|convert)\b|\b(write|save|export|output)\b[^.\n]{0,40}\bfile\b|实现|修复|落地|开发|编写代码|写入|保存|生成|创建|修改/i;
-const OUTPUT_FILE = /(?:\b(?:write|writes|save|export|output|into|create|generate|produce)\b|写入|写到|保存到|输出到|生成)[^.\n。]{0,40}?[\w~/-]\.(?:md|csv|tsv|json|jsonl|txt|ya?ml|html?|py|ts|js|sh|sql|xlsx?|docx?|pptx?|pdf|png|svg|toml)\b/i;
+/** Asking for the work itself (INV-2192: "analyze the logs … write /app/summary.csv" is a job, not a proposal). WORK is the original list and guards only the L2 rule, as
+ * before: its words are also nouns ("the build logs"). ARTIFACT — a verb that leaves something behind, or a file named as the output ("summarise notes.md" only reads
+ * it) — guards both. "do not change them" is struck out first, so a refusal never reads as a request. */
+const WORK = /\b(do (?:it|this|that|the|them)|implement|build|write the code|fix|ship)\b|实现|修复|落地|开发|编写代码/i;
+const ARTIFACT = /\b(create|generate|save|edit|modify|install|configure|convert)\b|\b(write|save|export|output)\b[^.\n]{0,40}\bfile\b|写入|保存|生成|创建|修改/i;
+const OUTPUT_VERB = /(?:\b(?:write|writes|save|export|output|into|create|generate|produce)\b|写入|写到|保存到|输出到|生成)[^.\n。]{0,40}?/.source;
+const FILE_NAME = /(?:\.{1,2}\/)?[\w~/-]*[\w~-]\.(?:md|csv|tsv|json|jsonl|txt|ya?ml|html?|py|ts|js|sh|sql|xlsx?|docx?|pptx?|pdf|png|svg|toml)\b/.source;
+const OUTPUT_FILE = new RegExp(OUTPUT_VERB + FILE_NAME, "i");
 const NEGATED = /\b(?:do not|don't|never|without)\s+\w+(?:(?:\s*,\s*(?:(?:or|and|nor)\s+)?|\s+(?:or|and|nor)\s+)\w+)*|(?:不要|不用|无需|别|不)(?:修改|创建|生成|保存|写入|改动)/gi;
 
 export interface LevelInput {
@@ -58,10 +62,10 @@ export interface Inferred {
 export function inferLevel(input: LevelInput): Inferred {
   const words = `${input.title}\n${input.description ?? ""}`;
   const reasons: string[] = [];
-  let level: Level; const affirmative = words.replace(NEGATED, " "); const asksForWork = DO.test(affirmative) || OUTPUT_FILE.test(affirmative);
-  if (TIDY.test(words) && !PLAN.test(words) && !OUTWARD.test(words) && !asksForWork) {
+  let level: Level; const affirmative = words.replace(NEGATED, " "); const leavesArtifact = ARTIFACT.test(affirmative) || OUTPUT_FILE.test(affirmative);
+  if (TIDY.test(words) && !PLAN.test(words) && !OUTWARD.test(words) && !leavesArtifact) {
     level = 1; reasons.push("asks to collect or summarise, not to act");
-  } else if (PLAN.test(words) && !OUTWARD.test(words) && !asksForWork) {
+  } else if (PLAN.test(words) && !OUTWARD.test(words) && !leavesArtifact && !WORK.test(affirmative)) {
     level = 2; reasons.push("asks for analysis or a proposal, not for the work itself");
   } else if (input.isPursuit === true || input.hasContract === true) {
     level = 5; reasons.push(input.isPursuit === true ? "a goal with its own gate: verified before it is called done" : "has a written acceptance the gate can verify");
