@@ -32,7 +32,7 @@ import { NEXT_TEACH_JS } from "./next-teach-ui.ts";
 import { NEXT_SET_MINE_JS } from "./next-set-mine-ui.ts";
 import { NEXT_SET_MODEL_JS } from "./next-set-model-ui.ts";
 import { NEXT_SET_DOORS_JS } from "./next-set-doors-ui.ts";
-import { NEXT_SET_TEAM_JS } from "./next-set-team-ui.ts";
+import { NEXT_SET_TEAM_JS } from "./next-set-team-ui.ts"; import { NEXT_SET_DIRECTORY_CSS, NEXT_SET_DIRECTORY_JS } from "./next-set-directory-ui.ts";
 import { NEXT_SET_LIMITS_JS } from "./next-set-limits-ui.ts";
 import { NEXT_SET_BOXES_JS } from "./next-set-boxes-ui.ts";
 import { NEXT_SET_BOXES_MORE_JS } from "./next-set-boxes-more-ui.ts";
@@ -386,7 +386,7 @@ export const NEXT_HTML = `<!doctype html>
 <link rel="icon" href="data:,">
 <script>${STRIP_TOKEN_JS}${SIGN_IN_AGAIN_JS}</script>
 <script src="/vendor/markdown-it.js"></script>
-<style>${STYLE}</style>
+<style>${STYLE}${NEXT_SET_DIRECTORY_CSS}</style>
 </head>
 <body>
 <script>
@@ -529,6 +529,7 @@ ${NEXT_SET_MINE_JS}
 ${NEXT_SET_MODEL_JS}
 ${NEXT_SET_DOORS_JS}
 ${NEXT_SET_TEAM_JS}
+${NEXT_SET_DIRECTORY_JS}
 ${NEXT_SET_LIMITS_JS}
 ${NEXT_SET_BOXES_JS}
 ${NEXT_SET_BOXES_MORE_JS}

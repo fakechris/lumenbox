@@ -237,7 +237,7 @@ import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { OpenDesktops } from "./open-desktops.ts";
 import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
-import { Directories } from "../host/directory.ts";
+import { Directories } from "../host/directory.ts"; import { Activations } from "../host/activations.ts"; import { admission, activationRoute } from "./activation-routes.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
@@ -3014,11 +3014,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
 
+  // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
+  const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
+    signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log };
+  const orgAdmission = admission(admissionDeps);
+  const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
   // The web sign-in through a Feishu or DingTalk door (INV-1701, INV-729): one dispatcher in door-sign-in.ts.
   const handleDoorAuth = doorSignInHandler({
     records: () => channelRecords, envBase: channelEnvBase, env: key => process.env[key] ?? (loadConfig().env ?? {})[key],
     publicUrl: () => process.env.AGENTBOX_PUBLIC_URL, feishuDomain: () => process.env.FEISHU_DOMAIN ?? "feishu", fetch: options.loginFetch ?? fetch,
-    bootstrap, setupPending: bootstrapPending, principals, send, log,
+    bootstrap, setupPending: bootstrapPending, principals, send, log, admit: (...who) => orgAdmission.admit(...who),
     sessionCookie: (identity, principalId) => sessionCookie(identity, sessionSecret, epochs.of(principalId), secureCookies),
   });
 
@@ -3622,13 +3627,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "POST /api/directories/sync") {
           if (refusedRole("admin")) return; principals.requireOrganisation(); const body = await readJson(req); // a directory is an organisation's people (INV-1689)
           if (refusedRole("admin")) return;
-          const credentials = directoryCredentials(String(body.channelId ?? ""));
-          if (!credentials) { send(res, 400, apiError("directory-channel-needed")); return; }
-          try {
-            await directories.sync(credentials.source, () => credentials.provider.fetchDirectory({
-              clientId: credentials.clientId, clientSecret: credentials.clientSecret, fetchFn: options.directoryFetch ?? fetch,
-            }), () => directoryCredentials(credentials.source.channelId)?.source);
-            send(res, 200, { ok: true });
+          try { // the sync, then who it no longer lists among the people it let in (INV-2202)
+            const synced = await orgAdmission.sync(String(body.channelId ?? ""));
+            if (synced === undefined) send(res, 400, apiError("directory-channel-needed")); else send(res, 200, { ok: true, ...synced });
           } catch { send(res, 503, apiError("directory-sync-failed")); }
           return;
         }
@@ -4652,6 +4653,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: process.env.AGENTBOX_PUBLIC_URL, callerId: () => caller.userId, log });
         if (peopleReply !== undefined) { if (peopleReply.status !== 0) send(res, peopleReply.status, peopleReply.body); return; }
+        const activationReply = await activationRoute(route, url.searchParams, { ...admissionDeps, admission: orgAdmission, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req),
+          callerId: () => caller.userId, doors: () => channelRecords, boxesHeld: id => personalBoxesOf(registry.listBoxes(), id).length });
+        if (activationReply !== undefined) { if (activationReply.status !== 0) send(res, activationReply.status, activationReply.body); return; }
 
         // One click on a knock. The person is told on the channel they knocked from,
         // because "approved silently" reads as "still ignored" from their side.
@@ -6705,7 +6709,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     clearInterval(boxWatch);
     clearInterval(teachWatch);
     // Same reason as the backups: an old tick beside a new one delivers a reminder twice (INV-861).
-    clearInterval(reminderTimer);
+    clearInterval(reminderTimer); clearInterval(directoryRefresh);
     channels.stop();
     orchestrator.scheduler.stop();
     server.close();

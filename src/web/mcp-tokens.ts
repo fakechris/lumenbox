@@ -102,6 +102,17 @@ export class McpTokenStore {
     return true;
   }
 
+  /**
+   * Tokens that end when the directory says somebody left (INV-2202). `signInOnly`: only those made from
+   * that sign-in, for a person who keeps another way in; otherwise every token of these ids, whoever made it.
+   */
+  revokeFor(ids: readonly string[], signInOnly = false): number {
+    const before = this.tokens.length;
+    this.tokens = this.tokens.filter(entry => !ids.includes(entry.principalId) || (signInOnly && entry.via === "person"));
+    if (this.tokens.length !== before) this.save();
+    return before - this.tokens.length;
+  }
+
   /** Whose, what and when: never the secret, never the hash. */
   list(): { principalId: string; label: string; createdAt: string }[] {
     return this.tokens.map(({ principalId, label, createdAt }) => ({ principalId, label, createdAt }));
