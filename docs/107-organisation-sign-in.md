@@ -1,7 +1,9 @@
 <!-- doc: 107-organisation-sign-in
      title: Signing in to an organisation with DingTalk: activation by an Admin, a box on first sign-in
      family: decision
-     status: current
+     status: superseded
+     superseded-by: 109-organisation-onboarding
+     why: activation now makes the person, their box and their agent at once; the rest is restated there
      updated: 2026-11-27
 -->
 # Signing in to an organisation with DingTalk: activation by an Admin, a box on first sign-in
