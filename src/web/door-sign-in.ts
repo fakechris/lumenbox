@@ -24,7 +24,7 @@
 import { randomBytes } from "node:crypto";
 import type { ServerResponse } from "node:http";
 import { apiError } from "./api-error.ts";
-import { parseCookies, safeNext } from "./auth.ts";
+import { safeNext } from "./auth.ts";
 import { requestLocaleOf, localeOf } from "./page-locale.ts";
 import { askedToJoinPage, notLinkedPage, notMemberPage, signInRecoveryPage } from "./server-pages.ts";
 import { signInCallbackUrl, signsInOnWeb, wantsHtml, type WebSignInType } from "./sign-in.ts";
@@ -44,8 +44,14 @@ const STATE_TTL_MS = 10 * 60_000;
  * invalidate each other.
  */
 export const BINDING_COOKIE = "agentbox_signin";
+// Read on its own, undecoded: the value is hex, and decoding every cookie in the header would let
+// one malformed cookie of somebody else's (`pref=100%`) fail the sign-in. The last one wins, as in parseCookies.
 const bindingOf = (cookieHeader: string | undefined): string | undefined => {
-  const value = parseCookies(cookieHeader).get(BINDING_COOKIE);
+  let value: string | undefined;
+  for (const part of (cookieHeader ?? "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0 && part.slice(0, at).trim() === BINDING_COOKIE) value = part.slice(at + 1).trim();
+  }
   return value !== undefined && /^[0-9a-f]{32}$/.test(value) ? value : undefined;
 };
 

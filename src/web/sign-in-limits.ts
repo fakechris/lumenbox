@@ -53,6 +53,8 @@ export interface Attempt {
   address: string;
   /** Who it was for, when the credential names somebody: a user name, `bootstrap`. Never the credential. */
   account?: string;
+  /** The connection's own other end, for the record: where it differs from `address`, `address` is a proxy's word. */
+  peer?: string;
 }
 
 export class SignInLimiter {
@@ -66,7 +68,9 @@ export class SignInLimiter {
 
   private keys(attempt: Attempt): [string, Backoff][] {
     const keys: [string, Backoff][] = [[`${attempt.door}|address|${attempt.address}`, this.address]];
-    if (attempt.account !== undefined) keys.push([`${attempt.door}|account|${attempt.account.toLowerCase()}`, this.account]);
+    // The account as it was written: where names are compared exactly (the gateway's password list),
+    // `alice` and `Alice` are two accounts, and one signing in must not clear the other's count.
+    if (attempt.account !== undefined) keys.push([`${attempt.door}|account|${attempt.account}`, this.account]);
     return keys;
   }
 
@@ -113,7 +117,7 @@ export class SignInLimiter {
 
   /** A sign-in that worked: the account's count is cleared; the address keeps its own. */
   succeeded(attempt: Attempt): void {
-    if (attempt.account !== undefined) this.counts.delete(`${attempt.door}|account|${attempt.account.toLowerCase()}`);
+    if (attempt.account !== undefined) this.counts.delete(`${attempt.door}|account|${attempt.account}`);
   }
 }
 
@@ -122,7 +126,11 @@ export class SignInLimiter {
  *
  * Off local the server sits behind the TLS terminator it declared (exposure.ts), so the peer is the
  * proxy and the person's address is what the proxy wrote: the **last** entry of `X-Forwarded-For`,
- * the one the adjacent proxy appended. Never the first — the client writes that. With no usable
+ * the one the adjacent proxy appended. Never the first — the client writes that. The peer cannot
+ * be checked against the proxy, whose address this server is not told: a request that reaches the
+ * port around the proxy writes its own last entry, so the port must be reachable only through the
+ * proxy (docs/06), the per-account count does not depend on the address, and the record keeps the
+ * peer beside it. With no usable
  * entry it is the peer, which is also the answer for a request that came with no proxy at all (the
  * CLI on the server: `isDirectLocal` reads the same headers). On local, and on a tenant's box
  * behind the gateway, it is the peer as it always was.
@@ -141,6 +149,12 @@ export interface SignInRecord {
   door: SignInDoor;
   outcome: "failed" | "limited";
   address: string;
+  /**
+   * The connection's other end, when it is not `address`. Off local `address` is what the last
+   * `X-Forwarded-For` entry said, and a request that reached the server around its proxy wrote that
+   * itself: a peer that is not the proxy's is how a reader tells.
+   */
+  peer?: string;
   account?: string;
   /** Why, in a word a reader can search for: `wrong-code`, `state-mismatch`, `not-activated`. */
   reason?: string;
@@ -171,6 +185,7 @@ export function signInGuard(options: { enabled: boolean; limiter?: SignInLimiter
   const limiter = options.limiter ?? new SignInLimiter();
   const line = (attempt: Attempt, outcome: SignInRecord["outcome"], more: Partial<SignInRecord>): SignInRecord => ({
     at: (options.now?.() ?? new Date()).toISOString(), door: attempt.door, outcome, address: attempt.address,
+    ...(attempt.peer !== undefined && attempt.peer !== attempt.address ? { peer: attempt.peer } : {}),
     ...(attempt.account !== undefined ? { account: attempt.account.slice(0, 80) } : {}), ...more,
   });
   return {

@@ -41,9 +41,10 @@ const first = (value: string | string[] | undefined): string | undefined => (Arr
 
 /**
  * Why a request is refused for where it came from, or undefined. `upgrade` is a socket upgrade,
- * which is a `GET` that is not safe: the socket carries the screen and the keyboard.
+ * which is a `GET` that is not safe: the socket carries the screen and the keyboard. `httpsOnly`
+ * says the installation is reached over https, for the case where no address was declared.
  */
-export function originRefusal(req: Pick<IncomingMessage, "method" | "headers" | "url">, publicOrigin: string | undefined, upgrade = false): string | undefined {
+export function originRefusal(req: Pick<IncomingMessage, "method" | "headers" | "url">, publicOrigin: string | undefined, upgrade = false, httpsOnly = false): string | undefined {
   if (!upgrade && SAFE.has((req.method ?? "GET").toUpperCase())) return undefined;
   if (req.headers.authorization !== undefined) return undefined;
   if (/^\/hooks\/[^/]+\/?(?:\?|$)/.test(req.url ?? "")) return undefined;
@@ -52,6 +53,9 @@ export function originRefusal(req: Pick<IncomingMessage, "method" | "headers" | 
   if (origin === undefined && first(req.headers.referer) === undefined) return undefined;
   if (claimed === undefined || claimed === "null") return "cross-origin";
   if (publicOrigin !== undefined) return claimed.toLowerCase() === publicOrigin.toLowerCase() ? undefined : "cross-origin";
+  // Reached over https with no address declared (TLS said to be in front some other way): the same
+  // name over plain HTTP is another origin, and a page there is not ours.
+  if (httpsOnly && !claimed.toLowerCase().startsWith("https://")) return "cross-origin";
   const host = (first(req.headers.host) ?? "").toLowerCase();
   return host !== "" && originOf(claimed)?.replace(/^https?:\/\//, "").toLowerCase() === withoutDefaultPort(host, claimed) ? undefined : "cross-origin";
 }

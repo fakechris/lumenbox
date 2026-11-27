@@ -7,8 +7,8 @@
  * the box and proxied under `/desktop/`. A unit test cannot see that; a browser can. So: a
  * disposable box and a temporary home (the same ones `npm run smoke` uses — nothing of the
  * installation is read or touched), the web server in front of it, and headless Chrome loading
- * the desktop the three ways a person meets it — the page itself, the page as a viewer (the
- * view-only stream), and embedded in the app's page as an iframe — and a card drawn by the A2UI
+ * the desktop the three ways a person meets it — the page itself, the page in a viewer's session,
+ * and embedded in the app's page as an iframe — and a card drawn by the A2UI
  * bundle, the other script here that is somebody else's.
  *
  * What fails it: a policy violation in the console, an asset refused for its content type, a
@@ -150,10 +150,13 @@ try {
   await first.close();
   await cards(operator, base);
   const driving = await visit(operator, base, DESKTOP, "the desktop page");
-  say(driving.sockets.some(socket => /\/desktop\/1\/websockify/.test(socket.url)), "the desktop page: its socket is this installation's own address");
+  const ours = new URL(base);
+  const own = socket => { const url = new URL(socket.url); return url.protocol === "ws:" && url.host === ours.host && url.pathname.endsWith("/desktop/1/websockify"); };
+  say(driving.sockets.length > 0 && driving.sockets.every(own), "the desktop page: its socket is this installation's own address", driving.sockets.map(socket => socket.url.split("?")[0]).join(", "));
   await visit(operator, base, DESKTOP, "embedded in the app's page", { frame: true });
 
-  // A viewer: the same address, and the server picks the view-only stream (/vnc-ro/) from the role.
+  // A viewer's session: the same address. This shows the page loads for them under the rules; it
+  // does not show which stream they were joined to — a browser cannot see that (INV-2228).
   const invite = await (await fetch(`${base}/api/channels/invite`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ role: "viewer" }) })).json();
   const login = await fetch(`${base}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: invite.code, name: "Viewer" }) });
   const session = login.headers.getSetCookie()[0]?.split(";")[0] ?? "";
@@ -161,7 +164,7 @@ try {
   const viewer = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   const [name, value] = [session.slice(0, session.indexOf("=")), session.slice(session.indexOf("=") + 1)];
   await viewer.addCookies([{ name, value, url: base }]);
-  await visit(viewer, base, DESKTOP, "the view-only desktop (a viewer)");
+  await visit(viewer, base, DESKTOP, "the desktop page in a viewer's session");
 
   // And the check that makes the rest mean something: another site's page cannot open the socket.
   const foreign = await new Promise(resolve => {

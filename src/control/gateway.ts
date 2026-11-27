@@ -280,7 +280,7 @@ export class Gateway {
     if (this.options.hsts === true) res.setHeader("strict-transport-security", HSTS);
     for (const [name, value] of Object.entries(securityHeaders(req, this.options.publicOrigin))) res.setHeader(name, value);
     // The session is a cookie, which a browser sends whoever wrote the page: what changes something comes from our own page.
-    if (originRefusal(req, this.options.publicOrigin) !== undefined) {
+    if (originRefusal(req, this.options.publicOrigin, false, this.options.hsts === true) !== undefined) {
       res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
       res.end("This request did not come from this gateway's own page.\n");
       return;
@@ -460,7 +460,7 @@ export class Gateway {
     const next = safeNext(form.get("next"));
 
     // Counted by where it came from and by the name it was for, and asked before the password is compared.
-    const attempt = { door: "gateway" as const, address: clientAddress(req, this.options.behindProxy === true), account: username };
+    const attempt = { door: "gateway" as const, address: clientAddress(req, this.options.behindProxy === true), peer: clientAddress(req, false), account: username };
     const wait = this.options.signIns?.blocked(attempt);
     if (wait !== undefined) {
       res.setHeader("retry-after", String(wait));
@@ -577,7 +577,7 @@ export class Gateway {
    * without signing in.
    */
   async handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
-    if (originRefusal(req, this.options.publicOrigin, true) !== undefined) {
+    if (originRefusal(req, this.options.publicOrigin, true, this.options.hsts === true) !== undefined) {
       socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
       return;
     }

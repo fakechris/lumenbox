@@ -479,6 +479,17 @@ it is the address the limiter counts. If a second proxy stands in front of the a
 CDN, a cloud load balancer), configure the adjacent one to pass the real client address through
 (ingress-nginx: `use-forwarded-headers` with `proxy-real-ip-cidr`; nginx: `real_ip`), or every
 person arrives as that proxy's one address and one person's wrong tries make everyone wait.
+**The server's port must be reachable only through the terminator.** The server cannot check
+that a request came from its proxy — it is not told the proxy's address — so a client that
+reaches the port directly (another pod in the cluster, a host on the same network) writes its own
+`X-Forwarded-For` and is counted, and recorded, under any address it likes. What still holds
+against it: the per-account counts and the invite-code cap do not depend on the address, the
+tokens it could try are not guessable, and each line of `sign-ins.jsonl` keeps the connection's
+real other end as `peer` when it differs from `address` — on a correct deployment `peer` is always
+the proxy. Close the path: a NetworkPolicy admitting only the Ingress controller (the example is
+in `deploy/kubernetes/README.md`), a firewall rule, or a loopback bind with the proxy on the same
+machine.
+
 `X-Forwarded-Proto` is not read. A connector's OAuth callback address is built from
 `AGENTBOX_PUBLIC_URL` off local, not from the request's headers.
 
@@ -503,7 +514,7 @@ policy does not yet stop an injected script.
 The two pages here that are somebody else's — noVNC's desktop page, served by the box, and a
 card drawn by the A2UI bundle — are checked against these rules in a real browser by
 `npm run check:desktop-page`: a disposable box and a temporary home, headless Chrome, the desktop
-as a page, as a viewer and embedded, and one card. It needs Docker and `npm run build:vendor`, so
+as a page, in a viewer's session and embedded, and one card. It needs Docker and `npm run build:vendor`, so
 it is run by hand after a change to the policy, the box image's noVNC or the bundle, not in CI.
 
 A door's sign-in is tied to the browser that started it: `/auth/<door>` sets a ten-minute

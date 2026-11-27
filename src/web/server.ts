@@ -2990,7 +2990,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let signIns: SignInGuard = signInGuard({ enabled: false, record: () => {}, log });
   /** One try at one way in, from wherever this request came: the proxy's word off local, the peer otherwise. */
   const attemptFrom = (req: IncomingMessage, door: SignInDoor, account?: string) =>
-    ({ door, address: clientAddress(req, exposure !== undefined && exposure.level !== "local" && !exposure.behindGateway), ...(account !== undefined ? { account } : {}) });
+    ({ door, address: clientAddress(req, exposure !== undefined && exposure.level !== "local" && !exposure.behindGateway), peer: clientAddress(req, false), ...(account !== undefined ? { account } : {}) });
   /** Answers 429 with Retry-After when this try has to wait; true when it answered. */
   const mustWait = (req: IncomingMessage, res: ServerResponse, door: SignInDoor, account?: string): boolean => {
     const seconds = signIns.blocked(attemptFrom(req, door, account));
@@ -3065,7 +3065,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (exposure?.hsts === true) res.setHeader("strict-transport-security", HSTS);
       for (const [name, value] of Object.entries(securityHeaders(req, exposure?.publicOrigin))) res.setHeader(name, value);
       // A request that changes something comes from this installation's own page, or is refused (browser-guard.ts, R5).
-      if (originRefusal(req, exposure?.publicOrigin) !== undefined) { send(res, 403, apiError("cross-origin")); return; }
+      if (originRefusal(req, exposure?.publicOrigin, false, exposure?.hsts === true) !== undefined) { send(res, 403, apiError("cross-origin")); return; }
       const boxSide = boxSideRefusal(req.headers.host, url.pathname); if (boxSide !== undefined) { send(res, 403, { error: boxSide }); return; } // INV-1543
 
       const poppyAnswer = await poppyRoute(route, url, orchestrator.poppy?.poppyManager); if (poppyAnswer !== undefined) { send(res, poppyAnswer.status, poppyAnswer.body, poppyAnswer.type); return; } // docs/poppy.md
@@ -3215,6 +3215,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return;
       }
       if (!decision.allow && route !== "POST /api/login") {
+        // A token that was offered and refused is a try at one: counted by address and made to wait, whatever kind of answer follows.
+        const offered = decision.reason === "wrong" && req.headers.authorization !== undefined ? "wrong-token" : decision.reason === "token-in-address" || decision.reason === "token-not-here" ? decision.reason : undefined;
+        if (offered !== undefined && signIns.enabled) {
+          if (mustWait(req, res, "installation-token")) return;
+          signIns.failed(attemptFrom(req, "installation-token"), offered);
+        }
         if (req.method === "GET" && !/^\/api(?:\/|$)/.test(url.pathname) && wantsHtml(req.headers.accept)) {
           const reason = decision.reason === "access-removed" || decision.reason === "session-expired" ? decision.reason : "sign-in-required";
           const orgView = /\bLumenBoxOrgView\/1\b/.test(req.headers["user-agent"] ?? "");
@@ -3228,12 +3234,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         // Off local the token is not how a person gets in, so the answer does not offer it (INV-2204).
-        // A token that was offered and refused is a try at one: counted by address, and made to wait.
-        const offered = decision.reason === "wrong" && req.headers.authorization !== undefined ? "wrong-token" : decision.reason === "token-in-address" || decision.reason === "token-not-here" ? decision.reason : undefined;
-        if (offered !== undefined && signIns.enabled) {
-          if (mustWait(req, res, "installation-token")) return;
-          signIns.failed(attemptFrom(req, "installation-token"), offered);
-        }
         if (exposure !== undefined && exposure.level !== "local") { send(res, 401, apiError(decision.reason === "token-in-address" || decision.reason === "token-not-here" ? decision.reason : "sign-in-needed")); return; }
         send(res, 401, {
           error:
@@ -6654,7 +6654,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
     const [pathname, query] = (req.url ?? "").split("?");
     // A socket a page on another site opened would carry this browser's cookie: only our own page may (browser-guard.ts, R5).
-    if (originRefusal(req, exposure?.publicOrigin, true) !== undefined) { clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
+    if (originRefusal(req, exposure?.publicOrigin, true, exposure?.hsts === true) !== undefined) { clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
     // The RFB socket carries the screen, so it needs the same check. A browser sends the
     // cookie on an upgrade but cannot set a header, which is why the cookie exists. Asked again
     // whenever who may do what changes, because the socket outlives the moment it was let in (INV-2071).

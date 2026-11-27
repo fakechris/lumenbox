@@ -211,7 +211,7 @@ test("a DingTalk door signs in the organisation's employee as the identity their
   };
   // DingTalk returns the code as both `code` and `authCode`.
   const callback = (state: string, unionId: string) =>
-    fetch(`${base}/auth/ding/callback?state=${state}&code=${unionId}&authCode=${unionId}`, { redirect: "manual", headers: { "accept-language": "en", cookie: browser } });
+    fetch(`${base}/auth/ding/callback?state=${state}&code=${unionId}&authCode=${unionId}`, { redirect: "manual", headers: { "accept-language": "en", cookie: `pref=100%; ${browser}` } }); // beside a cookie of somebody else's that does not decode
 
   const known = await callback(await begin("/?view=settings"), "union-ana");
   assert.equal(known.status, 302);

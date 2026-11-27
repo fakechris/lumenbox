@@ -174,6 +174,37 @@ tries make everyone wait. Members must open the host in `AGENTBOX_PUBLIC_URL`: r
 name, the page loads and its changes are refused as cross-origin (docs/06, "Sign-in limits and
 what a browser is held to").
 
+Admit only the Ingress controller to the server's port. The address the server counts is the
+controller's word, so a pod that reaches port 7777 directly can claim any address. The selectors
+below are ingress-nginx's defaults; use your controller's namespace and labels:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agentbox-organisation-ingress
+  namespace: agentbox
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: agentbox-organisation
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - port: web
+```
+
+Personal boxes reach the server too (their agents' MCP face and model relay): if the policy above
+cuts them off, add a second `from` selecting the box pods. It needs a CNI that enforces
+NetworkPolicy.
+
 If you inspect the deployment from a Mac running the LumenBox desktop app, local port `7777` is
 already bound by your personal desktop installation (`127.0.0.1:7777`). Forward a distinct local
 port when testing with `kubectl port-forward` — for example `kubectl -n agentbox port-forward

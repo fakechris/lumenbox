@@ -28,6 +28,10 @@ test("a request that changes something comes from this installation's own page; 
   assert.equal(originRefusal(request("POST", { ...local, origin: "http://127.0.0.1:3000" }), undefined), "cross-origin", "another port on this machine is another site");
   assert.equal(originRefusal(request("POST", { ...local, origin: "https://evil.example" }), undefined), "cross-origin");
 
+  // Reached over https with no address declared: the same name over plain HTTP is not ours.
+  assert.equal(originRefusal(request("POST", { host: "box.example.test", origin: "http://box.example.test" }), undefined, false, true), "cross-origin");
+  assert.equal(originRefusal(request("POST", { host: "box.example.test", origin: "https://box.example.test" }), undefined, false, true), undefined);
+
   // Not asked, and why.
   assert.equal(originRefusal(request("GET", { ...local, origin: "https://evil.example" }), undefined), undefined, "a read changes nothing, and a link from anywhere opens the page");
   assert.equal(originRefusal(request("POST", { ...local, origin: "https://evil.example", authorization: "Bearer x" }), OURS), undefined, "a bearer credential is a program's: no page can add that header unasked");

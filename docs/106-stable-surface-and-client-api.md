@@ -180,8 +180,10 @@ limits and what a browser is held to"). R4, off local: every way a credential is
 limiter, by address and by account, with back-off to a ceiling, `429` and `Retry-After`; tries
 that did not get in are recorded without the credential and exported by `audit export`. The
 address is the last `X-Forwarded-For` entry, the one the declared proxy appended. R5, at every
-level: a request that changes something and every socket upgrade must carry this installation's
-own origin unless it carries a bearer credential; no cross-origin header is ever sent; the page
+level: where a request that changes something, or a socket upgrade, names an origin (`Origin`,
+else `Referer`), it must be this installation's own; a request with a bearer credential, one
+that names no origin at all (a program, not a browser) and a webhook are not asked; no
+cross-origin header is ever sent; the page
 has a content security policy whose `script-src` still allows inline script, which is the part
 of R5 not met; a door's sign-in state is bound to the browser that started it. R6–R8 are not
 built.

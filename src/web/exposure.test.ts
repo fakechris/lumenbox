@@ -270,6 +270,7 @@ test("private: every way in waits after a few wrong tries and records them witho
   assert.equal((await post("/api/login", { code: "WRONG1", name: "x" }, via("203.0.113.2"))).status, 400, "another address is not held by the first");
   assert.deepEqual(await until429(() => get("/api/me", { ...via("203.0.113.3"), authorization: "Bearer bad-token" })), limited(six, 401), "the installation token");
   assert.equal((await get("/api/me", { authorization: `Bearer ${TOKEN}` })).status, 200, "the CLI on the server is another address, and not waiting");
+  assert.deepEqual(await until429(() => get(`/?token=${TOKEN}`, { ...via("203.0.113.9"), accept: "text/html" })), limited(six, 401), "the token in a page's address, which answers with the sign-in page, counts the same");
   assert.deepEqual(await until429(() => post("/mcp", { jsonrpc: "2.0", id: 1, method: "initialize" }, { ...via("203.0.113.4"), authorization: "Bearer lmbx_bad-token" })), limited(six, 401), "a side-door token");
   assert.deepEqual(await until429(() => get("/auth/fixture/callback?state=forged&code=x", via("203.0.113.5"))), limited(six, 400), "a door's sign-in callback");
   // The first Admin's code is one secret: one address is stopped at its own limit, and many addresses at the code's.
@@ -284,6 +285,7 @@ test("private: every way in waits after a few wrong tries and records them witho
     assert.ok(lines.some(line => line.door === door && line.outcome === "limited"), `${door}: and so is the wait`);
   }
   assert.ok(lines.some(line => line.address === "203.0.113.1") && lines.every(line => line.address !== "198.51.100.250"), "by the address the proxy saw, not the one the client claimed");
+  assert.ok(lines.every(line => (line as { peer?: string }).peer === "127.0.0.1"), "with the connection's own other end beside it, which is how a forged one shows");
   for (const secret of ["WRONG1", "bad-token", "n0t-the-c0de", TOKEN]) assert.ok(!record.includes(secret), "never what was presented");
 
   // R5. Ana is signed in; her browser sends her cookie with any request to this address, whoever wrote the page.

@@ -33,15 +33,21 @@ test("wrong tries are free at first, then each doubles the wait up to a ceiling;
 
   // Many addresses guessing at one account: no address reaches its own limit, the account does.
   for (let n = 0; n < ACCOUNT_BACKOFF.free; n += 1) assert.equal(limiter.failed(from(`198.51.100.${n}`, "Ana")), undefined);
-  assert.equal(limiter.failed(from("198.51.100.200", "ana")), 2, "the name is one account however it is capitalised");
-  assert.equal(limiter.waitFor(from("192.0.2.9", "ana"))?.seconds, 2, "and it waits whoever asks next");
+  assert.equal(limiter.failed(from("198.51.100.200", "Ana")), 2);
+  assert.equal(limiter.waitFor(from("192.0.2.9", "Ana"))?.seconds, 2, "and it waits whoever asks next");
   assert.equal(limiter.waitFor(from("192.0.2.9", "bob")), undefined);
+  // Names are compared as written where they are checked (the gateway's password list), so `ana`
+  // is another account: she is not held by Ana's count, and her signing in does not clear it.
+  assert.equal(limiter.waitFor(from("192.0.2.9", "ana")), undefined);
+  limiter.succeeded(from("192.0.2.9", "ana"));
+  assert.equal(limiter.waitFor(from("192.0.2.9", "Ana"))?.seconds, 2);
+  now += 2_000;
 
   // Signing in clears the account; the address that was guessing keeps what it earned.
-  for (let n = 0; n < ADDRESS_BACKOFF.free + 1; n += 1) limiter.failed(from("192.0.2.50", "ana"));
-  limiter.succeeded(from("192.0.2.50", "ana"));
-  assert.equal(limiter.waitFor(from("192.0.2.77", "ana")), undefined, "the account starts again");
-  assert.ok(limiter.waitFor(from("192.0.2.50", "ana")), "the address does not");
+  for (let n = 0; n < ADDRESS_BACKOFF.free + 1; n += 1) limiter.failed(from("192.0.2.50", "Ana"));
+  limiter.succeeded(from("192.0.2.50", "Ana"));
+  assert.equal(limiter.waitFor(from("192.0.2.77", "Ana")), undefined, "the account starts again");
+  assert.ok(limiter.waitFor(from("192.0.2.50", "Ana")), "the address does not");
 
   // A quiet hour forgets.
   now += ADDRESS_BACKOFF.forgetMs + 1;
@@ -64,15 +70,15 @@ test("a refused try is recorded with who and from where and never with what was 
     const path = join(dir, "sign-ins.jsonl");
     const logs: string[] = [];
     const guard = signInGuard({ enabled: true, record: signInLedger(path, line => logs.push(line)), log: line => logs.push(line), now: () => new Date("2026-11-27T10:00:00Z") });
-    const attempt = { door: "gateway" as const, address: "203.0.113.9", account: "ana" };
+    const attempt = { door: "gateway" as const, address: "203.0.113.9", peer: "10.0.0.7", account: "ana" };
     for (let n = 0; n < ADDRESS_BACKOFF.free + 1; n += 1) { assert.equal(guard.blocked(attempt), undefined); guard.failed(attempt, "wrong-password"); }
     assert.equal(guard.blocked(attempt), 2);
     assert.equal(guard.blocked(attempt), 2);
     guard.failed({ door: "door", address: "203.0.113.9", account: "ding:bob" }, "not-activated", false);
     const lines = readFileSync(path, "utf8").trim().split("\n").map(line => JSON.parse(line) as SignInRecord);
     assert.equal(lines.filter(line => line.outcome === "failed" && line.reason === "wrong-password").length, ADDRESS_BACKOFF.free + 1);
-    assert.deepEqual(lines.filter(line => line.outcome === "limited"), [{ at: "2026-11-27T10:00:00.000Z", door: "gateway", outcome: "limited", address: "203.0.113.9", account: "ana", seconds: 2 }], "a flood of refused tries is one line");
-    assert.deepEqual(Object.keys(lines[0]!).sort(), ["account", "address", "at", "door", "outcome", "reason"], "nothing in a line could hold a password, a code or a token");
+    assert.deepEqual(lines.filter(line => line.outcome === "limited"), [{ at: "2026-11-27T10:00:00.000Z", door: "gateway", outcome: "limited", address: "203.0.113.9", peer: "10.0.0.7", account: "ana", seconds: 2 }], "a flood of refused tries is one line");
+    assert.deepEqual(Object.keys(lines[0]!).sort(), ["account", "address", "at", "door", "outcome", "peer", "reason"], "nothing in a line could hold a password, a code or a token; the peer is there because the address is a proxy's word");
     assert.equal(guard.blocked({ door: "door", address: "203.0.113.9" }), undefined, "a person an Admin has not let in yet is recorded, not counted");
     assert.ok(logs.some(line => /sign-in limited: gateway from 203\.0\.113\.9 for "ana"; refused for 2s/.test(line)));
 
