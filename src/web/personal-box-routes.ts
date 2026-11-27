@@ -2,6 +2,7 @@ import { personalBoxUsesQuota, type PersonalBoxes } from "../host/personal-boxes
 import { roleAtLeast, type Principal, type Principals } from "../host/principals.ts";
 import { personalBoxesOf } from "../host/box-quota.ts";
 import type { apiError } from "./api-error.ts";
+import type { AutoPersonalBoxes } from "../host/auto-personal-box.ts";
 
 interface Deps {
   boxes: PersonalBoxes;
@@ -15,6 +16,8 @@ interface Deps {
   read(): Promise<Record<string, unknown>>;
   send(status: number, body: unknown): void;
   error: typeof apiError;
+  /** The box made at a first sign-in: what the person's own list and the Admins' say about it (INV-2203). */
+  auto?: Pick<AutoPersonalBoxes, "view" | "waiting">;
 }
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : "Personal computer operation failed.";
@@ -47,11 +50,12 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
   };
   type Rows = Awaited<ReturnType<typeof listed>>;
   const current = (person: Principal, rows: Rows) => ({
-    boxes: rows, ...counts(person.id), canCreate: deps.authorize(person.id), name: person.name,
+    boxes: rows, ...counts(person.id), canCreate: deps.authorize(person.id), name: person.name, auto: deps.auto?.view(person.id),
   });
   const inventory = (rows: Rows) => {
-    const entries = boxes.quotaEntries();
-    const people = principals.list().map(person => ({ id: person.id, name: person.name, eligible: deps.authorize(person.id), ...counts(person.id, entries) }));
+    const entries = boxes.quotaEntries(), waiting = deps.auto?.waiting() ?? new Set<string>();
+    const people = principals.list().map(person => ({ id: person.id, name: person.name, eligible: deps.authorize(person.id), ...counts(person.id, entries),
+      ...(waiting.has(person.id) ? { waitingForQuota: true } : {}) }));
     return { people, boxes: rows.map(box => {
       const person = people.find(row => row.id === box.owner);
       return { ...box, ownerName: person?.name ?? box.ownerName ?? box.owner, orphaned: !person || box.retained };
