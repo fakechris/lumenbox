@@ -278,31 +278,44 @@ try {
   if (notice) {
     const reopened = [];
     page.on("websocket", socket => { const entry = { url: socket.url(), frames: 0 }; reopened.push(entry); socket.on("framereceived", () => { entry.frames += 1; }); });
+    // One press. While the box is still bringing the desktop back the page keeps trying by itself, saying so; nobody presses again.
     await page.locator("#lumenbox-desktop-closed button").click();
-    // While the box is still bringing the desktop back, a person meets either the "could not open" page
-    // or the notice again, and tries again: so does this, every few seconds, the way they would.
-    const deadline = Date.now() + 120_000;
-    for (let waited = 500; Date.now() < deadline && !reopened.some(socket => socket.frames >= 3); waited += 500) {
+    let presses = 1, reconnecting = false;
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline && !reopened.some(socket => socket.frames >= 3)) {
       await page.waitForTimeout(500);
-      if (waited % 5_000 !== 0) continue;
-      const again = page.locator("#lumenbox-desktop-closed button");
-      if (await again.count() > 0) await again.click().catch(() => {});
-      else if (!(await page.title()).includes("noVNC")) await page.reload({ waitUntil: "load" }).catch(() => {});
+      const state = await page.locator("#lumenbox-desktop-closed").getAttribute("data-state", { timeout: 200 }).catch(() => null);
+      if (state === "0") reconnecting = true;
+      // Only if the page gave up after its own tries — "still not answering" — does a person press again.
+      if (state === "1") { presses += 1; await page.locator("#lumenbox-desktop-closed button").click().catch(() => {}); }
+      else if (state === null && !(await page.title()).includes("noVNC")) await page.reload({ waitUntil: "load" }).catch(() => {});
     }
     const back = reopened.find(socket => socket.frames >= 3);
-    say(back !== undefined && back.url !== socketUrl, "private: Reopen gets a new ticket and the picture is live again", back ? `${back.frames} frame(s) on a new ticket` : `sockets after reopening: ${JSON.stringify(reopened.map(socket => [socket.url.replace(/ticket=.*/, "ticket=…"), socket.frames]))}; the page is at ${page.url().replace(/ticket.*/, "ticket…")} titled "${await page.title()}" saying "${(await page.evaluate(() => document.body.textContent)).slice(0, 120)}"`);
+    say(back !== undefined && back.url !== socketUrl, "private: Reopen gets a new ticket and the picture is live again", back
+      ? `${back.frames} frame(s) on a new ticket, after ${reopened.length} tr${reopened.length === 1 ? "y" : "ies"}${reconnecting ? ", the page saying it was reconnecting" : ""}`
+      : `sockets after reopening: ${JSON.stringify(reopened.map(socket => [socket.url.replace(/ticket=.*/, "ticket=…"), socket.frames]))}; the page is at ${page.url().replace(/ticket.*/, "ticket…")} titled "${await page.title()}"`);
+    say(presses === 1, "private: one press was enough — the page did the waiting", `${presses} press(es)`);
   }
   await page.close();
 
   const watcher = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   await signedIn(watcher, direct, through, "viewer", "Watcher");
-  await visit(watcher, through, DESKTOP, "private: the desktop page in a viewer's session");
+  const watched = await visit(watcher, through, DESKTOP, "private: the desktop page in a viewer's session", { keep: true });
+  // The viewer is signed out everywhere while watching: the stream goes, and the page says their access ended — with nothing to press.
+  const who = sessions().filter(line => line.event === "opened" && line.mode === "view").at(-1)?.person;
+  await fetch(`${direct}/api/principals/logout`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ principalId: who }) });
+  const ended = await watched.page.waitForSelector("#lumenbox-desktop-closed", { timeout: 15_000 }).then(() => true, () => false);
+  const endedState = ended ? await watched.page.locator("#lumenbox-desktop-closed").getAttribute("data-state") : null;
+  say(ended && endedState === "0" && await watched.page.locator("#lumenbox-desktop-closed button").count() === 0, "private: a person signed out while watching is told their access ended, and offered nothing to reopen",
+    ended ? ((await watched.page.locator("#lumenbox-desktop-closed p").textContent()) ?? "").slice(0, 60) : "no notice appeared");
+  await watched.page.close();
   await new Promise(resolve => setTimeout(resolve, 500));
   const record = sessions().slice(before);
   const opened = record.filter(line => line.event === "opened");
   say(opened.length >= 3 && opened.every(line => line.by === "ticket"), "the record: every private stream was opened by ticket", `${opened.length} opened`);
   say(opened.some(line => line.mode === "control") && opened.some(line => line.mode === "view"), "the record: the driver's stream is control, the viewer's is view");
   say(record.some(line => line.event === "closed" && line.reason === "box-gone"), "the record: the stream that ended under the page says the box let go");
+  say(record.some(line => line.event === "closed" && line.reason === "revoked" && line.mode === "view"), "the record: the signed-out viewer's stream says it was revoked");
   say(!readFileSync(join(scratch.home, "desktop-sessions.jsonl"), "utf8").includes(socketUrl.split("ticket=")[1] || "no-ticket-seen"), "the record holds no ticket");
 } catch (error) {
   failed += 1;

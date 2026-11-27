@@ -93,8 +93,8 @@ import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } fro
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import { originRefusal, securityHeaders } from "./browser-guard.ts";
 import {
-  DESKTOP_IDLE_MS, DESKTOP_SESSIONS_LEDGER, DesktopStreams, DesktopTickets, desktopSessionLedger, grantedMode, pageAddressWith, ticketIn,
-  withReopenNotice, withoutTicket, type HeldStream, type StreamEnd, type StreamOpen,
+  DESKTOP_IDLE_MS, DESKTOP_SESSIONS_LEDGER, DesktopStreams, DesktopTickets, REVOKED_CLOSE_CODE, closeFrame, desktopSessionLedger, grantedMode, pageAddressWith, ticketIn,
+  withReopenNotice, withoutTicket, type HeldStream, type ReopenWords, type StreamEnd, type StreamOpen,
 } from "./desktop-streams.ts";
 import { clientAddress, signInGuard, signInLedger, trustedProxies, SIGN_INS_LEDGER, type SignInDoor, type SignInGuard } from "./sign-in-limits.ts";
 import {
@@ -2805,7 +2805,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           response.on("data", (chunk: Buffer) => chunks.push(chunk));
           response.on("end", () => {
             const locale = requestLocaleOf(res.req);
-            const body = Buffer.from(withReopenNotice(Buffer.concat(chunks).toString("utf8"), { closed: tr("page.desktop.closed", locale), idle: tr("page.desktop.idle", locale), reopen: tr("page.desktop.reopen", locale) }), "utf8");
+            const body = Buffer.from(withReopenNotice(Buffer.concat(chunks).toString("utf8"), desktopClosedWords(locale)), "utf8");
             const { "content-length": _length, "content-encoding": _encoding, "transfer-encoding": _transfer, ...rest } = headers;
             res.writeHead(status, { ...rest, "content-length": body.length });
             res.end(body);
@@ -2847,6 +2847,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
     req.pipe(upstream);
   }
+
+  /** What the desktop page says when its stream ends (desktop-streams.ts), in the reader's language. */
+  const desktopClosedWords = (locale: ReturnType<typeof requestLocaleOf>): ReopenWords => ({
+    closed: tr("page.desktop.closed", locale), idle: tr("page.desktop.idle", locale), revoked: tr("page.desktop.revoked", locale),
+    reconnecting: tr("page.desktop.reconnecting", locale), still: tr("page.desktop.still-closed", locale), reopen: tr("page.desktop.reopen", locale),
+  });
 
   function sendDesktopWaiting(res: ServerResponse, reason: string, loading?: boolean): void {
     const page = desktopWaitingPage(reason, requestLocaleOf(res.req), loading);
@@ -6758,7 +6764,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const joined = desktop;
     const held: { stream?: HeldStream } = {};
     const opening: StreamOpen = { person, box: boxOf, display, mode: joined.upstream.startsWith("/vnc-ro/") ? "view" : "control", by: ticketsRequired() ? "ticket" : "session" };
-    openDesktops.hold(clientSocket, () => { const again = admitted(); return typeof again !== "number" && again.upstream === joined.upstream; }, () => held.stream?.end("revoked"));
+    openDesktops.hold(clientSocket, () => { const again = admitted(); return typeof again !== "number" && again.upstream === joined.upstream; }, () => {
+      held.stream?.end("revoked");
+      // Said to the page before the socket is taken away, so it can tell the person their access ended rather than offer to reopen.
+      try { clientSocket.write(closeFrame(REVOKED_CLOSE_CODE, "Your access to this desktop ended.")); } catch { /* already gone */ }
+    });
 
     void (async () => {
       // noVNC reconnects its socket without reloading the HTML after a box restart.

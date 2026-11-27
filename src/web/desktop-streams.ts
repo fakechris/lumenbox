@@ -125,8 +125,15 @@ export function pageAddressWith(pathname: string, search: string, prefix: string
   return `${pathname}?${params.toString()}`;
 }
 
-/** The close code an idle stream is ended with, so the page can say that and not something vaguer. */
+/** The close codes the server ends a stream with, so the page can say which it was. */
 export const IDLE_CLOSE_CODE = 4408;
+export const REVOKED_CLOSE_CODE = 4403;
+
+/** How long the page keeps trying after a person presses Reopen, and how often. */
+export const REOPEN_WINDOW_MS = 20_000;
+export const REOPEN_EVERY_MS = 2_500;
+
+export interface ReopenWords { closed: string; idle: string; revoked: string; reconnecting: string; still: string; reopen: string }
 
 /**
  * The desktop page with a way back when its stream ends (off local).
@@ -135,28 +142,51 @@ export const IDLE_CLOSE_CODE = 4408;
  * Off local the socket cannot simply be opened again — its ticket is spent — so a box restart, an
  * idle close or a withdrawn permission would leave a frozen screen that looks alive. This adds,
  * to the page as it passes through, a notice over the picture when a socket that had opened
- * closes, with one button: it reloads the page, which is given a new ticket. Not automatic: a
- * page that reopened itself would make the idle limit mean nothing.
+ * closes, which says why and offers what makes sense:
  *
- * It watches the socket itself rather than noVNC's markup, which differs between its versions
- * (measured: the box's page keeps no state class on the document): the page's `WebSocket` is
- * wrapped before noVNC's modules run — an inline script runs first — and nothing else is touched.
+ * - the desktop or its box went away: **Reopen**. The press reloads the page for a new ticket,
+ *   and because a box is often still bringing the desktop back, the page then keeps trying by
+ *   itself — `REOPEN_EVERY_MS` apart, for `REOPEN_WINDOW_MS` — saying that it is reconnecting,
+ *   and only then says the desktop is still not answering. Each try is a fresh ticket, which a
+ *   person asked for by pressing.
+ * - nothing happened for a while (`IDLE_CLOSE_CODE`): Reopen, once, with no trying after it.
+ * - the person's access ended (`REVOKED_CLOSE_CODE`): that is said, and there is no button.
+ *
+ * Nothing here runs before a person presses: a page that reopened itself would make the idle
+ * limit mean nothing. The pressed state is one deadline in `sessionStorage`, so it survives the
+ * reload and nothing else. It watches the socket itself rather than noVNC's markup, which differs
+ * between its versions (measured: the box's page keeps no state class on the document): the
+ * page's `WebSocket` is wrapped before noVNC's modules run — an inline script runs first.
  */
-export function withReopenNotice(html: string, words: { closed: string; idle: string; reopen: string }): string {
+export function withReopenNotice(html: string, words: ReopenWords): string {
   const at = html.lastIndexOf("</body>");
   if (at < 0) return html;
   const text = (value: string) => JSON.stringify(value).replace(/</g, "\\u003c");
   const script =
-    `<script>(function(){var Native=window.WebSocket,shown=false;if(!Native)return;` +
-    `function show(idle){if(shown)return;shown=true;var box=document.createElement("div");box.id="lumenbox-desktop-closed";` +
+    `<script>(function(){var Native=window.WebSocket,KEY="lumenbox-desktop-reopen",box=null,until=0;if(!Native)return;` +
+    `function forget(){try{sessionStorage.removeItem(KEY);}catch(e){}}` +
+    `try{until=Number(sessionStorage.getItem(KEY))||0;}catch(e){}` +
+    `var trying=until>Date.now();if(!trying)forget();` +
+    // what: 0 no button, 1 Reopen that keeps trying, 2 Reopen once.
+    `function show(words,what){if(box)box.remove();box=document.createElement("div");box.id="lumenbox-desktop-closed";box.setAttribute("data-state",String(what));` +
     `box.style.cssText="position:fixed;inset:0;z-index:2147483647;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;` +
     `background:rgba(0,0,0,.82);color:#eee;font:14px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;text-align:center;padding:24px";` +
-    `var p=document.createElement("p");p.style.cssText="max-width:34em;margin:0";p.textContent=idle?${text(words.idle)}:${text(words.closed)};` +
-    `var b=document.createElement("button");b.textContent=${text(words.reopen)};b.style.cssText="font:inherit;padding:8px 18px;border-radius:8px;border:0;background:#eee;color:#111;cursor:pointer";` +
-    `b.onclick=function(){location.reload();};box.appendChild(p);box.appendChild(b);document.body.appendChild(box);}` +
-    `function Watched(url,protocols){var socket=protocols===undefined?new Native(url):new Native(url,protocols),opened=false;` +
+    `var p=document.createElement("p");p.style.cssText="max-width:34em;margin:0";p.textContent=words;box.appendChild(p);` +
+    `if(what){var b=document.createElement("button");b.textContent=${text(words.reopen)};` +
+    `b.style.cssText="font:inherit;padding:8px 18px;border-radius:8px;border:0;background:#eee;color:#111;cursor:pointer";` +
+    `b.onclick=function(){if(what===1){try{sessionStorage.setItem(KEY,String(Date.now()+${REOPEN_WINDOW_MS}));}catch(e){}}location.reload();};box.appendChild(b);}` +
+    `document.body.appendChild(box);}` +
+    `function ended(code){` +
+    `if(code===${IDLE_CLOSE_CODE}){trying=false;forget();show(${text(words.idle)},2);return;}` +
+    `if(code===${REVOKED_CLOSE_CODE}){trying=false;forget();show(${text(words.revoked)},0);return;}` +
+    `if(trying&&Date.now()<until){show(${text(words.reconnecting)},0);setTimeout(function(){location.reload();},${REOPEN_EVERY_MS});return;}` +
+    `if(trying){trying=false;forget();show(${text(words.still)},1);return;}` +
+    `show(${text(words.closed)},1);}` +
+    `function Watched(url,protocols){var socket=protocols===undefined?new Native(url):new Native(url,protocols),opened=false,over=false;` +
     `socket.addEventListener("open",function(){opened=true;});` +
-    `socket.addEventListener("close",function(event){if(opened)show(event.code===${IDLE_CLOSE_CODE});});return socket;}` +
+    // A picture arrived: whatever was being retried has worked.
+    `socket.addEventListener("message",function(){if(trying){trying=false;forget();}});` +
+    `socket.addEventListener("close",function(event){if(over)return;over=true;if(opened||trying)ended(event.code);});return socket;}` +
     `Watched.prototype=Native.prototype;Watched.CONNECTING=0;Watched.OPEN=1;Watched.CLOSING=2;Watched.CLOSED=3;window.WebSocket=Watched;})();</script>`;
   return html.slice(0, at) + script + html.slice(at);
 }
@@ -189,8 +219,8 @@ export interface DesktopSessionRecord {
 
 export interface StreamOpen { person: string; box: string; display: number; agent?: string; mode: DesktopMode; by: "ticket" | "session" }
 
-/** A WebSocket close frame from the server: status 4000 + `code`, and words noVNC shows. */
-function closeFrame(code: number, reason: string): Buffer {
+/** A WebSocket close frame from the server: a code the page reads, and words for anything else that shows them. */
+export function closeFrame(code: number, reason: string): Buffer {
   const text = Buffer.from(reason, "utf8").subarray(0, 120);
   const frame = Buffer.alloc(4 + text.length);
   frame[0] = 0x88;
@@ -309,8 +339,8 @@ export class DesktopStreams {
       if (ended || now() - last < idleMs) return;
       end("idle");
       // Said in the socket's own words first, so the page shows why; then the socket goes.
-      try { client.write(closeFrame(IDLE_CLOSE_CODE, "Closed after a while with nothing happening. Reload to watch again.")); } catch { /* already gone */ }
-      client.destroy();
+      // Ended, not destroyed: the frame has to reach the page before the socket goes.
+      try { client.end(closeFrame(IDLE_CLOSE_CODE, "Closed after a while with nothing happening. Reload to watch again.")); } catch { client.destroy(); }
     }, Math.max(1_000, Math.min(30_000, Math.floor(idleMs / 4))));
     timer?.unref();
     return {

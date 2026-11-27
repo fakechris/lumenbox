@@ -123,6 +123,9 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "page.desktop.retry": ["重试", "Retry"],
   "page.desktop.closed": ["这个桌面的连接已结束：桌面或 box 被重启了，或你的访问权限变了。", "This desktop's connection ended: the desktop or its box was restarted, or your access changed."],
   "page.desktop.idle": ["这个桌面长时间没有动静，连接已关闭。", "Nothing happened on this desktop for a while, so its connection was closed."],
+  "page.desktop.revoked": ["你对这个桌面的访问已结束。", "Your access to this desktop has ended."],
+  "page.desktop.reconnecting": ["正在重新连接桌面…", "Reconnecting to the desktop…"],
+  "page.desktop.still-closed": ["桌面还没有响应。它可能仍在重启，请稍后再试。", "The desktop is still not answering. It may still be restarting; try again in a moment."],
   "page.desktop.reopen": ["重新打开", "Reopen"],
   "page.desktop.box-down": ["box 暂时不可用。用 agentbox box up 启动它。", "The box is not available. Start it with agentbox box up."],
 };

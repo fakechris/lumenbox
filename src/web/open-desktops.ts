@@ -26,8 +26,10 @@ export class OpenDesktops {
       try { stays = held.mayStay(); } catch { /* a question that cannot be answered is a no */ }
       if (stays) continue;
       this.open.delete(socket);
+      // The holder may have something to say to the page first (why it ended); the socket goes either way.
       try { held.revoked?.(); } catch { /* the record is not a reason to keep the socket */ }
-      socket.destroy();
+      // After what was written to it has gone out: a reason said to the page must arrive before the socket does not.
+      socket.destroySoon();
       closed++;
     }
     return closed;

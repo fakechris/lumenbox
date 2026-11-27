@@ -99,7 +99,7 @@ test("a key or a button pressed is input; watching, or a pointer crossing the pi
 test("a stream is recorded when it opens and when it ends, once, with why; quiet for too long, it is closed with words the page shows", async () => {
   const lines: DesktopSessionRecord[] = [];
   let now = Date.parse("2026-11-27T10:00:00Z");
-  const fake = () => { const written: Buffer[] = []; return { written, destroyed: false, write(chunk: Buffer) { written.push(chunk); return true; }, destroy() { this.destroyed = true; } }; };
+  const fake = () => { const written: Buffer[] = []; return { written, destroyed: false, end(chunk: Buffer) { written.push(chunk); this.destroyed = true; }, destroy() { this.destroyed = true; } }; };
 
   const streams = new DesktopStreams({ record: line => lines.push(line), now: () => now });
   const socket = fake();
@@ -142,33 +142,99 @@ test("a stream is recorded when it opens and when it ends, once, with why; quiet
   assert.equal(DESKTOP_IDLE_MS, 15 * 60_000, "the limit a deployment has is fifteen minutes");
 });
 
-test("the desktop page gains a way back for when its stream ends, and nothing else", () => {
-  const html = "<html><body><canvas></canvas></body></html>";
-  const out = withReopenNotice(html, { closed: "Closed </script><b>x", idle: "Idle", reopen: "Reopen" });
+test("when a stream ends the page says why; Reopen, once pressed, keeps trying for a while; an idle close and a withdrawn permission do not", () => {
+  const WORDS = { closed: "Closed </script><b>x", idle: "Idle", revoked: "Revoked", reconnecting: "Reconnecting", still: "Still", reopen: "Reopen" };
+  const out = withReopenNotice("<html><body><canvas></canvas></body></html>", WORDS);
   assert.ok(out.startsWith("<html><body><canvas></canvas><script>") && out.endsWith("</script></body></html>"));
   const script = out.slice(out.indexOf("<script>") + 8, out.lastIndexOf("</script>"));
   assert.ok(!script.includes("</script>"), "words cannot end the script early");
-  assert.match(script, /window\.WebSocket=Watched/, "it watches the socket itself, whatever the page's markup is");
-  assert.match(script, /event\.code===4408/, "and tells an idle close from the others");
-  assert.match(script, /location\.reload\(\)/);
-  assert.ok(!/setTimeout|setInterval/.test(script), "it waits for the person: a page that reopened itself would undo the idle limit");
-  // The script is what a browser runs: a socket that opened and then closed shows the notice once; one that never opened does not.
-  const made: { listeners: Record<string, ((event: { code: number }) => void)[]> }[] = [];
-  const appended: { id?: string; children: { textContent?: string }[] }[] = [];
-  const element = () => { const node = { style: {}, children: [] as { textContent?: string }[], appendChild(child: { textContent?: string }) { node.children.push(child); } }; return node; };
-  const window = { WebSocket: function (this: unknown) { const socket = { listeners: {} as Record<string, ((event: { code: number }) => void)[]>, addEventListener(name: string, fn: (event: { code: number }) => void) { socket.listeners[name] = [...(socket.listeners[name] ?? []), fn]; } }; made.push(socket); return socket; } as unknown as { new (url: string): unknown } };
-  const document = { createElement: element, body: { appendChild: (node: { id?: string; children: { textContent?: string }[] }) => appended.push(node) } };
-  new Function("window", "document", "location", script)(window, document, { reload() {} });
-  new window.WebSocket("wss://x/never-opens");
-  made[0]!.listeners.close![0]!({ code: 1006 });
-  assert.equal(appended.length, 0, "a socket that never opened is noVNC's to report");
-  new window.WebSocket("wss://x/opens");
-  made[1]!.listeners.open![0]!({ code: 0 });
-  made[1]!.listeners.close![0]!({ code: 4408 });
-  made[1]!.listeners.close![0]!({ code: 4408 });
-  assert.equal(appended.length, 1);
-  assert.deepEqual([appended[0]!.id, appended[0]!.children[0]!.textContent, appended[0]!.children[1]!.textContent], ["lumenbox-desktop-closed", "Idle", "Reopen"]);
-  assert.equal(withReopenNotice("no body here", { closed: "x", idle: "i", reopen: "y" }), "no body here");
+  assert.equal(withReopenNotice("no body here", WORDS), "no body here");
+
+  /** A browser tab: its sessionStorage and clock outlive a reload; each `load()` runs the page's script afresh. */
+  const tab = { storage: new Map<string, string>(), now: 1_000_000, reloads: 0, timers: [] as (() => void)[] };
+  type Notice = { text: string; state: string; press?: () => void };
+  const load = () => {
+    const sockets: { fire(name: string, event?: { code: number }): void }[] = [];
+    let notice: Notice | undefined;
+    interface Node { style: object; attrs: Record<string, string>; children: Node[]; textContent: string; onclick?: () => void; setAttribute(name: string, value: string): void; appendChild(child: Node): void; remove(): void }
+    const element = (): Node => {
+      const node: Node = { style: {}, attrs: {}, children: [], textContent: "",
+        setAttribute(name, value) { node.attrs[name] = value; }, appendChild(child) { node.children.push(child); }, remove() { notice = undefined; } };
+      return node;
+    };
+    const window = { WebSocket: function () {
+      const listeners: Record<string, ((event: { code: number }) => void)[]> = {};
+      sockets.push({ fire: (name, event = { code: 1006 }) => { for (const fn of listeners[name] ?? []) fn(event); } });
+      return { addEventListener(name: string, fn: (event: { code: number }) => void) { listeners[name] = [...(listeners[name] ?? []), fn]; } };
+    } as unknown as { new (url: string): unknown } };
+    const document = { createElement: element, body: { appendChild: (node: Node) => {
+      notice = { text: node.children[0]!.textContent, state: node.attrs["data-state"]!, ...(node.children[1]?.onclick ? { press: node.children[1].onclick } : {}) };
+    } } };
+    const sessionStorage = { getItem: (key: string) => tab.storage.get(key) ?? null, setItem: (key: string, value: string) => { tab.storage.set(key, value); }, removeItem: (key: string) => { tab.storage.delete(key); } };
+    const RealDate = Date;
+    new Function("window", "document", "location", "sessionStorage", "setTimeout", "Date", script)(
+      window, document, { reload: () => { tab.reloads += 1; } }, sessionStorage, (fn: () => void) => { tab.timers.push(fn); }, { now: () => tab.now } as unknown as typeof RealDate);
+    const socket = () => { new window.WebSocket("wss://x/websockify"); return sockets.at(-1)!; };
+    return { socket, notice: () => notice };
+  };
+  /** A socket that opened, showed a picture, and then closed with `code`. */
+  const live = (page: ReturnType<typeof load>, code: number) => { const socket = page.socket(); socket.fire("open"); socket.fire("message"); socket.fire("close", { code }); };
+
+  // Nothing runs before a person presses: a socket that never opened is noVNC's to report, and a closed stream shows a notice and waits.
+  let page = load();
+  page.socket().fire("close");
+  assert.equal(page.notice(), undefined);
+  live(page, 1006);
+  assert.deepEqual([page.notice()!.text, page.notice()!.state], [WORDS.closed, "1"]);
+  assert.deepEqual([tab.reloads, tab.timers.length], [0, 0], "no reload and no timer until somebody presses");
+
+  // The press reloads, and from then on the page tries by itself while the box brings the desktop back.
+  page.notice()!.press!();
+  assert.equal(tab.reloads, 1);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    page = load();
+    const socket = page.socket();
+    if (attempt % 2 === 0) socket.fire("open"); // opened and closed again, or never opened: both are "not back yet"
+    socket.fire("close");
+    assert.deepEqual([page.notice()!.text, page.notice()!.press], [WORDS.reconnecting, undefined], "it says so, with nothing to press");
+    assert.equal(tab.timers.length, attempt + 1);
+    tab.now += 2_500;
+    tab.timers[attempt]!();
+    assert.equal(tab.reloads, attempt + 2);
+  }
+  // It comes back: a picture arrives, and the trying is over — a later close is an ordinary one again.
+  page = load();
+  live(page, 1006);
+  assert.deepEqual([page.notice()!.text, tab.storage.size, tab.timers.length], [WORDS.closed, 0, 3]);
+
+  // It does not come back within the window: the page stops and says so, and the person may press again.
+  page.notice()!.press!();
+  tab.now += 20_001;
+  page = load();
+  page.socket().fire("close");
+  assert.equal(page.notice(), undefined, "past the window a socket that never opened is not retried");
+  tab.storage.set("lumenbox-desktop-reopen", String(tab.now + 1_000));
+  page = load();
+  tab.now += 2_000;
+  page.socket().fire("close");
+  assert.deepEqual([page.notice()!.text, page.notice()!.state, tab.storage.size], [WORDS.still, "1", 0]);
+
+  // Idle: Reopen, once, and no trying after it. Revoked: said, and nothing to press — also in the middle of trying.
+  const timersBefore = tab.timers.length, reloadsBefore = tab.reloads;
+  page = load();
+  live(page, 4408);
+  assert.deepEqual([page.notice()!.text, page.notice()!.state], [WORDS.idle, "2"]);
+  page.notice()!.press!();
+  assert.deepEqual([tab.reloads, tab.storage.size], [reloadsBefore + 1, 0], "the press reloads and leaves nothing behind to keep trying with");
+  page = load();
+  live(page, 4403);
+  assert.deepEqual([page.notice()!.text, page.notice()!.press], [WORDS.revoked, undefined]);
+  tab.storage.set("lumenbox-desktop-reopen", String(tab.now + 10_000));
+  page = load();
+  const refused = page.socket();
+  refused.fire("open");
+  refused.fire("close", { code: 4403 });
+  assert.deepEqual([page.notice()!.text, tab.storage.size, tab.timers.length], [WORDS.revoked, 0, timersBefore], "a withdrawn permission ends the trying too");
 });
 
 // ── a real server, a stand-in daemon ────────────────────────────────────────────────────────────
@@ -276,7 +342,8 @@ test("private: the desktop's socket opens only with a ticket — this person's, 
   assert.equal(served.status, 200);
   assert.equal(served.headers.get("cache-control"), "no-store");
   const html = await served.text();
-  assert.match(html, /^<html><body>desktop<script>.*This desktop's connection ended.*Reopen.*<\/script><\/body><\/html>$/s);
+  assert.match(html, /^<html><body>desktop<script>.*<\/script><\/body><\/html>$/s);
+  for (const words of ["This desktop's connection ended", "Reopen", "Reconnecting to the desktop", "Your access to this desktop has ended"]) assert.ok(html.includes(words), words);
   assert.equal(Number(served.headers.get("content-length")), Buffer.byteLength(html));
 
   assert.equal((await open(annTicket.socket, { cookie: dee })).status, "HTTP/1.1 403 Forbidden ticket-other-person", "somebody else's session cannot use it");
@@ -302,9 +369,13 @@ test("private: the desktop's socket opens only with a ticket — this person's, 
   driving.socket.write(Buffer.concat([masked(HANDSHAKE), masked(UPDATE_REQUEST), masked(KEY_DOWN)]));
   await new Promise(resolve => setTimeout(resolve, 100));
   const lost = new Promise<void>(resolve => driving.socket.once("close", () => resolve()));
+  const said: Buffer[] = [];
+  driving.socket.on("data", chunk => said.push(chunk as Buffer));
   const { Principals } = await import("../host/principals.ts");
   assert.equal((await post("/api/principals", { principals: new Principals().list().map(person => (person.id === "dee" ? { ...person, role: "viewer" } : person)) }, { authorization: "Bearer t0k" })).status, 200);
   await Promise.race([lost, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("the demoted driver's stream is still open")), 2000))]);
+  const frame = Buffer.concat(said);
+  assert.deepEqual([frame[0], frame.readUInt16BE(2)], [0x88, 4403], "and the page is told why before the socket goes, so it does not offer to reopen what was taken away");
 
   // Ann leaves; the box drops the viewer's stream.
   watching.socket.destroy();

@@ -554,9 +554,13 @@ for 15 minutes (`DESKTOP_IDLE_MS`) is closed. A desktop an agent is working on r
 person driving sends input, so neither is idle; what goes quiet is a tab left open on a still
 screen.
 
-**When a stream ends** — idle, the desktop or the box restarted, the person's access withdrawn —
-the page shows why in a notice over the last picture with one button, **Reopen**, which reloads
-it and so gets a new ticket. It does not reopen by itself: that would undo the idle limit.
+**When a stream ends** the page says why in a notice over the last picture, and offers what
+makes sense. The desktop or its box was restarted: **Reopen** — one press reloads the page for a
+new ticket, and because a box is often still bringing the desktop back, the page then keeps
+trying by itself, every 2.5 seconds for 20, saying that it is reconnecting; only after that does
+it say the desktop is still not answering, with the button again. Nothing happened for 15
+minutes: Reopen, once. The person's access was withdrawn: that is said, and there is no button.
+Nothing reopens before a person presses: that would undo the idle limit.
 
 **Access that ends, ends the stream.** Removing a person, signing them out everywhere, a
 directory sync that drops them, taking a box from them, or lowering a driver to viewer closes the
