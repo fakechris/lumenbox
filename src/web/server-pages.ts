@@ -50,17 +50,17 @@ const SERVER_PAGE_CSS = [
   ".cmd{display:flex;align-items:center;gap:8px;background:var(--rail);border:1px solid var(--border);border-radius:9px;padding:8px 11px;margin:6px 0 12px}",
   ".cmd pre{margin:0;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere;flex:1;user-select:all}",
   ".copy-link{flex:none;font-size:12px;font-weight:500;color:var(--accent);text-decoration:none;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);cursor:pointer;user-select:none}",
-  "form#bootstrap{display:flex;flex-direction:column;gap:12px;margin-top:8px}",
-  "form#bootstrap label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--soft)}",
-  "form#bootstrap input{width:100%;padding:10px 12px;font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;border-radius:10px;border:1px solid var(--strong);background:var(--surface);color:var(--text)}",
-  "form#bootstrap input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}",
+  "form#bootstrap,form#op-unlock{display:flex;flex-direction:column;gap:12px;margin-top:8px}",
+  "form#bootstrap label,form#op-unlock label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--soft)}",
+  "form#bootstrap input,form#op-unlock input{width:100%;padding:10px 12px;font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;border-radius:10px;border:1px solid var(--strong);background:var(--surface);color:var(--text)}",
+  "form#bootstrap input:focus,form#op-unlock input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}",
   ".btn-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:2px}",
   "button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 16px;font:600 14px/1.3 inherit;",
   "border-radius:10px;border:1px solid transparent;background:var(--accent);color:var(--accent-fg);text-decoration:none;cursor:pointer}",
   "button:hover,.btn:hover{filter:brightness(1.06)}button:disabled{opacity:.55;cursor:not-allowed}",
   ".btn-secondary{background:var(--surface);color:var(--text);border-color:var(--strong)}",
   ".acts{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;align-items:center}",
-  "#status{margin:10px 0 0;font-size:13px;color:var(--muted)}#status[data-err='1']{color:var(--bad);font-weight:500}",
+  "#status,#op-status{margin:10px 0 0;font-size:13px;color:var(--muted)}#status[data-err='1'],#op-status[data-err='1']{color:var(--bad);font-weight:500}",
   "@media(max-width:520px){body{padding:16px 12px}.card{padding:20px 18px}}",
 ].join("");
 
@@ -81,17 +81,60 @@ function pageShell(options: {
     `${content}</div></main>${script}</body></html>`;
 }
 
+export interface OperatorUnlock {
+  credPath: string;
+  next: string;
+}
+
+function shellQuotePath(path: string): string {
+  return /^[A-Za-z0-9_./-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`;
+}
+
+function operatorReadCmd(credPath: string): string {
+  return credPath === "/state/ui-token"
+    ? "kubectl -n agentbox exec deploy/agentbox-organisation -- cat /state/ui-token"
+    : `cat ${shellQuotePath(credPath)}`;
+}
+
+function copyJsSnippet(copiedWord: string): string {
+  return "document.querySelectorAll('[data-copy]').forEach(function(el){el.onclick=function(ev){ev.preventDefault();" +
+    `if(navigator.clipboard){navigator.clipboard.writeText(el.getAttribute('data-copy')||'');var old=el.textContent;el.textContent='${copiedWord}';setTimeout(function(){el.textContent=old;},1500);}};});`;
+}
+
+function operatorUnlockJs(): string {
+  return "var opForm=document.getElementById('op-unlock');if(opForm){opForm.onsubmit=async function(ev){ev.preventDefault();" +
+    "var btn=this.querySelector('button'),err=document.getElementById('op-status'),inp=document.getElementById('op-cred');" +
+    "err.textContent='';err.removeAttribute('data-err');btn.disabled=true;" +
+    "try{var res=await fetch('/api/operator-session',{method:'POST',headers:{'content-type':'application/json'}," +
+    "body:JSON.stringify({credential:inp.value,next:this.getAttribute('data-next')||'/'})});" +
+    "var data=await res.json();if(!res.ok)throw new Error(data.error||'Denied');inp.value='';location.assign(data.redirect||'/');}" +
+    "catch(e){err.setAttribute('data-err','1');err.textContent=e.message;btn.disabled=false;}};}";
+}
+
 export function signInRecoveryPage(
   reason: "sign-in-required" | "access-removed" | "session-expired" | "sign-in-expired" | "bootstrap-unavailable",
   locale: Locale,
-  { setup = false, orgView = false, personal = false } = {},
+  { setup = false, orgView = false, personal = false, operatorUnlock }: {
+    setup?: boolean; orgView?: boolean; personal?: boolean; operatorUnlock?: OperatorUnlock;
+  } = {},
 ): string {
   const say = (key: string) => escapeHtml(tr(key, locale));
   const titleText = tr(`page.recovery.${reason}`, locale);
   const title = escapeHtml(titleText);
+  const copyWord = tr("page.bootstrap.copy", locale);
+  const copiedWord = escapeHtml(tr("page.bootstrap.copied", locale));
   const setupCard = setup
     ? `<div class="callout callout-accent"><strong>${say("page.bootstrap.title")}</strong>${say("page.recovery.setup-pending")}` +
       `<div class="acts"><a class="btn" href="/bootstrap">${say("page.recovery.setup-cta")}</a></div></div>`
+    : "";
+  const operatorCard = operatorUnlock && !orgView
+    ? `<div class="panel"><div class="panel-h">${say("page.recovery.operator-title")}</div>` +
+      `<p>${say("page.recovery.operator-how")}</p>` +
+      `${copyRow(operatorReadCmd(operatorUnlock.credPath), copyWord)}` +
+      `<form id="op-unlock" data-next="${escapeHtml(operatorUnlock.next)}">` +
+      `<label>${say("page.bootstrap.operator-label")} <input id="op-cred" type="password" autocomplete="off" placeholder="${say("page.bootstrap.operator-placeholder")}" required></label>` +
+      `<div class="btn-row"><button type="submit" class="${setup ? "btn btn-secondary" : "btn"}">${say("page.recovery.operator-open")}</button></div>` +
+      `</form><p id="op-status"></p></div>`
     : "";
   const unavailableNote = reason === "bootstrap-unavailable"
     ? personal
@@ -100,13 +143,15 @@ export function signInRecoveryPage(
     : "";
   const action = orgView
     ? `<p>${say("page.recovery.desktop")}</p>`
-    : `<div class="acts"><a class="${setup ? "btn btn-secondary" : "btn"}" href="/login">${say("page.recovery.login")}</a></div>`;
+    : `<div class="acts"><a class="${setup || operatorCard ? "btn btn-secondary" : "btn"}" href="/login">${say("page.recovery.login")}</a></div>`;
   const contact = setup ? `<p class="sub">${say("page.recovery.contact")}</p>` : `<p>${say("page.recovery.contact")}</p>`;
+  const script = operatorCard ? `<script>${copyJsSnippet(copiedWord)}${operatorUnlockJs()}</script>` : "";
   return pageShell({
     locale,
     title: titleText,
-    width: 520,
-    content: `<h1>${title}</h1>${setupCard}${unavailableNote}${contact}${action}`,
+    width: operatorCard ? 580 : 520,
+    content: `<h1>${title}</h1>${setupCard}${operatorCard}${unavailableNote}${contact}${action}`,
+    script,
   });
 }
 
@@ -128,7 +173,7 @@ function copyRow(command: string, copyLabel: string): string {
  */
 export function bootstrapPage(page: {
   doors: readonly { id: string; name: string; type: "feishu" | "dingtalk" }[]; toSet: readonly DoorToSet[];
-  local: boolean; locale: Locale; codePath: string; callbackTemplate?: string;
+  local: boolean; locale: Locale; codePath: string; callbackTemplate?: string; operatorUnlock?: OperatorUnlock;
 }): string {
   const { doors, locale } = page;
   const say = (key: string) => escapeHtml(tr(key, locale));
@@ -167,12 +212,21 @@ export function bootstrapPage(page: {
   ).join("");
   const readCmd = page.codePath === "/state/bootstrap-code"
     ? "kubectl -n agentbox exec deploy/agentbox-organisation -- cat /state/bootstrap-code"
-    : `cat ${page.codePath}`;
+    : `cat ${shellQuotePath(page.codePath)}`;
+
+  const localUnlock = page.local && page.operatorUnlock
+    ? `<div class="panel"><div class="panel-h">${say("page.bootstrap.operator-title")}</div>` +
+      `<p>${say("page.bootstrap.operator-cmd")}</p>${copyRow(operatorReadCmd(page.operatorUnlock.credPath), copyWord)}` +
+      `<form id="op-unlock" data-next="${escapeHtml(page.operatorUnlock.next)}">` +
+      `<label>${say("page.bootstrap.operator-label")} <input id="op-cred" type="password" autocomplete="off" placeholder="${say("page.bootstrap.operator-placeholder")}" required></label>` +
+      `<div class="btn-row"><button type="submit">${say("page.bootstrap.operator-open")}</button></div>` +
+      `</form><p id="op-status"></p></div>`
+    : "";
 
   const steps = page.local
-    ? `<div class="panel"><ol class="steps"><li><a href="/?ui=next&amp;once=1&amp;view=settings&amp;pane=doors">${say("page.bootstrap.operator")}</a> ${say("page.bootstrap.operator-how")}</li>
+    ? `${localUnlock}<div class="panel"><ol class="steps"><li><a href="/?ui=next&amp;once=1&amp;view=settings&amp;pane=doors">${say("page.bootstrap.operator")}</a> ${say("page.bootstrap.operator-how")}</li>
 <li>${say("page.bootstrap.configure")}</li><li>${say("page.bootstrap.register")} ${page.callbackTemplate ? `<code>${escapeHtml(page.callbackTemplate)}</code>` : say("page.bootstrap.public-url")}</li>
-<li>${say("page.bootstrap.scan")} ${code}.</li></ol></div>`
+<li>${say("page.bootstrap.scan")} ${code}.${copyRow(readCmd, copyWord)}</li></ol></div>`
     : doors.length > 0
       ? `<div class="panel"><div class="panel-h">${say("page.bootstrap.step-sign-title")}</div><p>${say("page.bootstrap.enter")} ${code}</p>` +
         `<p>${say("page.bootstrap.cmd-read-label")}</p>${copyRow(readCmd, copyWord)}</div>`
@@ -186,8 +240,8 @@ export function bootstrapPage(page: {
     ? `${checks}${urlAlert}${steps}<div class="panel">${form}<p id="status">${doors.length ? say("page.bootstrap.expires") : say("page.bootstrap.no-channel")}</p></div>`
     : `${checks}${urlAlert}${steps}`;
 
-  const copyJs = "document.querySelectorAll('[data-copy]').forEach(function(el){el.onclick=function(ev){ev.preventDefault();" +
-    `if(navigator.clipboard){navigator.clipboard.writeText(el.getAttribute('data-copy')||'');var old=el.textContent;el.textContent='${copiedWord}';setTimeout(function(){el.textContent=old;},1500);}};});`;
+  const copyJs = copyJsSnippet(copiedWord);
+  const unlockJs = page.local && page.operatorUnlock ? operatorUnlockJs() : "";
   const submitJs = doors.length === 0 ? "" : "document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();" +
     "var buttons=this.querySelectorAll('button'),door=(event.submitter||buttons[0]).value,status=document.getElementById('status');" +
     "status.removeAttribute('data-err');buttons.forEach(function(b){b.disabled=true;});try{var response=await fetch('/auth/'+encodeURIComponent(door),{method:'POST'," +
@@ -202,10 +256,9 @@ export function bootstrapPage(page: {
     width: 660,
     langLinks: true,
     content: `<h1>${say("page.bootstrap.title")}</h1><p class="sub">${say("page.bootstrap.subtitle")}</p>${body}`,
-    script: `<script>${copyJs}${submitJs}</script>`,
+    script: `<script>${copyJs}${unlockJs}${submitJs}</script>`,
   });
 }
-
 /** Signed in with the vendor, unknown here: the knock path, as a page a person can act on. */
 export function notLinkedPage(identity: string, channel: string, locale: Locale): string {
   const titleText = tr("page.not-linked.title", locale, { channel });

@@ -8,7 +8,7 @@ import { CHANNEL_SETUP_JS } from "./channel-setup-ui.ts";
 
 export const NEXT_SET_DOORS_JS = `
 ${CHANNEL_SETUP_JS}
-var doors = { data: null, connectors: null, error: "", adding: false, note: "" };
+var doors = { data: null, connectors: null, error: "", adding: false, editing: null, note: "" };
 
 function loadDoors() {
   getJson("/api/channels").then(function (got) { doors.data = got; doors.error = ""; }, function (error) { doors.data = {}; doors.error = error.message; })
@@ -19,15 +19,41 @@ function loadDoors() {
 /** What saving a channel led to, in words: it is connecting now, or it needs a restart to. */
 function doorSaved(got) { return got.started ? t("ui.next.doors.connecting") : got.restartNeeded ? t("ui.next.doors.restart") : t("ui.next.settings.saved2"); }
 
+function publicUrlBlock(data) {
+  var wrap = el("div", "fact"), left = el("div", ""), right = el("div", "acts"), input = el("input"), save = el("button", "act", t("ui.next.settings.save"));
+  input.value = data.publicUrl || "";
+  input.placeholder = location.origin;
+  input.disabled = Boolean(data.publicUrlLocked);
+  left.appendChild(labelled(t("ui.next.doors.publicUrl"), input));
+  left.appendChild(el("p", "why", data.publicUrlLocked ? t("ui.next.doors.publicUrlLocked") : t("ui.next.doors.publicUrlHint")));
+  if (!data.publicUrlLocked) {
+    if (!data.publicUrl) {
+      var fill = el("button", "act", t("ui.next.doors.publicUrlUseOrigin"));
+      fill.addEventListener("click", function () { input.value = location.origin; input.focus(); });
+      right.appendChild(fill);
+    }
+    save.addEventListener("click", function () {
+      save.disabled = true;
+      postJson("/api/channels/public-url", { publicUrl: input.value.trim() }).then(function () {
+        doors.note = t("ui.next.settings.saved2"); loadDoors();
+      }, function (error) { save.disabled = false; failed(error); });
+    });
+    right.appendChild(save);
+  }
+  wrap.appendChild(left); wrap.appendChild(right);
+  return wrap;
+}
+
 function channelsBlock() {
   var data = doors.data, box = el("section", "setting"), running = {};
   (data.channels || []).forEach(function (channel) { running[channel.name] = channel; });
   box.appendChild(el("h2", "group", t("ui.next.doors.channels")));
   if (data.bootstrapPending) {
-    var setup = el("a", "why", t("ui.channels.bootstrap-pending"));
+    var setup = el("a", "act-primary", t("ui.channels.bootstrap-pending"));
     setup.href = "/bootstrap"; box.appendChild(setup);
   }
   if (doors.note) box.appendChild(el("p", "why", doors.note));
+  box.appendChild(publicUrlBlock(data));
   var change = function (record, extra) {
     postJson("/api/channels/records", Object.assign({ id: record.id, type: record.type }, extra)).then(function (got) { doors.note = doorSaved(got); loadDoors(); }, failed);
   };
@@ -42,6 +68,11 @@ function channelsBlock() {
     who.addEventListener("change", function () { change(record, { defaultAgent: who.value }); });
     groups.addEventListener("change", function () { change(record, { groupMessages: groups.value }); });
     acts.appendChild(who); acts.appendChild(groups);
+    if (record.type === "feishu" || record.type === "dingtalk") {
+      var cred = el("button", record.credentialsSet ? "act" : "act-primary", t(record.credentialsSet ? "ui.next.doors.updateCredentials" : "ui.next.doors.setCredentials"));
+      cred.addEventListener("click", function () { doors.adding = true; doors.editing = { id: record.id, type: record.type, name: record.name || "" }; render(); });
+      acts.appendChild(cred);
+    }
     if (!record.grandfathered) {
       var remove = el("button", "act", t("ui.next.doors.remove"));
       remove.addEventListener("click", function () {
@@ -56,23 +87,27 @@ function channelsBlock() {
   if (!(data.records || []).length) box.appendChild(el("p", "why", t("ui.next.doors.none")));
   if (!doors.adding) {
     var add = el("button", "act", t("ui.next.doors.add"));
-    add.addEventListener("click", function () { doors.adding = true; render(); });
+    add.addEventListener("click", function () { doors.adding = true; doors.editing = null; render(); });
     box.appendChild(add);
     return box;
   }
-  var type = selectOf([["feishu", t("ui.next.doors.feishu")], ["dingtalk", t("ui.next.doors.dingtalk")]], "feishu"), id = el("input"), name = el("input"), appId = el("input"), secret = el("input");
+  var preset = doors.editing;
+  var type = selectOf([["feishu", t("ui.next.doors.feishu")], ["dingtalk", t("ui.next.doors.dingtalk")]], preset ? preset.type : "feishu"), id = el("input"), name = el("input"), appId = el("input"), secret = el("input");
   var save = el("button", "act-primary", t("ui.next.settings.save")), cancel = el("button", "act", t("ui.next.auto.cancel")), acts2 = el("div", "acts");
   secret.type = "password"; secret.autocomplete = "off"; id.placeholder = t("ui.next.doors.idPlaceholder");
+  if (preset) { id.value = preset.id; id.disabled = true; type.disabled = true; name.value = preset.name || ""; }
   save.addEventListener("click", function () {
     if (!id.value.trim()) { id.focus(); return; }
+    var idVal = appId.value.trim(), secVal = secret.value.trim();
+    if ((idVal !== "") !== (secVal !== "")) { (idVal ? secret : appId).focus(); return; }
     var body = { id: id.value.trim(), type: type.value };
     if (name.value.trim()) body.name = name.value.trim();
-    if (appId.value.trim()) body.appId = appId.value.trim();
-    if (secret.value.trim()) body.appSecret = secret.value.trim();
+    if (idVal) body.appId = idVal;
+    if (secVal) body.appSecret = secVal;
     save.disabled = true;
-    postJson("/api/channels/records", body).then(function (got) { doors.adding = false; doors.note = doorSaved(got); loadDoors(); }, function (error) { save.disabled = false; failed(error); });
+    postJson("/api/channels/records", body).then(function (got) { doors.adding = false; doors.editing = null; doors.note = doorSaved(got); loadDoors(); }, function (error) { save.disabled = false; failed(error); });
   });
-  cancel.addEventListener("click", function () { doors.adding = false; render(); });
+  cancel.addEventListener("click", function () { doors.adding = false; doors.editing = null; render(); });
   [labelled(t("ui.next.doors.type"), type), labelled(t("ui.next.doors.id"), id), labelled(t("ui.next.member.name"), name), labelled(t("ui.next.doors.appId"), appId),
     labelled(t("ui.next.doors.appSecret"), secret)].forEach(function (node) { box.appendChild(node); });
   var callback = el("p", "why");

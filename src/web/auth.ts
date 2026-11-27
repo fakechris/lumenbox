@@ -254,6 +254,20 @@ export function authorize(
   return { allow: false, reason: cookie || bearer || query ? "wrong" : "missing" };
 }
 
+export function operatorCookieFor(config: AuthConfig, candidate: string): AuthDecision {
+  if (config.level !== undefined && config.level !== "local") return { allow: false, reason: "token-not-here" };
+  if (!config.token) return { allow: true, reason: "loopback" };
+  const trimmed = candidate.trim();
+  if (!trimmed || !sameToken(trimmed, config.token)) return { allow: false, reason: "wrong" };
+  return {
+    allow: true,
+    reason: "token",
+    setCookie:
+      `${COOKIE_NAME}=${encodeURIComponent(config.token)}; Path=/; ` +
+      `Max-Age=${30 * 24 * 3_600}; HttpOnly; SameSite=Lax`,
+  };
+}
+
 /**
  * The installation token off local (docs/106 §5 R2, INV-2204): a machine's credential, never a
  * person's way in.
