@@ -36,6 +36,26 @@ spec:
     requests:
       storage: 1Gi
 ---
+# agentbox-organisation-env, the Secret the Deployment below reads with envFrom: it must exist
+# before the pod starts. It holds the app of the channel the first Admin signs in through at
+# /bootstrap. The server sets up its `dingtalk` and `feishu` channels by itself and reads their
+# apps from its environment by the channel id uppercased, so nothing is configured in a page
+# first. Create it with the command in README.md ("The first Admin") rather than writing values
+# in a file; its shape, with placeholders, for a DingTalk app, a Feishu app, or both:
+#
+#   apiVersion: v1
+#   kind: Secret
+#   metadata:
+#     name: agentbox-organisation-env
+#     namespace: agentbox
+#   stringData:
+#     DINGTALK_CLIENT_ID: REPLACE_WITH_DINGTALK_CLIENT_ID
+#     DINGTALK_CLIENT_SECRET: REPLACE_WITH_DINGTALK_CLIENT_SECRET
+#     FEISHU_APP_ID: REPLACE_WITH_FEISHU_APP_ID
+#     FEISHU_APP_SECRET: REPLACE_WITH_FEISHU_APP_SECRET
+#
+# Register the callback address with the vendor, in the app's sign-in (redirect) settings:
+# https://REPLACE_WITH_PUBLIC_HOST/auth/dingtalk/callback, or .../auth/feishu/callback.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

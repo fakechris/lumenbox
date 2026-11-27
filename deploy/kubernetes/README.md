@@ -117,8 +117,47 @@ spec:
 
 At this level the installation token is not a way in. `?token=` in an address is refused and
 the token is accepted only as `Authorization: Bearer` from inside the pod. The first Admin opens
-`https://<host>/bootstrap`; everyone else signs in as themselves. If nobody can sign in (the
-bootstrap was used and the Admins are gone), mint an invitation from inside the pod:
+`https://<host>/bootstrap`; everyone else signs in as themselves.
+
+### The first Admin
+
+The first Admin signs in at `/bootstrap` with a one-use code the server writes to
+`/state/bootstrap-code` (24 hours), through a DingTalk or a Feishu channel. The server sets up
+its `dingtalk` and `feishu` channels by itself; what they need is a vendor app, and the app's
+credentials come from the environment — the `agentbox-organisation-env` Secret the Deployment
+reads, which must exist before the pod starts. Nothing has to be configured in a page first, and
+no page asks for the installation token.
+
+| Channel | Variables in `agentbox-organisation-env` | Callback address to register in the vendor's app |
+|---|---|---|
+| DingTalk | `DINGTALK_CLIENT_ID`, `DINGTALK_CLIENT_SECRET` | `https://<host>/auth/dingtalk/callback` |
+| Feishu | `FEISHU_APP_ID`, `FEISHU_APP_SECRET` | `https://<host>/auth/feishu/callback` |
+
+`<host>` is the host in `AGENTBOX_PUBLIC_URL`. Set one app or both. For a DingTalk app, in a
+private Bash terminal with shell tracing off, paste the app's Client ID and Client Secret at the
+prompts (the secret's prompt is hidden; `kubectl` prints only the Secret creation status):
+
+```bash
+read -rp 'DingTalk app Client ID: ' dingtalk_client_id
+read -rsp 'DingTalk app Client Secret: ' dingtalk_client_secret
+printf '\n'
+kubectl -n agentbox create secret generic agentbox-organisation-env \
+  --from-literal=DINGTALK_CLIENT_ID="${dingtalk_client_id:?Client ID is required}" \
+  --from-literal=DINGTALK_CLIENT_SECRET="${dingtalk_client_secret:?Client Secret is required}"
+unset dingtalk_client_id dingtalk_client_secret
+```
+
+For a Feishu app the same, with `FEISHU_APP_ID` and `FEISHU_APP_SECRET`. A Secret changed after
+the pod started reaches the server at the next start (`kubectl -n agentbox rollout restart
+deploy/agentbox-organisation`). Until one app is set, `/bootstrap` says which variables are
+missing and which callback address to register; once one is, it shows "Sign in with DingTalk" (or
+Feishu): read the code with `kubectl -n agentbox exec deploy/agentbox-organisation -- cat
+/state/bootstrap-code`, enter it, and sign in. The other way to configure a channel is from inside the pod: the
+settings routes (`/api/channels/records`) still answer a call over loopback with the bearer token
+in `/state/ui-token`, as the invitation below does.
+
+If nobody can sign in (the bootstrap was used and the Admins are gone), mint an invitation from
+inside the pod:
 
 ```sh
 kubectl -n agentbox exec deploy/agentbox-organisation -- sh -c \

@@ -25,15 +25,15 @@ test("a door is offered only for a Feishu or DingTalk channel with its app set o
     { id: "telegram", name: "Telegram", type: "telegram" },
   ];
   const set = (record: { id: string }) => record.id !== "feishu-b";
-  assert.deepEqual(webSignInDoors(records, set, "https://org.example"), [{ id: "feishu", name: "Feishu" }, { id: "ding", name: "DingTalk" }]);
+  assert.deepEqual(webSignInDoors(records, set, "https://org.example"), [{ id: "feishu", name: "Feishu", type: "feishu" }, { id: "ding", name: "DingTalk", type: "dingtalk" }]);
   assert.deepEqual(webSignInDoors(records, () => true, "https://org.example").map(door => door.name), ["Feishu", "feishu-b", "DingTalk"], "no name: the id; no web sign-in for Telegram");
   assert.deepEqual(webSignInDoors(records, () => true, undefined), [], "the vendor has nowhere to send the person back to");
   const page = `<p>${SIGN_IN_DOORS_MARKER}</p>`;
   assert.equal(loginPageWithDoors(page, [], "en"), "<p></p>");
-  const doors = loginPageWithDoors(page, [{ id: "a&b", name: "<Acme>" }], "en");
+  const doors = loginPageWithDoors(page, [{ id: "a&b", name: "<Acme>", type: "feishu" }], "en");
   assert.match(doors, /href="\/auth\/a%26b"/);
   assert.match(doors, /Sign in with &lt;Acme&gt;/);
-  assert.match(loginPageWithDoors(page, [{ id: "feishu", name: "飞书" }], "zh"), /用 飞书 登录/);
+  assert.match(loginPageWithDoors(page, [{ id: "feishu", name: "飞书", type: "feishu" }], "zh"), /用 飞书 登录/);
   assert.deepEqual(invitationLink("https://org.example/", "4F7KQZ"), { link: "https://org.example/login?code=4F7KQZ" });
   assert.deepEqual(invitationLink(undefined, "4F7KQZ"), { linkUnavailable: "public-url-unset" });
   assert.deepEqual(invitationLink(" ", "4F7KQZ"), { linkUnavailable: "public-url-unset" });

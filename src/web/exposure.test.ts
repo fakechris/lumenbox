@@ -193,7 +193,15 @@ test("the organisation manifest starts with the settings it ships, and the contr
   assert.match(publicUrl ?? "", /^https:\/\//, "and the address people open is https");
   const server = await serve(t, { host: host! }, { AGENTBOX_EXPOSURE: value("AGENTBOX_EXPOSURE")!, AGENTBOX_PUBLIC_URL: publicUrl! });
   assert.equal((await server.get("/login")).status, 200, "it starts, and the sign-in page is there");
-  assert.equal((await server.get("/bootstrap")).headers.get("strict-transport-security"), "max-age=31536000");
+  const bootstrap = await server.get("/bootstrap?lang=en", { "x-forwarded-for": "203.0.113.9" });
+  assert.equal(bootstrap.headers.get("strict-transport-security"), "max-age=31536000");
+  // The first Admin's page asks for what the manifest's Secret holds, and for no page opened with a token (INV-2227).
+  const page = await bootstrap.text();
+  for (const name of ["DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET", "FEISHU_APP_ID", "FEISHU_APP_SECRET"]) {
+    assert.ok(page.includes(`<code>${name}</code>`) && manifest.includes(name), `the page asks for ${name}, and the manifest's Secret has it`);
+  }
+  assert.ok(page.includes(`${publicUrl}/auth/dingtalk/callback`), "with the callback address at the manifest's public address");
+  assert.doesNotMatch(page, /token/i);
 
   const { startControlPlane } = await import("../control/main.ts");
   const home = mkdtempSync(join(tmpdir(), "agentbox-exposure-control-"));
