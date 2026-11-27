@@ -40,7 +40,7 @@ import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
 import { runEpisode, type Script } from "./scenario.ts";
-import { ChatRoute } from "./chat-route.ts"; import { Principals, roleAtLeast } from "./principals.ts"; import { tr } from "../i18n/messages.ts";
+import { ChatRoute } from "./chat-route.ts"; import { PersonReach } from "./reach-person.ts"; import { PushBudget } from "./push-budget.ts"; import { Principals, roleAtLeast } from "./principals.ts"; import { tr } from "../i18n/messages.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { answerGuest, GUEST_TOOL_NAMES, guestMessageOf } from "./guest-turn.ts";
 import { GuestDesk } from "./guests.ts";
@@ -6043,5 +6043,73 @@ test("two members, an agent each of the same name: a direct message reaches the 
   try {
     assert.deepEqual(heard, ["ANA_ONE", "BOB_ONE", "ANA_TWO", "BOB_TWO", "CAT_ONE", "ANA_ROOM"], "six turns, and no other message was shown to a model");
     assert.deepEqual(episode.score.said.map(line => line.agent), ["Assistant", "Assistant", "Assistant", "Assistant", "Desk", "Desk"]);
+  } finally { episode.cleanup(); rmSync(home, { recursive: true, force: true }); }
+});
+
+// INV-2221, part 2 (docs/109 §4). A member's own agent, made for them at activation, was given work from the page and had a
+// question. Nobody had ever written to it from a chat, so the question went nowhere but the page, and the member — who lives in
+// the chat — never saw it. The route to a person is the person: the question goes to their direct chat with the door's bot, their
+// answer from there comes back to that agent, and the other member's chat hears nothing.
+test("an agent nobody wrote to from a chat asks its own person there, and takes their answer; the other member's chat hears nothing", async () => {
+  const home = mkdtempSync(join(tmpdir(), "inv2221-reach-scenario-"));
+  let ask: ((input: { agentId: string; agentName: string; question: string }) => string | undefined) | undefined;
+  const episode = await runEpisode({
+    team: [{ name: "Desk" }], says: [],
+    script: ({ messages }) => {
+      const seen = JSON.stringify(messages);
+      if (/Answer to question/.test(seen)) return { say: `Preparing the ${/Q[34]/.exec(seen.slice(seen.indexOf("Answer to question")))?.[0]} report.` };
+      return seen.includes("WHICH_QUARTER") && !seen.includes("tool_result") ? { call: "AskUser", input: { question: "WHICH_QUARTER should the report cover?", options: ["Q3", "Q4"], default: "Q3" } } : { say: "Waiting for the answer." };
+    },
+    askUser: input => ask?.(input),
+    drive: async ({ registry, bus }) => {
+      const principals = new Principals(join(home, "principals.json"));
+      principals.save(["ana", "bob"].map(id => ({ id, name: id, role: "driver" as const, identities: [`ding:${id}`] })));
+      const own = (owner: string) => registry.create({ name: "Assistant", boxId: registry.attachBox({ id: `${owner}-box`, name: `${owner}-box`, kind: "attached", members: [owner], displayFloor: 1, workDir: "/work", createdAt: new Date().toISOString() }).id });
+      const anas = own("ana"), bobs = own("bob");
+      principals.setHomeAgent("ana", anas.id); principals.setHomeAgent("bob", bobs.id);
+      const route = new ChatRoute({ registry, principals, door: () => ({ type: "dingtalk", defaultAgent: "Desk" }), preparing: () => false, firstAgent: () => { throw new Error("no agent is made here"); }, log: () => {} });
+      const sent: { chatKey: string; text: string }[] = [];
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>, manager!: ChannelManager;
+      const adapter: ChannelAdapter = { name: "ding", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined, sendToChat: async (chatKey, text) => { sent.push({ chatKey, text }); } };
+      const reach = new PersonReach({ registry, principals, budget: new PushBudget(), log: () => {}, writesFirst: door => door === "ding", push: (chatKey, text, purpose) => manager.tryPushToChat(chatKey, text, purpose) });
+      manager = new ChannelManager({
+        log: () => {}, mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+        route: (adapterName, message, name) => { if (message.privateChat === true) reach.noteDirect(message.identity, message.chatKey); return route.route(adapterName, message, name); },
+        personFor: agentId => reach.addressFor(agentId),
+        ask: async (token, text, identity, chatKey, _progress, _thread, _task, _interim, _stream, origin) => {
+          const agent = route.asked(token, identity);
+          if (typeof agent === "string") return agent;
+          const conversation = conversationIdFor(chatKey);
+          bus.sendFromUser(agent.id, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(agent.id, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(agent.id, conversation), origin!.messageId);
+        },
+      });
+      manager.register(adapter, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      ask = input => manager.askQuestion({ ...input, questionId: "q-quarter" });
+      try {
+        // Work given from the page: no chat has ever named this agent.
+        bus.sendFromUser(anas.id, "Prepare the report. WHICH_QUARTER is up to me.", { steerable: false });
+        await bus.runExclusive(anas.id, { userDriven: true });
+        for (let waited = 0; sent.length === 0 && waited < 200; waited++) await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(sent.map(line => line.chatKey), ["ding:@ana"], "the question went to Ana's direct chat, and to nobody else's");
+        assert.match(sent[0]!.text, /WHICH_QUARTER[\s\S]*\/answer q-quarter/);
+        // Bob cannot answer it; Ana can, from the direct chat the vendor opened for her.
+        assert.match(String(await receive({ identity: "ding:bob", chatKey: "ding:cid_bob", privateChat: true, senderLabel: "bob", text: "/answer q-quarter Q4", messageId: "b1" })), /已失效/);
+        await receive({ identity: "ding:ana", chatKey: "ding:cid_ana", privateChat: true, senderLabel: "ana", text: "/answer q-quarter Q4", messageId: "a1" });
+        await manager.idle();
+        assert.equal(registry.readTranscript(bobs.id, conversationIdFor("ding:cid_bob")).length, 0, "Bob's agent ran nothing");
+        assert.match(JSON.stringify(registry.readTranscript(anas.id, conversationIdFor("ding:cid_ana"))), /Preparing the Q4 report/);
+        // From now on each agent writes to the direct chat its own person wrote in: Ana's to Ana, Bob's to Bob.
+        await reach.tellOwner(anas.id, "The report is in your files.", { about: "report" });
+        await reach.tellOwner(bobs.id, "Nothing new today.", { about: "digest" });
+        assert.deepEqual(sent.filter(line => /report is in|Nothing new/.test(line.text)).map(line => [line.chatKey, line.text]), [["ding:cid_ana", "The report is in your files."], ["ding:cid_bob", "Nothing new today."]]);
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.equal(episode.score.questions, 1);
+    assert.deepEqual(episode.score.said.map(line => line.text), ["Waiting for the answer.", "Preparing the Q4 report."], "Ana's agent asked, waited, and went on with her answer; no other agent said anything");
   } finally { episode.cleanup(); rmSync(home, { recursive: true, force: true }); }
 });

@@ -54,7 +54,10 @@ function renderSide() {
   here.forEach(function (agent) {
     var row = el("button", "agent"), body = el("span", "body");
     row.setAttribute("aria-current", String(next.view === "chat" && agent.id === chat.agentId));
-    body.appendChild(el("div", "title", agent.name));
+    var title = el("div", "title", agent.name);
+    // The one that answers this person's direct messages in a chat channel (INV-2221).
+    if (settings.me && settings.me.homeAgentId === agent.id) { var mark = el("span", "home-mark", t("ui.next.agent.home")); mark.title = t("ui.next.member.isHome"); title.appendChild(mark); }
+    body.appendChild(title);
     body.appendChild(lineNode("role", memberLine(agent))); // what it asks of the person, else what it says it is doing (next-line-ui.ts)
     row.appendChild(el("span", "who", initial(agent.name)));
     row.appendChild(body);

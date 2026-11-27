@@ -406,6 +406,8 @@ export interface EpisodeOptions {
    * `say` is one line of `says`, with the same after-turn bookkeeping, for a drive that
    * needs to change the world between turns.
    */
+  /** Where a question goes besides the page: a scenario with chat doors passes it to them (INV-2221). */
+  askUser?: (input: { agentId: string; agentName: string; question: string }) => string | undefined;
   drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string>; surfaces: ReadonlyMap<string, SurfaceRecord>; say: (line: string) => Promise<void> ; goalLoop?: GoalLoop }) => Promise<void>;
 }
 
@@ -548,9 +550,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(rememberer !== undefined
         ? { onSummarised: (agentId: string, conversationId: string, entries: readonly HistoryEntry[]) => { void rememberer.flush(agentId, conversationId, entries).catch(() => {}); } }
         : {}),
-      askUser: async (input: { agentName: string; question: string }) => {
+      askUser: async (input: { agentId: string; agentName: string; question: string }) => {
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
-        return "in the app";
+        return options.askUser?.(input) ?? "in the app";
       },
       // The host's own validation (docs/79), so a scenario proves what a box would accept.
       showUI: async (input: { agentId: string; agentName: string; conversation?: string; surface: string; components?: unknown; data?: unknown; title?: string; close?: boolean; work?: import("../agents/work-attention.ts").WorkStamp }) => {

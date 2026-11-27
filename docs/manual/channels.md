@@ -43,7 +43,9 @@ Channels.
   the channel is theirs, their own computer is made with one assistant in it if their limit allows one (a
   few computers start at a time when a department is activated), and they sign in through the
   channel whenever they come. Somebody who signs in before being activated sees "Your request to join is with the
-  Admins" and waits under *Asked to join*, here and in Settings → Channels.
+  Admins" and waits under *Asked to join*, here and in Settings → Channels. Somebody the
+  directory lists who writes to the channel directly before being activated is told the same and
+  is the same request; somebody it does not list is told so, and makes none.
 - **Connect a service:** Settings → Channels → Connectors → *Connect* links an outside service,
   such as Notion, for the agents to use.
 

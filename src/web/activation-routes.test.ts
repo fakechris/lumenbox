@@ -4,7 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { startWebServer } from "./server.ts";
-import { admission } from "./activation-routes.ts";
+import { admission, joinRequestWords } from "./activation-routes.ts";
+import { type ChannelAdapter, ChannelManager, type InboundMessage, knockRefusal } from "../channels/manager.ts";
+import { tr } from "../i18n/messages.ts";
+import { roleAtLeast } from "../host/principals.ts";
 import { Activations } from "../host/activations.ts";
 import { Directories, directorySource } from "../host/directory.ts";
 import { Principals } from "../host/principals.ts";
@@ -390,5 +393,72 @@ test("leaving ends the sign-in the directory gave and what was made from it; a p
     assert.equal(tokens.personFor(dans, principals), undefined);
     assert.equal(tokens.list().length, 1);
     assert.equal(principals.resolve("ding:eve").role, "driver", "and whoever is still listed is untouched");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+// INV-2221 (docs/109 §2 step c). Somebody the directory lists who is not on the roster wrote to the bot and was held as a knock in
+// memory: lost at a restart, and a second list beside the requests a sign-in makes. Wired here as the server wires it.
+test("a direct message from somebody the directory lists is one request that outlives a restart, and approving it is an activation; an outsider makes none; with no directory the door knocks as before (INV-2221)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "inv2221-request-"));
+  try {
+    const path = join(home, "activations.jsonl");
+    const principals = new Principals(join(home, "principals.json"));
+    principals.save([{ id: "p-ana", name: "Ana", role: "admin", identities: ["web:ana"] }]);
+    const directories = new Directories(join(home, "directory.json"));
+    const source = directorySource("ding", 1, "ding-app", "dingtalk");
+    // Only the `ding` door has an app with a directory behind it.
+    const credentials = (channelId: string) => channelId === "ding" ? { source, clientId: "ding-app", clientSecret: "secret", provider: directoryProviders.dingtalk! } : undefined;
+    const boxesAsked: string[] = [];
+    const desk = () => admission({ activations: new Activations(path), directories, principals, credentials, fetch, signOut: () => {}, revokeTokens: () => {}, log: () => {},
+      boxes: people => { boxesAsked.push(...people.map(person => person.id)); return people.map(person => person.id); } });
+    let door = desk();
+    const knocks: string[] = [], turns: string[] = [];
+    const handlers = new Map<string, (message: InboundMessage) => Promise<string | undefined>>();
+    const manager = new ChannelManager({
+      log: () => {}, mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"), known: identity => principals.isKnown(identity),
+      joinRequest: (adapterName, message) => joinRequestWords(door.knocked(adapterName, message.identity.slice(adapterName.length + 1), message.senderLabel), "en"),
+      knock: request => { if (door.knocked(request.channel, request.identity.slice(request.channel.length + 1), request.senderLabel) !== "no-directory") return; knocks.push(request.identity); },
+      ask: async (_agent, text, identity) => { turns.push(`${identity}: ${text}`); return "ok"; },
+    });
+    for (const name of ["ding", "telegram"]) manager.register({ name, start: async handler => { handlers.set(name, handler); }, stop() {}, send: async () => undefined } satisfies ChannelAdapter, true, "test");
+    manager.start();
+    await new Promise(resolve => setImmediate(resolve));
+    const write = (via: string, who: string, text: string, direct = true) => handlers.get(via)!({ identity: `${via}:${who}`, chatKey: direct ? `${via}:dm-${who}` : `${via}:room`, senderLabel: who, text, ...(direct ? { privateChat: true } : { privateChat: false, addressed: true }) });
+    try {
+      // Before the directory was ever synced there is nothing to ask: the door's own knock, as before.
+      assert.equal(await write("ding", "bob", "hello"), knockRefusal("ding:bob"));
+      assert.deepEqual(knocks.splice(0), ["ding:bob"]);
+      await directories.sync(source, async () => ({ departments: [{ vendorId: "1", name: "Acme", parentVendorId: null }], people: [{ vendorSubject: "bob", name: "Bob Li", departmentVendorIds: ["1"] }] }));
+
+      // Three messages, one request, under the name the directory gives.
+      for (const text of ["hello", "anyone?", "please"]) assert.equal(await write("ding", "bob", text), tr("access.asked", "en"));
+      assert.deepEqual(new Activations(path).requests(source).map(request => [request.subject, request.name]), [["bob", "Bob Li"]]);
+      assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 1, "one line in the ledger");
+      // In a group he is a stranger as before, and it is still that one request, not a knock held in memory.
+      await write("ding", "bob", "hello", false);
+      assert.deepEqual([knocks.length, new Activations(path).requests(source).length], [0, 1]);
+      // Somebody the directory does not list is told so and makes no request, direct or in a group.
+      assert.equal(await write("ding", "zed", "let me in"), tr("access.unlisted", "en"));
+      await write("ding", "zed", "let me in", false);
+      assert.deepEqual([knocks.length, new Activations(path).requests(source).length], [0, 1]);
+      // A door with no directory keeps its knock.
+      assert.equal(await write("telegram", "77", "hello"), knockRefusal("telegram:77"));
+      assert.deepEqual(knocks.splice(0), ["telegram:77"]);
+      assert.equal(turns.length, 0, "and none of them was answered by an agent");
+
+      // The server starts again: the request is still there, and approving it is an activation — the person, and their box asked for.
+      door = desk();
+      assert.equal(door.stateOf(source, "bob"), "asked");
+      assert.equal(door.approveRequest("ding:zed", "driver", "p-ana"), undefined, "nobody who did not ask is approved this way");
+      assert.equal(door.approveRequest("telegram:77", "driver", "p-ana"), undefined);
+      assert.deepEqual(door.approveRequest("ding:bob", "driver", "p-ana"), { state: "active", already: false });
+      assert.deepEqual([principals.roleOf("ding:bob"), principals.resolve("ding:bob").name], ["driver", "Bob Li"]);
+      assert.deepEqual(boxesAsked, [principals.resolve("ding:bob").id], "his box is asked for as any activation asks");
+      assert.deepEqual(new Activations(path).requests(source), [], "and the request is gone from the list");
+      // His next message is taken.
+      assert.equal(await write("ding", "bob", "what is on today"), undefined);
+      await manager.idle();
+      assert.deepEqual(turns, ["ding:bob: what is on today"]);
+    } finally { manager.stop(); }
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

@@ -294,3 +294,38 @@ test("INV-2220: somebody activated before the upgrade keeps a box at their first
   for (let i = 0; i < 100 && new Principals().byId("ding:p05")?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(new Principals().byId("ding:p05")?.homeAgentId, "with her agent in it");
 });
+
+test("INV-2221: a person chooses which agent answers their direct messages, among agents they may reach; a request that came from a chat is approved by activating them", async (t) => {
+  const org = await organisation(t, { withDoor: true });
+  // Somebody the directory lists wrote to the bot before this server started: the durable request, as the chat door writes it.
+  const source = directorySource("ding", 1, "ding-app", "dingtalk");
+  new Activations(join(org.home, "activations.jsonl")).request(source, { subject: "p05", name: "P05" });
+  const request = await org.boot();
+  for (const subject of ["p01", "p02"]) assert.equal((await request("/api/activations/person", "web:operator", { channelId: "ding", subject, role: "driver" })).status, 200);
+  await allSettled(request, 2);
+  const homeOf = async (id: string) => { for (let i = 0; i < 100 && new Principals().byId(id)?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20)); return new Principals().byId(id)!.homeAgentId!; };
+  const hers = await homeOf("ding:p01"), his = await homeOf("ding:p02");
+  assert.equal((await request("/api/me", "ding:p01")).data.homeAgentId, hers, "the page is told which agent answers her");
+
+  // Another of her own: made in her box, then chosen.
+  const box = new AgentRegistry(join(org.home, "agents")).boxOf(hers).id;
+  const second = (await request("/api/agents", "ding:p01", { name: "Scribe", boxId: box })).data.id as string;
+  assert.deepEqual((await request("/api/me/home-agent", "ding:p01", { agentId: second })).data, { homeAgentId: second });
+  assert.equal((await request("/api/me", "ding:p01")).data.homeAgentId, second);
+  assert.equal(new Principals().byId("ding:p01")?.homeAgentId, second, "written on the roster");
+  // Not an agent in a box she may not enter, and not one that does not exist: the same answer for both, and nothing changes.
+  const theirs = await request("/api/me/home-agent", "ding:p01", { agentId: his }), nobody = await request("/api/me/home-agent", "ding:p01", { agentId: "no-such-agent" });
+  assert.deepEqual([theirs.status, nobody.status], [404, 404]);
+  assert.equal(String(theirs.data.error).replace(his, "no-such-agent"), nobody.data.error);
+  assert.equal((await request("/api/me", "ding:p01")).data.homeAgentId, second);
+
+  // Approving the request that came from a chat: the same person, box and agent an activation makes.
+  assert.equal((await request("/api/channels/approve", "web:operator", { identity: "ding:p09" })).status, 404, "nobody who did not ask");
+  assert.equal((await request("/api/channels/approve", "ding:p01", { identity: "ding:p05" })).status, 403, "and only an Admin");
+  assert.equal((await request("/api/channels/approve", "web:operator", { identity: "ding:p05" })).status, 200);
+  assert.equal(new Principals().byId("ding:p05")?.role, "driver");
+  const rows = await allSettled(request, 3);
+  assert.ok(rows.some(row => row.owner === "ding:p05" && row.status === "ready"), "his box was made");
+  assert.notEqual(await homeOf("ding:p05"), undefined, "and his agent in it");
+  assert.equal((await request("/api/channels/approve", "web:operator", { identity: "ding:p05" })).status, 404, "the request is spent");
+});
