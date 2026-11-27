@@ -18,8 +18,9 @@
  * lock across a restart — and the credentials a restart could help against are either long random
  * tokens or codes that `CodeAttempts` already caps for the whole installation.
  *
- * **Local has none of this.** `signInGuard` with `enabled: false` waits for nobody and records
- * nothing: a personal installation on loopback behaves as it did.
+ * **Local has none of this.** `signInGuard` with `enabled: false` waits for nobody and records no
+ * failure: a personal installation on loopback behaves as it did. A sign-in that worked is
+ * recorded at every level — who came in is the other half of the record (R8).
  */
 import { BlockList, isIP } from "node:net";
 import type { IncomingMessage } from "node:http";
@@ -173,7 +174,8 @@ export function trustedProxies(value: string | undefined): BlockList | undefined
 export interface SignInRecord {
   at: string;
   door: SignInDoor;
-  outcome: "failed" | "limited";
+  /** `signed-in` is a sign-in that worked, recorded at every level (R8); the other two are off local only. */
+  outcome: "failed" | "limited" | "signed-in";
   address: string;
   /**
    * The connection's other end, when it is not `address`. Off local `address` is what the last
@@ -203,6 +205,7 @@ export interface SignInGuard {
   blocked(attempt: Attempt): number | undefined;
   /** The credential was wrong, or the sign-in was refused. `counts: false` records it without counting it (a real person an Admin has not let in yet). */
   failed(attempt: Attempt, reason: string, counts?: boolean): void;
+  /** A sign-in that worked: recorded at every level with who it was (`account`), and the account's count cleared. */
   succeeded(attempt: Attempt): void;
 }
 
@@ -232,6 +235,10 @@ export function signInGuard(options: { enabled: boolean; limiter?: SignInLimiter
       options.record(line(attempt, "failed", { reason }));
       if (counts) limiter.failed(attempt);
     },
-    succeeded(attempt) { if (options.enabled) limiter.succeeded(attempt); },
+    succeeded(attempt) {
+      // Who got in, at every level: the record of sign-ins is not only the ones that failed (R8).
+      options.record(line(attempt, "signed-in", {}));
+      if (options.enabled) limiter.succeeded(attempt);
+    },
   };
 }

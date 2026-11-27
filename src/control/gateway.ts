@@ -495,7 +495,8 @@ export class Gateway {
       actor: username,
       action: "signin",
       target: tenant.name,
-      detail: { userId: user.id, role: membership.role },
+      // From where, like the tries that did not get in: the record of a sign-in is not only who.
+      detail: { userId: user.id, role: membership.role, address: attempt.address, ...(attempt.peer !== attempt.address ? { peer: attempt.peer } : {}) },
     });
     res.writeHead(302, {
       location: next ?? "/",

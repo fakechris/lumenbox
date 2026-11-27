@@ -299,7 +299,11 @@ export async function startControlPlane(
     // Tries at the password form that did not get in go where sign-ins already go: the store's audit.
     signIns: signInGuard({
       enabled: exposure.level !== "local",
-      record: entry => store.audit({ tenantId: undefined, actor: entry.account ?? "", action: `signin.${entry.outcome}`, target: "gateway", detail: { address: entry.address, reason: entry.reason, seconds: entry.seconds } }),
+      // A sign-in that worked is already the `signin` row the gateway writes, with the tenant and the role.
+      record: entry => entry.outcome === "signed-in" ? undefined : store.audit({
+        tenantId: undefined, actor: entry.account ?? "", action: `signin.${entry.outcome}`, target: "gateway",
+        detail: { address: entry.address, peer: entry.peer, reason: entry.reason, seconds: entry.seconds },
+      }),
       log: line => out(`  ${line}`),
     }),
     publicUrl: options.publicUrl ?? `http://${options.host}:${options.port}`,

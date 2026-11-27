@@ -466,7 +466,7 @@ at. Signing in clears the account's count, not the address's. The counts are in 
 restart clears them, as it clears nothing that was durable before. Invite codes keep their own
 installation-wide cap as well (`CodeAttempts`, INV-2078).
 
-Tries that did not get in are recorded in `<home>/sign-ins.jsonl` — when, which way in, the
+Sign-ins that worked (part 3, every level) and tries that did not get in are recorded in `<home>/sign-ins.jsonl` — when, which way in, the
 address, the account if any, why, and one line when a wait begins; never the code, password or
 token tried — and `audit export` includes the file. On the control plane they are `signin.failed`
 and `signin.limited` rows in its audit, beside `signin`.
@@ -526,6 +526,52 @@ it is run by hand after a change to the policy, the box image's noVNC or the bun
 A door's sign-in is tied to the browser that started it: `/auth/<door>` sets a ten-minute
 `agentbox_signin` cookie and the callback is honoured only with it, so a finished callback link
 signs in nobody else's browser.
+
+### Desktop streams: a ticket, an idle limit, and who watched (INV-2204 part 3, 2026-11-27)
+
+**The ticket (private and public; at local the session opens the desktop as before).** The
+desktop's socket (`/desktop/<n>/websockify`, and `/desktop/b/<box>/<n>/…`) opens only with a
+ticket: for one signed-in person, one desktop, one mode (`control` or `view`), one use, sixty
+seconds. The mode is the lower of what was asked (`&mode=view` on the page's address asks to
+watch only) and what the person's role allows, and the role is asked again when the ticket is
+used. Nobody has to ask for one: a request for the desktop page without a good ticket is answered
+with a redirect to the same address with a fresh ticket inside `path=` — where noVNC reads the
+path of the socket it opens — so the app's embedded desktop, "Take over", the phone page and a
+link in a chat all work unchanged, and a reload gets a new one. The socket spends it. A refusal
+is `403` and one word: `ticket-missing`, `ticket-unknown`, `ticket-expired`, `ticket-used`,
+`ticket-other-person`, `ticket-other-desktop`. Through the control plane's gateway it is the
+same: the tenant's box issues and checks the ticket for the gateway's user.
+
+A ticket is a credential in an address, which is why it is one-use and short. The redirect and
+the page are `Cache-Control: no-store`; the ticket is taken out of the address and the `Referer`
+before anything is passed to the box; no log line prints a query string; `Referrer-Policy:
+same-origin` keeps the page's address from leaving. It does stay in the browser's history for a
+tab opened on the desktop directly — spent, by then. Tickets live in memory: a restart forgets
+them, and the next page request gets a new one.
+
+**The idle limit (private and public).** A stream on which nothing has moved in either direction
+for 15 minutes (`DESKTOP_IDLE_MS`) is closed. A desktop an agent is working on repaints, and a
+person driving sends input, so neither is idle; what goes quiet is a tab left open on a still
+screen.
+
+**When a stream ends** the page says why in a notice over the last picture, and offers what
+makes sense. The desktop or its box was restarted: **Reopen** — one press reloads the page for a
+new ticket, and because a box is often still bringing the desktop back, the page then keeps
+trying by itself, every 2.5 seconds for 20, saying that it is reconnecting; only after that does
+it say the desktop is still not answering, with the button again. Nothing happened for 15
+minutes: Reopen, once. The person's access was withdrawn: that is said, and there is no button.
+Nothing reopens before a person presses: that would undo the idle limit.
+
+**Access that ends, ends the stream.** Removing a person, signing them out everywhere, a
+directory sync that drops them, taking a box from them, or lowering a driver to viewer closes the
+streams they hold at that moment (a viewer may open a view-only one again).
+
+**The record (every level).** `<home>/desktop-sessions.jsonl` gets a line when a stream opens and
+a line when it closes: who, which box and display (and agent), which mode, how it was admitted;
+then why it ended, how long it lasted, and for a driving stream whether a key or a pointer button
+was ever pressed — read from the stream as it passes and kept as one yes/no, never the input.
+`sign-ins.jsonl` now also records sign-ins that worked, at every level. Fields are in docs/05
+§2.4.1; `audit export` includes both files.
 
 ## The token key belongs outside the directory it protects (INV-579, 2026-09-16)
 
