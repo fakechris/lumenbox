@@ -8,8 +8,9 @@ the Pod spec.
 
 For a standalone organization server running `agentbox web` instead of this control-plane
 gateway, use `organisation.yaml`: it mounts the `agentbox-organisation-state` PVC at the
-directory named in `AGENTBOX_HOME` (`/state`). The generated operator credential is stored in
-`$AGENTBOX_HOME/ui-token`, not printed in the pod logs. Browser sessions are signed with a key
+directory named in `AGENTBOX_HOME` (`/state`). The generated installation token is stored in
+`$AGENTBOX_HOME/ui-token`, not printed in the pod logs; it is the CLI's credential inside the pod
+and signs nobody in from a browser (see [TLS](#tls-and-the-exposure-level)). Browser sessions are signed with a key
 derived from it. Keep that volume across rollouts so browser sessions keep working. Without the
 volume, every restart creates a new token and signs out the whole organization. If you supply
 `AGENTBOX_UI_TOKEN` yourself, reference a stable Kubernetes Secret.
@@ -65,9 +66,68 @@ kubectl apply -f deploy/kubernetes/control-plane.yaml
 ```
 
 If you skipped step 3, the control plane logs a generated admin password on every start
-instead — fine for a look around, wrong for anything longer. There is no TLS on the gateway —
-put an Ingress with a terminator in front of the
-`agentbox-control` Service's `gateway` port before anyone signs in over a network.
+instead — fine for a look around, wrong for anything longer.
+
+## TLS and the exposure level
+
+Neither server terminates TLS, and neither starts on a network without it in front. Each reads
+an exposure level at start (`AGENTBOX_EXPOSURE`: `local`, `private`, `public`; docs/06 "The
+exposure level") and refuses a configuration weaker than the level requires, saying what is
+missing in the pod's log.
+
+**The control plane (`control-plane.yaml`)** ships as `local`: the Service is ClusterIP and the
+smoke check below reaches it by `kubectl port-forward`, from your own machine. Before anyone
+signs in over a network, put an Ingress that terminates TLS in front of the `agentbox-control`
+Service's `gateway` port and set, in the `agentbox-control` ConfigMap, `AGENTBOX_EXPOSURE:
+"private"` and `AGENTBOX_PUBLIC_URL: "https://<the Ingress host>"`. The session cookie is then
+`Secure` and responses carry HSTS. With `private` and no `https://` address the pod exits with
+the reason.
+
+**The organisation server (`organisation.yaml`)** ships as `private`, because members open it
+from their own computers: replace `REPLACE_WITH_PUBLIC_HOST` in `AGENTBOX_PUBLIC_URL` with the
+host of an Ingress like this one (the class, the certificate and the timeouts are your
+cluster's; the desktop stream is a WebSocket, so the Ingress must allow upgrades and long reads):
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agentbox-organisation
+  namespace: agentbox
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [lumenbox.example.com]
+      secretName: lumenbox-example-com-tls
+  rules:
+    - host: lumenbox.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: agentbox-organisation
+                port:
+                  name: web
+```
+
+At this level the installation token is not a way in. `?token=` in an address is refused and
+the token is accepted only as `Authorization: Bearer` from inside the pod. The first Admin opens
+`https://<host>/bootstrap`; everyone else signs in as themselves. If nobody can sign in (the
+bootstrap was used and the Admins are gone), mint an invitation from inside the pod:
+
+```sh
+kubectl -n agentbox exec deploy/agentbox-organisation -- sh -c \
+  'curl -s -X POST -H "Authorization: Bearer $(cat /state/ui-token)" -H "content-type: application/json" \
+     -d "{\"role\":\"admin\"}" http://127.0.0.1:7777/api/channels/invite'
+```
+
+The Ingress controller must set `X-Forwarded-For` (ingress-nginx and Traefik do): it is how the
+server tells a member's request from the CLI's.
 
 ## How it wires together
 

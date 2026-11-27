@@ -155,6 +155,16 @@ from the person's role. That is sound for **local**. For **private** and **publi
 R6–R7 are not met: the server speaks plain HTTP, the cookie is not `Secure`, one shared token
 opens everything, and the host does not verify the box's certificate.
 
+**Built since (INV-2204, part 1): the level, R1 and R2** (`src/web/exposure.ts`; how to set it is
+docs/06 "The exposure level"). The level is derived before it is declared: a loopback bind is
+local, any other bind is private, and `AGENTBOX_EXPOSURE` overrides either — `local` on a wider
+bind is an operator's statement, repeated at every start. R1: private and public do not start
+without an `https://` public address (the terminator in front is the declared proxy; the server
+handles no certificate), cookies are `Secure` and responses carry HSTS, and `X-Forwarded-Proto`
+is believed from nobody. R2: off local the installation token is refused in an address, ignored
+as a cookie, and accepted as a bearer header only from the server's own machine or, on a tenant's
+box, from the control plane's gateway. R4–R8 are not built.
+
 ## 6. Upgrades that can be promised
 
 - **One home format number.** `home/FORMAT` holds an integer. Changes to stored data are numbered
@@ -195,7 +205,7 @@ first delivery; the client API is needed only when they show the board on a scre
 |---|---|---|
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
 | 2. Organisation sign-in | docs/107: DingTalk sign-in, activation by an Admin, a box on first sign-in | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
-| 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Not built. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
+| 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 part 1): the declared level and its start-up check, R1, R2, and S-2 closed for private. R4–R8 not built. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
 | 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`; service and personal tokens with scopes and views; OpenAPI + contract tests | Not built. Paged work list, resumable event stream and stable error codes exist internally |
 | 5. Client API, the rest; remote access, public level | Conversations, decisions, deliverables, device pairing, desktop tickets; R9–R10 | Not built |
 | 6. Shared storage for an organisation; mobile apps | A design of its own each; mobile in its own repository | Not started |

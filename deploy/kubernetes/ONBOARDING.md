@@ -216,7 +216,11 @@ enough capacity, it can instead remain `Pending`: use `kubectl describe pod` and
   and the audit log are one SQLite file there. Back up that directory and you have backed up
   everything; lose it and every tenant gets allocated a second box.
 - **Terminate TLS at the public gateway.** Put a TLS-terminating Ingress in front of the
-  gateway for real use. Only the tenant-pod allocator sets `AGENTBOX_INSECURE=1` for hostd's
+  gateway for real use, and set `AGENTBOX_EXPOSURE: "private"` and
+  `AGENTBOX_PUBLIC_URL: "https://…"` in the `agentbox-control` ConfigMap
+  ([README](README.md#tls-and-the-exposure-level)); the manifest ships as `local`, which is the
+  port-forward above, and `private` does not start without the `https://` address. Only the
+  tenant-pod allocator sets `AGENTBOX_INSECURE=1` for hostd's
   internal HTTP listener. Its ClusterIP is not public: use a CNI that enforces the box
   NetworkPolicy, which only admits control-plane pods. The gateway authenticates tenant
   sessions and forwards requests with the per-box UI token. That internal hop and the relay

@@ -33,6 +33,15 @@ data:
   # whichever provider key the Secret below actually carries.
   # AGENTBOX_PROVIDER: "minimax"
   #
+  # Where the gateway is reachable (docs/106 §5, README.md "TLS"). As shipped: local, which is
+  # the port-forward in README.md — the Service is ClusterIP and only your own machine reaches
+  # it — and the control plane says so on every start. Before anyone signs in over a network,
+  # put an Ingress that terminates TLS in front, and set these two instead; private does not
+  # start without the https:// address:
+  #   AGENTBOX_EXPOSURE: "private"
+  #   AGENTBOX_PUBLIC_URL: "https://agentbox.example.com"
+  AGENTBOX_EXPOSURE: "local"
+  #
   # AGENTBOX_CONTROL_USERS is deliberately not here: a default password in a git-tracked manifest
   # is a password someone will deploy. Create the agentbox-control-users Secret before applying —
   # see README.md.
@@ -148,7 +157,8 @@ spec:
     app.kubernetes.io/name: agentbox-control
   ports:
     # Both ports, and under these names: boxes reach the relay through this Service, and people
-    # reach the gateway through it (usually via an Ingress in front, since there is no TLS here).
+    # reach the gateway through it, via an Ingress that terminates TLS (README.md "TLS"): there is
+    # none here, and at the private level the gateway does not start without an https:// address.
     - name: gateway
       port: 8080
       targetPort: 8080

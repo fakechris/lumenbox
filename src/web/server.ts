@@ -90,6 +90,7 @@ import { modelPresets, modelTestError } from "./model-settings.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, invitationLink, loginPageWithDoors, webSignInDoors, wantsHtml } from "./sign-in.ts";
+import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import {
   authorize,
   callerOf,
@@ -2976,12 +2977,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let sessionSecret = "";
   /** Whether this installation is reached over TLS, so cookies can say Secure (INV-578). */
   let secureCookies = false;
+  /** Where this installation is reachable and what that requires (exposure.ts); set before the server listens. */
+  let exposure: Exposure | undefined;
   // Which generation of each person's sign-ins is still good (INV-537).
   const epochs = new SessionEpochs(undefined, () => openDesktops.recheck());
 
-  const admit = (request: { authorization?: string; cookie?: string; query?: string | null }): AuthDecision | { allow: true; reason: "token"; sessionIdentity: string } | { allow: false; reason: "access-removed" | "session-expired" } => {
-    const byToken = authorize({ token, host }, request);
-    if (byToken.allow) return byToken;
+  const admit = (request: { authorization?: string; cookie?: string; query?: string | null; direct?: boolean }): AuthDecision | { allow: true; reason: "token"; sessionIdentity: string } | { allow: false; reason: "access-removed" | "session-expired" } => {
+    const byToken = authorize({ token, host, ...(exposure !== undefined ? { level: exposure.level, behindGateway: exposure.behindGateway } : {}) }, request);
+    if (byToken.allow || byToken.reason === "token-in-address") return byToken;
     const cookie = parseCookies(request.cookie).get(SESSION_COOKIE);
     if (cookie === undefined) return byToken;
     const session = readSession(cookie, sessionSecret);
@@ -3036,6 +3039,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       const url = new URL(req.url ?? "/", "http://localhost");
       const route = `${req.method} ${url.pathname}`;
       if (process.env.AGENTBOX_LOG_HTTP === "1") log(`web: ${route} from ${req.socket.remoteAddress}`);
+      if (exposure?.hsts === true) res.setHeader("strict-transport-security", HSTS);
       const boxSide = boxSideRefusal(req.headers.host, url.pathname); if (boxSide !== undefined) { send(res, 403, { error: boxSide }); return; } // INV-1543
 
       const poppyAnswer = await poppyRoute(route, url, orchestrator.poppy?.poppyManager); if (poppyAnswer !== undefined) { send(res, poppyAnswer.status, poppyAnswer.body, poppyAnswer.type); return; } // docs/poppy.md
@@ -3043,6 +3047,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         authorization: req.headers.authorization,
         cookie: req.headers.cookie,
         query: url.searchParams.get("token"),
+        direct: isDirectLocal(req),
       });
       // The door itself is before the gate, and must be: a person holding an invite
       // code has no token yet, and a sign-in page that requires being signed in is a
@@ -3146,6 +3151,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 401, signInRecoveryPage(reason, localeOf(req, url), { orgView }), "text/html");
           return;
         }
+        // Off local the token is not how a person gets in, so the answer does not offer it (INV-2204).
+        if (exposure !== undefined && exposure.level !== "local") { send(res, 401, apiError(decision.reason === "token-in-address" || decision.reason === "token-not-here" ? decision.reason : "sign-in-needed")); return; }
         send(res, 401, {
           error:
             "This UI needs a token. Open it with ?token=… or send an Authorization: Bearer header.",
@@ -3764,7 +3771,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         }
 
         const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
-        if (await taskExportRoute(route, url, req, res, { exports: taskExports, access: () => { principals.reload(); unavailableBoxes = undefined; agentBoxes.clear(); const allowed = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, query: url.searchParams.get("token") }).allow; return { task: id => { const task = orchestrator.tasks?.get(id); return allowed && !!task && mayReadTask(task); }, agent: id => allowed && mayReadAgent(id), box: id => allowed && mayReadBox(id) }; }, send })) return;
+        if (await taskExportRoute(route, url, req, res, { exports: taskExports, access: () => { principals.reload(); unavailableBoxes = undefined; agentBoxes.clear(); const allowed = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, query: url.searchParams.get("token"), direct: isDirectLocal(req) }).allow; return { task: id => { const task = orchestrator.tasks?.get(id); return allowed && !!task && mayReadTask(task); }, agent: id => allowed && mayReadAgent(id), box: id => allowed && mayReadBox(id) }; }, send })) return;
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
         let readingBuilt = false; let readingWorld: Parameters<typeof stageWorldOf<Task>>[1] | undefined; const childReferences = new Map<string, string[]>(), readingCache = new Map<string, ReturnType<typeof workReading>>();
         const readingFor = (task: Task) => { if (!readingBuilt) { readingBuilt = true; for (const row of orchestrator.tasks?.list() ?? []) if (row.origin?.parentId && mayReadTask(row)) { const ids = childReferences.get(row.origin.parentId) ?? []; ids.push(row.id); childReferences.set(row.origin.parentId, ids); } } let reading = readingCache.get(task.id); if (!reading) { const reference = (id: string, relation: "parent" | "dependency" | "collaboration") => workReference(id, relation, id => orchestrator.tasks?.get(id), mayReadTask); readingWorld ??= { undeliverableChats: new Set(outbox.problems().map(receipt => receipt.chatKey)), questions: questions.list(), agentIds: new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending }; reading = workReading(task, { stage: stageWorldOf(task, readingWorld!), checks: orchestrator.resultChecks.snapshot(task), verdicts: orchestrator.verifications.recordsFor(task.id, evidenceDigest(task)), references: [...(task.origin?.parentId ? [reference(task.origin.parentId, "parent")] : []), ...(task.blockedBy ?? []).map(id => reference(id, "dependency")), ...(childReferences.get(task.id) ?? []).map(id => reference(id, "collaboration"))] }); readingCache.set(task.id, reading); } return reading; };
@@ -6531,7 +6538,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // cookie on an upgrade but cannot set a header, which is why the cookie exists. Asked again
     // whenever who may do what changes, because the socket outlives the moment it was let in (INV-2071).
     const admitted = (): number | NonNullable<ReturnType<typeof desktopRouteOf>> => {
-      const decision = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie });
+      const decision = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, direct: isDirectLocal(req) });
       if (!decision.allow) return 401;
       // And the role, not only the token: this socket is bidirectional, so authorising it as though
       // it only carried pixels is what let someone who may only watch drive the desktop instead.
@@ -6626,40 +6633,30 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // the orchestrator moved into the box, where it binds 0.0.0.0 and only Docker's publish
   // address keeps it local. So a non-loopback bind without a configured token gets one
   // persisted in the installation state, rather than being served openly.
+  /**
+   * Where this is reachable, and whether its configuration is as strong as that requires
+   * (docs/106 §5, docs/10 S-2; INV-578, INV-2204). A bind other machines can reach is private
+   * unless the operator says otherwise, and private without HTTPS does not start: it refuses and
+   * names what is missing, here, before a token is made or a port is opened.
+   */
+  exposure = resolveExposure({
+    host, port: options.port, declared: process.env.AGENTBOX_EXPOSURE, publicUrl: process.env.AGENTBOX_PUBLIC_URL,
+    behindGateway: trustsGatewayIdentity(), insecure: process.env.AGENTBOX_INSECURE === "1", noToken: process.env.AGENTBOX_NO_TOKEN === "1",
+  });
+  for (const note of exposure.notes) log(note);
   const configured = options.token ?? process.env.AGENTBOX_UI_TOKEN;
   let token = configured;
   if (process.env.AGENTBOX_NO_TOKEN === "1") {
     token = undefined;
-  } else if (!token && !isLoopback(host)) {
+  } else if (!token && (!isLoopback(host) || exposure.level !== "local")) {
+    // No token on a bind that is not loopback, or off local, gets one persisted in the
+    // installation state rather than being served openly.
     token = uiToken();
-    log(`Operator UI token: read ${join(agentboxHome(), "ui-token")} on the server, then open the installation URL with ?token=<value>.`);
+    log(exposure.level === "local"
+      ? `Operator UI token: read ${join(agentboxHome(), "ui-token")} on the server, then open the installation URL with ?token=<value>.`
+      : `Operator token: kept in ${join(agentboxHome(), "ui-token")} on the server, for the CLI there. It does not sign anyone in at this level: the first Admin opens /bootstrap, everyone else /login.`);
   }
   if (token) holdHostToken(token); // whatever this web answers to is kept out of what agents see (INV-1543)
-  /**
-   * A published installation over plain HTTP (docs/10 S-2, INV-578).
-   *
-   * Anyone on the path between a person and this port has their session — not the whole
-   * installation any more (a sign-in issues its own session since 2026-09-15), but a
-   * person's session is a person's work. The documentation has said "use TLS" for months,
-   * which is the kind of advice that gets read after the incident.
-   *
-   * So it refuses, and names the two ways forward. `AGENTBOX_INSECURE=1` is the deliberate
-   * one — a lab, a tailnet, a demo — and it says so on every start rather than once, because
-   * a warning nobody sees again is a warning nobody acted on.
-   */
-  const publicUrl = process.env.AGENTBOX_PUBLIC_URL?.trim() ?? "";
-  const overHttps = publicUrl.startsWith("https://");
-  if (!isLoopback(host) && !overHttps) {
-    if (process.env.AGENTBOX_INSECURE !== "1") {
-      throw new Error(
-        `Refusing to serve ${host}:${options.port} without TLS. Anyone on the path has ` +
-          `somebody's session. Put a terminator in front (Caddy, nginx, a tunnel) and set ` +
-          `AGENTBOX_PUBLIC_URL=https://…, or set AGENTBOX_INSECURE=1 if you mean it — a ` +
-          `tailnet or a laptop demo — and this will say so every time it starts.`
-      );
-    }
-    log(`serving ${host}:${options.port} without TLS because AGENTBOX_INSECURE=1: anybody on the path has somebody's session`);
-  }
   if (!token) {
     log("no UI token: anything that can reach this port can drive the agents");
   }
@@ -6667,7 +6664,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // second secret to store. Assigned before anything can serve a request.
   sessionSecret = sessionKey(token);
   // Under TLS the cookie says so, and a browser stops sending it over plain HTTP.
-  if (overHttps) secureCookies = true;
+  secureCookies = exposure.secureCookies;
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
   // Where a job in the box reaches this server (docs/33 §1), and the lease renewal that ends a
   // route when its job is gone.
