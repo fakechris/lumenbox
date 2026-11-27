@@ -4554,9 +4554,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           const body = await readJson(req);
-          const parsed = parsePublicUrlInput(body.publicUrl, (exposure?.level ?? "local") !== "local");
+          const nonLocal = (exposure?.level ?? "local") !== "local";
+          const parsed = parsePublicUrlInput(body.publicUrl, nonLocal);
           if ("error" in parsed) {
             send(res, 400, apiError(parsed.error));
+            return;
+          }
+          if (parsed.url === null && nonLocal && !exposure?.behindGateway && process.env.AGENTBOX_INSECURE !== "1") {
+            send(res, 400, apiError("public-url-https"));
             return;
           }
           saveConfig({ env: { AGENTBOX_PUBLIC_URL: parsed.url } });
@@ -4602,6 +4607,16 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, { error: tailmsg });
             return;
           }
+          const appId = typeof body.appId === "string" ? body.appId.trim() : "";
+          const appSecret = typeof body.appSecret === "string" ? body.appSecret.trim() : "";
+          if ((appId !== "") !== (appSecret !== "")) {
+            const base = channelEnvBase(id);
+            const [idKey, secretKey] = type === "dingtalk"
+              ? [`${base}_CLIENT_ID`, `${base}_CLIENT_SECRET`]
+              : [`${base}_APP_ID`, `${base}_APP_SECRET`];
+            send(res, 400, apiError("channel-app-unset", { id: idKey, secret: secretKey }));
+            return;
+          }
           const wasKnown = channelRecords.some(record => record.id === id);
           let updated: ReturnType<typeof upsertChannelRecord> | undefined;
           try {
@@ -4625,8 +4640,6 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // so a changed default applies to the next message without a restart.
           channelRecords.splice(0, channelRecords.length, ...updated);
           for (const record of updated) channelIncarnations.set(record.id, record.incarnation);
-          const appId = typeof body.appId === "string" ? body.appId.trim() : "";
-          const appSecret = typeof body.appSecret === "string" ? body.appSecret.trim() : "";
           let credentialsSaved = false;
           if (appId !== "" && appSecret !== "") {
             const base = channelEnvBase(id);

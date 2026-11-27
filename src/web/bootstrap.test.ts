@@ -266,6 +266,14 @@ test("local port-forward bootstrap breaks the 401 loop: operator unlock opens Se
   assert.equal(saveUrl.status, 200);
   assert.equal(((await saveUrl.json()) as { publicUrl: string }).publicUrl, base);
 
+  // Partial credential save (only appSecret without appId) is rejected with 400 channel-app-unset.
+  const partialDing = await fetch(`${base}/api/channels/records`, {
+    method: "POST", headers: { cookie: opCookie, "content-type": "application/json" },
+    body: JSON.stringify({ id: "dingtalk", type: "dingtalk", appSecret: "only-secret" }),
+  });
+  assert.equal(partialDing.status, 400);
+  assert.equal((await partialDing.json()).code, "channel-app-unset");
+
   const saveDing = await fetch(`${base}/api/channels/records`, {
     method: "POST", headers: { cookie: opCookie, "content-type": "application/json" },
     body: JSON.stringify({ id: "dingtalk", type: "dingtalk", name: "DingTalk", appId: "ding-id", appSecret: "ding-secret" }),

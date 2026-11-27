@@ -86,10 +86,14 @@ export interface OperatorUnlock {
   next: string;
 }
 
+function shellQuotePath(path: string): string {
+  return /^[A-Za-z0-9_./-]+$/.test(path) ? path : `'${path.replace(/'/g, "'\\''")}'`;
+}
+
 function operatorReadCmd(credPath: string): string {
   return credPath === "/state/ui-token"
     ? "kubectl -n agentbox exec deploy/agentbox-organisation -- cat /state/ui-token"
-    : `cat ${credPath}`;
+    : `cat ${shellQuotePath(credPath)}`;
 }
 
 function copyJsSnippet(copiedWord: string): string {
@@ -208,7 +212,7 @@ export function bootstrapPage(page: {
   ).join("");
   const readCmd = page.codePath === "/state/bootstrap-code"
     ? "kubectl -n agentbox exec deploy/agentbox-organisation -- cat /state/bootstrap-code"
-    : `cat ${page.codePath}`;
+    : `cat ${shellQuotePath(page.codePath)}`;
 
   const localUnlock = page.local && page.operatorUnlock
     ? `<div class="panel"><div class="panel-h">${say("page.bootstrap.operator-title")}</div>` +

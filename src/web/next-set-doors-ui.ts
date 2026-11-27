@@ -98,10 +98,12 @@ function channelsBlock() {
   if (preset) { id.value = preset.id; id.disabled = true; type.disabled = true; name.value = preset.name || ""; }
   save.addEventListener("click", function () {
     if (!id.value.trim()) { id.focus(); return; }
+    var idVal = appId.value.trim(), secVal = secret.value.trim();
+    if ((idVal !== "") !== (secVal !== "")) { (idVal ? secret : appId).focus(); return; }
     var body = { id: id.value.trim(), type: type.value };
     if (name.value.trim()) body.name = name.value.trim();
-    if (appId.value.trim()) body.appId = appId.value.trim();
-    if (secret.value.trim()) body.appSecret = secret.value.trim();
+    if (idVal) body.appId = idVal;
+    if (secVal) body.appSecret = secVal;
     save.disabled = true;
     postJson("/api/channels/records", body).then(function (got) { doors.adding = false; doors.editing = null; doors.note = doorSaved(got); loadDoors(); }, function (error) { save.disabled = false; failed(error); });
   });
