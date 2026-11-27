@@ -27,7 +27,7 @@ import { UI_PAGE } from "./ui-page.ts";
 import { UI_SECTIONS } from "./ui-sections.ts";
 import { SERVER_ERRORS } from "./server-errors.ts";
 import { UI_NEXT } from "./ui-next.ts"; import { UI_NEXT_LINE } from "./ui-next-line.ts"; import { UI_NEXT_PRESS } from "./ui-next-press.ts";
-import { UI_PERSONAL_COMPUTERS } from "./ui-personal-computers.ts"; import { UI_DIRECTORY } from "./ui-directory.ts";
+import { UI_PERSONAL_COMPUTERS } from "./ui-personal-computers.ts"; import { UI_DIRECTORY } from "./ui-directory.ts"; import { UI_ORG_SKILLS } from "./ui-org-skills.ts";
 import { SERVER_WORDS } from "./server-words.ts";
 import { SHELL_WORDS } from "./shell-words.ts";
 import { SETTINGS_PANES } from "../web/settings-registry.ts";
@@ -43,6 +43,7 @@ const UI_WORDS: Record<string, readonly [zh: string, en: string]> = {
   ...UI_TASK_FOCUS, ...UI_WORK_MANAGEMENT,
   ...UI_NEXT, ...UI_NEXT_LINE, ...UI_NEXT_PRESS, // the rebuilt page (INV-1825); a row's one line (INV-1926); what a press leads to
   ...UI_PERSONAL_COMPUTERS, ...UI_DIRECTORY, // the organisation's directory and activation (INV-2202)
+  ...UI_ORG_SKILLS, // the organisation's skill library (INV-2222)
   ...UI_SECTIONS,
   ...Object.fromEntries(SETTINGS_PANES.map(pane => [`ui.pane.${pane.key}`, [pane.titleZh, pane.title] as const])),
   ...Object.fromEntries(SETTINGS_PANES.map(pane => [`ui.pane.${pane.key}.about`, [pane.aboutZh, pane.about] as const])), // what each is for, on the rebuilt page (INV-1825)

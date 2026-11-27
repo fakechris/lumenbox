@@ -565,6 +565,25 @@ member template (`memberTemplate`, §2.5) or else the built-in assistant
 several boxes or none and may choose another agent; it is kept by every roster save and changed
 only by `Principals.setHomeAgent`. It may name an agent since deleted — a reader checks the registry.
 
+### 2.2h `org-skills/` and `org-skills.jsonl` — the organisation's skill library (INV-2222, docs/93 §1a)
+
+On an organisation installation only. `org-skills/<slug>/v<n>/` is one version of one skill, in
+the format a box skill has (`SKILL.md` and the text files beside it), written whole beside
+itself and renamed into place. `org-skills.jsonl` is one line per act, a `record` ledger
+(`src/host/org-skills.ts`): append-only, never compacted, each line written and synced before it
+is believed, read whole at start; a torn last line is skipped. It is the state and the audit at
+once, and the ledger wins: a version directory with no line is a publish that did not finish.
+
+| `act` | what it records |
+|---|---|
+| `publish` | `by` made `slug` an organisation skill at `version` (1, or the next after a withdrawal): its `digest`, `name`, `description`, `files`, and `source` (`upload`, `template:<name>`, `box:<box id>/<slug>`) |
+| `update` | `by` published a new `version` over the one standing; the same fields |
+| `withdraw` | `by` withdrew `slug`: it leaves every box at the next sync. The version directories stay |
+| `require` | `by` marked `slug` `required` true or false (docs/93 §1a's one rule) |
+
+What a box holds of it is §3.1a′. Which boxes are behind is not stored: it is asked of the
+boxes, and a restart asks again.
+
 ### 2.2b `memory.jsonl`
 
 Append-only, one record per line: `{ at, kind, text, source?, from?, revokedSources? }`. An agent's
@@ -1350,6 +1369,15 @@ Read at most every few seconds, and the load reports whether the directory was a
 distinct from being read and empty. Those mean opposite things: without the distinction a box
 restarting replaces a good list with an empty one, and since the list is in the prompt, that reads as
 "you have no skills" rather than "we could not check".
+
+### 3.1a′ `.lumenbox/org-skills/` — the organisation's skills, as a box holds them (INV-2222)
+
+`/home/box/work/.lumenbox/org-skills/<slug>/` (`orgSkillsDir(box)`; under a host box's own work
+directory), and `.placed.json` beside the skills: slug → the digest the server last placed, so
+a host that restarted can tell an update from a change made inside the box. Owned by the box's
+user, every file and directory without write bits. Nothing reads it as a source: the server
+writes it over from §2.2h at every sync, and the directory is removed with the last skill.
+An organisation with no skills, and a personal installation, have no such directory.
 
 ### 3.1b `chats/<conversation>/outbox/` — checked before it goes (INV-692)
 

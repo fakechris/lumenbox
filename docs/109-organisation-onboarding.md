@@ -107,7 +107,7 @@ credentials one misplaced file away.
 | What | How | State |
 |---|---|---|
 | Knowledge | The organisation's knowledge (docs/98) lives on the server; every box's agents read it; an item is recalled once a person stands behind it. | Built. To add: a simple way for a member's agent to offer something, and visibility by department |
-| Skills | **Organisation skills**: an Admin publishes a skill; the server keeps it and places it, read-only, in every box at start and on change, as a second skill directory. A member's own skill can be offered for promotion and an Admin decides, as knowledge is. | Not built. First, because a tool rolled out to every member is one publish instead of one import per box |
+| Skills | **Organisation skills**: an Admin publishes a skill; the server keeps it and places it, read-only, in every box at start and on change, as a second skill directory. A member's own skill can be offered for promotion and an Admin decides, as knowledge is. | Publishing and placing: built (docs/93 §1a says what read-only means in a box, and the rule for a name both have). Promotion from a member: not built |
 | Files and data | An agent publishes a file to the organisation, a department or a person; the server keeps it with its origin; another box's agent fetches what it may see. Built on deliverables. | Not built; detailed when a case needs it |
 | A shared box | For people with quota 0 and for an agent that belongs to no one person: a box whose members are everyone or a department, on the cluster. | Designed (docs/36 Scene 4, docs/95 §3); not built for the Kubernetes backend. Later |
 
@@ -142,6 +142,6 @@ longer opens with a token.
 | 2a. A direct message reaches the person's own agent; `@Name` among the speaker's boxes; a person chooses their home agent (`POST /api/me/home-agent`) | Built (INV-2221, `src/host/chat-route.ts`). A person whose box is still starting is told so before the door's default is tried. The page does not yet mark the home agent |
 | 2b. An agent reaches its person; a direct message from somebody listed and not activated becomes a request | Not built |
 | 3. The first conversation offers the sign-ins the organisation's skills declare | Not built |
-| 4. Organisation skills | Not built |
+| 4. Organisation skills | The library, publishing by an Admin, placing in every box read-only, the collision rule and the Settings block: built (INV-2222, docs/93 §1a). A member offering a skill for promotion, and a skill declaring a tool and a sign-in: not built |
 | 5. The bugs of §8 | Not fixed |
 | 6. A shared box on the cluster; a group answered by the asker's agent; files between boxes | Later |

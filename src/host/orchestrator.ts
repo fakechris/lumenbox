@@ -130,7 +130,7 @@ import { readsExternalContent, Rememberer, summariseExchange, turnReadOutside } 
 import type { HistoryEntry } from "./compaction.ts";
 import { memoryRef } from "./memory.ts";
 import type { PitfallSource } from "./pitfalls.ts";
-import { SkillCache } from "./skills.ts";
+import { type OrgSkillRoot, SkillCache } from "./skills.ts";
 import { parseSchedule, type Schedule, type Scheduled, Scheduler } from "./schedule.ts"; import { lastPersonMessage } from "./routine-idle.ts";
 import { heartbeatAgentOf, heartbeatItems, heartbeatSlug, readStanding, standingBoxDir } from "./standing.ts";
 import { UsageLog } from "./usage.ts"; import type { SpendLimits } from "./spend-limits.ts"; import { PersonRecords } from "./person.ts"; import { ORG_KNOWLEDGE_FILE, OrgKnowledge } from "./org-knowledge.ts"; import { MEMORY_CONFLICTS_FILE, MemoryConflicts } from "./memory-conflicts.ts"; import { boxRegistrationModeAt } from "./installation.ts"; import { principalsPath } from "./principals.ts";
@@ -291,6 +291,8 @@ export class Orchestrator {
   private readonly boxAccesses = new Map<string, BoxClass>();
   /** One skills directory per box; the prompt shows an agent its own box's. */
   private readonly skillCaches = new Map<string, SkillCache>();
+  /** Set by `attachOrgSkills` (INV-2222): the organisation's skills in a box, and the sync a connecting box is due. */
+  orgSkillRoot: (boxId: string) => OrgSkillRoot | undefined = () => undefined; boxConnected: (boxId: string) => void = () => {};
   private readonly memoryMirror: MemoryMirror;
 
   /** Pushes an agent's standing files to its box after a person edited them on the host (INV-777). */
@@ -578,14 +580,14 @@ export class Orchestrator {
    * Cached because a prompt is built once per turn and reading them is a listing plus a read per
    * skill; four agents waking at once should not produce four scans of the same directory.
    */
-  readonly skills = new SkillCache(() => this.box, () => this.skillRoots(), undefined, undefined, () => skillsDir(this.registry.defaultBox()));
+  readonly skills = new SkillCache(() => this.box, () => this.skillRoots(), undefined, undefined, () => skillsDir(this.registry.defaultBox()), () => this.orgSkillRoot(this.registry.box.id));
 
   /** The skills directory of one box, read at most every few seconds like the own box's. */
   skillsFor(boxId: string): SkillCache {
     if (boxId === this.registry.box.id) return this.skills;
     let cache = this.skillCaches.get(boxId);
     if (cache === undefined) {
-      cache = new SkillCache(() => this.boxClients.get(boxId), () => this.skillRoots(), undefined, undefined, () => skillsDir(this.registry.boxById(boxId)));
+      cache = new SkillCache(() => this.boxClients.get(boxId), () => this.skillRoots(), undefined, undefined, () => skillsDir(this.registry.boxById(boxId)), () => this.orgSkillRoot(boxId));
       this.skillCaches.set(boxId, cache);
     }
     return cache;
@@ -1197,7 +1199,7 @@ export class Orchestrator {
       if (entry.id === own) continue;
       await this.connectAttached(entry);
     }
-    void this.memoryMirror.syncAll();
+    void this.memoryMirror.syncAll(); this.boxConnected(own);
     return result;
   }
 
@@ -1206,7 +1208,7 @@ export class Orchestrator {
     if (this.revokedBoxes.has(entry.id)) return { connected: false, detail: `${entry.name}: revoked; a reconnect is refused` }; // the box watch never redials a revoked box
     const injected = this.options.boxClientFor?.(entry);
     if (injected !== undefined) {
-      this.boxClients.set(entry.id, injected); this.boxConnectionErrors.delete(entry.id);
+      this.boxClients.set(entry.id, injected); this.boxConnectionErrors.delete(entry.id); this.boxConnected(entry.id);
       this.attachedHealthy.add(entry.id);
       this.forgetDesktopsOf(entry.id);
       return { connected: true, detail: `${entry.name}: box attached directly` };
@@ -1224,7 +1226,7 @@ export class Orchestrator {
       const provisioner = new AttachedBoxProvisioner({ baseUrl: entry.endpoint.baseUrl, token });
       const client = await provisioner.connect();
       const health = await client.health();
-      this.boxClients.set(entry.id, client);
+      this.boxClients.set(entry.id, client); this.boxConnected(entry.id);
       this.attachedHealthy.add(entry.id);
       this.resolutions.set(entry.id, health.resolution);
       this.boxAccesses.set(entry.id, classifyBox(provisioner.boxName, loadConfig(), entry.name));
