@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: testing-and-release
-     updated: 2026-10-26
+     updated: 2026-11-27
 -->
 # Testing and release stability: ours, against OpenClaw and Hermes
 
@@ -84,11 +84,22 @@ installers with three packages in node_modules and every new user's first launch
    and `:latest` as linux/amd64 + linux/arm64 manifests using the `lumenbox-release`
    docker-container builder. Cross-platform builds need binfmt/QEMU or native builder nodes.
    `npm run build:image` remains a single-platform local developer build, not a release push.
+   **A release that carries fewer engines says so** (INV-2201): `LUMENBOX_RELEASE_ENGINES`, a
+   comma-separated list of `opencode`, `claude`, `pi`, `mcode`; unset means all four, which is
+   every release so far. A commercial build is `LUMENBOX_RELEASE_ENGINES=pi` with only
+   `PI_VERSION` exported — Claude Code may not be redistributed, and the other engines are
+   installed by the operator under their own licences (docs/106 §3). The build refuses a pin
+   for an engine the declaration leaves out, so a `CLAUDE_CODE_VERSION` still exported from the
+   last full build stops the build instead of going into the image. Export the same variable
+   for step 2: `release:check` then requires exactly the declared engines in the published
+   image's `/etc/lumenbox/contract.json` — a declared engine missing fails, and so does an
+   engine nobody declared. Publish such an image under its own repository or tag
+   (`--image`, `AGENTBOX_IMAGE_REPO`), never over the full one.
    The app pins its pull at the package version — an app published before its tag
    exists breaks every fresh install of that version on the first start.
 2. **`npm run release:check`**, which now also refuses to bless a release whose packaged
    zips do not carry the full production dependency closure, whose dmg is missing beside a
-   zip, or whose image tag is absent from Docker Hub or lacks either Linux architecture (skippable with
+   zip, whose image carries other engines than the release declares, or whose image tag is absent from Docker Hub or lacks either Linux architecture (skippable with
    `RELEASE_CHECK_SKIP_IMAGE=1`, which CI sets — the gate belongs to the publishing machine).
 3. **Build the app** (`npm run dist:mac`, …), and upload only artifacts the check above
    saw. Overriding `AGENTBOX_DIST_DIR` points the check at a candidate directory. The

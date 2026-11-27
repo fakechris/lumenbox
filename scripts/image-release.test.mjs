@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { engineBuildArgs, publicationTarget, publishedEngineContract, publishImage, requireReleasePlatforms } from "./image-release.mjs";
+import { engineBuildArgs, publicationTarget, publishedEngineContract, publishImage, releaseEngines, requireDeclaredEngines, requireReleasePlatforms } from "./image-release.mjs";
 
 test("a release tag must carry both runnable Linux platforms, not just attestations", () => {
   const amd64 = { os: "linux", architecture: "amd64" };
@@ -36,6 +36,32 @@ test("local and published builds share pins and refuse incomplete release builds
   for (const name of Object.keys(env).filter(key => key.endsWith("_VERSION"))) assert.ok(args.includes(`${name}=${env[name]}`));
   assert.throws(() => engineBuildArgs({ ...env, PI_VERSION: "" }, () => {}), /refusing.*PI_VERSION/);
   assert.deepEqual(engineBuildArgs({}, () => {}), []);
+});
+
+test("a release declares which engines it carries, and the build and the published image are both held to it", () => {
+  const all = { opencode: "1", claude: "2", pi: "3", mcode: "4" };
+  // Undeclared, a release is what it has always been: all four, each required.
+  assert.deepEqual(releaseEngines({}), ["opencode", "claude", "pi", "mcode"]);
+  assert.deepEqual(requireDeclaredEngines({ engines: all }, releaseEngines({}), "image:1"), ["opencode 1", "claude 2", "pi 3", "mcode 4"]);
+  assert.throws(() => requireDeclaredEngines({ engines: { ...all, mcode: "" } }, releaseEngines({}), "image:1"), /image:1 carries no mcode: rebuild with MCODE_VERSION exported/);
+  assert.throws(() => requireDeclaredEngines({}, releaseEngines({}), "image:1"), /carries no opencode, claude, pi, mcode/);
+
+  // A commercial build: pi alone. Only its pin is needed, and only it may be in the image.
+  const commercial = { LUMENBOX_RELEASE_ENGINES: "pi", LUMENBOX_RELEASE_IMAGE: "1", PI_VERSION: "3" };
+  assert.deepEqual(releaseEngines(commercial), ["pi"]);
+  assert.deepEqual(engineBuildArgs(commercial, () => {}), ["--build-arg", "PI_VERSION=3"], "a release build with the one pin it declares");
+  assert.throws(() => engineBuildArgs({ ...commercial, PI_VERSION: "" }, () => {}), /refusing an unpinned release image; missing PI_VERSION/);
+  assert.throws(() => engineBuildArgs({ ...commercial, CLAUDE_CODE_VERSION: "2" }, () => {}), /LUMENBOX_RELEASE_ENGINES=pi does not carry claude \(CLAUDE_CODE_VERSION\), but its pin is set/, "a pin left exported from the last full build is refused, not built");
+  assert.deepEqual(requireDeclaredEngines({ engines: { opencode: "", claude: "", pi: "3", mcode: "" } }, ["pi"], "image:1"), ["pi 3"], "the contract writes an absent engine as an empty field");
+  assert.throws(() => requireDeclaredEngines({ engines: { opencode: "", claude: "", pi: "", mcode: "" } }, ["pi"], "image:1"), /image:1 carries no pi: rebuild with PI_VERSION exported/);
+  assert.throws(() => requireDeclaredEngines({ engines: all }, ["pi"], "image:1"),
+    /image:1 carries opencode 1, claude 2, mcode 4, which this release does not declare \(it declares pi\): rebuild without OPENCODE_VERSION, CLAUDE_CODE_VERSION, MCODE_VERSION/, "the image this gate exists to stop");
+  assert.throws(() => requireDeclaredEngines({ engines: { pi: "", claude: "2" } }, ["pi"], "image:1"), /carries no pi.*; and carries claude 2/, "both halves are said at once");
+
+  // The declaration itself is checked: a typo must not silently mean "no engines required".
+  assert.deepEqual(releaseEngines({ LUMENBOX_RELEASE_ENGINES: " pi , opencode,pi " }), ["pi", "opencode"]);
+  assert.throws(() => releaseEngines({ LUMENBOX_RELEASE_ENGINES: "pi,claude-code" }), /names claude-code, which is not an engine; the engines are opencode, claude, pi, mcode/);
+  assert.throws(() => releaseEngines({ LUMENBOX_RELEASE_ENGINES: "" }), /is empty: name the engines/);
 });
 
 test("publishing creates a multi-platform builder when absent, or reuses a suitable one", () => {
