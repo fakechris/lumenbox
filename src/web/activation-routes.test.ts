@@ -10,6 +10,33 @@ import { Directories, directorySource } from "../host/directory.ts";
 import { Principals } from "../host/principals.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { directoryProviders } from "../channels/directory.ts";
+import { activationRoute } from "./activation-routes.ts";
+import { holdReason } from "../host/activations.ts";
+import { McpTokenStore } from "./mcp-tokens.ts";
+import { SessionEpochs } from "./session-epochs.ts";
+import type { DirectorySnapshot } from "../host/directory.ts";
+
+/** The admission on real stores in a temporary home, with a directory the test rewrites: what a sync finds is `org.listed`. */
+function organisation(home: string, subjects: string[]) {
+  const person = (subject: string) => ({ vendorSubject: subject, name: subject.toUpperCase(), departmentVendorIds: ["1"] });
+  const org = { listed: subjects };
+  const principals = new Principals(join(home, "principals.json")), directories = new Directories(join(home, "directory.json"));
+  const activations = new Activations(join(home, "activations.jsonl")), tokens = new McpTokenStore(), epochs = new SessionEpochs(join(home, "session-epochs.json"));
+  const provider = { type: "dingtalk" as const, fetchDirectory: async (): Promise<DirectorySnapshot> => ({ departments: [{ vendorId: "1", name: "Acme", parentVendorId: null }], people: org.listed.map(person) }) };
+  const source = directorySource("ding", 1, "ding-app", "dingtalk");
+  const deps = {
+    activations, directories, principals, credentials: () => ({ source, clientId: "ding-app", clientSecret: "secret", provider }), fetch,
+    signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { tokens.revokeFor(ids, signInOnly); }, log: () => {},
+  };
+  const door = admission(deps);
+  /** A route as an Admin (`p-ana`) calls it. */
+  const call = async (route: string, body: Record<string, unknown> = {}) => (await activationRoute(route, new URLSearchParams({ channelId: "ding" }), {
+    ...deps, admission: door, refusedAdmin: () => false, readJson: async () => ({ channelId: "ding", ...body }), callerId: () => "p-ana",
+    doors: () => [{ id: "ding", name: "DingTalk", type: "dingtalk" }], boxesHeld: () => 0,
+  }))!;
+  const signedIn = () => subjects.filter(subject => principals.isKnown(`ding:${subject}`));
+  return { org, principals, directories, activations, tokens, epochs, source, door, call, signedIn };
+}
 
 /** A DingTalk organisation, faked on both sides: the directory the app reads and the sign-in the person makes. */
 function dingtalkOrganisation() {
@@ -91,7 +118,7 @@ test("an Admin activates a person or a department and they sign in at that role;
   const ana = await scan("ana"), ivy = await scan("ivy");
   assert.equal((await me(ana.cookie!)).data.role, "admin");
 
-  assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 0 });
+  assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 0, held: 0 });
   const tree = (await api("/api/activations")).data;
   assert.deepEqual(
     tree.departments.map((node: { name: string; direct: number; total: number; parentVendorId: string | null }) => [node.name, node.parentVendorId, node.direct, node.total]),
@@ -132,6 +159,8 @@ test("an Admin activates a person or a department and they sign in at that role;
   const cat = await scan("cat");
   assert.equal((await me(cat.cookie!)).data.role, "driver");
   assert.equal((await api("/api/activations/department", { channelId: "ding", department: "99", role: "driver" })).status, 404);
+  const asAdmins = await api("/api/activations/department", { channelId: "ding", department: "20", role: "admin" });
+  assert.deepEqual([asAdmins.status, asAdmins.data.code], [400, "activation-department-admin"], "a department is never made Admins in one press");
 
   // The audit says the bulk act as one act: who, which department, how many, which role.
   const acts = (await api("/api/activations/audit")).data.acts as Array<Record<string, unknown>>;
@@ -148,13 +177,14 @@ test("an Admin activates a person or a department and they sign in at that role;
       ["/api/activations", undefined], ["/api/activations/people?channelId=ding&department=10", undefined], ["/api/activations/audit", undefined],
       ["/api/activations/person", { channelId: "ding", subject: "fay", role: "admin" }], ["/api/activations/department", { channelId: "ding", department: "1", includeSub: true, role: "admin" }],
       ["/api/activations/dismiss", { channelId: "ding", subject: "fay" }], ["/api/directories/sync", { channelId: "ding" }],
+      ["/api/activations/held/confirm", { channelId: "ding" }], ["/api/activations/held/dismiss", { channelId: "ding" }],
     ] as const) assert.equal((await api(path, body, cookie)).status, 403, `${path} as ${(await me(cookie)).data.role}`);
   }
   assert.equal(await stateOf("1", "fay"), "listed", "and nothing they sent was done");
 
   // Somebody who joins the department after it was activated is listed, and asks like anybody else.
   org.people.set("hal", ["11"]);
-  assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 0 });
+  assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 0, held: 0 });
   assert.equal(await stateOf("11", "hal"), "listed");
   assert.match((await scan("hal")).page, waiting);
   assert.equal(await stateOf("11", "hal"), "asked");
@@ -166,7 +196,7 @@ test("an Admin activates a person or a department and they sign in at that role;
   assert.equal(await tokensOf("ding:cat"), 2);
   // No longer listed, and still able to prove who she is (moved out of what the app may see): the harder case than DingTalk refusing her itself.
   org.people.delete("cat"); org.employees.add("cat");
-  assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 1 });
+  assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 1, held: 0 });
   assert.equal((await me(cat.cookie!)).status, 401, "her session stops");
   assert.equal(await tokensOf("ding:cat"), 0, "and her tokens");
   const after = (await api("/api/activations")).data;
@@ -187,7 +217,7 @@ test("an Admin activates a person or a department and they sign in at that role;
   assert.equal((await api("/api/principals", { principals: new Principals().list().map(person => person.id === "ding:dan" ? { ...person, role: "admin" } : person) })).status, 200);
   assert.equal((await api("/api/principals/remove", { principalId: "p-ana" })).status, 200);
   org.people.delete("dan"); org.people.delete("gus");
-  assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 1 }, "Gus left; Dan stays");
+  assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 1, held: 0 }, "Gus left; Dan stays");
   assert.equal((await me(dan.cookie!)).data.role, "admin");
   assert.equal((await me(gus.cookie!)).status, 401);
   assert.deepEqual((await api("/api/activations")).data.unlisted, [{ subject: "dan", name: "Dan" }], "and the page says he is no longer listed");
@@ -222,5 +252,120 @@ test("an activation belongs to the door it was made against, and a request outli
     incarnation = 1;
     assert.equal(door().admit("ding", "bob", "Bob"), "admitted", "and it still stands for the door it was made against");
     assert.equal(principals.resolve("ding:bob").role, "driver");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a sync that would sign many people out at once is held: nothing changes until an Admin confirms it, and the hourly refresh is held the same way (INV-2202)", async () => {
+  // The rule itself, in the one place it is decided.
+  assert.equal(holdReason({ leaving: 1, standing: 30, listedNow: 59, listedBefore: 60 }), undefined, "one of thirty is believed");
+  assert.equal(holdReason({ leaving: 5, standing: 6, listedNow: 55, listedBefore: 60 }), undefined, "five people are few, whatever share they are");
+  assert.equal(holdReason({ leaving: 6, standing: 100, listedNow: 94, listedBefore: 100 }), undefined, "six of a hundred are a small share");
+  assert.equal(holdReason({ leaving: 20, standing: 30, listedNow: 40, listedBefore: 60 }), "many");
+  assert.equal(holdReason({ leaving: 2, standing: 30, listedNow: 20, listedBefore: 60 }), "halved");
+  assert.equal(holdReason({ leaving: 1, standing: 30, listedNow: 0, listedBefore: 60 }), "empty");
+  assert.equal(holdReason({ leaving: 0, standing: 30, listedNow: 0, listedBefore: 60 }), undefined, "nobody to sign out: nothing to hold");
+
+  const home = mkdtempSync(join(tmpdir(), "inv2202-brake-"));
+  try {
+    // Thirty people let in by activation, thirty more the directory only lists.
+    const active = Array.from({ length: 30 }, (_, index) => `a${String(index + 1).padStart(2, "0")}`), others = Array.from({ length: 30 }, (_, index) => `o${index}`);
+    const { org, principals, directories, activations, epochs, source, door, call, signedIn } = organisation(home, active);
+    principals.save([{ id: "p-ana", name: "Ana", role: "admin", identities: ["web:ana"] }]);
+    org.listed = [...active, ...others];
+    assert.deepEqual(await door.sync("ding"), { left: 0, held: 0 });
+    for (const subject of active) { activations.activatePerson(source, { subject, name: subject }, "driver", "p-ana", true); assert.equal(door.admit("ding", subject, subject), "admitted"); }
+    assert.equal(signedIn().length, 30);
+
+    // One of thirty leaves: believed, applied.
+    org.listed = [...active.slice(0, 29), ...others];
+    assert.deepEqual(await door.sync("ding"), { left: 1, held: 0 });
+    assert.equal(principals.isKnown("ding:a30"), false);
+    assert.equal(epochs.of("ding:a30"), 1);
+
+    // A day later the hourly refresh reads a list without twenty of them: held, and nobody is touched.
+    const stored = JSON.parse(readFileSync(join(home, "directory.json"), "utf8"));
+    stored.ding.syncedAt = new Date(Date.now() - 2 * 24 * 60 * 60_000).toISOString();
+    writeFileSync(join(home, "directory.json"), JSON.stringify(stored));
+    org.listed = [...active.slice(0, 9), ...others];
+    await door.refreshStale(["ding"]);
+    assert.equal(directories.status(source), "ready", "the refresh did sync");
+    assert.equal(signedIn().length, 29, "every sign-in still stands");
+    assert.deepEqual(active.slice(9, 29).map(subject => [principals.resolve(`ding:${subject}`).role, epochs.of(`ding:${subject}`)]), Array(20).fill(["driver", 0]), "role and sessions too");
+    const held = (await call("GET /api/activations")).body as { held: { reason: string; people: { subject: string }[] } | null; left: unknown[]; unlisted: unknown[] };
+    assert.deepEqual(held.unlisted, [], "people waiting in a hold are not reported as an Admin the sync kept");
+    assert.equal(held.held?.reason, "many");
+    assert.deepEqual(held.held?.people.map(person => person.subject), active.slice(9, 29), "the page is given who would leave");
+    assert.equal(held.left.length, 1, "and only a30 has left");
+    const lines = () => readFileSync(join(home, "activations.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { type: string; by?: string; count?: number });
+    const holds = () => lines().filter(line => line.type === "hold").length;
+    assert.deepEqual(await door.sync("ding"), { left: 0, held: 20 }, "pressing the button is held the same way");
+    assert.equal(holds(), 1, "the same hold is not written again by every sync");
+
+    // Put away: the next sync is judged afresh, and is held again.
+    assert.equal((await call("POST /api/activations/held/dismiss")).status, 200);
+    assert.equal(activations.held(source), undefined);
+    assert.equal((await call("POST /api/activations/held/confirm")).status, 404, "nothing held, nothing to confirm");
+    assert.deepEqual(await door.sync("ding"), { left: 0, held: 20 });
+    assert.equal(signedIn().length, 29);
+
+    // Confirmed: exactly those twenty leave, as one act naming who confirmed.
+    assert.deepEqual((await call("POST /api/activations/held/confirm")).body, { left: 20 });
+    assert.deepEqual(signedIn(), active.slice(0, 9));
+    assert.equal(activations.held(source), undefined);
+    assert.deepEqual(lines().filter(line => line.type === "left-confirmed").map(line => [line.by, line.count]), [["p-ana", 20]]);
+    assert.equal(lines().filter(line => line.type === "left").length, 1, "one bulk line, not twenty");
+
+    // A sync that lists nobody never signs anybody out by itself, however few are left to lose.
+    org.listed = [];
+    assert.deepEqual(await door.sync("ding"), { left: 0, held: 9 });
+    assert.equal(activations.held(source)?.reason, "empty");
+    assert.equal(signedIn().length, 9);
+    // The directory comes back whole: that sync is believed, and the hold it replaces is gone.
+    org.listed = [...active.slice(0, 9), ...others];
+    assert.deepEqual(await door.sync("ding"), { left: 0, held: 0 });
+    assert.equal(activations.held(source), undefined);
+    assert.equal(signedIn().length, 9);
+
+    // A fetch that fails is not a sync: the snapshot before it stands and nothing follows.
+    org.listed = [{ broken: true } as unknown as string];
+    await assert.rejects(door.sync("ding"), /Previous complete snapshot retained/);
+    assert.equal(directories.of("ding")?.snapshot?.people.length, 39);
+    assert.equal(signedIn().length, 9);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("leaving ends the sign-in the directory gave and what was made from it; a person with another way in keeps their role and it (INV-2202)", async () => {
+  const home = mkdtempSync(join(tmpdir(), "inv2202-leave-"));
+  try {
+    const { org, principals, activations, tokens, epochs, source, door } = organisation(home, ["bob", "cat", "dan", "eve"]);
+    principals.save([{ id: "p-ana", name: "Ana", role: "admin", identities: ["web:ana"] }]);
+    const others = ["o1", "o2", "o3", "o4", "o5", "o6"]; // three of ten leaving is a sync that is believed
+    org.listed = ["bob", "cat", "dan", "eve", ...others];
+    await door.sync("ding");
+    for (const [subject, role] of [["bob", "driver"], ["cat", "admin"], ["dan", "driver"], ["eve", "driver"]] as const) {
+      activations.activatePerson(source, { subject, name: subject }, role, "p-ana", true);
+      door.admit("ding", subject, subject);
+    }
+    // Bob and Cat have since linked another sign-in (an invite code in a browser); Ana is gone, so Cat is the only Admin.
+    principals.save(principals.list().filter(person => person.id !== "p-ana").map(person => ["ding:bob", "ding:cat"].includes(person.id) ? { ...person, identities: [...person.identities, `web:${person.name}`] } : person));
+    const fromSignIn = tokens.mint("ding:bob", "made while signed in through DingTalk").token, forBob = tokens.mint("ding:bob", "made for Bob by an Admin", new Date(), "person").token;
+    const dans = tokens.mint("ding:dan", "Dan's", new Date(), "person").token;
+
+    org.listed = ["eve", ...others];
+    assert.deepEqual(await door.sync("ding"), { left: 3, held: 0 });
+    const bob = principals.byId("ding:bob")!, cat = principals.byId("ding:cat")!, dan = principals.byId("ding:dan")!;
+    // Bob: the DingTalk sign-in is gone and what was made from it; he is still a driver through his other one.
+    assert.deepEqual([bob.role, bob.identities], ["driver", ["web:bob"]]);
+    assert.equal(epochs.of("ding:bob"), 0, "his other sessions are not this sync's to end; one made through DingTalk stops because nobody holds that identity");
+    assert.equal(tokens.personFor(fromSignIn, principals), undefined);
+    assert.equal(tokens.personFor(forBob, principals), "ding:bob", "a token given to the person stands while he has a way in");
+    // Cat, the only Admin, keeps another way in: she loses the DingTalk one like anybody, and stays Admin.
+    assert.deepEqual([cat.role, cat.identities], ["admin", ["web:cat"]]);
+    // Dan had nothing else: no sign-in, no say, every session and token ended; still on the roster as the owner of what he has.
+    assert.deepEqual([dan.role, dan.identities], ["viewer", []]);
+    assert.equal(epochs.of("ding:dan"), 1);
+    assert.equal(tokens.personFor(dans, principals), undefined);
+    assert.equal(tokens.list().length, 1);
+    assert.equal(principals.resolve("ding:eve").role, "driver", "and whoever is still listed is untouched");
   } finally { rmSync(home, { recursive: true, force: true }); }
 });

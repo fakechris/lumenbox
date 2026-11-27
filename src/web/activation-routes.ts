@@ -8,15 +8,16 @@
  *   the activation's role, linked to the identity the door mints (`<door>:<subject>`, the same string
  *   the door's chat messages carry). Anybody else has asked to join: one request, however many scans.
  * - **the sync** (`sync`): the same sync the quotas use, then *left* for everybody whose activation
- *   names this source and whom it no longer lists: every sign-in they hold is taken off, their
- *   sessions and tokens stop, and they stay on the roster as the owner of what they have, for the
- *   Admins to decide. Nothing is deleted. Somebody admitted another way has no activation here and is
- *   never touched, and the last Admin who can still sign in is never taken.
+ *   names this source and whom it no longer lists: the sign-in this directory gave them is taken
+ *   off, and with it what was made from it. They stay on the roster as the owner of what they have,
+ *   for the Admins to decide. Nothing is deleted. Somebody admitted another way has no activation
+ *   here and is never touched, and the last Admin who can still sign in is never taken. A sync that
+ *   would end many sign-ins at once is held, changing nothing, until an Admin confirms it.
  * - **the routes**: Admin only, organisation only. A department is expanded here against the
  *   snapshot of the moment, so what was done and what the audit says cannot differ.
  */
 
-import { departmentScope, departmentTree, type Activation, type Activations, activationRole, type DirectoryPersonState } from "../host/activations.ts";
+import { departmentScope, departmentTree, holdReason, type Activation, type Activations, activationRole, type DirectoryPersonState } from "../host/activations.ts";
 import type { Directories, DirectorySnapshot, DirectorySource } from "../host/directory.ts";
 import type { Principal, Principals, Role } from "../host/principals.ts";
 import type { DirectoryCredentials } from "../channels/directory-sources.ts";
@@ -30,8 +31,8 @@ export interface AdmissionDeps {
   fetch: typeof fetch;
   /** Every browser the person holds stops being served. */
   signOut: (principalId: string) => void;
-  /** Every token issued to the person, or to a sign-in they held. */
-  revokeTokens: (ids: readonly string[]) => void;
+  /** Every token of these ids (a person, a sign-in); `signInOnly`: only those made from that sign-in. */
+  revokeTokens: (ids: readonly string[], signInOnly?: boolean) => void;
   log: (line: string) => void;
 }
 
@@ -74,47 +75,83 @@ export function admission(deps: AdmissionDeps) {
     return "admitted";
   }
 
-  /** After a sync: who the directory no longer lists, among the people it let in. */
-  function applySync(source: DirectorySource): { left: number } {
-    const snapshot = snapshotOf(source);
-    if (snapshot === undefined) return { left: 0 };
+  /**
+   * These people leave: each loses the sign-in this directory gave them, and nothing else. Somebody who
+   * still holds another sign-in keeps their role and those sessions; a session is tied to the identity
+   * it was made with, so the removed one stops being served without touching the rest, and only the
+   * tokens made from that sign-in go. Somebody left with no sign-in at all becomes a viewer who still
+   * owns their boxes: there every session and every token of theirs ends. The last Admin who can sign
+   * in is never left without a way in: nobody would remain to let anybody back.
+   */
+  function leave(source: DirectorySource, leaving: readonly Activation[]): (Activation & { personId?: string })[] {
     principals.reload();
-    const listed = new Set(snapshot.people.map(person => person.vendorSubject));
-    const standing = activations.activations(source).filter(activation => activation.leftAt === undefined);
-    activations.listed(source, standing.filter(activation => !activation.listed && listed.has(activation.subject)).map(activation => activation.subject));
-    let roster = principals.list(), left = 0;
-    const gone: { activation: Activation; person?: Principal }[] = [];
-    for (const activation of standing) {
-      if (listed.has(activation.subject) || !activation.listed) continue;
+    let roster = principals.list();
+    const gone: { activation: Activation; person?: Principal; kept: string[] }[] = [];
+    for (const activation of leaving) {
       const identity = identityOf(source, activation.subject);
       const person = principals.isKnown(identity) ? roster.find(entry => entry.id === principals.resolve(identity).id) : undefined;
-      // Never the last Admin who can still sign in: nobody would be left to let anybody back.
-      if (person?.role === "admin" && !roster.some(other => other.id !== person.id && other.role === "admin" && other.identities.length > 0)) {
+      const kept = person?.identities.filter(entry => entry !== identity) ?? [];
+      if (person?.role === "admin" && kept.length === 0 && !roster.some(other => other.id !== person.id && other.role === "admin" && other.identities.length > 0)) {
         deps.log(`directory sync ${source.channelId}: ${person.name} is no longer listed and stays, being the only Admin`);
         continue;
       }
-      // Left with no sign-in and no say; still the owner of their boxes, which the Admins decide about.
-      if (person !== undefined) roster = roster.map(entry => entry.id === person.id ? { ...entry, role: "viewer" as Role, identities: [] } : entry);
-      gone.push({ activation, ...(person !== undefined ? { person } : {}) });
+      if (person !== undefined) roster = roster.map(entry => entry.id !== person.id ? entry : kept.length > 0 ? { ...entry, identities: kept } : { ...entry, role: "viewer" as Role, identities: [] });
+      gone.push({ activation, kept, ...(person !== undefined ? { person } : {}) });
     }
     if (gone.some(entry => entry.person !== undefined)) principals.save(roster);
-    for (const { activation, person } of gone) {
-      if (person !== undefined) { deps.signOut(person.id); deps.revokeTokens([person.id, ...person.identities]); }
-      activations.left(source, { subject: activation.subject, name: activation.name }, person?.id);
-      deps.log(`left: ${identityOf(source, activation.subject)} (${activation.name}) is no longer listed by ${source.channelId}; sign-ins and tokens revoked, nothing deleted`);
-      left++;
+    for (const { activation, person, kept } of gone) {
+      const identity = identityOf(source, activation.subject);
+      if (person !== undefined && kept.length > 0) deps.revokeTokens([identity], true);
+      else if (person !== undefined) { deps.signOut(person.id); deps.revokeTokens([person.id, identity]); }
+      deps.log(`left: ${identity} (${activation.name}) is no longer listed by ${source.channelId}; ${kept.length > 0 ? "that sign-in ended, their others stand" : "sign-ins and tokens ended"}, nothing deleted`);
     }
-    return { left };
+    return gone.map(({ activation, person }) => ({ ...activation, ...(person !== undefined ? { personId: person.id } : {}) }));
   }
 
-  /** The directory sync, and what follows from it. Throws what `Directories.sync` throws. */
-  async function sync(channelId: string): Promise<{ left: number } | undefined> {
+  /**
+   * After a sync: who the directory no longer lists, among the people it let in. A sync the brake does
+   * not believe (`holdReason`) changes nothing and is held for an Admin; `listedBefore` is the head
+   * count of the snapshot this one replaced.
+   */
+  function applySync(source: DirectorySource, listedBefore?: number): { left: number; held: number } {
+    const snapshot = snapshotOf(source);
+    if (snapshot === undefined) return { left: 0, held: 0 };
+    const listed = new Set(snapshot.people.map(person => person.vendorSubject));
+    const standing = activations.activations(source).filter(activation => activation.leftAt === undefined);
+    activations.listed(source, standing.filter(activation => !activation.listed && listed.has(activation.subject)).map(activation => activation.subject));
+    const leaving = standing.filter(activation => activation.listed && !listed.has(activation.subject));
+    const reason = holdReason({ leaving: leaving.length, standing: standing.length, listedNow: snapshot.people.length, listedBefore });
+    if (reason !== undefined) {
+      activations.hold(source, reason, standing.length, leaving.map(({ subject, name }) => ({ subject, name })));
+      deps.log(`directory sync ${source.channelId}: held (${reason}) — it no longer lists ${leaving.length} of ${standing.length} activated people; nothing was changed until an Admin confirms`);
+      return { left: 0, held: leaving.length };
+    }
+    activations.dismissHold(source, "sync"); // a sync that is believed replaces one that was not
+    const gone = leave(source, leaving);
+    for (const person of gone) activations.left(source, { subject: person.subject, name: person.name }, person.personId);
+    return { left: gone.length, held: 0 };
+  }
+
+  /** An Admin confirms a held sync: exactly the people it named leave, as one act. Undefined when nothing is held. */
+  function confirmHeld(source: DirectorySource, by: string): { left: number } | undefined {
+    const held = activations.held(source);
+    if (held === undefined) return undefined;
+    const named = new Set(held.people.map(person => person.subject));
+    const gone = leave(source, activations.activations(source).filter(activation => activation.leftAt === undefined && named.has(activation.subject)));
+    activations.leftConfirmed(source, by, gone.map(person => ({ subject: person.subject, name: person.name, ...(person.personId !== undefined ? { principalId: person.personId } : {}) })));
+    deps.log(`held directory sync ${source.channelId} confirmed by ${by}: ${gone.length} left`);
+    return { left: gone.length };
+  }
+
+  /** The directory sync, and what follows from it. Throws what `Directories.sync` throws: a failed fetch keeps the previous snapshot and nothing follows. */
+  async function sync(channelId: string): Promise<{ left: number; held: number } | undefined> {
     const credentials = deps.credentials(channelId);
     if (credentials === undefined) return undefined;
+    const before = snapshotOf(credentials.source)?.people.length;
     await directories.sync(credentials.source, () => credentials.provider.fetchDirectory({
       clientId: credentials.clientId, clientSecret: credentials.clientSecret, fetchFn: deps.fetch,
     }), () => deps.credentials(channelId)?.source);
-    return applySync(credentials.source);
+    return applySync(credentials.source, before);
   }
 
   /** The daily refresh: a directory somebody synced once is read again when it is a day old. */
@@ -128,7 +165,7 @@ export function admission(deps: AdmissionDeps) {
     }
   }
 
-  return { admit, applySync, sync, refreshStale, stateOf, snapshotOf, onRoster };
+  return { admit, applySync, confirmHeld, sync, refreshStale, stateOf, snapshotOf, onRoster };
 }
 
 export interface ActivationRouteDeps extends AdmissionDeps {
@@ -144,7 +181,10 @@ export interface ActivationRouteDeps extends AdmissionDeps {
 
 type Reply = { status: number; body: unknown };
 
-const ROUTES = ["GET /api/activations", "GET /api/activations/people", "GET /api/activations/audit", "POST /api/activations/person", "POST /api/activations/department", "POST /api/activations/dismiss"];
+const ROUTES = [
+  "GET /api/activations", "GET /api/activations/people", "GET /api/activations/audit", "POST /api/activations/person", "POST /api/activations/department", "POST /api/activations/dismiss",
+  "POST /api/activations/held/confirm", "POST /api/activations/held/dismiss",
+];
 
 export async function activationRoute(route: string, query: URLSearchParams, deps: ActivationRouteDeps): Promise<Reply | undefined> {
   if (!ROUTES.includes(route)) return undefined;
@@ -168,17 +208,19 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
         return { channelId: door.id, name: door.name || door.id, type: door.type, status: directories.status(source), syncedAt: stored?.syncedAt ?? null, failedAt: stored?.failedAt ?? null };
       }),
     };
-    if (chosen === undefined) return { status: 200, body: { ...base, channelId: null, departments: [], people: 0, requests: [], left: [], unlisted: [] } };
+    if (chosen === undefined) return { status: 200, body: { ...base, channelId: null, departments: [], people: 0, requests: [], left: [], unlisted: [], held: null } };
     const { source } = chosen, snapshot = snapshotOf(source), listed = new Set(snapshot?.people.map(person => person.vendorSubject));
     const states = new Map(snapshot?.people.map(person => [person.vendorSubject, stateOf(source, person.vendorSubject)]));
     const counted = (ids: (person: DirectorySnapshot["people"][number]) => boolean, state: DirectoryPersonState) =>
       snapshot!.people.filter(person => ids(person) && states.get(person.vendorSubject) === state).length;
     const tree = snapshot === undefined ? [] : departmentTree(snapshot);
-    const standing = activations.activations(source);
+    const standing = activations.activations(source), held = activations.held(source), waiting = new Set(held?.people.map(person => person.subject));
     return {
       status: 200,
       body: {
         ...base, channelId: source.channelId, people: snapshot?.people.length ?? 0,
+        // A sync that was not believed: who it would have signed out. Nothing changed; an Admin confirms or puts it away.
+        held: held ?? null,
         departments: tree.map(node => {
           const scope = departmentScope({ departments: tree, people: [] }, node.vendorId, true), inScope = (person: DirectorySnapshot["people"][number]) => person.departmentVendorIds.some(id => scope.has(id));
           return { ...node, active: counted(inScope, "active"), asked: counted(inScope, "asked"), left: counted(inScope, "left") };
@@ -189,8 +231,8 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
           subject: activation.subject, name: activation.name, at: activation.leftAt ?? null, listed: listed.has(activation.subject),
           ...(activation.principalId !== undefined && principals.byId(activation.principalId) !== undefined ? { principalId: activation.principalId, boxes: deps.boxesHeld(activation.principalId) } : {}),
         })),
-        // Active, once listed, not listed now: the last Admin, whom a sync never takes.
-        unlisted: snapshot === undefined ? [] : standing.filter(activation => activation.listed && !listed.has(activation.subject) && stateOf(source, activation.subject) === "active")
+        // Active, once listed, not listed now, and not waiting in a held sync: the last Admin, whom a sync never takes.
+        unlisted: snapshot === undefined ? [] : standing.filter(activation => activation.listed && !listed.has(activation.subject) && !waiting.has(activation.subject) && stateOf(source, activation.subject) === "active")
           .map(activation => ({ subject: activation.subject, name: activation.name })),
       },
     };
@@ -224,6 +266,15 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
     return { status: 200, body: { ok: true } };
   }
 
+  if (route === "POST /api/activations/held/confirm") {
+    const done = deps.admission.confirmHeld(source, by);
+    return done === undefined ? { status: 404, body: apiError("directory-nothing-held") } : { status: 200, body: done };
+  }
+  if (route === "POST /api/activations/held/dismiss") {
+    if (activations.dismissHold(source, by)) deps.log(`held directory sync ${source.channelId} put away by ${by}`);
+    return { status: 200, body: { ok: true } };
+  }
+
   const role = activationRole(body.role);
   if (role === undefined) return { status: 400, body: apiError("activation-role-invalid") };
 
@@ -242,6 +293,8 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
   }
 
   // A department: everybody it lists now, once. Who joins it later is listed, and asks like anybody else.
+  // Never as Admins: one press must not hand the settings to a whole department.
+  if (role === "admin") return { status: 400, body: apiError("activation-department-admin") };
   if (snapshot === undefined) return { status: 409, body: apiError("directory-not-synced") };
   const department = String(body.department ?? ""), includeSub = body.includeSub === true;
   const done = activations.activateDepartment(source, snapshot, department, includeSub, role, by, subject => onRoster(source, subject));

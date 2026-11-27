@@ -102,10 +102,13 @@ export class McpTokenStore {
     return true;
   }
 
-  /** Every token issued to these ids — a person and the sign-ins they held — when the directory says they left (INV-2202). */
-  revokeFor(ids: readonly string[]): number {
+  /**
+   * Tokens that end when the directory says somebody left (INV-2202). `signInOnly`: only those made from
+   * that sign-in, for a person who keeps another way in; otherwise every token of these ids, whoever made it.
+   */
+  revokeFor(ids: readonly string[], signInOnly = false): number {
     const before = this.tokens.length;
-    this.tokens = this.tokens.filter(entry => !ids.includes(entry.principalId));
+    this.tokens = this.tokens.filter(entry => !ids.includes(entry.principalId) || (signInOnly && entry.via === "person"));
     if (this.tokens.length !== before) this.save();
     return before - this.tokens.length;
   }

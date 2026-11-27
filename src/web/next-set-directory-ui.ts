@@ -14,7 +14,8 @@ export const NEXT_SET_DIRECTORY_CSS = `
 .dept-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 5px 0; } .dept-row .grow, .dept-row > .why:first-child { flex: 1; min-width: 120px; }
 .dept-row label, .setting .dept-row label { flex-direction: row; align-items: center; width: auto; gap: 6px; }
 .dept-row input[type="checkbox"], .setting .dept-row input[type="checkbox"] { width: auto; }
-[data-directory] p.why, [data-directory] .needbox { white-space: normal; }
+[data-directory] p.why, [data-directory] .needbox, [data-directory] .needbox .why { white-space: normal; }
+[data-directory="held"] { margin: 8px 0; } [data-directory="held"] .acts { margin-top: 8px; flex-wrap: wrap; }
 `;
 
 export const NEXT_SET_DIRECTORY_JS = `
@@ -45,8 +46,9 @@ function loadDepartmentPeople(id, offset) {
   }, failed);
 }
 
-function directoryRolePick(key) {
-  var pick = selectOf(ROLES.map(function (name) { return [name, t("ui.next.team.role." + name)]; }), directory.role[key] || "driver");
+/** A role for one person: any. For a department (bulk): never Admin, which is given one person at a time. */
+function directoryRolePick(key, bulk) {
+  var pick = selectOf(ROLES.filter(function (name) { return !bulk || name !== "admin"; }).map(function (name) { return [name, t("ui.next.team.role." + name)]; }), directory.role[key] || "driver");
   pick.addEventListener("change", function () { directory.role[key] = pick.value; });
   return pick;
 }
@@ -112,7 +114,7 @@ function departmentActs(node) {
     });
     go.replaceWith(sure);
   });
-  line.appendChild(directoryRolePick(key));
+  line.appendChild(directoryRolePick(key, true));
   if (node.total > node.direct) line.appendChild(subLabel);
   line.appendChild(go);
   return line;
@@ -162,11 +164,33 @@ function directorySyncLine(data) {
   sync.addEventListener("click", function () {
     sync.disabled = true; sync.textContent = t("ui.next.directory.syncing");
     postJson("/api/directories/sync", { channelId: data.channelId }).then(function (got) {
-      directory.note = got.left ? t("ui.next.directory.syncedLeft", { n: got.left }) : t("ui.next.directory.syncedNow"); loadDirectory(); loadPeople();
+      directory.note = got.held ? t("ui.next.directory.syncedHeld", { n: got.held }) : got.left ? t("ui.next.directory.syncedLeft", { n: got.left }) : t("ui.next.directory.syncedNow");
+      loadDirectory(); loadPeople();
     }, function (error) { failed(error); loadDirectory(); });
   });
   line.appendChild(sync);
   return line;
+}
+
+/** A sync that was not believed: who it would have signed out, and the Admin's two answers. Nothing has changed yet. */
+function heldSyncBox(held) {
+  var box = el("div", "needbox"), names = held.people.map(function (person) { return person.name; }), acts = el("div", "acts");
+  var yes = el("button", "act", t("ui.next.directory.heldConfirm")), no = el("button", "act", t("ui.next.directory.heldDismiss"));
+  var answer = function (path, note) {
+    return function () { postJson(path, { channelId: directory.channelId }).then(function (got) { directory.note = note(got); loadDirectory(); loadPeople(); }, function (error) { failed(error); loadDirectory(); }); };
+  };
+  box.setAttribute("data-directory", "held");
+  box.appendChild(el("strong", "", t("ui.next.directory.held", { n: names.length })));
+  box.appendChild(el("div", "", t("ui.next.directory.held." + held.reason)));
+  box.appendChild(el("div", "why", names.slice(0, 20).join(", ") + (names.length > 20 ? " " + t("ui.next.directory.heldMore", { n: names.length - 20 }) : "")));
+  yes.addEventListener("click", function () {
+    var sure = el("button", "act-danger", t("ui.next.directory.heldConfirmSure", { n: names.length }));
+    sure.addEventListener("click", function () { sure.disabled = true; answer("/api/activations/held/confirm", function (got) { return t("ui.next.directory.heldDone", { n: got.left }); })(); });
+    yes.replaceWith(sure);
+  });
+  no.addEventListener("click", answer("/api/activations/held/dismiss", function () { return ""; }));
+  acts.appendChild(no); acts.appendChild(yes); box.appendChild(acts);
+  return box;
 }
 
 function directoryBlock() {
@@ -180,6 +204,7 @@ function directoryBlock() {
   box.appendChild(el("p", "why", t("ui.next.directory.note")));
   box.appendChild(directorySyncLine(data));
   if (directory.note) box.appendChild(el("p", "why", directory.note));
+  if (data.held) box.appendChild(heldSyncBox(data.held));
   (data.unlisted || []).forEach(function (person) { box.appendChild(el("div", "needbox", t("ui.next.directory.lastAdminKept", { name: person.name }))); });
   if (requests) box.appendChild(requests);
   departments.filter(function (node) { return node.parentVendorId === null; }).forEach(function (node) { box.appendChild(departmentNode(node, departments)); });

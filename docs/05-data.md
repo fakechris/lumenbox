@@ -511,13 +511,19 @@ not apply to another.
 | `dismiss` | an Admin put a request away |
 | `admitted` | the activated subject signed in and became `principalId` on the roster |
 | `listed` | a sync listed people who had been activated before the directory showed them |
-| `left` | a sync no longer listed an activated person: their sign-ins and tokens were ended (`principalId` when they had signed in). Nothing else was changed |
+| `left` | a sync no longer listed an activated person: the sign-in this source gave them was ended (`principalId` when they had signed in). Nothing else was changed |
+| `hold` | a sync was not believed and changed nothing: `reason` (`empty`: it listed nobody; `halved`: fewer than half the people of the one before; `many`: more than 5 people and more than 10% of the source's `standing` activations would leave) and the `people` it would have ended |
+| `hold-dismissed` | the hold was put away, `by` an Admin or by a later sync that was believed (`sync`) |
+| `left-confirmed` | an Admin (`by`) confirmed a hold: exactly its `people` left, `count` of them, as one line |
 
 An activation is a record, not a roster row: `principals.json` gains the person only at `admitted`.
 A person whose line says `admitted` and whose identity nobody holds any more — an Admin removed
 them, or `left` — is *left*, and the activation admits nobody until an Admin activates again.
 `left` is written only for an activation of that source; the first Admin, an invite code and a chat
-request leave no line here, so a sync never touches them.
+request leave no line here, so a sync never touches them. Leaving removes the identity
+`<channelId>:<subject>` from the person and nothing else of theirs: with another identity they keep
+their role, and only when none remains do they become a viewer with no sign-in who still owns their
+boxes. The rule that holds a sync is `holdReason` in `src/host/activations.ts`, and only there.
 
 ### 2.2b `memory.jsonl`
 

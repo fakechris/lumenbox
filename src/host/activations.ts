@@ -13,6 +13,9 @@
  * role, never one line per person. State is the fold of the lines, keyed by the whole source
  * (door, incarnation, tenant), so an activation made against one door does not apply to its
  * replacement.
+ *
+ * A sync that would end many sign-ins at once is not believed (`holdReason`, the one place that
+ * decides): it is recorded as a hold, changes nothing, and waits for an Admin.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -36,7 +39,35 @@ export type ActivationEvent =
   | (Stamp & { type: "admitted"; subject: string; principalId: string })
   /** Activated before the directory listed them, and a later sync did. */
   | (Stamp & { type: "listed"; subjects: string[] })
-  | (Stamp & Named & { type: "left"; principalId?: string });
+  | (Stamp & Named & { type: "left"; principalId?: string })
+  /** A sync that would have ended too many sign-ins at once: nothing was changed, and an Admin decides. */
+  | (Stamp & { type: "hold"; reason: HoldReason; standing: number; people: Named[] })
+  | (Stamp & { type: "hold-dismissed"; by: string })
+  /** An Admin confirmed a held sync: exactly these people left, as one act. */
+  | (Stamp & { type: "left-confirmed"; by: string; count: number; people: (Named & { principalId?: string })[] });
+
+/** Why a sync was held: it lists nobody, its head count fell by more than half, or it would end many sign-ins at once. */
+export type HoldReason = "empty" | "halved" | "many";
+export interface HeldSync { at: string; reason: HoldReason; standing: number; people: Named[] }
+
+/** More than this many people leaving in one sync, and more than this share of the source's standing activations, is not believed without an Admin. */
+export const HOLD_OVER_PEOPLE = 5;
+export const HOLD_OVER_SHARE = 0.1;
+
+/**
+ * The brake on a sync, decided here and nowhere else: a vendor answer that is successful and short
+ * (a narrowed contact scope, a department the app can no longer read, a partial walk) must not sign
+ * an organisation out. A sync that would end somebody's sign-in is held, changing nothing, when it
+ * lists nobody at all, when it lists fewer than half the people the last one did, or when more than
+ * `HOLD_OVER_PEOPLE` people and more than `HOLD_OVER_SHARE` of the standing activations would leave.
+ */
+export function holdReason(sync: { leaving: number; standing: number; listedNow: number; listedBefore: number | undefined }): HoldReason | undefined {
+  if (sync.leaving === 0) return undefined;
+  if (sync.listedNow === 0) return "empty";
+  if (sync.listedBefore !== undefined && sync.listedNow * 2 < sync.listedBefore) return "halved";
+  if (sync.leaving > HOLD_OVER_PEOPLE && sync.leaving > sync.standing * HOLD_OVER_SHARE) return "many";
+  return undefined;
+}
 
 type Unstamped = ActivationEvent extends infer E ? (E extends ActivationEvent ? Omit<E, "at"> : never) : never;
 
@@ -98,7 +129,7 @@ export function departmentTree(snapshot: DirectorySnapshot): DepartmentNode[] {
   });
 }
 
-interface SourceState { activations: Map<string, Activation>; requests: Map<string, JoinRequest> }
+interface SourceState { activations: Map<string, Activation>; requests: Map<string, JoinRequest>; held?: HeldSync }
 
 export class Activations {
   private readonly sources = new Map<string, SourceState>();
@@ -133,7 +164,12 @@ export class Activations {
     else if (event.type === "activate-department") for (const person of event.people) activate(person, event.role, event.by, true, event.department);
     else if (event.type === "request") state.requests.set(event.subject, { subject: event.subject, name: event.name, at: event.at });
     else if (event.type === "dismiss") state.requests.delete(event.subject);
-    else {
+    else if (event.type === "hold") state.held = { at: event.at, reason: event.reason, standing: event.standing, people: event.people };
+    else if (event.type === "hold-dismissed") delete state.held;
+    else if (event.type === "left-confirmed") {
+      delete state.held;
+      for (const person of event.people) { const activation = state.activations.get(person.subject); if (activation !== undefined) activation.leftAt = event.at; }
+    } else {
       const subjects = event.type === "listed" ? event.subjects : [event.subject];
       for (const subject of subjects) {
         const activation = state.activations.get(subject);
@@ -224,6 +260,27 @@ export class Activations {
 
   left(source: DirectorySource, person: Named, principalId?: string): void {
     this.record({ type: "left", source, ...person, ...(principalId !== undefined ? { principalId } : {}) });
+  }
+
+  held(source: DirectorySource): HeldSync | undefined { return this.of(source).held; }
+
+  /** A sync held back. The same people for the same reason is the same hold: the hourly refresh does not write it again. */
+  hold(source: DirectorySource, reason: HoldReason, standing: number, people: Named[]): void {
+    const before = this.of(source).held, key = (held: { reason: HoldReason; people: Named[] }) => JSON.stringify([held.reason, held.people.map(person => person.subject).sort()]);
+    if (before !== undefined && key(before) === key({ reason, people })) return;
+    this.record({ type: "hold", source, reason, standing, people });
+  }
+
+  /** The hold put away, by an Admin or by a later sync that is believed: the next sync is judged afresh. */
+  dismissHold(source: DirectorySource, by: string): boolean {
+    if (this.of(source).held === undefined) return false;
+    this.record({ type: "hold-dismissed", source, by });
+    return true;
+  }
+
+  /** A held sync confirmed: who left, as one line naming who confirmed and how many. */
+  leftConfirmed(source: DirectorySource, by: string, people: (Named & { principalId?: string })[]): void {
+    this.record({ type: "left-confirmed", source, by, count: people.length, people });
   }
 
   /** The acts as written, newest last: the audit an Admin reads. */

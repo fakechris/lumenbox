@@ -104,6 +104,8 @@ export const SERVER_ERRORS = {
   "err.cpus-out-of-range": ["请在 0.5 到 {max} 个核心之间选择。", "Choose between 0.5 and {max} cores."],
   // ── personal boxes and the directory ─────────────────────────────────────────────────────────
   "err.activation-role-invalid": ["请选一个角色：管理员、可以交代工作，或只能看。", "Choose a role: Admin, gives work, or watches."],
+  "err.activation-department-admin": ["不能把整个部门一次激活为管理员。请按“可以交代工作”或“只能看”激活部门，再逐个把需要的人设为管理员。", "A whole department cannot be activated as Admins in one press. Activate it as gives work or watches, then make the people who need it Admins one by one."],
+  "err.directory-nothing-held": ["没有等待确认的同步结果。", "No sync result is waiting to be confirmed."],
   "err.directory-person-unknown": ["通讯录里没有这个人，他也没有申请加入。请先同步通讯录。", "The directory does not list this person and they have not asked to join. Sync the directory first."],
   "err.directory-department-unknown": ["通讯录里没有这个部门。请先同步通讯录。", "The directory has no such department. Sync the directory first."],
   "err.directory-not-synced": ["这个渠道的通讯录还没有同步。", "This channel's directory has not been synced yet."],

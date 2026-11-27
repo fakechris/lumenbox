@@ -3016,7 +3016,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
-    signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[]) => { mcpTokens.revokeFor(ids); }, log };
+    signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log };
   const orgAdmission = admission(admissionDeps);
   const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
   // The web sign-in through a Feishu or DingTalk door (INV-1701, INV-729): one dispatcher in door-sign-in.ts.
