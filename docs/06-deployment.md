@@ -479,8 +479,14 @@ it is the address the limiter counts. If a second proxy stands in front of the a
 CDN, a cloud load balancer), configure the adjacent one to pass the real client address through
 (ingress-nginx: `use-forwarded-headers` with `proxy-real-ip-cidr`; nginx: `real_ip`), or every
 person arrives as that proxy's one address and one person's wrong tries make everyone wait.
-**The server's port must be reachable only through the terminator.** The server cannot check
-that a request came from its proxy — it is not told the proxy's address — so a client that
+**Say which proxies are in front: `AGENTBOX_TRUSTED_PROXIES`.** Addresses and CIDR ranges,
+comma-separated (`10.42.0.0/16, 192.0.2.10`): the Ingress controller's pod range, the load
+balancer's address. With it set, `X-Forwarded-For` is believed only from one of them or from the
+server's own machine; any other machine that reaches the port is counted, and recorded, as the
+peer it is, whatever it wrote. A list that cannot be read refuses the start.
+
+**Unset, the server's port must be reachable only through the terminator.** Then the server
+cannot tell its proxy from another machine, so a client that
 reaches the port directly (another pod in the cluster, a host on the same network) writes its own
 `X-Forwarded-For` and is counted, and recorded, under any address it likes. What still holds
 against it: the per-account counts and the invite-code cap do not depend on the address, the

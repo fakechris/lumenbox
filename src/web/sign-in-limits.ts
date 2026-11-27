@@ -21,7 +21,7 @@
  * **Local has none of this.** `signInGuard` with `enabled: false` waits for nobody and records
  * nothing: a personal installation on loopback behaves as it did.
  */
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import type { IncomingMessage } from "node:http";
 import { appendLine } from "../host/jsonl.ts";
 
@@ -126,21 +126,47 @@ export class SignInLimiter {
  *
  * Off local the server sits behind the TLS terminator it declared (exposure.ts), so the peer is the
  * proxy and the person's address is what the proxy wrote: the **last** entry of `X-Forwarded-For`,
- * the one the adjacent proxy appended. Never the first — the client writes that. The peer cannot
- * be checked against the proxy, whose address this server is not told: a request that reaches the
- * port around the proxy writes its own last entry, so the port must be reachable only through the
- * proxy (docs/06), the per-account count does not depend on the address, and the record keeps the
- * peer beside it. With no usable
+ * the one the adjacent proxy appended. Never the first — the client writes that.
+ *
+ * Whose word that entry is depends on who connected. With the proxies declared
+ * (`AGENTBOX_TRUSTED_PROXIES`, `trustedProxies`), it is believed only from one of them or from this
+ * machine itself; anyone else who reaches the port is counted as the peer they are, whatever they
+ * wrote. With none declared the server cannot tell its proxy from another machine, so the entry is
+ * believed from any peer: then the port must be reachable only through the proxy (docs/06), and
+ * the record keeps the peer beside the address so a forged one shows. With no usable
  * entry it is the peer, which is also the answer for a request that came with no proxy at all (the
  * CLI on the server: `isDirectLocal` reads the same headers). On local, and on a tenant's box
  * behind the gateway, it is the peer as it always was.
  */
-export function clientAddress(req: Pick<IncomingMessage, "headers"> & { socket: { remoteAddress?: string | undefined } }, behindProxy: boolean): string {
+export function clientAddress(req: Pick<IncomingMessage, "headers"> & { socket: { remoteAddress?: string | undefined } }, behindProxy: boolean, trusted?: BlockList): string {
   const peer = (req.socket.remoteAddress ?? "unknown").replace(/^::ffff:/, "");
   if (!behindProxy) return peer;
+  if (trusted !== undefined && peer !== "127.0.0.1" && peer !== "::1" && !(isIP(peer) !== 0 && trusted.check(peer, isIP(peer) === 6 ? "ipv6" : "ipv4"))) return peer;
   const header = req.headers["x-forwarded-for"];
   const last = (Array.isArray(header) ? header.join(",") : header ?? "").split(",").map(entry => entry.trim()).filter(entry => entry !== "").pop();
   return last !== undefined && isIP(last) !== 0 ? last : peer;
+}
+
+/**
+ * The proxies whose `X-Forwarded-For` is believed: `AGENTBOX_TRUSTED_PROXIES`, addresses and
+ * CIDR ranges separated by commas (`10.42.0.0/16, 192.0.2.10`). Undefined when unset. An entry
+ * that is not an address or a range is an error, at start: a list nobody can read protects nothing.
+ */
+export function trustedProxies(value: string | undefined): BlockList | undefined {
+  const entries = (value ?? "").split(",").map(entry => entry.trim()).filter(entry => entry !== "");
+  if (entries.length === 0) return undefined;
+  const list = new BlockList();
+  for (const entry of entries) {
+    const [address, bits, ...rest] = entry.split("/");
+    const family = isIP(address ?? "");
+    const prefix = bits === undefined ? undefined : Number(bits);
+    if (family === 0 || rest.length > 0 || (prefix !== undefined && (!Number.isInteger(prefix) || prefix < 0 || prefix > (family === 6 ? 128 : 32)))) {
+      throw new Error(`AGENTBOX_TRUSTED_PROXIES has "${entry}", which is not an address or a range like 10.42.0.0/16. Refusing to start with a proxy list that cannot be read.`);
+    }
+    if (prefix === undefined) list.addAddress(address!, family === 6 ? "ipv6" : "ipv4");
+    else list.addSubnet(address!, prefix, family === 6 ? "ipv6" : "ipv4");
+  }
+  return list;
 }
 
 /** One line of `sign-ins.jsonl`: a try that did not get in. Who and from where; never what was presented. */

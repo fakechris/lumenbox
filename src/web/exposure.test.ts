@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const KEYS = ["AGENTBOX_HOME", "AGENTBOX_UI_TOKEN", "AGENTBOX_NO_TOKEN", "AGENTBOX_PUBLIC_URL", "AGENTBOX_INSECURE", "AGENTBOX_EXPOSURE", "AGENTBOX_TRUST_GATEWAY_IDENTITY"] as const;
+const KEYS = ["AGENTBOX_HOME", "AGENTBOX_TRUSTED_PROXIES", "AGENTBOX_UI_TOKEN", "AGENTBOX_NO_TOKEN", "AGENTBOX_PUBLIC_URL", "AGENTBOX_INSECURE", "AGENTBOX_EXPOSURE", "AGENTBOX_TRUST_GATEWAY_IDENTITY"] as const;
 type Env = Partial<Record<(typeof KEYS)[number], string>>;
 const ORIGINAL = Object.fromEntries(KEYS.map(key => [key, process.env[key]]));
 const restore = () => { for (const key of KEYS) { if (ORIGINAL[key] === undefined) delete process.env[key]; else process.env[key] = ORIGINAL[key]; } };

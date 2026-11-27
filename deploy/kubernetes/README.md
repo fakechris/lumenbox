@@ -174,8 +174,11 @@ tries make everyone wait. Members must open the host in `AGENTBOX_PUBLIC_URL`: r
 name, the page loads and its changes are refused as cross-origin (docs/06, "Sign-in limits and
 what a browser is held to").
 
-Admit only the Ingress controller to the server's port. The address the server counts is the
-controller's word, so a pod that reaches port 7777 directly can claim any address. The selectors
+Tell the server who its proxy is, and admit only that. Set `AGENTBOX_TRUSTED_PROXIES` in
+`agentbox-organisation-env` to the range the Ingress controller's pods get their addresses from
+(or the controller's own addresses): the forwarded address is then believed only from there, and
+a pod that reaches port 7777 directly is counted as itself. And keep it from reaching the port at
+all: The selectors
 below are ingress-nginx's defaults; use your controller's namespace and labels:
 
 ```yaml

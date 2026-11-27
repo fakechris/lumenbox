@@ -177,6 +177,8 @@ export interface GatewayOptions {
   signIns?: SignInGuard;
   /** A TLS terminator stands in front, so a person's address is the last `X-Forwarded-For` entry. */
   behindProxy?: boolean;
+  /** The proxies that entry is believed from (`AGENTBOX_TRUSTED_PROXIES`); absent, from any peer. */
+  trustedProxies?: import("node:net").BlockList;
   /**
    * Where this gateway is reached by a person, for the share links it hands out (docs/29
    * §6 B). Absent, templates can be staged and served but no link is built.
@@ -460,7 +462,7 @@ export class Gateway {
     const next = safeNext(form.get("next"));
 
     // Counted by where it came from and by the name it was for, and asked before the password is compared.
-    const attempt = { door: "gateway" as const, address: clientAddress(req, this.options.behindProxy === true), peer: clientAddress(req, false), account: username };
+    const attempt = { door: "gateway" as const, address: clientAddress(req, this.options.behindProxy === true, this.options.trustedProxies), peer: clientAddress(req, false), account: username };
     const wait = this.options.signIns?.blocked(attempt);
     if (wait !== undefined) {
       res.setHeader("retry-after", String(wait));

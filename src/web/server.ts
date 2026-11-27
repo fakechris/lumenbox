@@ -92,7 +92,7 @@ import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, parsePublicUrlInput, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import { originRefusal, securityHeaders } from "./browser-guard.ts";
-import { clientAddress, signInGuard, signInLedger, SIGN_INS_LEDGER, type SignInDoor, type SignInGuard } from "./sign-in-limits.ts";
+import { clientAddress, signInGuard, signInLedger, trustedProxies, SIGN_INS_LEDGER, type SignInDoor, type SignInGuard } from "./sign-in-limits.ts";
 import {
   authorize,
   callerOf,
@@ -2988,9 +2988,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let exposure: Exposure | undefined;
   /** Sign-in limits and their record (sign-in-limits.ts, R4): nothing at local; set with the level, before the server listens. */
   let signIns: SignInGuard = signInGuard({ enabled: false, record: () => {}, log });
+  /** The proxies whose forwarded address is believed (AGENTBOX_TRUSTED_PROXIES); unset, any peer's is. Read at start, where a bad list refuses. */
+  let proxies: ReturnType<typeof trustedProxies>;
   /** One try at one way in, from wherever this request came: the proxy's word off local, the peer otherwise. */
   const attemptFrom = (req: IncomingMessage, door: SignInDoor, account?: string) =>
-    ({ door, address: clientAddress(req, exposure !== undefined && exposure.level !== "local" && !exposure.behindGateway), peer: clientAddress(req, false), ...(account !== undefined ? { account } : {}) });
+    ({ door, address: clientAddress(req, exposure !== undefined && exposure.level !== "local" && !exposure.behindGateway, proxies), peer: clientAddress(req, false), ...(account !== undefined ? { account } : {}) });
   /** Answers 429 with Retry-After when this try has to wait; true when it answered. */
   const mustWait = (req: IncomingMessage, res: ServerResponse, door: SignInDoor, account?: string): boolean => {
     const seconds = signIns.blocked(attemptFrom(req, door, account));
@@ -6786,6 +6788,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   sessionSecret = sessionKey(token);
   // Under TLS the cookie says so, and a browser stops sending it over plain HTTP.
   secureCookies = exposure.secureCookies;
+  proxies = trustedProxies(process.env.AGENTBOX_TRUSTED_PROXIES);
   signIns = signInGuard({ enabled: exposure.level !== "local", record: signInLedger(join(agentboxHome(), SIGN_INS_LEDGER), log), log });
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
   // Where a job in the box reaches this server (docs/33 §1), and the lease renewal that ends a

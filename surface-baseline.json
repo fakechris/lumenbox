@@ -118,6 +118,7 @@
   "env/AGENTBOX_SECURE_COOKIES": "listed by agentbox help",
   "env/AGENTBOX_SESSION_SECRET": "listed by agentbox help",
   "env/AGENTBOX_THINKING": "listed by agentbox help",
+  "env/AGENTBOX_TRUSTED_PROXIES": "listed by agentbox help",
   "env/AGENTBOX_VISION": "listed by agentbox help",
   "env/AGENTBOX_WIDTH/HEIGHT": "listed by agentbox help",
   "env/ANTHROPIC_API_KEY": "listed by agentbox help",

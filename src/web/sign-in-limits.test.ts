@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ACCOUNT_BACKOFF, ADDRESS_BACKOFF, SignInLimiter, clientAddress, signInGuard, signInLedger, type SignInRecord } from "./sign-in-limits.ts";
+import { ACCOUNT_BACKOFF, ADDRESS_BACKOFF, SignInLimiter, clientAddress, signInGuard, signInLedger, trustedProxies, type SignInRecord } from "./sign-in-limits.ts";
 
 test("wrong tries are free at first, then each doubles the wait up to a ceiling; an address and an account are counted apart, and success clears only the account", () => {
   let now = 1_000_000;
@@ -62,6 +62,19 @@ test("a person's address is what the adjacent proxy wrote, never what the client
   assert.equal(clientAddress(req("10.0.0.7", "not-an-address"), true), "10.0.0.7", "a value that is not an address is nobody's");
   assert.equal(clientAddress(req("::ffff:127.0.0.1"), true), "127.0.0.1", "the CLI on the server came through no proxy");
   assert.equal(clientAddress(req("127.0.0.1", "203.0.113.9"), false), "127.0.0.1", "local has no proxy to believe");
+
+  // With the proxies declared, only their word is taken: a machine that reaches the port around
+  // them is counted as the peer it is, whatever it wrote.
+  const proxies = trustedProxies(" 10.42.0.0/16, 192.0.2.10 ,2001:db8:1::/48")!;
+  assert.equal(clientAddress(req("10.42.3.7", "203.0.113.9"), true, proxies), "203.0.113.9", "the Ingress controller, inside the declared range");
+  assert.equal(clientAddress(req("192.0.2.10", "203.0.113.9"), true, proxies), "203.0.113.9");
+  assert.equal(clientAddress(req("2001:db8:1::5", "203.0.113.9"), true, proxies), "203.0.113.9");
+  assert.equal(clientAddress(req("::ffff:127.0.0.1", "203.0.113.9"), true, proxies), "203.0.113.9", "a proxy on this machine needs no listing");
+  assert.equal(clientAddress(req("10.43.0.9", "203.0.113.9"), true, proxies), "10.43.0.9", "another pod that reached the port directly is itself, not who it says");
+  assert.equal(clientAddress(req("192.0.2.11", "1.1.1.1, 2.2.2.2"), true, proxies), "192.0.2.11");
+  assert.equal(trustedProxies(undefined), undefined);
+  assert.equal(trustedProxies(" , "), undefined);
+  for (const bad of ["10.42.0.0/33", "ingress-nginx", "10.0.0.1/8/8", "2001:db8::/129"]) assert.throws(() => trustedProxies(bad), /AGENTBOX_TRUSTED_PROXIES has/, bad);
 });
 
 test("a refused try is recorded with who and from where and never with what was presented; local records and limits nothing", () => {
