@@ -1,0 +1,384 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 860" width="1240" height="860" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1120"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="diagGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <linearGradient id="depGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1E293B"/>
+      <stop offset="100%" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="zeroZoneGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#064E3B" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#022C22" stop-opacity="0.14"/>
+    </linearGradient>
+    <filter id="cardShadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="4" stdDeviation="8" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <filter id="glowBlue" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#3B82F6" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Main Canvas Background -->
+  <rect x="0" y="0" width="1240" height="860" rx="18" fill="url(#bgGrad)" stroke="#1E293B" stroke-width="2"/>
+
+  <!-- Header Banner -->
+  <rect x="28" y="24" width="1184" height="84" rx="12" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+  <rect x="28" y="24" width="6" height="84" rx="3" fill="#3B82F6"/>
+  <text x="52" y="58" fill="#F8FAFC" font-size="22" font-weight="700" letter-spacing="0.3">LumenBox 顶层公理设计矩阵（Level-1 Design Matrix）</text>
+  <text x="52" y="86" fill="#94A3B8" font-size="13.5">设计方程  {FR₁..₈} = [A₈×₈] · {DP₁..₈}  —  严格下三角准耦合架构（Decoupled Lower-Triangular Design，满足 MIT 独立公理）</text>
+
+  <!-- Status Pill Top Right -->
+  <rect x="980" y="44" width="208" height="42" rx="21" fill="#064E3B" fill-opacity="0.45" stroke="#10B981" stroke-width="1.2"/>
+  <circle cx="1004" cy="65" r="5" fill="#34D399"/>
+  <text x="1018" y="70" fill="#A7F3D0" font-size="13" font-weight="600">上三角反向耦合 = 0 / 28</text>
+
+  <!-- Equation Left Bracket Label -->
+  <text x="52" y="164" fill="#60A5FA" font-size="13" font-weight="700" letter-spacing="0.8">功能域 {FRs} — 系统要达成什么</text>
+  <text x="348" y="138" fill="#A78BFA" font-size="13" font-weight="700" letter-spacing="0.8">物理域 {DPs} — 系统用什么架构原语实现（列）</text>
+
+  <!-- DP Column Headers (x starts at 348, step = 68, width = 62) -->
+  <!-- Col 0..7: x = 348 + j*68 -->
+  <g font-size="11.5" text-anchor="middle">
+    <!-- DP1 -->
+    <rect x="348" y="150" width="62" height="86" rx="8" fill="#1E293B" stroke="#334155" stroke-width="1"/>
+    <text x="379" y="171" fill="#60A5FA" font-weight="700" font-size="12.5">DP1</text>
+    <text x="379" y="191" fill="#E2E8F0" font-weight="600">Box容器</text>
+    <text x="379" y="208" fill="#94A3B8" font-size="10.5">&amp; boxd</text>
+    <text x="379" y="225" fill="#64748B" font-size="9.5">独立Xvfb</text>
+
+    <!-- DP2 -->
+    <rect x="416" y="150" width="62" height="86" rx="8" fill="#1E293B" stroke="#334155" stroke-width="1"/>
+    <text x="447" y="171" fill="#60A5FA" font-weight="700" font-size="12.5">DP2</text>
+    <text x="447" y="191" fill="#E2E8F0" font-weight="600">无权限门</text>
+    <text x="447" y="208" fill="#94A3B8" font-size="10.5">Channels</text>
+    <text x="447" y="225" fill="#64748B" font-size="9.5">收发账本</text>
+
+    <!-- DP3 -->
+    <rect x="484" y="150" width="62" height="86" rx="8" fill="#1E293B" stroke="#334155" stroke-width="1"/>
+    <text x="515" y="171" fill="#60A5FA" font-weight="700" font-size="12.5">DP3</text>
+    <text x="515" y="191" fill="#E2E8F0" font-weight="600">宿主编排</text>
+    <text x="515" y="208" fill="#94A3B8" font-size="10.5">Host/Bus</text>
+    <text x="515" y="225" fill="#64748B" font-size="9.5">团队名册</text>
+
+    <!-- DP4 -->
+    <rect x="552" y="150" width="62" height="86" rx="8" fill="#1E293B" stroke="#334155" stroke-width="1"/>
+    <text x="583" y="171" fill="#60A5FA" font-weight="700" font-size="12.5">DP4</text>
+    <text x="583" y="191" fill="#E2E8F0" font-weight="600">两道门</text>
+    <text x="583" y="208" fill="#94A3B8" font-size="10.5">策略门</text>
+    <text x="583" y="225" fill="#64748B" font-size="9.5">出站中继</text>
+
+    <!-- DP5 -->
+    <rect x="620" y="150" width="62" height="86" rx="8" fill="#1E293B" stroke="#334155" stroke-width="1"/>
+    <text x="651" y="171" fill="#60A5FA" font-weight="700" font-size="12.5">DP5</text>
+    <text x="651" y="191" fill="#E2E8F0" font-weight="600">三记录</text>
+    <text x="651" y="208" fill="#94A3B8" font-size="10.5">双轴状态</text>
+    <text x="651" y="225" fill="#64748B" font-size="9.5">验证闸门</text>
+
+    <!-- DP6 -->
+    <rect x="688" y="150" width="62" height="86" rx="8" fill="#1E293B" stroke="#334155" stroke-width="1"/>
+    <text x="719" y="171" fill="#60A5FA" font-weight="700" font-size="12.5">DP6</text>
+    <text x="719" y="191" fill="#E2E8F0" font-weight="600">三栏工作台</text>
+    <text x="719" y="208" fill="#94A3B8" font-size="10.5">接管抢占</text>
+    <text x="719" y="225" fill="#64748B" font-size="9.5">分级自愈</text>
+
+    <!-- DP7 -->
+    <rect x="756" y="150" width="62" height="86" rx="8" fill="#1E293B" stroke="#334155" stroke-width="1"/>
+    <text x="787" y="171" fill="#60A5FA" font-weight="700" font-size="12.5">DP7</text>
+    <text x="787" y="191" fill="#E2E8F0" font-weight="600">溯源记忆</text>
+    <text x="787" y="208" fill="#94A3B8" font-size="10.5">SKILL契约</text>
+    <text x="787" y="225" fill="#64748B" font-size="9.5">三档例程</text>
+
+    <!-- DP8 -->
+    <rect x="824" y="150" width="62" height="86" rx="8" fill="#1E293B" stroke="#334155" stroke-width="1"/>
+    <text x="855" y="171" fill="#60A5FA" font-weight="700" font-size="12.5">DP8</text>
+    <text x="855" y="191" fill="#E2E8F0" font-weight="600">证据账本</text>
+    <text x="855" y="208" fill="#94A3B8" font-size="10.5">黄金评测</text>
+    <text x="855" y="225" fill="#64748B" font-size="9.5">旁路控制面</text>
+  </g>
+
+  <!-- Matrix Outer Brackets -->
+  <path d="M 342 244 L 334 244 L 334 748 L 342 748" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M 892 244 L 900 244 L 900 748 L 892 748" fill="none" stroke="#64748B" stroke-width="2.5" stroke-linecap="round"/>
+
+  <!-- Upper-Triangular Zero Zone Orthogonal Step Boundary -->
+  <path d="M 413 245 L 889 245 L 889 685 L 821 685 L 821 622 L 753 622 L 753 559 L 685 559 L 685 496 L 617 496 L 617 433 L 549 433 L 549 370 L 481 370 L 481 307 L 413 307 Z" fill="url(#zeroZoneGrad)" stroke="#10B981" stroke-width="1.3" stroke-dasharray="5,4" stroke-opacity="0.65"/>
+
+  <!-- FR Row Labels (y starts at 248, step = 63, height = 57) -->
+  <g font-size="12.5">
+    <!-- FR1 -->
+    <rect x="28" y="248" width="294" height="57" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="1.2"/>
+    <rect x="28" y="248" width="4" height="57" rx="2" fill="#3B82F6"/>
+    <text x="42" y="272" fill="#60A5FA" font-weight="700">FR1</text>
+    <text x="80" y="272" fill="#F1F5F9" font-weight="600">真实隔离的计算执行环境</text>
+    <text x="42" y="293" fill="#94A3B8" font-size="11">独立桌面 · 效果证据 · 持久Shell · 供给解耦</text>
+
+    <!-- FR2 -->
+    <rect x="28" y="311" width="294" height="57" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="1.2"/>
+    <rect x="28" y="311" width="4" height="57" rx="2" fill="#3B82F6"/>
+    <text x="42" y="335" fill="#60A5FA" font-weight="700">FR2</text>
+    <text x="80" y="335" fill="#F1F5F9" font-weight="600">多渠道统一接入与可靠投递</text>
+    <text x="42" y="356" fill="#94A3B8" font-size="11">跨门身份 · 入站唯一ID · 出站收据 · 房间隔离</text>
+
+    <!-- FR3 -->
+    <rect x="28" y="374" width="294" height="57" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="1.2"/>
+    <rect x="28" y="374" width="4" height="57" rx="2" fill="#3B82F6"/>
+    <text x="42" y="398" fill="#60A5FA" font-weight="700">FR3</text>
+    <text x="80" y="398" fill="#F1F5F9" font-weight="600">多智能体团队编排与并发协调</text>
+    <text x="42" y="419" fill="#94A3B8" font-size="11">单Agent串行 · 优先打断 · 工作租约 · MCP委托</text>
+
+    <!-- FR4 -->
+    <rect x="28" y="437" width="294" height="57" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="1.2"/>
+    <rect x="28" y="437" width="4" height="57" rx="2" fill="#3B82F6"/>
+    <text x="42" y="461" fill="#60A5FA" font-weight="700">FR4</text>
+    <text x="80" y="461" fill="#F1F5F9" font-weight="600">确定性权限边界与机密保护</text>
+    <text x="42" y="482" fill="#94A3B8" font-size="11">两道门 · 高危审批门 · 凭据不出Box · 双安装隔离</text>
+
+    <!-- FR5 -->
+    <rect x="28" y="500" width="294" height="57" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="1.2"/>
+    <rect x="28" y="500" width="4" height="57" rx="2" fill="#3B82F6"/>
+    <text x="42" y="524" fill="#60A5FA" font-weight="700">FR5</text>
+    <text x="80" y="524" fill="#F1F5F9" font-weight="600">长周期任务续跑与独立完成验收</text>
+    <text x="42" y="545" fill="#94A3B8" font-size="11">三记录双轴 · 归档换代 · 四闸续跑 · 异体独立验证</text>
+
+    <!-- FR6 -->
+    <rect x="28" y="563" width="294" height="57" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="1.2"/>
+    <rect x="28" y="563" width="4" height="57" rx="2" fill="#3B82F6"/>
+    <text x="42" y="587" fill="#60A5FA" font-weight="700">FR6</text>
+    <text x="80" y="587" fill="#F1F5F9" font-weight="600">实时桌面观测、人类接管与自愈</text>
+    <text x="42" y="608" fill="#94A3B8" font-size="11">三栏独立滚动 · 接管停写锁 · 分片录像 · 两级监督</text>
+
+    <!-- FR7 -->
+    <rect x="28" y="626" width="294" height="57" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="1.2"/>
+    <rect x="28" y="626" width="4" height="57" rx="2" fill="#3B82F6"/>
+    <text x="42" y="650" fill="#60A5FA" font-weight="700">FR7</text>
+    <text x="80" y="650" fill="#F1F5F9" font-weight="600">跨会话记忆、技能沉淀与自动例程</text>
+    <text x="42" y="671" fill="#94A3B8" font-size="11">原话引用校验 · 接管即教学 · SKILL索引 · 观察档</text>
+
+    <!-- FR8 -->
+    <rect x="28" y="689" width="294" height="57" rx="8" fill="#0F172A" stroke="#1E293B" stroke-width="1.2"/>
+    <rect x="28" y="689" width="4" height="57" rx="2" fill="#3B82F6"/>
+    <text x="42" y="713" fill="#60A5FA" font-weight="700">FR8</text>
+    <text x="80" y="713" fill="#F1F5F9" font-weight="600">防篡改溯源账本、评测与多租户</text>
+    <text x="42" y="734" fill="#94A3B8" font-size="11">原生协议块 · 黄金语料k次检验 · 旁路拉取控制面</text>
+  </g>
+
+  <!-- Matrix Cells 8x8 -->
+  <!-- Row y = 248 + i*63, Col x = 348 + j*68, w=62, h=57 -->
+  <g text-anchor="middle" font-size="15">
+    <!-- ROW 0 (FR1): [X, 0, 0, 0, 0, 0, 0, 0] -->
+    <rect x="348" y="248" width="62" height="57" rx="8" fill="url(#diagGrad)" filter="url(#glowBlue)"/>
+    <text x="379" y="283" fill="#FFFFFF" font-weight="800" font-size="18">X</text>
+    <g fill="#064E3B" fill-opacity="0.22" stroke="#10B981" stroke-opacity="0.28" stroke-width="1">
+      <rect x="416" y="248" width="62" height="57" rx="8"/><rect x="484" y="248" width="62" height="57" rx="8"/>
+      <rect x="552" y="248" width="62" height="57" rx="8"/><rect x="620" y="248" width="62" height="57" rx="8"/>
+      <rect x="688" y="248" width="62" height="57" rx="8"/><rect x="756" y="248" width="62" height="57" rx="8"/>
+      <rect x="824" y="248" width="62" height="57" rx="8"/>
+    </g>
+    <g fill="#34D399" fill-opacity="0.65" font-size="13" font-weight="600">
+      <text x="447" y="282">0</text><text x="515" y="282">0</text><text x="583" y="282">0</text>
+      <text x="651" y="282">0</text><text x="719" y="282">0</text><text x="787" y="282">0</text><text x="855" y="282">0</text>
+    </g>
+
+    <!-- ROW 1 (FR2): [0, X, 0, 0, 0, 0, 0, 0] -->
+    <rect x="348" y="311" width="62" height="57" rx="8" fill="#0F172A" stroke="#1E293B"/>
+    <text x="379" y="345" fill="#475569" font-size="13">0</text>
+    <rect x="416" y="311" width="62" height="57" rx="8" fill="url(#diagGrad)" filter="url(#glowBlue)"/>
+    <text x="447" y="346" fill="#FFFFFF" font-weight="800" font-size="18">X</text>
+    <g fill="#064E3B" fill-opacity="0.22" stroke="#10B981" stroke-opacity="0.28" stroke-width="1">
+      <rect x="484" y="311" width="62" height="57" rx="8"/><rect x="552" y="311" width="62" height="57" rx="8"/>
+      <rect x="620" y="311" width="62" height="57" rx="8"/><rect x="688" y="311" width="62" height="57" rx="8"/>
+      <rect x="756" y="311" width="62" height="57" rx="8"/><rect x="824" y="311" width="62" height="57" rx="8"/>
+    </g>
+    <g fill="#34D399" fill-opacity="0.65" font-size="13" font-weight="600">
+      <text x="515" y="345">0</text><text x="583" y="345">0</text><text x="651" y="345">0</text>
+      <text x="719" y="345">0</text><text x="787" y="345">0</text><text x="855" y="345">0</text>
+    </g>
+
+    <!-- ROW 2 (FR3): [x, x, X, 0, 0, 0, 0, 0] -->
+    <g fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2">
+      <rect x="348" y="374" width="62" height="57" rx="8"/>
+      <rect x="416" y="374" width="62" height="57" rx="8"/>
+    </g>
+    <text x="379" y="407" fill="#FBBF24" font-weight="700">x</text>
+    <text x="447" y="407" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="484" y="374" width="62" height="57" rx="8" fill="url(#diagGrad)" filter="url(#glowBlue)"/>
+    <text x="515" y="409" fill="#FFFFFF" font-weight="800" font-size="18">X</text>
+    <g fill="#064E3B" fill-opacity="0.22" stroke="#10B981" stroke-opacity="0.28" stroke-width="1">
+      <rect x="552" y="374" width="62" height="57" rx="8"/><rect x="620" y="374" width="62" height="57" rx="8"/>
+      <rect x="688" y="374" width="62" height="57" rx="8"/><rect x="756" y="374" width="62" height="57" rx="8"/>
+      <rect x="824" y="374" width="62" height="57" rx="8"/>
+    </g>
+    <g fill="#34D399" fill-opacity="0.65" font-size="13" font-weight="600">
+      <text x="583" y="408">0</text><text x="651" y="408">0</text><text x="719" y="408">0</text>
+      <text x="787" y="408">0</text><text x="855" y="408">0</text>
+    </g>
+
+    <!-- ROW 3 (FR4): [x, x, x, X, 0, 0, 0, 0] -->
+    <g fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2">
+      <rect x="348" y="437" width="62" height="57" rx="8"/>
+      <rect x="416" y="437" width="62" height="57" rx="8"/>
+      <rect x="484" y="437" width="62" height="57" rx="8"/>
+    </g>
+    <text x="379" y="470" fill="#FBBF24" font-weight="700">x</text>
+    <text x="447" y="470" fill="#FBBF24" font-weight="700">x</text>
+    <text x="515" y="470" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="552" y="437" width="62" height="57" rx="8" fill="url(#diagGrad)" filter="url(#glowBlue)"/>
+    <text x="583" y="472" fill="#FFFFFF" font-weight="800" font-size="18">X</text>
+    <g fill="#064E3B" fill-opacity="0.22" stroke="#10B981" stroke-opacity="0.28" stroke-width="1">
+      <rect x="620" y="437" width="62" height="57" rx="8"/><rect x="688" y="437" width="62" height="57" rx="8"/>
+      <rect x="756" y="437" width="62" height="57" rx="8"/><rect x="824" y="437" width="62" height="57" rx="8"/>
+    </g>
+    <g fill="#34D399" fill-opacity="0.65" font-size="13" font-weight="600">
+      <text x="651" y="471">0</text><text x="719" y="471">0</text><text x="787" y="471">0</text><text x="855" y="471">0</text>
+    </g>
+
+    <!-- ROW 4 (FR5): [x, x, x, x, X, 0, 0, 0] -->
+    <g fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2">
+      <rect x="348" y="500" width="62" height="57" rx="8"/>
+      <rect x="416" y="500" width="62" height="57" rx="8"/>
+      <rect x="484" y="500" width="62" height="57" rx="8"/>
+      <rect x="552" y="500" width="62" height="57" rx="8"/>
+    </g>
+    <text x="379" y="533" fill="#FBBF24" font-weight="700">x</text>
+    <text x="447" y="533" fill="#FBBF24" font-weight="700">x</text>
+    <text x="515" y="533" fill="#FBBF24" font-weight="700">x</text>
+    <text x="583" y="533" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="620" y="500" width="62" height="57" rx="8" fill="url(#diagGrad)" filter="url(#glowBlue)"/>
+    <text x="651" y="535" fill="#FFFFFF" font-weight="800" font-size="18">X</text>
+    <g fill="#064E3B" fill-opacity="0.22" stroke="#10B981" stroke-opacity="0.28" stroke-width="1">
+      <rect x="688" y="500" width="62" height="57" rx="8"/><rect x="756" y="500" width="62" height="57" rx="8"/>
+      <rect x="824" y="500" width="62" height="57" rx="8"/>
+    </g>
+    <g fill="#34D399" fill-opacity="0.65" font-size="13" font-weight="600">
+      <text x="719" y="534">0</text><text x="787" y="534">0</text><text x="855" y="534">0</text>
+    </g>
+
+    <!-- ROW 5 (FR6): [x, 0, x, x, 0, X, 0, 0] -->
+    <rect x="348" y="563" width="62" height="57" rx="8" fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2"/>
+    <text x="379" y="596" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="416" y="563" width="62" height="57" rx="8" fill="#0F172A" stroke="#1E293B"/>
+    <text x="447" y="597" fill="#475569" font-size="13">0</text>
+    <rect x="484" y="563" width="62" height="57" rx="8" fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2"/>
+    <text x="515" y="596" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="552" y="563" width="62" height="57" rx="8" fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2"/>
+    <text x="583" y="596" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="620" y="563" width="62" height="57" rx="8" fill="#0F172A" stroke="#1E293B"/>
+    <text x="651" y="597" fill="#475569" font-size="13">0</text>
+    <rect x="688" y="563" width="62" height="57" rx="8" fill="url(#diagGrad)" filter="url(#glowBlue)"/>
+    <text x="719" y="598" fill="#FFFFFF" font-weight="800" font-size="18">X</text>
+    <g fill="#064E3B" fill-opacity="0.22" stroke="#10B981" stroke-opacity="0.28" stroke-width="1">
+      <rect x="756" y="563" width="62" height="57" rx="8"/><rect x="824" y="563" width="62" height="57" rx="8"/>
+    </g>
+    <g fill="#34D399" fill-opacity="0.65" font-size="13" font-weight="600">
+      <text x="787" y="597">0</text><text x="855" y="597">0</text>
+    </g>
+
+    <!-- ROW 6 (FR7): [x, x, x, x, 0, x, X, 0] -->
+    <g fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2">
+      <rect x="348" y="626" width="62" height="57" rx="8"/>
+      <rect x="416" y="626" width="62" height="57" rx="8"/>
+      <rect x="484" y="626" width="62" height="57" rx="8"/>
+      <rect x="552" y="626" width="62" height="57" rx="8"/>
+    </g>
+    <text x="379" y="659" fill="#FBBF24" font-weight="700">x</text>
+    <text x="447" y="659" fill="#FBBF24" font-weight="700">x</text>
+    <text x="515" y="659" fill="#FBBF24" font-weight="700">x</text>
+    <text x="583" y="659" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="620" y="626" width="62" height="57" rx="8" fill="#0F172A" stroke="#1E293B"/>
+    <text x="651" y="660" fill="#475569" font-size="13">0</text>
+    <rect x="688" y="626" width="62" height="57" rx="8" fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2"/>
+    <text x="719" y="659" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="756" y="626" width="62" height="57" rx="8" fill="url(#diagGrad)" filter="url(#glowBlue)"/>
+    <text x="787" y="661" fill="#FFFFFF" font-weight="800" font-size="18">X</text>
+    <rect x="824" y="626" width="62" height="57" rx="8" fill="#064E3B" fill-opacity="0.22" stroke="#10B981" stroke-opacity="0.28" stroke-width="1"/>
+    <text x="855" y="660" fill="#34D399" fill-opacity="0.65" font-size="13" font-weight="600">0</text>
+
+    <!-- ROW 7 (FR8): [x, x, x, x, x, 0, 0, X] -->
+    <g fill="url(#depGrad)" stroke="#F59E0B" stroke-opacity="0.55" stroke-width="1.2">
+      <rect x="348" y="689" width="62" height="57" rx="8"/>
+      <rect x="416" y="689" width="62" height="57" rx="8"/>
+      <rect x="484" y="689" width="62" height="57" rx="8"/>
+      <rect x="552" y="689" width="62" height="57" rx="8"/>
+      <rect x="620" y="689" width="62" height="57" rx="8"/>
+    </g>
+    <text x="379" y="722" fill="#FBBF24" font-weight="700">x</text>
+    <text x="447" y="722" fill="#FBBF24" font-weight="700">x</text>
+    <text x="515" y="722" fill="#FBBF24" font-weight="700">x</text>
+    <text x="583" y="722" fill="#FBBF24" font-weight="700">x</text>
+    <text x="651" y="722" fill="#FBBF24" font-weight="700">x</text>
+    <rect x="688" y="689" width="62" height="57" rx="8" fill="#0F172A" stroke="#1E293B"/>
+    <text x="719" y="723" fill="#475569" font-size="13">0</text>
+    <rect x="756" y="689" width="62" height="57" rx="8" fill="#0F172A" stroke="#1E293B"/>
+    <text x="787" y="723" fill="#475569" font-size="13">0</text>
+    <rect x="824" y="689" width="62" height="57" rx="8" fill="url(#diagGrad)" filter="url(#glowBlue)"/>
+    <text x="855" y="724" fill="#FFFFFF" font-weight="800" font-size="18">X</text>
+  </g>
+
+  <!-- Right Side Annotation Panel: Why Upper Triangle = 0 -->
+  <rect x="918" y="150" width="294" height="596" rx="12" fill="#0F172A" stroke="#1E293B" stroke-width="1.5" filter="url(#cardShadow)"/>
+  <text x="938" y="182" fill="#F8FAFC" font-size="14.5" font-weight="700">关键架构解耦定律（上三角清零机制）</text>
+  <line x1="938" y1="196" x2="1192" y2="196" stroke="#1E293B" stroke-width="1.5"/>
+
+  <!-- Law 1 -->
+  <rect x="936" y="210" width="258" height="106" rx="8" fill="#111827" stroke="#065F46" stroke-width="1"/>
+  <text x="950" y="232" fill="#34D399" font-size="12.5" font-weight="700">1. A₁₂ = A₁₃ = A₁₈ = 0（Box 零反向依赖）</text>
+  <text x="950" y="253" fill="#CBD5E1" font-size="11.5">boxd 仅被动监听 HTTP/WS，不存会话状态，</text>
+  <text x="950" y="271" fill="#CBD5E1" font-size="11.5">绝不主动外连报到（No Phone-Home）。</text>
+  <text x="950" y="294" fill="#64748B" font-size="10.5">收益：换模型、换飞书/钉钉、换控制面均不动 Box</text>
+
+  <!-- Law 2 -->
+  <rect x="936" y="328" width="258" height="106" rx="8" fill="#111827" stroke="#065F46" stroke-width="1"/>
+  <text x="950" y="350" fill="#34D399" font-size="12.5" font-weight="700">2. A₂₄ = A₂₃ = 0（渠道门不带权限）</text>
+  <text x="950" y="371" fill="#CBD5E1" font-size="11.5">Doors 只管身份映射与收发账本，不持权限集、</text>
+  <text x="950" y="389" fill="#CBD5E1" font-size="11.5">不做全局路由会话（docs/22 §0）。</text>
+  <text x="950" y="412" fill="#64748B" font-size="10.5">收益：调整团队机密边界无需修改任何 IM 适配器</text>
+
+  <!-- Law 3 -->
+  <rect x="936" y="446" width="258" height="106" rx="8" fill="#111827" stroke="#065F46" stroke-width="1"/>
+  <text x="950" y="468" fill="#34D399" font-size="12.5" font-weight="700">3. A₃₈ = A₅₈ = 0（控制面不在 Turn 路径）</text>
+  <text x="950" y="489" fill="#CBD5E1" font-size="11.5">Control Plane 只管分配、认证与拉取计量，</text>
+  <text x="950" y="507" fill="#CBD5E1" font-size="11.5">绝不代理工具调用或转发智能体消息。</text>
+  <text x="950" y="530" fill="#64748B" font-size="10.5">收益：控制面重启或故障时，运行中任务零中断</text>
+
+  <!-- Law 4 -->
+  <rect x="936" y="564" width="258" height="106" rx="8" fill="#111827" stroke="#065F46" stroke-width="1"/>
+  <text x="950" y="586" fill="#34D399" font-size="12.5" font-weight="700">4. A₅₇ = A₃₆ = 0（观测与教学不侵入主循环）</text>
+  <text x="950" y="607" fill="#CBD5E1" font-size="11.5">人类接管锁在 boxd 层即时阻断输入；接管录制</text>
+  <text x="950" y="625" fill="#CBD5E1" font-size="11.5">生成 dry-run 技能草稿，不直接篡改运行策略。</text>
+  <text x="950" y="648" fill="#64748B" font-size="10.5">收益：随时观看与接管任意桌面不影响其余队友</text>
+
+  <!-- Execution Sequence Strip inside Right Panel -->
+  <rect x="936" y="682" width="258" height="50" rx="8" fill="#1E293B"/>
+  <text x="948" y="702" fill="#93C5FD" font-size="11" font-weight="700">公理化调参/演进法定顺序（Forward Order）：</text>
+  <text x="948" y="721" fill="#F8FAFC" font-size="10.2" font-weight="600">DP1 → DP2 → DP3 → DP4 → DP5 → DP6 → DP7 → DP8</text>
+
+  <!-- Bottom Legend Bar -->
+  <rect x="28" y="768" width="1184" height="66" rx="12" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+  <!-- Legend Item 1 -->
+  <rect x="48" y="786" width="30" height="30" rx="6" fill="url(#diagGrad)"/>
+  <text x="63" y="806" fill="#FFFFFF" font-size="14" font-weight="800" text-anchor="middle">X</text>
+  <text x="88" y="800" fill="#F1F5F9" font-size="12.5" font-weight="600">主对角元（Primary Mapping）</text>
+  <text x="88" y="817" fill="#94A3B8" font-size="11">唯一主导该 FR 的核心设计原语（一概念一归属）</text>
+
+  <!-- Legend Item 2 -->
+  <rect x="372" y="786" width="30" height="30" rx="6" fill="url(#depGrad)" stroke="#F59E0B" stroke-width="1.2"/>
+  <text x="387" y="806" fill="#FBBF24" font-size="14" font-weight="700" text-anchor="middle">x</text>
+  <text x="412" y="800" fill="#F1F5F9" font-size="12.5" font-weight="600">下三角单向依赖（Feed-Forward）</text>
+  <text x="412" y="817" fill="#94A3B8" font-size="11">上层机制复用底层基础设施契约，无反向环路</text>
+
+  <!-- Legend Item 3 -->
+  <rect x="700" y="786" width="30" height="30" rx="6" fill="#064E3B" fill-opacity="0.35" stroke="#10B981" stroke-width="1"/>
+  <text x="715" y="806" fill="#34D399" font-size="13" font-weight="700" text-anchor="middle">0</text>
+  <text x="740" y="800" fill="#F1F5F9" font-size="12.5" font-weight="600">上三角严格零元（Structural Zero）</text>
+  <text x="740" y="817" fill="#94A3B8" font-size="11">通过架构边界与 architecture-guard 测试强制隔离</text>
+
+  <!-- Legend Item 4 -->
+  <rect x="1032" y="786" width="160" height="30" rx="6" fill="#172554" stroke="#3B82F6" stroke-width="1"/>
+  <text x="1112" y="805" fill="#93C5FD" font-size="12" font-weight="700" text-anchor="middle">判定：准耦合优设计 ✓</text>
+</svg>

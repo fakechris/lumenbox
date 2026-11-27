@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 470" width="1240" height="470" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <linearGradient id="bg3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B1120"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="highEntropyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#EF4444" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#EF4444" stop-opacity="0.05"/>
+    </linearGradient>
+    <linearGradient id="lowEntropyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0.06"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1240" height="470" rx="18" fill="url(#bg3)" stroke="#1E293B" stroke-width="2"/>
+
+  <!-- Header -->
+  <rect x="28" y="22" width="1184" height="72" rx="12" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+  <rect x="28" y="22" width="6" height="72" rx="3" fill="#8B5CF6"/>
+  <text x="52" y="52" fill="#F8FAFC" font-size="20" font-weight="700">第二公理（信息公理 Information Axiom）：信息含量 I = log₂(1 / p) 最小化机制</text>
+  <text x="52" y="77" fill="#94A3B8" font-size="13">为什么“边界用代码画，措辞让团队改”能在弱模型与长链路任务下保持高可靠？—— 将概率性约束转为确定性工程卡口</text>
+
+  <!-- Left Visual: Probability & Common Range Curve -->
+  <rect x="28" y="112" width="540" height="332" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+  <text x="48" y="142" fill="#E2E8F0" font-size="14" font-weight="700">设计公差（Design Range）vs 系统响应分布（System Range）</text>
+  <text x="48" y="162" fill="#94A3B8" font-size="11.5">n 步长任务联合成功率 P = ∏ pᵢ ，总信息熵 I_total = ∑ log₂(1/pᵢ)</text>
+
+  <!-- Axes -->
+  <line x1="60" y1="356" x2="532" y2="356" stroke="#475569" stroke-width="1.5"/>
+  <line x1="60" y1="184" x2="60" y2="356" stroke="#475569" stroke-width="1.5"/>
+  <text x="526" y="376" fill="#94A3B8" font-size="11" text-anchor="end">系统行为状态空间 →</text>
+  <text x="70" y="196" fill="#94A3B8" font-size="11">概率密度 f(x)</text>
+
+  <!-- Design Range Vertical Band -->
+  <rect x="230" y="188" width="140" height="168" fill="#3B82F6" fill-opacity="0.10" stroke="#3B82F6" stroke-dasharray="5,4" stroke-width="1.2"/>
+  <rect x="214" y="176" width="172" height="20" rx="5" fill="#0F172A" stroke="#3B82F6" stroke-width="0.9"/>
+  <text x="300" y="190" fill="#93C5FD" font-size="10.5" font-weight="700" text-anchor="middle">可接受设计范围 (Design Range)</text>
+
+  <!-- Wide Red Curve: Prompt-only governance -->
+  <path d="M 75 355 Q 180 350 245 292 Q 310 235 385 295 Q 455 348 520 355 Z" fill="url(#highEntropyGrad)" stroke="#F87171" stroke-width="2"/>
+  <text x="76" y="260" fill="#FCA5A5" font-size="11" font-weight="600">纯提示词约束（高方差）</text>
+  <text x="76" y="276" fill="#F87171" font-size="10.2">p₁≈0.85 → 20步 P=0.038</text>
+  <text x="76" y="291" fill="#F87171" font-size="10.2">I = 4.7 bits（跑偏/伪造）</text>
+
+  <!-- Narrow Tall Green Curve: LumenBox Harness -->
+  <path d="M 236 355 Q 268 350 282 246 Q 300 176 318 246 Q 332 350 364 355 Z" fill="url(#lowEntropyGrad)" stroke="#34D399" stroke-width="2.5"/>
+  <text x="434" y="232" fill="#6EE7B7" font-size="11.5" font-weight="700" text-anchor="middle">LumenBox 引擎协议收束</text>
+  <text x="434" y="249" fill="#A7F3D0" font-size="10.5" text-anchor="middle">Common Range ≈ System Range</text>
+  <text x="434" y="265" fill="#34D399" font-size="10.5" font-weight="600" text-anchor="middle">关键不变量 p → 1.0 (I → 0 bits)</text>
+
+  <rect x="48" y="388" width="500" height="40" rx="8" fill="#111827" stroke="#1E293B"/>
+  <text x="64" y="413" fill="#CBD5E1" font-size="11.5">核心洞见：不要求弱模型每次都推理正确，而是让错误动作被协议拦截、未知结果无法冒充成功。</text>
+
+  <!-- Right Visual: 5 Entropy-Reduction Pillars -->
+  <rect x="588" y="112" width="624" height="332" rx="14" fill="#0F172A" stroke="#1E293B" stroke-width="1.5"/>
+  <text x="610" y="142" fill="#E2E8F0" font-size="14" font-weight="700">LumenBox 五大“工程降熵器”（将 p &lt; 1 的模型自觉转化为 p = 1 的系统铁律）</text>
+
+  <!-- Pillar Rows -->
+  <g font-size="11.5">
+    <!-- Row 1 -->
+    <rect x="608" y="158" width="584" height="48" rx="8" fill="#111827" stroke="#1E293B"/>
+    <rect x="608" y="158" width="88" height="48" rx="8" fill="#1E1B4B"/>
+    <text x="652" y="186" fill="#C4B5FD" font-weight="700" text-anchor="middle">视觉与动作</text>
+    <text x="710" y="178" fill="#F1F5F9" font-weight="600">2000ms Settle + 帧缓冲轮询 + 单次观测控件身份重验</text>
+    <text x="710" y="196" fill="#94A3B8" font-size="10.5">消除半渲染假画面与控件移位误点；unknown 状态禁止自动重试写操作</text>
+    <text x="1176" y="186" fill="#34D399" font-weight="700" text-anchor="end">I → 0</text>
+
+    <!-- Row 2 -->
+    <rect x="608" y="214" width="584" height="48" rx="8" fill="#111827" stroke="#1E293B"/>
+    <rect x="608" y="214" width="88" height="48" rx="8" fill="#1E1B4B"/>
+    <text x="652" y="242" fill="#C4B5FD" font-weight="700" text-anchor="middle">溯源证据链</text>
+    <text x="710" y="234" fill="#F1F5F9" font-weight="600">宿主机直存原生 tool_use / tool_result 协议块（只读不可伪造）</text>
+    <text x="710" y="252" fill="#94A3B8" font-size="10.5">取代模型可仿写的文本摘要；record 类账本压缩强制归档（archiveSettled）零丢行</text>
+    <text x="1176" y="242" fill="#34D399" font-weight="700" text-anchor="end">I = 0</text>
+
+    <!-- Row 3 -->
+    <rect x="608" y="270" width="584" height="48" rx="8" fill="#111827" stroke="#1E293B"/>
+    <rect x="608" y="270" width="88" height="48" rx="8" fill="#1E1B4B"/>
+    <text x="652" y="298" fill="#C4B5FD" font-weight="700" text-anchor="middle">上下文与记忆</text>
+    <text x="710" y="290" fill="#F1F5F9" font-weight="600">原话引用校验（quote-check）+ 提示词体积棘轮（prompt-baseline）</text>
+    <text x="710" y="308" fill="#94A3B8" font-size="10.5">无用户原话出处不入长期记忆；SKILL.md 仅注索引按需展开，防止注意力稀释</text>
+    <text x="1176" y="298" fill="#34D399" font-weight="700" text-anchor="end">低熵缓存</text>
+
+    <!-- Row 4 -->
+    <rect x="608" y="326" width="584" height="48" rx="8" fill="#111827" stroke="#1E293B"/>
+    <rect x="608" y="326" width="88" height="48" rx="8" fill="#1E1B4B"/>
+    <text x="652" y="354" fill="#C4B5FD" font-weight="700" text-anchor="middle">高危与预算门</text>
+    <text x="710" y="346" fill="#F1F5F9" font-weight="600">代码级 PolicyGate + 事前额度预留 + 异体只读会话验收（GoalGate）</text>
+    <text x="710" y="364" fill="#94A3B8" font-size="10.5">付款/外发/删除强制先问人；执行者无权自标完成，消除“停下冒充完成”</text>
+    <text x="1176" y="354" fill="#34D399" font-weight="700" text-anchor="end">I = 0</text>
+
+    <!-- Row 5 -->
+    <rect x="608" y="382" width="584" height="48" rx="8" fill="#111827" stroke="#1E293B"/>
+    <rect x="608" y="382" width="88" height="48" rx="8" fill="#1E1B4B"/>
+    <text x="652" y="410" fill="#C4B5FD" font-weight="700" text-anchor="middle">研发过程域</text>
+    <text x="710" y="402" fill="#F1F5F9" font-weight="600">architecture-guard.test.ts + docs-lint.mjs + arch-baseline.json</text>
+    <text x="710" y="420" fill="#94A3B8" font-size="10.5">将“一概念一归属”固化为构建门禁，防止多人多 Agent 协作把解耦矩阵改回耦合</text>
+    <text x="1176" y="410" fill="#34D399" font-weight="700" text-anchor="end">I = 0</text>
+  </g>
+</svg>
