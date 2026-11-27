@@ -130,6 +130,7 @@ export interface InboundMessage {
    */
   addressed?: boolean;
   privateChat?: boolean; // positive evidence from the wire, never inferred
+  to?: { agent?: string; fallback?: string }; // whom it is for, written once at admission (INV-2221): the agent it names and the one that answers when it names nobody — ids where `route` gave them
   admittedByDoor?: true; // the door admitted the sender itself (INV-1288, a tailmsg peer on its allow list); the drive list is not consulted, and the letter is still never an approval
 }
 
@@ -386,6 +387,12 @@ export interface ChannelManagerDeps {
    * installation default the `ask` dependency applies.
    */
   defaultAgentFor?: (adapterName: string) => string | undefined;
+  /**
+   * Who a message is for (INV-2221, docs/109 §4; src/host/chat-route.ts), asked once per admitted message with the `@Name` it opens with: the agent it names (`agent`)
+   * or the answer when this person can reach none by that name (`say`); who answers when it names nobody (`fallback`), or what they are told when a turn would have run (`none`).
+   * Agents come back as ids, which is what every dependency below is then given. Absent: a name is passed on as written and the door's default answers.
+   */
+  route?: (adapterName: string, message: InboundMessage, name: string | undefined) => { agent?: { id: string; name: string }; say?: string; fallback?: { id: string; name: string }; none?: () => string | undefined };
   /** The door's group-message rule (identity.ts `groupMessages`). Absent means `all`. */
   groupMessagesFor?: (adapterName: string) => "all" | "addressed" | undefined;
   /** The door's room rules and guest switch (INV-429), by adapter name. */
@@ -409,7 +416,7 @@ export interface ChannelManagerDeps {
    * The roster, for 「团队」— what this door shows is what it routes (docs/22 §2:
    * the box's agents, the door's default marked). One list, both uses.
    */
-  roster?: (adapterName: string) => string;
+  roster?: (adapterName: string, message: InboundMessage) => string;
   /**
    * The live desktop as a link, for 「桌面」. Takes the addressed agent (or the
    * door's default) and the door it was asked through — a feishu door's link
@@ -584,7 +591,7 @@ export interface ChannelManagerDeps {
     revalidate?: (taskId: string, identity: string) => { status: "ok" | "stale" | "withdrawn" | "unknown"; reasons?: string[]; reauthorised?: string[] };
     withdraw?: (taskId: string, identity: string) => void; // A person's stop withdraws the task's mandate for good.
     /** The task that owns a thread's follow-ups (INV-1462), when one does; the message is delivered to it. */
-    ownerOf?: (threadKey: string, messageId: string) => { taskId: string; title: string } | undefined;
+    ownerOf?: (threadKey: string, messageId: string) => { taskId: string; title: string; agent?: { id: string; name: string } } | undefined; // agent: the task's own, who gets its follow-up (INV-2221)
     /** Whether that task's agent handed the follow-up back, with why; the message is then routed as new work. */
     handedBack?: (taskId: string) => string | undefined;
     started: (taskId: string) => void;
@@ -694,6 +701,10 @@ export function refusal(identity: string): string {
  * The refusal when the owner was just told about the knock: an invitation to wait,
  * not an id to copy around. The id still appears, last, for the manual path.
  */
+const named = (agent: string | undefined): { id: string; name: string } | undefined => (agent === undefined ? undefined : { id: agent, name: agent });
+/** The `@Name` a message opens with and the rest of it; the name is the agent `route` found for it, once it has. */
+const addressOf = (message: InboundMessage): { agentName?: string; text: string } => ({ ...parseAddress(message.text ?? ""), ...(message.to?.agent !== undefined ? { agentName: message.to.agent } : {}) });
+
 export function knockRefusal(identity: string): string {
   return (
     `You're not on this LumenBox's list yet. The owner has been notified and can let ` +
@@ -725,6 +736,9 @@ export class ChannelManager {
    * does not approve something new.
    */
   private readonly awaitingApproval = new Map<string, { approvalId: string; description: string }>();
+  /** The name a person reads for an agent `route` gave as an id: a card and a refusal say the name. */
+  private readonly agentNames = new Map<string, string>();
+  private label(agent: string): string { return this.agentNames.get(agent) ?? agent; }
   /**
    * Tasks still running behind an already-acknowledged wire. Held so `idle` can wait
    * for them — a shutdown that drops a task mid-push loses a result somebody was told
@@ -1305,9 +1319,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
 
     if (message.admittedByDoor !== true && !this.deps.mayDrive(message.identity)) {
-      if (message.messageId !== undefined) {
-        this.deps.ingress?.decided(message.messageId, "refused", message.identity);
-      }
+      if (message.messageId !== undefined) this.deps.ingress?.decided(message.messageId, "refused", message.identity);
       this.deps.log(`channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`);
       if (this.deps.known?.(message.identity) === true) return viewerOnly(); // a viewer is not a stranger: no knock, no guest turn (INV-2226)
       // A door with guests turned off does not collect knocks: in a room of strangers every
@@ -1318,11 +1330,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       }
       const guest = message.chatKey !== undefined && message.privateChat !== true && message.addressed !== false ? await this.deps.guestTurn?.(adapter.name, message).catch(() => undefined) : undefined; if (guest !== undefined) return guest.reply; // a guest turn, not a knock (INV-1708, docs/97): returned before the command table, so nothing a guest writes is a verb
       if (this.deps.knock !== undefined) {
-        this.deps.knock({
-          identity: message.identity,
-          senderLabel: message.senderLabel,
-          channel: adapter.name,
-        });
+        this.deps.knock({ identity: message.identity, senderLabel: message.senderLabel, channel: adapter.name });
         return knockRefusal(message.identity);
       }
       return refusal(message.identity);
@@ -1331,9 +1339,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // Past the door. Recorded here rather than at the end, because everything below can
     // take a long time or throw, and "admitted then something went wrong" is a different
     // report from "never got in".
-    if (message.messageId !== undefined) {
-      this.deps.ingress?.decided(message.messageId, "admitted");
-    }
+    if (message.messageId !== undefined) this.deps.ingress?.decided(message.messageId, "admitted");
     // The record, and the id everything downstream will carry. Minted here rather than
     // in the bus so that the line in messages.jsonl and the id in the inbox are one id;
     // written now, whole, because the inbox clamps its copy and the transcript joins
@@ -1350,9 +1356,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       conversationKey: message.threadKey ?? message.chatKey ?? message.identity,
       receivedAt: new Date().toISOString(),
       text: message.text,
-      ...(message.files !== undefined && message.files.length > 0
-        ? { files: message.files.map(file => ({ name: file.name, bytes: Buffer.byteLength(file.base64, "base64") })) }
-        : {}),
+      ...(message.files !== undefined && message.files.length > 0 ? { files: message.files.map(file => ({ name: file.name, bytes: Buffer.byteLength(file.base64, "base64") })) } : {}),
     });
     if (!isContextCommand(parseAddress(message.text).text) && !isRecoveryCommand(parseAddress(message.text).text) && !isRetryCommand(parseAddress(message.text).text) && !isGoalCommand(parseAddress(message.text).text)) this.deps.listeners?.({
       text: message.text,
@@ -1362,16 +1366,16 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       senderLabel: message.senderLabel,
     });
 
+    // Whom it is for, decided once, here, from who wrote it and where (INV-2221): below this nothing resolves a name again.
+    const to = this.deps.route?.(adapter.name, message, parseAddress(message.text).agentName) ?? { fallback: named(this.deps.defaultAgentFor?.(adapter.name)) };
+    for (const agent of [to.agent, to.fallback]) if (agent !== undefined) this.agentNames.set(agent.id, agent.name);
     // A group message that names nobody, on a door that only answers when addressed:
     // heard, not run. After the listeners (a routine may still be watching the room)
     // and before every verb below, because a verb said to the room is not said to us.
-    if (
-      message.addressed === false &&
-      this.deps.groupMessagesFor?.(adapter.name) === "addressed"
-    ) {
+    if (message.addressed === false && this.deps.groupMessagesFor?.(adapter.name) === "addressed") {
       const chatKey = message.chatKey ?? message.identity;
       this.deps.heard?.({
-        agentName: this.deps.defaultAgentFor?.(adapter.name),
+        agentName: to.fallback?.id,
         conversation: message.threadKey ?? chatKey,
         senderLabel: message.senderLabel,
         text: message.text,
@@ -1384,8 +1388,10 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // A one-word answer to a consent this person was asked for is a decision, not a
     // new instruction: answer the approval and do not start a turn. Checked before
     // address parsing, so "allow" is never read as a message to an agent named allow.
+    if (to.say !== undefined) return to.say;
+    message.to = { ...(to.agent !== undefined ? { agent: to.agent.id } : {}), ...(to.fallback !== undefined ? { fallback: to.fallback.id } : {}) };
     const pending = this.awaitingApproval.get(message.identity);
-    const control = parseAddress(message.text);
+    const control = addressOf(message);
     if (isContextCommand(control.text)) {
       const command = control.text.trim().toLowerCase();
       const mode = contextMode(command);
@@ -1396,7 +1402,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const question = [...this.awaitingAnswer.values()].some(item => item.conversationKey === key && item.expiresAt > Date.now());
       const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
       return this.deps.newContext?.({
-        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        agentName: control.agentName ?? to.fallback?.id,
         identity: message.identity,
         conversationKey: key,
         operationId: message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId]),
@@ -1413,7 +1419,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const question = [...this.awaitingAnswer.values()].some(item => item.conversationKey === key && item.expiresAt > Date.now());
       const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
       const result = this.deps.goal.command({
-        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        agentName: control.agentName ?? to.fallback?.id,
         identity: message.identity,
         conversationKey: key,
         operationId: message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId, "goal"]),
@@ -1451,7 +1457,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
       const operationId = message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId, "recover", taskId]);
       const prepared = this.deps.recover.prepare({
-        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        agentName: control.agentName ?? to.fallback?.id,
         identity: message.identity,
         conversationKey: key,
         operationId,
@@ -1484,7 +1490,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const blocked = pending !== undefined || busy.length > 0 || question || this.pendingDrops.has(key) || [...this.inflightContexts.values()].includes(key);
       const operationId = message.messageId === undefined ? "" : JSON.stringify([adapter.name, key, message.identity, message.messageId, "retry"]);
       const prepared = this.deps.retry.prepare({
-        agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+        agentName: control.agentName ?? to.fallback?.id,
         identity: message.identity,
         conversationKey: key,
         operationId,
@@ -1509,12 +1515,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const reply = parseApprovalReply(message.text);
       if (reply !== undefined) {
         this.awaitingApproval.delete(message.identity);
-        const result = this.deps.answerApproval?.(pending.approvalId, reply);
-        return (
-          result ??
-          "That consent is no longer waiting — it may have been answered from the app, " +
-            "or the turn moved on. Send the request again if it still needs doing."
-        );
+        return this.deps.answerApproval?.(pending.approvalId, reply) ??
+          "That consent is no longer waiting — it may have been answered from the app, or the turn moved on. Send the request again if it still needs doing.";
       }
     }
 
@@ -1536,9 +1538,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     if (scopeRequest !== undefined && this.deps.chatScope !== undefined) {
       const chatKey = message.chatKey ?? message.identity;
       if (scopeRequest.kind === "show") return this.deps.chatScope.show(chatKey);
-      if (this.deps.mayAdmin?.(message.identity) !== true) {
-        return SCOPE_IS_ADMIN_CALL;
-      }
+      if (this.deps.mayAdmin?.(message.identity) !== true) return SCOPE_IS_ADMIN_CALL;
       return scopeRequest.kind === "bind"
         ? this.deps.chatScope.bind(chatKey, scopeRequest.name)
         : this.deps.chatScope.off(chatKey);
@@ -1555,10 +1555,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           await adapter.postBoardCard(message.chatKey ?? message.identity, view);
           return undefined;
         } catch (error) {
-          this.deps.log(
-            `channel ${adapter.name}: board card failed — ` +
-              `${error instanceof Error ? error.message : String(error)}`
-          );
+          this.deps.log(`channel ${adapter.name}: board card failed — ${error instanceof Error ? error.message : String(error)}`);
         }
       }
       return boardText(view);
@@ -1570,7 +1567,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // 「团队」 is a look at who works here — answered on the wire, before the
     // running-work routing, so asking mid-task never reads as steering.
     if (parseRosterRequest(message.text) && this.deps.roster !== undefined) {
-      return this.deps.roster(adapter.name);
+      return this.deps.roster(adapter.name, message);
     }
 
     // "定时" is a look at what runs by itself. Like the board, answered on the wire and
@@ -1585,20 +1582,16 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     if (digestRequest !== undefined && this.deps.digest !== undefined) {
       const chatKey = message.chatKey ?? message.identity;
       if (digestRequest.kind === "now") return this.deps.digest.build(chatKey);
-      if (digestRequest.kind === "schedule")
-        return this.deps.digest.schedule(chatKey, digestRequest.hour);
+      if (digestRequest.kind === "schedule") return this.deps.digest.schedule(chatKey, digestRequest.hour);
       return this.deps.digest.off(chatKey);
     }
 
     const cleanConversationKey = message.threadKey ?? message.chatKey ?? message.identity;
     const activeContextMode = this.deps.contextMode?.({
-      agentName: control.agentName ?? this.deps.defaultAgentFor?.(adapter.name),
+      agentName: control.agentName ?? to.fallback?.id,
       conversationKey: cleanConversationKey,
     });
-    if (
-      message.files !== undefined && message.files.length > 0 &&
-      activeContextMode !== undefined && activeContextMode !== "normal"
-    ) {
+    if (message.files !== undefined && message.files.length > 0 && activeContextMode !== undefined && activeContextMode !== "normal") {
       return "当前是隔离上下文，首版只接受文字；附件没有写入或交给模型。请先单独发送 /new 退出隔离模式。";
     }
 
@@ -1607,6 +1600,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // as a delivery and ignored its text — the person had just said what they wanted, and
     // was told to say what they wanted. Walkthrough step zero, broken at the first second.
     if (message.files !== undefined && message.files.length > 0 && parseContinuation(parseAddress(message.text).text) === undefined) {
+      if (control.agentName === undefined && to.fallback === undefined && this.deps.route !== undefined) return to.none?.(); // nobody here to hand a file to (INV-2221)
       const drop = this.runDrop(adapter, message).catch(error => {
         this.deps.log(`channel ${adapter.name}: file request failed (${error instanceof Error ? error.message : String(error)})`);
       }).finally(() => {
@@ -1618,7 +1612,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       return undefined;
     }
 
-    const { agentName, text } = parseAddress(message.text);
+    const { agentName, text } = addressOf(message);
     if (text === "") return SAY_WHAT_YOU_NEED;
 
     // New requests always have their own task; explicit references bind context but still get a tracked turn (INV-611/630).
@@ -1634,11 +1628,12 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (question === undefined || question.expiresAt <= Date.now() ||
           question.identity !== message.identity || question.adapterName !== adapter.name ||
           question.conversationKey !== conversationKey ||
-          (agentName !== undefined && agentName !== question.agentName)) {
+          (agentName !== undefined && agentName !== question.agentName && agentName !== question.agentId)) {
         return "这个问题已失效，或不属于你、当前会话和指定的 agent。请重新发起请求。";
       }
       this.awaitingAnswer.delete(questionId);
-      answering = { agentName: question.agentName, question: question.question, text: reference?.kind === "answer" ? reference.text : text, id: questionId };
+      this.agentNames.set(question.agentId, question.agentName);
+      answering = { agentName: question.agentId, question: question.question, text: reference?.kind === "answer" ? reference.text : text, id: questionId };
     } else if (reference?.kind === "continue") {
       const target = entries.find(entry => entry.taskId === reference.id);
       if (target === undefined || target.identity !== message.identity || target.adapterName !== adapter.name ||
@@ -1661,8 +1656,9 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     if (owner !== undefined) {
       const mandate = this.deps.board?.revalidate?.(owner.taskId, message.identity);
       if (mandate?.status === "stale") return reauthorisationNeeded(owner.taskId, mandate);
-      const followUp = this.runTask(adapter, message, agentName ?? this.deps.defaultAgentFor?.(adapter.name), followUpPrompt({ id: owner.taskId, title: owner.title }, text), undefined, { existingTaskId: owner.taskId, cardTitle: `跟进：${owner.title}` })
-        .then(() => { const why = this.deps.board?.handedBack?.(owner.taskId); if (why !== undefined) { this.deps.log(`channel ${adapter.name}: ${owner.taskId} handed the follow-up back (${why}); routing it as new work`); return this.runTask(adapter, {...message,id:`reroute:${message.id}`,requestOf:message.id}, agentName ?? this.deps.defaultAgentFor?.(adapter.name), text, undefined, { cardTitle: firstLine(text) }); } return undefined; })
+      if (owner.agent !== undefined) this.agentNames.set(owner.agent.id, owner.agent.name);
+      const followUp = this.runTask(adapter, message, agentName ?? owner.agent?.id ?? to.fallback?.id, followUpPrompt({ id: owner.taskId, title: owner.title }, text), undefined, { existingTaskId: owner.taskId, cardTitle: `跟进：${owner.title}` })
+        .then(() => { const why = this.deps.board?.handedBack?.(owner.taskId); if (why !== undefined) { this.deps.log(`channel ${adapter.name}: ${owner.taskId} handed the follow-up back (${why}); routing it as new work`); return this.runTask(adapter, {...message,id:`reroute:${message.id}`,requestOf:message.id}, agentName ?? to.fallback?.id, text, undefined, { cardTitle: firstLine(text) }); } return undefined; })
         .catch(error => { this.deps.log(`channel ${adapter.name}: follow-up failed (${error instanceof Error ? error.message : String(error)})`); })
         .finally(() => { this.inflight.delete(followUp); this.inflightContexts.delete(followUp); });
       this.inflight.add(followUp); this.inflightContexts.set(followUp, conversationKey);
@@ -1674,7 +1670,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         // A person's stop ends the work, not just the turn (INV-1457).
         if (outcome === "stopped" && running.taskId !== undefined) this.deps.board?.withdraw?.(running.taskId, message.identity);
             // Three answers, not two: refused is not "nothing is running".
-        return outcome === "stopped" ? STOPPING : outcome === "refused" ? notYours(running.agentName) : NOTHING_RUNNING;
+        return outcome === "stopped" ? STOPPING : outcome === "refused" ? notYours(running.agentName === undefined ? undefined : this.label(running.agentName)) : NOTHING_RUNNING;
       }
     } else if (answering === undefined && parseStopRequest(text)) {
       return NOTHING_RUNNING;
@@ -1691,7 +1687,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
 
     // Explicit references retain their agent; otherwise the door owns the default.
-    const addressed = answering?.agentName ?? addition?.agentName ?? agentName ?? this.deps.defaultAgentFor?.(adapter.name);
+    const addressed = answering?.agentName ?? addition?.agentName ?? agentName ?? to.fallback?.id;
+    if (addressed === undefined && this.deps.route !== undefined) return to.none?.(); // nobody answers this person here: said (or, in a room, said once), never handed to an agent nobody chose
 
     // 「桌面」 is a link to the live screen, the phone-sized Take over.
     if (parseDesktopRequest(text) && this.deps.desktopUrl !== undefined) {
@@ -1700,10 +1697,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
     // 「入会 <会议号>」 becomes the door's join instructions (see parseMeetingJoinRequest).
     const joinNo = parseMeetingJoinRequest(text);
-    const finalText =
-      joinNo !== undefined
-        ? (this.deps.meetingJoinPrompt?.(joinNo, adapter.name) ?? text)
-        : text;
+    const finalText = joinNo !== undefined ? (this.deps.meetingJoinPrompt?.(joinNo, adapter.name) ?? text) : text;
     const textForTurn = answering === undefined ? addition?.text ?? finalText : `[Answer to question ${answering.id}: ${answering.question}]\n\n${answering.text}`;
 
     // "屏幕" is a look, not a task: no turn runs, the desktop is captured as it is.
@@ -1814,7 +1808,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   /** A message carrying files: store them, then run its instruction if it brought one. */
   private async runDrop(adapter: ChannelAdapter, message: InboundMessage): Promise<void> {
     const saved = await this.storeFiles(adapter, message);
-    const { agentName, text } = parseAddress(message.text ?? "");
+    const { agentName, text } = addressOf(message);
     const conversationKey = message.threadKey ?? message.chatKey ?? message.identity;
     if (text === "") {
       if (saved !== undefined && saved.length > 0) {
@@ -1928,7 +1922,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       "总共不超过三句话。不要开始任何大工作,不要改动文件。";
     try {
       const reply = await this.deps.ask(
-        undefined,
+        message.to?.fallback,
         prompt,
         message.identity,
         chatKey,
@@ -2004,6 +1998,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     droppedFiles?: readonly string[],
     options?: { questionId?: string; existingTaskId?: string; cardTitle?: string; recoveryOperationId?: string; skipTask?: boolean; onSucceeded?: () => void }
   ): Promise<void> {
+    agentName ??= message.to?.fallback; // named nobody: whoever answers this person here (INV-2221)
     if (message.interaction && !message.questionId && !options?.skipTask) { const taskId = this.deps.interactionTask?.({ ...message, text: parseAddress(message.text).text }, agentName); if (!taskId || options?.existingTaskId && options.existingTaskId !== taskId) throw new Error("This card's original work is unavailable; the press did not create a new task."); options = { ...options, existingTaskId: taskId }; }
     const chatKey = message.chatKey ?? message.identity;
     const runningKey = message.threadKey ?? chatKey;
@@ -2053,7 +2048,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
     const card: TaskCardState = {
       title: options?.cardTitle ?? firstLine(text),
-      agentName: agentName ?? "",
+      agentName: agentName === undefined ? "" : this.label(agentName),
       requesterLabel: message.senderLabel,
       status: ahead > 0 ? "queued" : "working",
       ...(ahead > 0 ? { ahead } : {}),
@@ -2248,7 +2243,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         options?.skipTask !== true && options?.recoveryOperationId === undefined && review.sampled(message.id);
       if (reviewable) {
         const input = {
-          source: "member" as const, agentName: agentName ?? this.deps.defaultAgentFor?.(adapter.name) ?? "",
+          source: "member" as const, agentName: this.label(agentName ?? this.deps.defaultAgentFor?.(adapter.name) ?? ""),
           messageId: message.id!,
           conversation: runningKey,
           request: message.text,

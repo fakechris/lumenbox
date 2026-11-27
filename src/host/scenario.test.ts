@@ -40,6 +40,7 @@ import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
 import { runEpisode, type Script } from "./scenario.ts";
+import { ChatRoute } from "./chat-route.ts"; import { Principals, roleAtLeast } from "./principals.ts"; import { tr } from "../i18n/messages.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { answerGuest, GUEST_TOOL_NAMES, guestMessageOf } from "./guest-turn.ts";
 import { GuestDesk } from "./guests.ts";
@@ -5973,4 +5974,74 @@ test("delegated, colleague reported, coordinator converges (INV-2037)", async ()
     },
   });
   episode.cleanup();
+});
+
+// INV-2221 (docs/109 §4). An organisation shares one bot, and behind it each member has an agent in a box only they may enter. The
+// chat door chose the agent by the name at the start of the message, looked up over the whole installation, or took the door's
+// default — and with neither, the first agent there was. Two members' agents of one name answered "unknown agent"; a direct
+// message with no name reached a shared agent, or somebody else's. The episode: the real stack, with the door's two questions
+// (`route`, `asked`) wired as the server wires them.
+test("two members, an agent each of the same name: a direct message reaches the writer's own, a name means their own, and nothing reaches an agent nobody chose", async () => {
+  const home = mkdtempSync(join(tmpdir(), "inv2221-scenario-"));
+  const heard: string[] = [];
+  const episode = await runEpisode({
+    team: [{ name: "Desk" }], says: [],
+    script: ({ messages }) => { const last = JSON.stringify(messages.at(-1)).match(/[A-Z]+_[A-Z]+/g)?.at(-1) ?? "?"; heard.push(last); return { say: `Done: ${last}` }; },
+    drive: async ({ registry, bus, frontId }) => {
+      const principals = new Principals(join(home, "principals.json"));
+      principals.save(["ana", "bob", "cat", "dan"].map(id => ({ id, name: id, role: "driver" as const, identities: [`ding:${id}`] })));
+      const own = (owner: string) => registry.create({ name: "Assistant", boxId: registry.attachBox({ id: `${owner}-box`, name: `${owner}-box`, kind: "attached", members: [owner], displayFloor: 1, workDir: "/work", createdAt: new Date().toISOString() }).id });
+      const anas = own("ana"), bobs = own("bob");
+      principals.setHomeAgent("ana", anas.id); principals.setHomeAgent("bob", bobs.id);
+      const door: { defaultAgent?: string; type: string } = { type: "dingtalk", defaultAgent: "Desk" };
+      const route = new ChatRoute({ registry, principals, door: () => door, preparing: id => id === "dan", firstAgent: () => { throw new Error("no agent is made here"); }, log: () => {} });
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>;
+      const adapter: ChannelAdapter = { name: "ding", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined };
+      const manager = new ChannelManager({
+        log: () => {}, mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+        route: (adapterName, message, name) => route.route(adapterName, message, name),
+        ask: async (token, text, identity, chatKey, _progress, _thread, _task, _interim, _stream, origin) => {
+          const agent = route.asked(token, identity);
+          if (typeof agent === "string") return agent;
+          const conversation = conversationIdFor(chatKey);
+          bus.sendFromUser(agent.id, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(agent.id, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(agent.id, conversation), origin!.messageId);
+        },
+      });
+      manager.register(adapter, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      let sent = 0;
+      const write = async (who: string, text: string, room?: string) => {
+        const said = await receive({ identity: `ding:${who}`, chatKey: room ?? `ding:dm-${who}`, senderLabel: who, text, messageId: `m${++sent}`, ...(room === undefined ? { privateChat: true } : { privateChat: false, addressed: true }) });
+        await manager.idle();
+        return said;
+      };
+      /** How many turns each agent has run, over every conversation it has. */
+      const turns = () => [anas.id, bobs.id, frontId].map(id => ["ding:dm-ana", "ding:dm-bob", "ding:dm-cat", "ding:dm-dan", "ding:room"].reduce((sum, key) => sum + registry.readTranscript(id, conversationIdFor(key)).filter(entry => (entry as { role?: string }).role === "user").length, 0));
+      try {
+        await write("ana", "ANA_ONE");
+        assert.deepEqual(turns(), [1, 0, 0], "Ana's direct message: her own agent, with no @; Bob's transcript did not grow");
+        await write("bob", "BOB_ONE");
+        assert.deepEqual(turns(), [1, 1, 0]);
+        await write("ana", "@Assistant ANA_TWO"); await write("bob", "@Assistant BOB_TWO");
+        assert.deepEqual(turns(), [2, 2, 0], "the name both agents carry means the speaker's own");
+        assert.equal(await write("ana", `@${bobs.id} ANA_PRIES`), tr("agent.unknown", "zh", { asked: bobs.id, roster: "Assistant、Desk" }), "Bob's agent by its id: the words for no such agent");
+        assert.equal(await write("dan", "DAN_ONE"), tr("agent.preparing", "zh"), "a box still starting: told so");
+        assert.deepEqual(turns(), [2, 2, 0], "and neither ran anything");
+        await write("cat", "CAT_ONE");
+        assert.deepEqual(turns(), [2, 2, 1], "no box of her own: the door's default agent");
+        await write("ana", "ANA_ROOM", "ding:room");
+        assert.deepEqual(turns(), [2, 2, 2], "a group chat still reaches the door's default, not the writer's own");
+        delete door.defaultAgent;
+        assert.equal(await write("bob", "BOB_ROOM", "ding:room"), tr("agent.noneForRooms", "zh"));
+        assert.equal(await write("cat", "CAT_ROOM", "ding:room"), undefined, "said once");
+        assert.deepEqual(turns(), [2, 2, 2], "with no default agent a group message reaches no agent at all");
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.deepEqual(heard, ["ANA_ONE", "BOB_ONE", "ANA_TWO", "BOB_TWO", "CAT_ONE", "ANA_ROOM"], "six turns, and no other message was shown to a model");
+    assert.deepEqual(episode.score.said.map(line => line.agent), ["Assistant", "Assistant", "Assistant", "Assistant", "Desk", "Desk"]);
+  } finally { episode.cleanup(); rmSync(home, { recursive: true, force: true }); }
 });

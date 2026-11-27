@@ -272,7 +272,7 @@ import { QuestionWatch } from "../host/question-expiry.ts";
 import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
-import { chatFilesRoot, firstRunCue } from "../host/prompt.ts";
+import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
@@ -1092,6 +1092,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const outboxSender = new OutboxSender(outbox, log, undefined, undefined, (event, detail) => noteDelivery(orchestrator.exceptions, event, detail, chatKey => orchestrator.tasks?.list().find(task => task.conversation !== undefined && task.status !== "done" && task.status !== "dropped" && conversations.chatKeyFor(task.conversation) === chatKey)?.id), receipt => orchestrator.governance.revoked(resourceKey("outbox", receipt.id!)) ? {allow:false,terminal:true,reason:"Revoked by operator"} : replyRecovery.authorizeReceipt(receipt)); const sentLedger = new SentLedger(join(agentboxHome(), "sent"), log, undefined, text => outboundRedactor(vault.heldValues())(text)); // each try onto the exception list (INV-1741); a line for everything a door sends (INV-1841)
   const credentialWaits = new CredentialWaits({ tasks: () => orchestrator.tasks, check: (agentId, principalId) => orchestrator.credentials.forAgent(agentId, [], principalId), announce: event => broadcast(taskCredentialEvent(event)), log }); vault.onChange(() => { void credentialWaits.recheck(); }); // a credential that lands releases the work waiting on it (INV-1666)
   const guestDesk = new GuestDesk({ settings: join(agentboxHome(), "guests.jsonl"), turns: join(agentboxHome(), "guest-turns.jsonl"), reviews: join(agentboxHome(), "guest-reviews.jsonl") }); // who answers guests, what is public to them, their turns and the reviews of their answers (INV-1708, INV-1713, docs/97)
+  // Who a chat message reaches, by who wrote it (INV-2221, docs/109 §4): the one place that decides it.
+  const chatRoute = new ChatRoute({ registry, principals, log, door: adapterName => channelRecords.find(record => record.id === adapterName),
+    preparing: id => autoBoxes.view(id)?.state === "preparing", firstAgent: () => orchestrator.ensureDefaultAgent() });
   const channels = new ChannelManager({
     interactionTask: (message, name) => { const agent = registry.resolve(name ?? ""), parsed = parseActionText(message.text); const result = surfaceActionWork({ action: parsed ? { surface: parsed.surfaceId, name: parsed.name } : undefined, text: message.text, agentId: agent.id, conversation: conversationIdFor(message.threadKey ?? message.chatKey ?? message.identity), surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }); if ("error" in result) throw new Error(result.error); return result.taskBinding.taskId; },
     outbox: unprompted.door(outboxSender), sent: sentLedger, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
@@ -1107,20 +1110,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     contextIdle: input => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
-      try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+      try { agent = input.agentName === undefined ? undefined : registry.resolve(input.agentName); }
       catch { return; }
       if (agent === undefined) return;
       void steward.consider({ agentId: agent.id, conversation: conversationIdFor(input.conversationKey), chatKey: input.chatKey, principal: principals.resolve(input.identity).id });
     },
     contextMode: input => {
       try {
-        const agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName);
+        const agent = input.agentName === undefined ? undefined : registry.resolve(input.agentName);
         return agent === undefined ? undefined : registry.contextMode(agent.id, conversationIdFor(input.conversationKey));
       } catch { return undefined; }
     },
     newContext: input => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
-      try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+      try { agent = input.agentName === undefined ? undefined : registry.resolve(input.agentName); }
       catch { return "找不到目标 agent；没有修改上下文。"; }
       if (agent === undefined) return "找不到目标 agent；没有修改上下文。";
       const principal = principals.resolve(input.identity);
@@ -1147,7 +1150,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     ...(orchestrator.tasks !== undefined ? { goal: {
       command: input => {
         let agent: ReturnType<typeof registry.resolve> | undefined;
-        try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+        try { agent = input.agentName === undefined ? undefined : registry.resolve(input.agentName); }
         catch { return { text: "找不到目标 agent；没有修改目标。" }; }
         if (agent === undefined) return { text: "找不到目标 agent；没有修改目标。" };
         const principal = principals.resolve(input.identity);
@@ -1176,7 +1179,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     ...(orchestrator.tasks !== undefined ? { recover: {
       prepare: input => {
         let agent: ReturnType<typeof registry.resolve> | undefined;
-        try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+        try { agent = input.agentName === undefined ? undefined : registry.resolve(input.agentName); }
         catch { return { status: "refused" as const, text: "找不到目标 agent；没有修改任务。" }; }
         if (agent === undefined) return { status: "refused" as const, text: "找不到目标 agent；没有修改任务。" };
         const principal = principals.resolve(input.identity);
@@ -1207,7 +1210,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     retry: {
       prepare: input => {
         let agent: ReturnType<typeof registry.resolve> | undefined;
-        try { agent = input.agentName === undefined ? registry.list()[0] : registry.resolve(input.agentName); }
+        try { agent = input.agentName === undefined ? undefined : registry.resolve(input.agentName); }
         catch { return { status: "refused" as const, text: "找不到目标 agent；没有修改上下文。" }; }
         if (agent === undefined) return { status: "refused" as const, text: "找不到目标 agent；没有修改上下文。" };
         const principal = principals.resolve(input.identity);
@@ -1246,8 +1249,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     cards,
     incarnationOf,
-    defaultAgentFor: adapterName =>
-      channelRecords.find(record => record.id === adapterName)?.defaultAgent,
+    defaultAgentFor: adapterName => channelRecords.find(record => record.id === adapterName)?.defaultAgent,
+    route: (adapterName, message, name) => chatRoute.route(adapterName, message, name), // who a message reaches, by who wrote it (INV-2221, src/host/chat-route.ts)
     // The door's room rules and guest switch (INV-429), read per message so an edit in
     // Settings takes effect without a restart — the same rule the roster follows.
     roomRulesFor: adapterName => channelRecords.find(record => record.id === adapterName)?.autoJoin,
@@ -1255,7 +1258,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // A guest's addressed group message (INV-1708, docs/97): a guest turn when this is an organisation and the agent answers guests.
     guestTurn: (adapterName, message) => answerGuest(guestMessageOf(adapterName, message, channelRecords.find(record => record.id === adapterName)?.defaultAgent), {
       installationMode: () => principals.installation().mode,
-      resolveAgent: name => { try { const agent = name === undefined ? registry.list()[0] : registry.resolve(name); return agent === undefined ? undefined : { id: agent.id, name: agent.profile.name }; } catch { return undefined; } },
+      resolveAgent: name => { const agent = chatRoute.forGuest(adapterName, name); return agent === undefined ? undefined : { id: agent.id, name: agent.profile.name }; },
       desk: guestDesk, isPaused: id => agentPauses.pauseOf(id) !== undefined, runtime: id => orchestrator.runtimeOf(id),
       usage: orchestrator.usage, spend: { note: row => orchestrator.spendLimits?.note(row) ?? { kind: "ok" } },
       lines: { overCap: () => tr("guests.over-cap", resolveLocale({ channelType: message.identity.split(":")[0] })), failed: () => tr("guests.failed", resolveLocale({ channelType: message.identity.split(":")[0] })), held: () => tr("guests.held", resolveLocale({ channelType: message.identity.split(":")[0] })) },
@@ -1289,25 +1292,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     desktopUrl: (agentName, adapterName) => {
       let agent: ReturnType<typeof registry.resolve> | undefined;
       try {
-        agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+        agent = agentName !== undefined ? registry.resolve(agentName) : undefined;
       } catch {
         agent = undefined;
       }
       const index = agent?.profile.displayIndex;
       if (agent === undefined || index === undefined) {
-        return unknownAgent(
-          agentName ?? "",
-          registry
-            .list()
-            .filter(record => record.profile.hidden !== true)
-            .map(record => record.profile.name)
-        );
+        return unknownAgent(agent?.profile.name ?? agentName ?? "", agent === undefined ? [] : registry.agentsIn(registry.boxOf(agent.id).id).filter(record => record.profile.hidden !== true).map(record => record.profile.name));
       }
       const base = process.env.AGENTBOX_PUBLIC_URL?.replace(/\/+$/, "");
       if (base === undefined || base === "") return DESKTOP_NOT_PUBLIC;
-      const direct =
-        `/desktop/${index}/vnc.html?autoconnect=1&resize=scale` +
-        `&path=desktop/${index}/websockify`;
+      const at = registry.boxOf(agent.id).id === registry.box.id ? `desktop/${index}` : `desktop/b/${registry.boxOf(agent.id).id}/${index}`; // the agent's own box (INV-2221)
+      const direct = `/${at}/vnc.html?autoconnect=1&resize=scale&path=${at}/websockify`;
       // Asked through a feishu door, the link routes through that door's own
       // sign-in: the person lands on the desktop already being who the roster
       // says they are — not whoever holds a URL.
@@ -1333,18 +1329,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     // What this door shows is what it routes: the box's agents, the door's default
     // marked (or the installation fallback, so the marker never lies by omission).
-    roster: adapterName => {
-      const door = channelRecords.find(record => record.id === adapterName);
-      const doorDefault = door?.defaultAgent ?? registry.list()[0]?.profile.name;
+    // The agents this person can address here, and the one that answers them when they name nobody (INV-2221).
+    roster: (adapterName, message) => {
+      const door = channelRecords.find(record => record.id === adapterName), answers = chatRoute.route(adapterName, message, undefined).fallback?.id;
       // A door opens into one box; its roster is that box's agents (docs/39 §1).
       return rosterText(
-        (door?.boxId !== undefined ? registry.agentsIn(door.boxId) : registry.list())
-          .filter(record => record.profile.hidden !== true)
-          .map(record => ({
-            name: record.profile.name,
-            ...(record.profile.title ? { title: record.profile.title } : {}),
-            isDefault: record.profile.name === doorDefault || record.id === doorDefault,
-          }))
+        chatRoute.reachable(principals.resolve(message.identity).id).map(entry => entry.agent)
+          .filter(record => record.profile.hidden !== true && (door?.boxId === undefined || registry.boxOf(record.id).id === door.boxId || record.id === answers))
+          .map(record => ({ name: record.profile.name, ...(record.profile.title ? { title: record.profile.title } : {}), isDefault: record.id === answers }))
       );
     },
     mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
@@ -1476,24 +1468,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     log: line => log(line),
     ask: async (agentName, text, identity, chatKey, onProgress, threadKey, taskId, onInterim, onText, origin) => {
-      let agent: ReturnType<typeof registry.resolve> | undefined;
-      if (agentName !== undefined) {
-        try {
-          agent = registry.resolve(agentName);
-        } catch {
-          // A wrong @ is answered with the way in — the same list the roster verb
-          // shows — instead of an error that leaves the person guessing at names.
-          return unknownAgent(
-            agentName,
-            registry
-              .list()
-              .filter(record => record.profile.hidden !== true)
-              .map(record => record.profile.name)
-          );
-        }
-      } else {
-        agent = registry.list()[0] ?? orchestrator.ensureDefaultAgent();
-      }
+      // The agent the door was given for this person, asked again here (INV-2221): among the agents they may reach, never a name over the whole installation, never the first agent.
+      const agent = chatRoute.asked(agentName, identity);
+      if (typeof agent === "string") return agent;
       // The thread rides along, so a later question or approval from this work goes
       // back into the topic that asked instead of loose at the bottom of the room.
       channels.remember(agent.id, identity.split(":")[0] ?? "", identity, threadKey ?? chatKey, {
@@ -1523,15 +1500,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           });
         }
       }
-      const principal = principals.resolve(identity).id;
-      // The third entrance (INV-538). A message from a chat is somebody entering a box, and
-      // the same members set answers it here as on the web — otherwise membership is a
-      // property of which door you used, which is exactly what docs/22 §0 forbids.
-      const theirBox = registry.boxOf(agent.id);
-      if (!mayEnterBox(theirBox, principal)) {
-        log(`${identity} is not in ${theirBox.name}; refused at the chat door`);
-        return refusalToEnter(theirBox.name, principals.resolve(identity).name);
-      }
+      const principal = principals.resolve(identity).id, theirBox = registry.boxOf(agent.id); // entered: `asked` above is the membership check (INV-538)
       // Only an explicitly bound answer can settle a question. New requests do not.
       if (origin?.questionId !== undefined) questions.noteReply(agent.id, identity, origin.questionId, conversation);
 
@@ -1542,11 +1511,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // most turns never touch the outbox, and constant afterwards, because a conversation
       // per topic means most turns now start with no directory at all.
       void orchestrator
-        .boxClient()
-        ?.exec(
-          `mkdir -p '${chatFilesRoot(conversation, registry.defaultBox())}/inbox' '${chatFilesRoot(conversation, registry.defaultBox())}/outbox'`, // the box boxClient() is (INV-1734)
-          { actor: "host:chat-exchange" }
-        )
+        .boxClient(agent.id)
+        ?.exec(`mkdir -p '${chatFilesRoot(conversation, theirBox)}/inbox' '${chatFilesRoot(conversation, theirBox)}/outbox'`, { actor: "host:chat-exchange" }) // on the asked agent's box, where its turn looks (INV-2221)
         .catch((error: unknown) => {
           log(
             `could not create the file exchange for ${conversation}: ` +
@@ -1685,7 +1651,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     stop: (agentName, identity) => {
       let agent: { id: string } | undefined;
       try {
-        agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+        agent = agentName !== undefined ? registry.resolve(agentName) : undefined;
       } catch {
         agent = undefined;
       }
@@ -1709,10 +1675,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (tasks === undefined) return undefined;
         let assigneeId: string | undefined;
         try {
-          assigneeId = (input.agentName !== undefined
-            ? registry.resolve(input.agentName)
-            : registry.list()[0]
-          )?.id;
+          assigneeId = input.agentName !== undefined ? registry.resolve(input.agentName).id : undefined;
         } catch {
           // The unknown-agent error is thrown (and relayed) by ask; the board entry
           // simply goes unassigned.
@@ -1751,7 +1714,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const task = ownerOf(orchestrator.tasks?.list() ?? [], conversationIdFor(threadKey));
         if (task === undefined) return undefined;
         orchestrator.tasks?.followUpDelivered(task.id, messageId);
-        return { taskId: task.id, title: task.title };
+        const theirs = task.assigneeId === undefined ? undefined : registry.tryGet(task.assigneeId); // the follow-up is the task's agent's, not whoever answers the writer (INV-2221)
+        return { taskId: task.id, title: task.title, ...(theirs !== undefined ? { agent: { id: theirs.id, name: theirs.profile.name } } : {}) };
       },
       handedBack: taskId => orchestrator.tasks?.get(taskId)?.followUp?.handedBack?.reason,
       // "看板": the room's plate right now, grouped by what a person does about each
@@ -1887,7 +1851,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // agent whose desktop never started answers undefined and the chat is told so.
     screenshot: async agentName => {
       const agent =
-        agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+        agentName !== undefined ? registry.resolve(agentName) : undefined;
       if (agent === undefined) return undefined;
       const client = orchestrator.boxClient(agent.id);
       if (client === undefined) return undefined;
@@ -1903,12 +1867,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     // The commands this agent let go of in this conversation that still run (INV-1461).
     openJobs: (agentName, conversationKey) => {
       let agent: { id: string } | undefined;
-      try { agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0]; } catch { return []; }
+      try { agent = agentName !== undefined ? registry.resolve(agentName) : undefined; } catch { return []; }
       return agent === undefined ? [] : orchestrator.jobWatch.openJobs(agent.id, conversationIdFor(conversationKey)).map(job => `${job.jobId}: ${job.command.slice(0, 80)}`);
     },
     ahead: (agentName, chatKey) => {
       try {
-        const agent = agentName !== undefined ? registry.resolve(agentName) : registry.list()[0];
+        const agent = agentName !== undefined ? registry.resolve(agentName) : undefined;
         if (agent === undefined) return 0;
         const conversation = conversationIdFor(chatKey);
         return (orchestrator.bus.isActive(agent.id, conversation) ? 1 : 0) + orchestrator.bus.queuedCount(agent.id, conversation);
@@ -3864,8 +3828,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             role: callerRole,
             // How this person arranges the list, wherever they open it from (INV-121).
             preferences: preferences.get(caller.userId),
+            homeAgentId: (principal ? chatRoute.homeOf(principal.id)?.id : undefined) ?? null, // the agent their direct messages reach (INV-2221)
           });
           return;
+        }
+
+        // A person chooses which of the agents they may reach answers their direct messages (INV-2221, docs/109 §4).
+        if (route === "POST /api/me/home-agent") {
+          if (refusedRole("driver")) return;
+          const me = caller.userId === undefined ? soleAdmin(principals.list()) : principals.resolve(caller.userId).id; // nobody signed in: the installation's one admin, as GET /api/me
+          const agentId = String((await readJson(req)).agentId ?? ""), chosen = me === undefined ? undefined : chatRoute.chooseHome(me, agentId);
+          if (chosen === undefined) { send(res, 404, apiError("agent-named-unknown", { agent: agentId })); return; }
+          send(res, 200, { homeAgentId: chosen.id }); return;
         }
 
         if (route === "POST /api/me/preferences") {

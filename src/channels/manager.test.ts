@@ -2017,7 +2017,7 @@ test("question ownership checks identity, room, agent, expiry and one-shot consu
   assert.equal(asks[0]?.questionId, undefined, "unrelated input must not clear the pending question");
   await adapter.inject({ ...room, text: "us", questionId: "q1" });
   await manager.idle();
-  assert.equal(asks[1]?.agent, "Ada");
+  assert.equal(asks[1]?.agent, "a1", "the answer goes to the agent that asked, by id: another box may hold an agent of the same name (INV-2221)");
   assert.equal(asks[1]?.questionId, "q1");
   assert.match(asks[1]!.text, /Which region/);
   assert.match(String(await adapter.inject({ ...room, text: "/answer q1 again" })), /已失效/);
@@ -2893,15 +2893,17 @@ test("a person's message in a task's thread runs as a follow-up on that task, no
   const asked: string[] = [];
   const opened: string[] = [];
   const admissions:{id:string;text:string;requestOf?:string}[]=[];
+  const askedOf: (string | undefined)[] = [];
   let handed: string | undefined;
   const manager = new ChannelManager({
     mayDrive: () => true, log: () => {},
-    ask: async (_agent, text) => { asked.push(text); return "ok"; },
+    defaultAgentFor: () => "Front",
+    ask: async (agent, text) => { asked.push(text); askedOf.push(agent); return "ok"; },
     board: {
       admit:(_taskId,id,text,_identity,requestOf)=>{const previous=admissions.find(row=>row.id===id);assert.ok(!previous || previous.text===text,"one admission id cannot mean two prompts");admissions.push({id,text,requestOf});},
       open: input => { opened.push(input.title); return `t${opened.length}`; },
       started: () => {}, closed: () => "done" as const,
-      ownerOf: threadKey => (threadKey === "feishu:oc_room:thread1" ? { taskId: "t1", title: "Sum the reports" } : undefined),
+      ownerOf: threadKey => (threadKey === "feishu:oc_room:thread1" ? { taskId: "t1", title: "Sum the reports", agent: { id: "worker", name: "Mia" } } : undefined),
       handedBack: () => handed,
     },
   });
@@ -2913,6 +2915,7 @@ test("a person's message in a task's thread runs as a follow-up on that task, no
     await manager.idle();
     assert.equal(opened.length, 0, "a follow-up opens no task");
     assert.match(asked[0] ?? "", /Follow-up in the thread of task t1 \(Sum the reports\)[\s\S]*也加上三月的/);
+    assert.equal(askedOf[0], "worker", "the follow-up goes to the task's own agent, not to whoever answers this person when they name nobody (INV-2221)");
 
     handed = "it asks for a new report";
     await adapter.inject({ ...thread, messageId: "m3", text: "另外帮我订个会议室" });
@@ -2922,6 +2925,7 @@ test("a person's message in a task's thread runs as a follow-up on that task, no
     assert.notEqual(admissions[1]!.id,admissions[2]!.id);
     assert.equal(admissions[2]!.requestOf,admissions[1]!.id,"rerouting retains the original human request link");
     assert.equal(asked[2], "另外帮我订个会议室", "the new turn carries the person's words, not the follow-up wrapper");
+    assert.equal(askedOf[2], "Front", "and, handed back, it is routed as any new message is");
 
     await adapter.inject({ ...thread, threadKey: undefined, messageId: "m4", text: "新需求" });
     await manager.idle();

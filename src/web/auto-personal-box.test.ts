@@ -240,6 +240,7 @@ test("INV-2220: a department of thirty is on the roster at once; their boxes sta
   for (let i = 0; i < 200 && org.started.length < STARTING_AT_ONCE; i++) await new Promise(resolve => setTimeout(resolve, 10));
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(org.started.length, STARTING_AT_ONCE, "the rest wait their turn");
+  assert.deepEqual((await request("/api/setup", "ding:p30")).data.autoBox, { state: "preparing" }, "and somebody still in the queue is told theirs is being prepared — what the chat tells them too (INV-2221)");
   open();
   const boxes = await allSettled(request, 30);
   assert.ok(most <= STARTING_AT_ONCE, `at most ${STARTING_AT_ONCE} starting together, saw ${most}`);

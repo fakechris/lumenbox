@@ -139,7 +139,8 @@ longer opens with a token.
 | A box made at the first page load | Built (INV-2203); kept as `personalBoxAt: "first-use"` |
 | 1a. Activation makes the person, the box and the agent; the setting; activations from before become people (home format 2) | Built (INV-2220). The agent is made when its box has started, not at the reservation: an agent needs its box in the registry. The member template is a `config.json` key (`memberTemplate`), not yet a page setting. A third value, `"never"`, is what `autoPersonalBox: false` meant |
 | 1b. The page that shows a department's boxes starting and what the press asks of the cluster; telling the person through the door | Not built |
-| 2. A direct message reaches the person's own agent; `@Name` among the speaker's boxes; an agent reaches its person | Not built |
+| 2a. A direct message reaches the person's own agent; `@Name` among the speaker's boxes; a person chooses their home agent (`POST /api/me/home-agent`) | Built (INV-2221, `src/host/chat-route.ts`). A person whose box is still starting is told so before the door's default is tried. The page does not yet mark the home agent |
+| 2b. An agent reaches its person; a direct message from somebody listed and not activated becomes a request | Not built |
 | 3. The first conversation offers the sign-ins the organisation's skills declare | Not built |
 | 4. Organisation skills | The library, publishing by an Admin, placing in every box read-only, the collision rule and the Settings block: built (INV-2222, docs/93 §1a). A member offering a skill for promotion, and a skill declaring a tool and a sign-in: not built |
 | 5. The bugs of §8 | Not fixed |

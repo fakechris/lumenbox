@@ -4,8 +4,8 @@
      status: current
      covers: agent
      audience: user
-     source-updated: 2026-11-06
-     updated: 2026-11-06
+     source-updated: 2026-11-27
+     updated: 2026-11-27
 -->
 # Agent
 
@@ -35,7 +35,7 @@
 
 - `@name <message>`：把这条消息交给那个 agent。
 - `团队`（或 `team`）：列出在这里工作的 agent。
-- 没有点名任何人的消息，交给这个渠道的默认 agent。
+- 没有点名任何人的消息，交给这个渠道的默认 agent；在组织里，私聊交给你自己的 agent。
 
 ### 在命令行里
 

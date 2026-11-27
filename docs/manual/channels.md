@@ -50,7 +50,8 @@ Channels.
 ### In a chat
 
 - `bind <code>` (or `绑定 <码>`) — join with an invite code.
-- `@name <message>` — talk to one agent; any other message goes to the default agent.
+- `@name <message>` — talk to one agent you can reach; any other message goes to the default
+  agent, or, in an organisation, a direct message goes to your own agent.
 - `/help` — list every command this chat understands.
 - `看板`, `团队`, `定时` — the board, the agents, and what runs by itself.
 
