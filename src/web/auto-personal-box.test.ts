@@ -123,6 +123,13 @@ test("INV-2203: out of quota makes none, says why, shows the Admins, and is not 
   const panel = (await request("/api/personal-boxes/panel", "web:operator")).data;
   assert.equal(panel.inventory.people.find((person: { id: string }) => person.id === "alice").waitingForQuota, true);
   assert.equal(panel.inventory.people.find((person: { id: string }) => person.id === "carol").waitingForQuota, undefined);
+  // An Admin raises the quota and Alice makes her box by hand: she is no longer out of quota anywhere.
+  assert.equal((await request("/api/quotas", "web:operator", { personalBoxQuota: 1 })).status, 200);
+  assert.equal((await request("/api/personal-boxes/create", "web:alice", { requestId: "by-hand", name: "Mine" })).status, 200);
+  assert.equal((await request("/api/setup", "web:alice")).data.autoBox, undefined);
+  assert.equal((await request("/api/personal-boxes/panel", "web:alice")).data.mine.auto, undefined);
+  const after = (await request("/api/personal-boxes/panel", "web:operator")).data;
+  assert.equal(after.inventory.people.find((person: { id: string }) => person.id === "alice").waitingForQuota, undefined);
 });
 
 test("INV-2203: the switch off makes none; a personal installation is untouched", async (t) => {

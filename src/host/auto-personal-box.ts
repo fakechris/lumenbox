@@ -60,9 +60,11 @@ export class AutoPersonalBoxes {
   private outcome(owner: string): Outcome | undefined {
     return this.db((db) => (db.prepare("SELECT outcome FROM done WHERE owner=?").get(owner) as { outcome: Outcome } | undefined)?.outcome);
   }
+  /** "had" never replaces "created": another process may have just reserved this person's box, and its record says it is the one made here. */
   private write(owner: string, outcome: Outcome | undefined): void {
+    const guard = outcome === "had" ? " WHERE outcome<>'created'" : "";
     this.db((db) => outcome === undefined ? db.prepare("DELETE FROM done WHERE owner=?").run(owner)
-      : db.prepare("INSERT INTO done VALUES(?,?,?) ON CONFLICT(owner) DO UPDATE SET outcome=excluded.outcome, at=excluded.at").run(owner, outcome, new Date().toISOString()));
+      : db.prepare(`INSERT INTO done VALUES(?,?,?) ON CONFLICT(owner) DO UPDATE SET outcome=excluded.outcome, at=excluded.at${guard}`).run(owner, outcome, new Date().toISOString()));
   }
 
   /**
@@ -99,17 +101,20 @@ export class AutoPersonalBoxes {
   /** What the page says about it while it matters: being prepared, why it failed, or out of quota. */
   view(owner: string): AutoPersonalBoxView | undefined {
     if (!this.options.enabled()) return;
-    const outcome = this.outcome(owner);
-    if (outcome === "quota") return { state: "quota" };
-    if (outcome !== "created") return;
-    const box = this.options.boxes.list(owner)[0];
-    if (box?.status === "provisioning") return { state: "preparing" };
-    if (box?.status === "failed") return { state: "failed", reason: box.stateReason ?? box.error ?? "" };
+    const outcome = this.outcome(owner), box = this.options.boxes.list(owner)[0];
+    // Out of quota stops mattering once the person has a box, however they got it.
+    if (outcome === "quota") return box ? undefined : { state: "quota" };
+    if (outcome !== "created" || !box) return;
+    if (box.status === "provisioning") return { state: "preparing" };
+    // Failed, interrupted by a restart, or a cleanup left half done: each waits for a person's retry, with what is known of why.
+    if (box.status === "failed" || box.status === "interrupted" || (box.status === "deleting" && box.error))
+      return { state: "failed", reason: box.stateReason ?? box.error ?? box.status };
   }
 
   /** The people whose box waits for an Admin to raise their quota. */
   waiting(): Set<string> {
     if (!this.options.enabled()) return new Set();
-    return this.db((db) => new Set((db.prepare("SELECT owner FROM done WHERE outcome='quota'").all() as { owner: string }[]).map((row) => row.owner)));
+    const owners = this.db((db) => (db.prepare("SELECT owner FROM done WHERE outcome='quota'").all() as { owner: string }[]).map((row) => row.owner));
+    return new Set(owners.filter((owner) => this.options.boxes.list(owner).length === 0));
   }
 }
