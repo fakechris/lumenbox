@@ -1,0 +1,93 @@
+{
+  "job_name": "lumenbox-minimax",
+  "n_attempts": 2,
+  "n_concurrent_trials": 4,
+  "environment_build_timeout_multiplier": 2.0,
+  "environment": {
+    "type": "docker"
+  },
+  "datasets": [
+    {
+      "name": "frontier-harness-eval/frontier-harness-eval",
+      "ref": "v1.1.0",
+      "task_names": [
+        "terminal-bench/fix-git",
+        "terminal-bench/regex-log",
+        "terminal-bench/log-summary-date-ranges",
+        "terminal-bench/sqlite-db-truncate",
+        "terminal-bench/openssl-selfsigned-cert",
+        "terminal-bench/constraints-scheduling",
+        "terminal-bench/chess-best-move",
+        "terminal-bench/gcode-to-text",
+        "terminal-bench/code-from-image",
+        "terminal-bench/dna-insert"
+      ]
+    }
+  ],
+  "agents": [
+    {
+      "import_path": "adapters.command_agent:CommandAgent",
+      "model_name": "minimax/MiniMax-M3.1-Flash",
+      "override_setup_timeout_sec": 1200,
+      "kwargs": {
+        "harness": "lumenbox",
+        "version": "<commit>",
+        "uploads": {
+          "lumenbox/lbx.tgz": "/tmp/lbx.tgz"
+        },
+        "install": [
+          "export DEBIAN_FRONTEND=noninteractive",
+          "if ! command -v curl >/dev/null || ! command -v xz >/dev/null; then apt-get update && apt-get install -y curl xz-utils ca-certificates; fi",
+          "case \"$(uname -m)\" in x86_64) na=x64;; aarch64|arm64) na=arm64;; *) echo \"unsupported $(uname -m)\"; exit 1;; esac",
+          "mkdir -p /opt/lumenbox/node",
+          "curl --retry 5 -fsSL https://nodejs.org/dist/v24.11.1/node-v24.11.1-linux-$na.tar.xz | tar -xJ -C /opt/lumenbox/node --strip-components=1",
+          "tar -xzf /tmp/lbx.tgz -C /opt/lumenbox",
+          "/opt/lumenbox/node/bin/node --version; cat /opt/lumenbox/COMMIT"
+        ],
+        "run": [
+          "NODE=/opt/lumenbox/node/bin/node LBX=/opt/lumenbox WORK=\"$PWD\"",
+          "TOK=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \\n')",
+          "mkdir -p \"$STATE/home\" \"$STATE/box\"",
+          "# The task container is the wall: boxd runs as it does inside a LumenBox box, not under the host sandbox.",
+          "BOXD_BIND=127.0.0.1 BOXD_PORT=13390 BOXD_TOKEN=$TOK AGENTBOX_WORK_DIR=\"$WORK\" BOXD_JOBS_DIR=\"$STATE/box/jobs\" BOXD_TEACH_DIR=\"$STATE/box/teach\" DISPLAY= nohup $NODE $LBX/boxd.cjs >\"$LOGS/boxd.log\" 2>&1 &",
+          "for i in $(seq 1 60); do curl -sf http://127.0.0.1:13390/health >/dev/null 2>&1 && break; sleep 1; done",
+          "export AGENTBOX_HOME=\"$STATE/home\" AGENTBOX_BOXD_URL=http://127.0.0.1:13390 AGENTBOX_TOKEN=$TOK AGENTBOX_PROVIDER=minimax AGENTBOX_MODEL=MiniMax-M3.1-Flash",
+          "trap 'cp -R \"$STATE/home\" \"$LOGS/home\" 2>/dev/null || true' EXIT",
+          "$NODE $LBX/cli.mjs chat </dev/null >/dev/null 2>&1 || true",
+          "\"$NODE\" -e 'const fs=require(\"fs\"),p=require(\"path\"),d=p.join(process.env.AGENTBOX_HOME,\"agents\");const off=t=>t===\"computer\"||t.startsWith(\"browser_\")||t===\"HandOverDesktop\"||t===\"WaitForControl\";for(const a of fs.readdirSync(d)){const f=p.join(d,a,\"profile.json\");if(!fs.existsSync(f))continue;const j=JSON.parse(fs.readFileSync(f,\"utf8\"));if(Array.isArray(j.tools)){j.tools=j.tools.filter(t=>!off(t));fs.writeFileSync(f,JSON.stringify(j,null,2))}}'",
+          "( while sleep 60; do rm -rf \"$LOGS/home.tmp\"; cp -R \"$AGENTBOX_HOME\" \"$LOGS/home.tmp\" 2>/dev/null && rm -rf \"$LOGS/home\" && mv \"$LOGS/home.tmp\" \"$LOGS/home\"; done ) &",
+          "$NODE $LBX/cli.mjs chat Ada \"$(cat \"$INSTRUCTION_FILE\")\""
+        ]
+      },
+      "env": {
+        "MINIMAX_CODE_CN_API_KEY": "${MINIMAX_CODE_CN_API_KEY}"
+      }
+    },
+    {
+      "name": "mcode",
+      "model_name": "openai/MiniMax-M3.1-Flash",
+      "override_setup_timeout_sec": 1200,
+      "kwargs": {
+        "version": "0.6.13",
+        "api_format": "openai-completions"
+      },
+      "env": {
+        "OPENAI_BASE_URL": "https://api.minimaxi.com/v1",
+        "OPENAI_API_KEY": "${MINIMAX_CODE_CN_API_KEY}"
+      }
+    },
+    {
+      "name": "pi",
+      "model_name": "openai/MiniMax-M3.1-Flash",
+      "override_setup_timeout_sec": 1200,
+      "kwargs": {
+        "version": "1.4.0",
+        "model_api": "openai-completions"
+      },
+      "env": {
+        "OPENAI_BASE_URL": "https://api.minimaxi.com/v1",
+        "OPENAI_API_KEY": "${MINIMAX_CODE_CN_API_KEY}"
+      }
+    }
+  ]
+}
