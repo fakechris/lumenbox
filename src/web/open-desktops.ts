@@ -10,22 +10,26 @@
 import type { Socket } from "node:net";
 
 export class OpenDesktops {
-  private readonly open = new Map<Socket, () => boolean>();
+  private readonly open = new Map<Socket, { mayStay: () => boolean; revoked?: () => void }>();
 
-  hold(socket: Socket, mayStay: () => boolean): void {
-    this.open.set(socket, mayStay);
+  /** `revoked` is told just before a socket is closed for its holder, so the record can say why it ended. */
+  hold(socket: Socket, mayStay: () => boolean, revoked?: () => void): void {
+    this.open.set(socket, { mayStay, ...(revoked !== undefined ? { revoked } : {}) });
     socket.once("close", () => this.open.delete(socket));
   }
 
   /** Closes every socket whose holder may no longer have it; returns how many. */
   recheck(): number {
     let closed = 0;
-    for (const [socket, mayStay] of this.open) {
+    for (const [socket, held] of this.open) {
       let stays = false;
-      try { stays = mayStay(); } catch { /* a question that cannot be answered is a no */ }
+      try { stays = held.mayStay(); } catch { /* a question that cannot be answered is a no */ }
       if (stays) continue;
       this.open.delete(socket);
-      socket.destroy();
+      // The holder may have something to say to the page first (why it ended); the socket goes either way.
+      try { held.revoked?.(); } catch { /* the record is not a reason to keep the socket */ }
+      // After what was written to it has gone out: a reason said to the page must arrive before the socket does not.
+      socket.destroySoon();
       closed++;
     }
     return closed;

@@ -193,9 +193,12 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   // Both of these are `record` ledgers, so their archives are read as well as their live
   // files — before INV-634 a compaction had already emptied the month being exported.
   write("ingress.jsonl", select(readRecord(join(options.home, "ingress.jsonl")), () => true));
-  // Tries at signing in that did not get in, and the waits they earned (web/sign-in-limits.ts,
-  // docs/106 §5 R4): the installation's, not a box's, so by time alone. Append-only, never compacted.
+  // Who signed in, the tries that did not get in, and the waits they earned (web/sign-in-limits.ts,
+  // docs/106 §5 R4, R8): the installation's, not a box's, so by time alone. Append-only, never compacted.
   write("sign-ins.jsonl", select(readLines(join(options.home, "sign-ins.jsonl")), () => true));
+  // Who watched or drove a desktop in this box, from when to when, and why it ended
+  // (web/desktop-streams.ts, R6/R8). Each line names its box.
+  write("desktop-sessions.jsonl", select(readLines(join(options.home, "desktop-sessions.jsonl")), record => record.box === box.id));
   // Who asked for what and who decided it (policy.ts, INV-812), archives included. A request
   // names its agent; a grant, a denial or a use names only the approval's id, and a revocation
   // only its fingerprint — so those are the box's when the request they answer is. The rules in

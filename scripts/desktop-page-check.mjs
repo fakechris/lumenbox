@@ -14,11 +14,22 @@
  * What fails it: a policy violation in the console, an asset refused for its content type, a
  * socket that does not open, or a socket no frame arrives on.
  *
+ * Twice: at local, where the session opens the desktop and nothing is asked of the page; and at
+ * private, behind a TLS terminator of this run's own, where the socket needs a ticket — refused
+ * without one, opened with the one the page was given, refused when it is used again — and where a
+ * stream that ends under the page leaves a notice and a way back, not a frozen picture. The
+ * record (desktop-sessions.jsonl in the temporary home) says which stream each person was joined to.
+ *
  *   npm run check:desktop-page            creates and removes lumenbox-eval-desktop-page-<id>
  *   UI_LAYOUT_BROWSER=/path/to/chrome     the browser to use (default: Playwright's, else Chrome)
  */
 
-import { existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { createServer as createTlsServer, request as httpsRequest } from "node:https";
+import { connect } from "node:net";
+import { join } from "node:path";
 import { chromium } from "playwright-core";
 import { defaultBoxImage } from "../src/box/docker.ts";
 import { openEvalBox } from "./lib/eval-box.mjs";
@@ -26,6 +37,7 @@ import { smokeHome } from "./smoke-target.mjs";
 
 const TOKEN = "desktop-page-check";
 const DESKTOP = "/desktop/1/vnc.html?autoconnect=1&resize=scale&path=desktop/1/websockify";
+const PRIVATE_HOST = "box.example.test";
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
 for (const key of ["AGENTBOX_UI_TOKEN", "AGENTBOX_PUBLIC_URL", "AGENTBOX_EXPOSURE", "AGENTBOX_INSECURE", "AGENTBOX_BOXD_URL", "AGENTBOX_TOKEN", "AGENTBOX_CONTAINER"]) delete process.env[key];
@@ -38,7 +50,7 @@ let failed = 0;
 const say = (ok, what, detail = "") => { if (!ok) failed += 1; console.log(`${ok ? "pass" : "FAIL"}  ${what}${detail ? `  (${detail})` : ""}`); };
 
 /** Loads `url` in a fresh page of `context` and reports what a person's browser would have met. */
-async function visit(context, base, url, label, { frame = false } = {}) {
+async function visit(context, base, url, label, { frame = false, keep = false } = {}) {
   const page = await context.newPage();
   const violations = [], refused = [], assets = [], sockets = [];
   page.on("console", message => {
@@ -77,10 +89,11 @@ async function visit(context, base, url, label, { frame = false } = {}) {
   const bad = assets.filter(asset => asset.status >= 400);
   say(assets.length > 0 && bad.length === 0, `${label}: the page's assets load`, `${assets.length} response(s) under /desktop/: ${[...types].map(([ext, type]) => `${ext} ${type}`).join(", ")}${bad.length ? `; failed: ${bad.map(asset => `${asset.status} ${asset.path}`).join(", ")}` : ""}`);
   say(assets.every(asset => asset.csp && asset.nosniff === "nosniff"), `${label}: every one of them carries the policy and nosniff`);
-  say(live !== undefined, `${label}: the socket opens and frames arrive`, live ? `${live.url.replace(base.replace("http", "ws"), "")}: ${live.frames} frame(s), ${live.bytes} bytes` : `sockets: ${JSON.stringify(sockets)}`);
+  say(live !== undefined, `${label}: the socket opens and frames arrive`, live ? `${new URL(live.url).pathname}: ${live.frames} frame(s), ${live.bytes} bytes` : `sockets: ${JSON.stringify(sockets.map(socket => ({ ...socket, url: socket.url.replace(/ticket=.*/, "ticket=…") })))}`);
   say(canvas !== null && canvas !== undefined && canvas.width > 0, `${label}: the screen is drawn`, canvas ? `canvas ${canvas.width}x${canvas.height}` : "no canvas");
-  await page.close();
-  return { assets, sockets };
+  const final = page.url();
+  if (!keep) await page.close();
+  return { assets, sockets, final, page };
 }
 
 /**
@@ -134,15 +147,83 @@ async function cards(context, base) {
   await page.close();
 }
 
-let box, stop, browser;
+/** A socket upgrade asked for by hand, with a session's cookie: the status line and the refusal's word. */
+function upgradeBy(base, path, cookie, origin) {
+  return new Promise(resolve => {
+    const { port, hostname } = new URL(base);
+    const socket = connect(Number(port), hostname, () => socket.write(
+      `GET ${path} HTTP/1.1\r\nhost: ${hostname}:${port}\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n` +
+      `cookie: ${cookie}\r\n${origin ? `origin: ${origin}\r\n` : ""}\r\n`));
+    let answer = "";
+    socket.on("data", chunk => { answer += String(chunk); socket.destroy(); });
+    socket.on("close", () => resolve(answer === "" ? "closed" : `${answer.split("\r\n")[0]} ${answer.split("\r\n\r\n")[1]?.trim() ?? ""}`.trim()));
+    socket.on("error", () => resolve("closed"));
+  });
+}
+
+/** What the record says of the streams, read from the temporary home. */
+const sessions = () => {
+  const path = join(scratch.home, "desktop-sessions.jsonl");
+  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+};
+/** A person invited with the installation's credential, signed in through `through` — the address people use — and their cookie put in `context`. */
+async function signedIn(context, direct, through, role, name) {
+  const invite = await (await fetch(`${direct}/api/channels/invite`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ role }) })).json();
+  const target = new URL(through), body = JSON.stringify({ code: invite.code, name });
+  // By hand rather than by fetch: the private run's name resolves only inside the browser, and its certificate is this run's own.
+  const login = await new Promise((resolve, reject) => {
+    const ask = target.protocol === "https:" ? httpsRequest : httpRequest;
+    const request = ask({ host: "127.0.0.1", port: target.port, method: "POST", path: "/api/login", rejectUnauthorized: false, headers: { host: target.host, "content-type": "application/json", "content-length": Buffer.byteLength(body) } }, answer => {
+      answer.resume();
+      answer.on("end", () => resolve({ status: answer.statusCode, cookies: answer.headers["set-cookie"] ?? [] }));
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
+  const session = login.cookies.map(line => line.split(";")[0]).find(pair => pair.startsWith("agentbox_who=")) ?? "";
+  say(login.status === 200 && session !== "", `${name} signs in as a ${role}`, `HTTP ${login.status}`);
+  await context.addCookies([{ name: "agentbox_who", value: session.slice("agentbox_who=".length), url: through, httpOnly: true, secure: target.protocol === "https:" }]);
+  return session;
+}
+
+/**
+ * A TLS terminator in front of the server, as a private installation has: https on a name of its
+ * own, the client's address appended to X-Forwarded-For. Self-signed, for this run only.
+ */
+async function terminator(target) {
+  const key = join(scratch.home, "tls.key"), cert = join(scratch.home, "tls.crt");
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "1", "-subj", `/CN=${PRIVATE_HOST}`, "-addext", `subjectAltName=DNS:${PRIVATE_HOST}`], { stdio: "ignore" });
+  const forwarded = req => ({ ...req.headers, "x-forwarded-for": [req.headers["x-forwarded-for"], req.socket.remoteAddress?.replace(/^::ffff:/, "")].filter(Boolean).join(", "), "x-forwarded-proto": "https" });
+  const server = createTlsServer({ key: readFileSync(key), cert: readFileSync(cert) }, (req, res) => {
+    const upstream = httpRequest({ host: "127.0.0.1", port: target().port, method: req.method, path: req.url, headers: forwarded(req) }, answer => { res.writeHead(answer.statusCode ?? 502, answer.headers); answer.pipe(res); });
+    upstream.on("error", () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    req.pipe(upstream);
+  });
+  server.on("upgrade", (req, socket, head) => {
+    const upstream = connect(Number(target().port), "127.0.0.1", () => {
+      upstream.write(`GET ${req.url} HTTP/1.1\r\n${Object.entries(forwarded(req)).map(([name, value]) => `${name}: ${value}\r\n`).join("")}\r\n`);
+      if (head.length > 0) upstream.write(head);
+      upstream.pipe(socket); socket.pipe(upstream);
+    });
+    const drop = () => { upstream.destroy(); socket.destroy(); };
+    upstream.on("error", drop).on("close", drop); socket.on("error", drop).on("close", drop);
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  return { port: server.address().port, close: () => { server.closeAllConnections(); server.close(); } };
+}
+
+let box, stop, browser, tls;
 try {
   box = await openEvalBox({ argv: [], runId: `desktop-page-${Date.now().toString(36)}`, isolated: true });
   const { startWebServer } = await import("../src/web/server.ts");
   let base = "";
   stop = await startWebServer({ port: 0, host: "127.0.0.1", token: TOKEN, useBox: true, onLog: () => {}, onReady: url => { base = url; } });
   const executablePath = process.env.UI_LAYOUT_BROWSER ?? (existsSync(CHROME) ? CHROME : undefined);
-  browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+  // The private run's name resolves to this machine, and its certificate is this run's own.
+  browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}), args: [`--host-resolver-rules=MAP ${PRIVATE_HOST} 127.0.0.1`, "--ignore-certificate-errors", "--no-proxy-server"] });
 
+  // ── local: as the app and a browser on this machine have it ─────────────────────────────────
+  console.log("\nlocal\n");
   // The operator, as the app loads it: the token once in the address, a cookie from then on.
   const operator = await browser.newContext({ viewport: { width: 1400, height: 900 } });
   const first = await operator.newPage();
@@ -153,38 +234,97 @@ try {
   const ours = new URL(base);
   const own = socket => { const url = new URL(socket.url); return url.protocol === "ws:" && url.host === ours.host && url.pathname.endsWith("/desktop/1/websockify"); };
   say(driving.sockets.length > 0 && driving.sockets.every(own), "the desktop page: its socket is this installation's own address", driving.sockets.map(socket => socket.url.split("?")[0]).join(", "));
+  say(driving.final === base + DESKTOP && driving.sockets.every(socket => !socket.url.includes("ticket")), "the desktop page: opened where it was asked for, with no ticket — the session suffices at local", driving.final.replace(base, ""));
   await visit(operator, base, DESKTOP, "embedded in the app's page", { frame: true });
 
-  // A viewer's session: the same address. This shows the page loads for them under the rules; it
-  // does not show which stream they were joined to — a browser cannot see that (INV-2228).
-  const invite = await (await fetch(`${base}/api/channels/invite`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ role: "viewer" }) })).json();
-  const login = await fetch(`${base}/api/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: invite.code, name: "Viewer" }) });
-  const session = login.headers.getSetCookie()[0]?.split(";")[0] ?? "";
-  say(login.status === 200 && session.startsWith("agentbox_who="), "a viewer signs in", `HTTP ${login.status}`);
+  // A viewer: the same address, and the view-only stream — which the record says, since a browser cannot (INV-2228).
   const viewer = await browser.newContext({ viewport: { width: 1400, height: 900 } });
-  const [name, value] = [session.slice(0, session.indexOf("=")), session.slice(session.indexOf("=") + 1)];
-  await viewer.addCookies([{ name, value, url: base }]);
+  await signedIn(viewer, base, base, "viewer", "Viewer");
   await visit(viewer, base, DESKTOP, "the desktop page in a viewer's session");
+  const localRecord = sessions();
+  say(localRecord.some(line => line.event === "opened" && line.person === "operator" && line.mode === "control" && line.by === "session"), "the record: the operator's stream, driving, by session");
+  say(localRecord.filter(line => line.event === "opened" && line.person !== "operator").every(line => line.mode === "view") && localRecord.some(line => line.person !== "operator"), "the record: the viewer was joined to the view-only stream");
 
   // And the check that makes the rest mean something: another site's page cannot open the socket.
-  const foreign = await new Promise(resolve => {
-    import("node:net").then(({ connect }) => {
-      const { port, hostname } = new URL(base);
-      const socket = connect(Number(port), hostname, () => socket.write(`GET /desktop/1/websockify HTTP/1.1\r\nhost: ${hostname}:${port}\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\ncookie: agentbox_ui=${TOKEN}\r\norigin: https://evil.example\r\n\r\n`));
-      let answer = "";
-      socket.on("data", chunk => { answer += String(chunk); socket.destroy(); });
-      socket.on("close", () => resolve(answer.split("\r\n")[0] || "closed"));
-      socket.on("error", () => resolve("closed"));
-    });
-  });
+  const foreign = await upgradeBy(base, "/desktop/1/websockify", `agentbox_ui=${TOKEN}`, "https://evil.example");
   say(foreign === "HTTP/1.1 403 Forbidden", "another site's page cannot open the desktop's socket", foreign);
+
+  // ── private: the same installation behind a TLS terminator, on a name of its own ─────────────
+  console.log("\nprivate\n");
+  stop(); stop = undefined;
+  let direct = "";
+  tls = await terminator(() => new URL(direct));
+  const through = `https://${PRIVATE_HOST}:${tls.port}`;
+  Object.assign(process.env, { AGENTBOX_EXPOSURE: "private", AGENTBOX_PUBLIC_URL: through });
+  stop = await startWebServer({ port: 0, host: "127.0.0.1", token: TOKEN, useBox: true, onLog: () => {}, onReady: url => { direct = url; } });
+  const before = sessions().length;
+
+  const driver = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  const driverCookie = await signedIn(driver, direct, through, "driver", "Driver");
+  say((await upgradeBy(direct, "/desktop/1/websockify", driverCookie)) === "HTTP/1.1 403 Forbidden ticket-missing", "private: the socket without a ticket is refused");
+  const ticketed = await visit(driver, through, DESKTOP, "private: the desktop page", { keep: true });
+  const socketUrl = ticketed.sockets.find(socket => socket.frames >= 3)?.url ?? "";
+  say(/\/desktop\/1\/websockify\?ticket=[A-Za-z0-9_-]{32}$/.test(socketUrl) && socketUrl.startsWith(`wss://${PRIVATE_HOST}:${tls.port}/`), "private: the page was given a ticket, and its socket carries it", socketUrl.replace(/ticket=.*/, "ticket=…"));
+  const again = await upgradeBy(direct, new URL(socketUrl.replace(/^wss/, "https")).pathname + new URL(socketUrl.replace(/^wss/, "https")).search, driverCookie);
+  say(again === "HTTP/1.1 403 Forbidden ticket-used", "private: the same ticket a second time is refused", again);
+
+  // The desktop's stream ends under the page — its VNC server in the box is killed, and the box brings it back — and the page says so, with a way back.
+  const { resolveBoxProvisioner } = await import("../src/box/provisioner.ts");
+  const inBox = await resolveBoxProvisioner().connect();
+  await inBox.exec("pkill -x x11vnc || true");
+  const page = ticketed.page;
+  const notice = await page.waitForSelector("#lumenbox-desktop-closed", { timeout: 30_000 }).then(() => true, () => false);
+  say(notice, "private: when the stream ends the page says so, over the last picture", notice ? ((await page.locator("#lumenbox-desktop-closed p").textContent()) ?? "").slice(0, 80) : "no notice appeared: the canvas is frozen with nothing said");
+  if (notice) {
+    const reopened = [];
+    page.on("websocket", socket => { const entry = { url: socket.url(), frames: 0 }; reopened.push(entry); socket.on("framereceived", () => { entry.frames += 1; }); });
+    // One press. While the box is still bringing the desktop back the page keeps trying by itself, saying so; nobody presses again.
+    await page.locator("#lumenbox-desktop-closed button").click();
+    let presses = 1, reconnecting = false;
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline && !reopened.some(socket => socket.frames >= 3)) {
+      await page.waitForTimeout(500);
+      const state = await page.locator("#lumenbox-desktop-closed").getAttribute("data-state", { timeout: 200 }).catch(() => null);
+      if (state === "0") reconnecting = true;
+      // Only if the page gave up after its own tries — "still not answering" — does a person press again.
+      if (state === "1") { presses += 1; await page.locator("#lumenbox-desktop-closed button").click().catch(() => {}); }
+      else if (state === null && !(await page.title()).includes("noVNC")) await page.reload({ waitUntil: "load" }).catch(() => {});
+    }
+    const back = reopened.find(socket => socket.frames >= 3);
+    say(back !== undefined && back.url !== socketUrl, "private: Reopen gets a new ticket and the picture is live again", back
+      ? `${back.frames} frame(s) on a new ticket, after ${reopened.length} tr${reopened.length === 1 ? "y" : "ies"}${reconnecting ? ", the page saying it was reconnecting" : ""}`
+      : `sockets after reopening: ${JSON.stringify(reopened.map(socket => [socket.url.replace(/ticket=.*/, "ticket=…"), socket.frames]))}; the page is at ${page.url().replace(/ticket.*/, "ticket…")} titled "${await page.title()}"`);
+    say(presses === 1, "private: one press was enough — the page did the waiting", `${presses} press(es)`);
+  }
+  await page.close();
+
+  const watcher = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  await signedIn(watcher, direct, through, "viewer", "Watcher");
+  const watched = await visit(watcher, through, DESKTOP, "private: the desktop page in a viewer's session", { keep: true });
+  // The viewer is signed out everywhere while watching: the stream goes, and the page says their access ended — with nothing to press.
+  const who = sessions().filter(line => line.event === "opened" && line.mode === "view").at(-1)?.person;
+  await fetch(`${direct}/api/principals/logout`, { method: "POST", headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ principalId: who }) });
+  const ended = await watched.page.waitForSelector("#lumenbox-desktop-closed", { timeout: 15_000 }).then(() => true, () => false);
+  const endedState = ended ? await watched.page.locator("#lumenbox-desktop-closed").getAttribute("data-state") : null;
+  say(ended && endedState === "0" && await watched.page.locator("#lumenbox-desktop-closed button").count() === 0, "private: a person signed out while watching is told their access ended, and offered nothing to reopen",
+    ended ? ((await watched.page.locator("#lumenbox-desktop-closed p").textContent()) ?? "").slice(0, 60) : "no notice appeared");
+  await watched.page.close();
+  await new Promise(resolve => setTimeout(resolve, 500));
+  const record = sessions().slice(before);
+  const opened = record.filter(line => line.event === "opened");
+  say(opened.length >= 3 && opened.every(line => line.by === "ticket"), "the record: every private stream was opened by ticket", `${opened.length} opened`);
+  say(opened.some(line => line.mode === "control") && opened.some(line => line.mode === "view"), "the record: the driver's stream is control, the viewer's is view");
+  say(record.some(line => line.event === "closed" && line.reason === "box-gone"), "the record: the stream that ended under the page says the box let go");
+  say(record.some(line => line.event === "closed" && line.reason === "revoked" && line.mode === "view"), "the record: the signed-out viewer's stream says it was revoked");
+  say(!readFileSync(join(scratch.home, "desktop-sessions.jsonl"), "utf8").includes(socketUrl.split("ticket=")[1] || "no-ticket-seen"), "the record holds no ticket");
 } catch (error) {
   failed += 1;
   console.log(`FAIL  could not run: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
 } finally {
   await browser?.close().catch(() => {});
   stop?.();
+  tls?.close();
   await box?.close();
 }
-console.log(failed === 0 ? "\nthe desktop page works under the browser rules" : `\n${failed} check(s) failed`);
+console.log(failed === 0 ? "\nthe desktop page works under the browser rules, with a ticket where one is required" : `\n${failed} check(s) failed`);
 process.exit(failed === 0 ? 0 : 1);

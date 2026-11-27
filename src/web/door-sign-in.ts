@@ -171,7 +171,7 @@ export interface DoorSignInDeps {
    * this request's address must wait, asked before anything is exchanged; `failed` records a
    * callback that did not sign anyone in, and counts it unless `counts` is false.
    */
-  attempts?: { blocked(res: ServerResponse): number | undefined; failed(res: ServerResponse, reason: string, account?: string, counts?: boolean): void };
+  attempts?: { blocked(res: ServerResponse): number | undefined; failed(res: ServerResponse, reason: string, account?: string, counts?: boolean): void; succeeded?(res: ServerResponse, account: string): void };
 }
 
 interface PendingSignIn { channelId: string; next: string; at: number; appId: string; incarnation: number; binding: string; bootstrapCode?: string }
@@ -291,6 +291,7 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
       res.writeHead(302, { "set-cookie": [deps.sessionCookie(identity, person.id)], location: pending.next });
       res.end();
       deps.log(`web login: ${identity} via ${record.type} door ${channelId} (${person.name})`);
+      deps.attempts?.succeeded?.(res, person.id);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       deps.log(`${record.type} sign-in via ${channelId} failed: ${detail}`);

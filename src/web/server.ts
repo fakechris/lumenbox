@@ -92,6 +92,10 @@ import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, parsePublicUrlInput, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import { originRefusal, securityHeaders } from "./browser-guard.ts";
+import {
+  DESKTOP_IDLE_MS, DESKTOP_SESSIONS_LEDGER, DesktopStreams, DesktopTickets, REVOKED_CLOSE_CODE, closeFrame, desktopSessionLedger, grantedMode, pageAddressWith, ticketIn,
+  withReopenNotice, withoutTicket, type HeldStream, type ReopenWords, type StreamEnd, type StreamOpen,
+} from "./desktop-streams.ts";
 import { clientAddress, signInGuard, signInLedger, trustedProxies, SIGN_INS_LEDGER, type SignInDoor, type SignInGuard } from "./sign-in-limits.ts";
 import {
   authorize,
@@ -2723,6 +2727,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           host: `${origin.host}:${origin.port}`,
           // boxd requires the token on everything but /health and the VNC stream.
           authorization: `Bearer ${origin.token}`,
+          // Off local the page's address holds a ticket, and a Referer would carry it into the box's logs.
+          ...(ticketsRequired() ? { referer: "" } : {}),
         },
       },
       response => {
@@ -2757,6 +2763,19 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const headers = isPage
           ? { ...response.headers, "cache-control": "no-store" }
           : response.headers;
+        if (isPage && ticketsRequired() && /text\/html/.test(String(response.headers["content-type"] ?? ""))) {
+          // The page passes through whole, gaining a notice for when its stream ends: a spent ticket cannot reopen it (desktop-streams.ts).
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () => {
+            const locale = requestLocaleOf(res.req);
+            const body = Buffer.from(withReopenNotice(Buffer.concat(chunks).toString("utf8"), desktopClosedWords(locale)), "utf8");
+            const { "content-length": _length, "content-encoding": _encoding, "transfer-encoding": _transfer, ...rest } = headers;
+            res.writeHead(status, { ...rest, "content-length": body.length });
+            res.end(body);
+          });
+          return;
+        }
         res.writeHead(status, headers);
         response.pipe(res);
       }
@@ -2792,6 +2811,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
     req.pipe(upstream);
   }
+
+  /** What the desktop page says when its stream ends (desktop-streams.ts), in the reader's language. */
+  const desktopClosedWords = (locale: ReturnType<typeof requestLocaleOf>): ReopenWords => ({
+    closed: tr("page.desktop.closed", locale), idle: tr("page.desktop.idle", locale), revoked: tr("page.desktop.revoked", locale),
+    reconnecting: tr("page.desktop.reconnecting", locale), still: tr("page.desktop.still-closed", locale), reopen: tr("page.desktop.reopen", locale),
+  });
 
   function sendDesktopWaiting(res: ServerResponse, reason: string, loading?: boolean): void {
     const page = desktopWaitingPage(reason, requestLocaleOf(res.req), loading);
@@ -2964,6 +2989,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   let exposure: Exposure | undefined;
   /** Sign-in limits and their record (sign-in-limits.ts, R4): nothing at local; set with the level, before the server listens. */
   let signIns: SignInGuard = signInGuard({ enabled: false, record: () => {}, log });
+  /** Desktop streams (desktop-streams.ts, R6/R8): tickets off local, the record of who watched at every level, the idle limit off local. */
+  const desktopTickets = new DesktopTickets();
+  let desktopStreams = new DesktopStreams({ record: desktopSessionLedger(join(agentboxHome(), DESKTOP_SESSIONS_LEDGER), log) });
+  const ticketsRequired = (): boolean => exposure !== undefined && exposure.level !== "local";
+  /** Who a stream is for: the gateway's user, the roster person behind a session, or the installation's own credential. */
+  const streamPerson = (gatewayUser: string | undefined, session: string | undefined): string =>
+    gatewayUser ?? (session === undefined ? "operator" : principals.resolve(session).id);
   /** The proxies whose forwarded address is believed (AGENTBOX_TRUSTED_PROXIES); unset, any peer's is. Read at start, where a bad list refuses. */
   let proxies: ReturnType<typeof trustedProxies>;
   /** One try at one way in, from wherever this request came: the proxy's word off local, the peer otherwise. */
@@ -3034,7 +3066,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     bootstrap, setupPending: bootstrapPending, principals, send, log, admit: (...who) => orgAdmission.admit(...who),
     sessionCookie: (identity, principalId) => sessionCookie(identity, sessionSecret, epochs.of(principalId), secureCookies),
     secureCookies: () => secureCookies,
-    attempts: { blocked: res => signIns.blocked(attemptFrom(res.req, "door")), failed: (res, reason, account, counts) => signIns.failed(attemptFrom(res.req, "door", account), reason, counts) },
+    attempts: {
+      blocked: res => signIns.blocked(attemptFrom(res.req, "door")),
+      failed: (res, reason, account, counts) => signIns.failed(attemptFrom(res.req, "door", account), reason, counts),
+      succeeded: (res, account) => signIns.succeeded(attemptFrom(res.req, "door", account)),
+    },
   });
 
   const server = createServer((req, res) => {
@@ -3393,7 +3429,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (url.pathname.startsWith("/desktop/")) {
           // Same choice as the upgrade: the page and the socket it opens must come from the same
           // stack, or a viewer would be served a page pointing at a stream they are refused.
-          const desktop = desktopRouteOf(url.pathname, url.search, mayDriveDesktop(gatewayCaller, webIdentity === undefined ? undefined : principals.roleOf(webIdentity)));
+          // Off local the page's address carries a ticket for the socket (desktop-streams.ts): never passed on to the box.
+          const drives = mayDriveDesktop(gatewayCaller, webIdentity === undefined ? undefined : principals.roleOf(webIdentity));
+          const asked = ticketsRequired() ? grantedMode(url.searchParams.get("mode"), drives) : undefined;
+          const desktop = desktopRouteOf(url.pathname, asked === undefined ? url.search : withoutTicket(url.search), asked === undefined ? drives : asked === "control");
           if (!desktop) {
             send(res, 404, apiError("desktop-path-unknown", { path: url.pathname }));
             return;
@@ -3409,6 +3448,17 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               else desktopPageErrors.delete(agent.id);
               sendDesktopWaiting(res, error ?? "");
               return;
+            }
+            // The socket opens only with a ticket: one for this person, this desktop and this mode, put where
+            // noVNC reads its socket's path. A page that arrives without a good one is sent to itself with one.
+            if (asked !== undefined) {
+              const person = streamPerson(gatewayCaller.userId, webIdentity), key = `${desktop.boxId ?? registry.box.id}/${page[1]}`;
+              if (!desktopTickets.good(ticketIn(url.search), person, key)) {
+                const prefix = /^\/(desktop\/(?:b\/[A-Za-z0-9_-]+\/)?\d+)/.exec(url.pathname)![1]!;
+                res.writeHead(302, { location: pageAddressWith(url.pathname, url.search, prefix, desktopTickets.issue(person, key, asked)), "cache-control": "no-store" });
+                res.end();
+                return;
+              }
             }
           }
           await proxyDesktop(req, res, desktop.upstream, false, desktop.boxId);
@@ -3839,6 +3889,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           if (redeemed.kind === "gone") { send(res, 409, apiError("invite-person-gone")); return; }
           // Two cookies, because they answer different questions: the token says this browser may reach the installation at all, the session says who it is. What the person may then *do* is their roster role.
           res.setHeader("set-cookie", [sessionCookie(identity, sessionSecret, epochs.of(redeemed.person.id), secureCookies)]);
+          signIns.succeeded({ ...from, account: redeemed.person.id });
           log(`web login: ${redeemed.kind === "linked" ? `${identity} linked to ${redeemed.person.name}` : `${name} joined as ${invite.role}`}`);
           send(res, 200, { name: redeemed.person.name, role: redeemed.person.role });
           return;
@@ -6642,7 +6693,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
    * everything after it is framed RFB rather than HTTP.
    */
   server.on("upgrade", (req, clientSocket: Socket, head: Buffer) => {
-    const [pathname, query] = (req.url ?? "").split("?");
+    const [pathname, rawQuery] = (req.url ?? "").split("?");
+    // Off local the socket's address carries its ticket: read here, and in no address that goes further (desktop-streams.ts).
+    const ticket = ticketsRequired() ? ticketIn(rawQuery ? `?${rawQuery}` : "") : undefined;
+    const query = ticketsRequired() ? withoutTicket(rawQuery ? `?${rawQuery}` : "").slice(1) : rawQuery;
+    let mode: "view" | "control" | undefined, person = "operator";
     // A socket a page on another site opened would carry this browser's cookie: only our own page may (browser-guard.ts, R5).
     if (originRefusal(req, exposure?.publicOrigin, true, exposure?.hsts === true) !== undefined) { clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
     // The RFB socket carries the screen, so it needs the same check. A browser sends the
@@ -6657,31 +6712,48 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // A person signed in here is who the roster says, whatever a header does or does not say (INV-2228).
       const session = readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity;
       principals.reload();
-      const route = desktopRouteOf(pathname ?? "", query ? `?${query}` : "", mayDriveDesktop(gateway, session === undefined ? undefined : principals.roleOf(session)));
+      // The ticket's mode is the most this stream is; the role, asked again each time, can only lower it.
+      const route = desktopRouteOf(pathname ?? "", query ? `?${query}` : "", mode !== "view" && mayDriveDesktop(gateway, session === undefined ? undefined : principals.roleOf(session)));
       if (!route) return 404;
       const identity = gateway.userId ?? session;
+      person = streamPerson(gateway.userId, session);
       const targetBox = registry.boxById(route.boxId ?? registry.box.id);
       return !targetBox || (identity !== undefined && !mayEnterBox(targetBox, principals.resolve(identity).id)) ? 403 : route;
     };
-    const desktop = admitted();
+    let desktop = admitted();
     if (typeof desktop === "number") {
       if (desktop === 404) clientSocket.destroy(); else clientSocket.end(`HTTP/1.1 ${desktop === 401 ? "401 Unauthorized" : "403 Forbidden"}\r\n\r\n`);
       return;
     }
-    openDesktops.hold(clientSocket, () => { const again = admitted(); return typeof again !== "number" && again.upstream === desktop.upstream; });
+    const display = Number(/^\/(?:vnc|vnc-ro)\/(\d+)\//.exec(desktop.upstream)?.[1]), boxOf = desktop.boxId ?? registry.box.id;
+    if (ticketsRequired()) {
+      // One use: spent here whether or not the box then answers. The refusal says which it was, and nothing else.
+      const spent = desktopTickets.redeem(ticket, person, `${boxOf}/${display}`);
+      if ("refused" in spent) { clientSocket.end(`HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n${spent.refused}\n`); return; }
+      mode = spent.mode;
+      const again = admitted();
+      if (typeof again === "number") { clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n"); return; }
+      desktop = again;
+    }
+    const joined = desktop;
+    const held: { stream?: HeldStream } = {};
+    const opening: StreamOpen = { person, box: boxOf, display, mode: joined.upstream.startsWith("/vnc-ro/") ? "view" : "control", by: ticketsRequired() ? "ticket" : "session" };
+    openDesktops.hold(clientSocket, () => { const again = admitted(); return typeof again !== "number" && again.upstream === joined.upstream; }, () => {
+      held.stream?.end("revoked");
+      // Said to the page before the socket is taken away, so it can tell the person their access ended rather than offer to reopen.
+      try { clientSocket.write(closeFrame(REVOKED_CLOSE_CODE, "Your access to this desktop ended.")); } catch { /* already gone */ }
+    });
 
     void (async () => {
       // noVNC reconnects its socket without reloading the HTML after a box restart.
       // That socket is explicit demand too; only its own desktop should be restored.
-      const index = Number(/^\/(?:vnc|vnc-ro)\/(\d+)\//.exec(desktop.upstream)?.[1]);
-      const agent = registry.agentsIn(desktop.boxId ?? registry.box.id)
-        .find(entry => registry.displayIndexFor(entry.id) === index);
+      const agent = registry.agentsIn(boxOf).find(entry => registry.displayIndexFor(entry.id) === display);
       if (agent && await orchestrator.ensureAgentDesktop(agent.id) === undefined) {
         clientSocket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
         return;
       }
       if (clientSocket.destroyed) return;
-      await openUpgrade(req, clientSocket, head, desktop.upstream, desktop.boxId);
+      await openUpgrade(req, clientSocket, head, joined.upstream, joined.boxId, { held, open: { ...opening, ...(agent !== undefined ? { agent: agent.id } : {}) } });
     })().catch(() => clientSocket.destroy());
   });
 
@@ -6691,7 +6763,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     clientSocket: Socket,
     head: Buffer,
     upstreamPath: string,
-    boxId?: string
+    boxId?: string,
+    /** Who this stream is for, and where its holder is kept so whoever ends it can say why (desktop-streams.ts). */
+    watching?: { held: { stream?: HeldStream }; open: StreamOpen }
   ): Promise<void> {
     const origin = await resolveBoxdOrigin(false, boxId);
     if (!origin) {
@@ -6724,6 +6798,25 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (head.length > 0) upstream.write(head);
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
+      if (watching === undefined) return;
+      // The stream is open when the box says so; from then on what moves on it is counted, and how it ends is recorded.
+      const ended = (reason: StreamEnd) => () => watching.held.stream?.end(reason);
+      // The answer's first line may arrive in pieces: wait for enough of it to read.
+      let answer = Buffer.alloc(0);
+      const answered = (chunk: Buffer): void => {
+        answer = Buffer.concat([answer, chunk]);
+        if (answer.length < 12) return;
+        upstream.off("data", answered);
+        if (!answer.toString("latin1", 0, 12).startsWith("HTTP/1.1 101") || clientSocket.destroyed) return;
+        const stream = desktopStreams.opened(watching.open, clientSocket);
+        watching.held.stream = stream;
+        upstream.on("data", (more: Buffer) => stream.moved("down", more));
+        clientSocket.on("data", (more: Buffer) => stream.moved("up", more));
+      };
+      upstream.on("data", answered);
+      upstream.once("close", ended("box-gone"));
+      // A browser that goes away half-closes first; the socket itself closes only once the box has let go.
+      clientSocket.once("end", ended("left")).once("close", ended("left"));
     });
 
     const drop = () => {
@@ -6779,6 +6872,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Under TLS the cookie says so, and a browser stops sending it over plain HTTP.
   secureCookies = exposure.secureCookies;
   proxies = trustedProxies(process.env.AGENTBOX_TRUSTED_PROXIES);
+  if (exposure.level !== "local") desktopStreams = new DesktopStreams({ record: desktopSessionLedger(join(agentboxHome(), DESKTOP_SESSIONS_LEDGER), log), idleMs: DESKTOP_IDLE_MS });
   signIns = signInGuard({ enabled: exposure.level !== "local", record: signInLedger(join(agentboxHome(), SIGN_INS_LEDGER), log), log });
   await new Promise<void>(resolve => server.listen(options.port, host, resolve));
   // Where a job in the box reaches this server (docs/33 §1), and the lease renewal that ends a

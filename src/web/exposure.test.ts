@@ -222,8 +222,8 @@ test("the organisation manifest starts with the settings it ships, and the contr
   );
 });
 
-/** The first line of the answer to a socket upgrade, or "closed" when the server just hung up. */
-async function upgrade(base: string, path: string, headers: Record<string, string>): Promise<string> {
+/** The first line of the answer to a socket upgrade — with the refusal's one word after it when asked — or "closed" when the server just hung up. */
+async function upgrade(base: string, path: string, headers: Record<string, string>, withReason = false): Promise<string> {
   const { connect } = await import("node:net");
   const { port, hostname } = new URL(base);
   return new Promise(resolve => {
@@ -233,7 +233,7 @@ async function upgrade(base: string, path: string, headers: Record<string, strin
     });
     let answer = "";
     socket.on("data", chunk => { answer += String(chunk); socket.destroy(); });
-    socket.on("close", () => resolve(answer === "" ? "closed" : answer.split("\r\n")[0]!));
+    socket.on("close", () => resolve(answer === "" ? "closed" : withReason ? `${answer.split("\r\n")[0]!} ${answer.split("\r\n\r\n")[1]?.trim() ?? ""}`.trim() : answer.split("\r\n")[0]!));
     socket.on("error", () => resolve("closed"));
   });
 }
@@ -302,7 +302,7 @@ test("private: every way in waits after a few wrong tries and records them witho
   assert.notEqual((await post("/hooks/abcdef123456", {}, { ...via("203.0.113.21"), origin: "https://ci.example" })).status, 403, "a webhook answers for itself");
   assert.equal((await post("/api/login", { code: "NOCODE", name: "x" }, { ...via("203.0.113.22"), origin: "https://evil.example" })).status, 403, "signing in is from our own page too");
   assert.equal(await upgrade(base, "/desktop/1/websockify", { cookie, origin: "https://evil.example" }), "HTTP/1.1 403 Forbidden", "nor can another site's page open the desktop's socket");
-  assert.notEqual(await upgrade(base, "/desktop/1/websockify", { cookie, origin: OURS }), "HTTP/1.1 403 Forbidden", "her own page's socket gets past the check");
+  assert.equal(await upgrade(base, "/desktop/1/websockify", { cookie, origin: OURS }, true), "HTTP/1.1 403 Forbidden ticket-missing", "her own page's socket gets past that check, to the next one: off local it needs a ticket (desktop-streams.test.ts)");
 
   const page = await get("/login", via("203.0.113.23"));
   assert.match(page.headers.get("content-security-policy") ?? "", /frame-ancestors 'self'/);
