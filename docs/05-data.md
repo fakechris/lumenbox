@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: storage
-     updated: 2026-11-23
+     updated: 2026-11-27
 -->
 # Data
 
@@ -29,6 +29,8 @@ means, and it takes the whole writable layer with it.
 self-contained topology.
 
 ```
+FORMAT                      the home's format number, one integer (§2.0)
+format-migrations.jsonl     each format the home was brought to: which, when, by which app version (§2.0)
 token                       box API bearer, 0600
 ui-token                    web UI shared secret, 0600
 config.json                 settings decided once
@@ -53,6 +55,77 @@ agents/<agentId>/
   todos.json                the agent's todo list, same
   box-owner                 this agent's claim on its desktop, 0600
 ```
+
+### 2.0 `FORMAT` — the home's format number (INV-2201, docs/106 §6)
+
+`FORMAT` holds one integer: the format of everything else in this directory. `src/home-format.ts`
+owns it. A home with content and no `FORMAT` is **format 0** — every installation written by
+0.4.9 or earlier. A home that does not exist yet is created and stamped with the current number.
+
+Changes to stored data are **numbered migrations**, `HOME_MIGRATIONS` in that file: migration `n`
+brings a home from `n - 1` to `n`. At start, in `src/cli.ts`'s `main` — the one place every command
+passes — a command that uses the installation's home has each migration the home has not had run
+in order, before it reads or writes anything.
+
+Which commands those are is a list (`HOME_COMMANDS`), and every command the dispatch knows is on
+it or on `HOMELESS_COMMANDS`; a test holds the dispatch to the two. A word that is no command
+makes no home. Homeless: `help`, `where`, `providers`, `probe`; `mcp` and `skill`, which a client
+machine runs against somebody else's installation; `node` (an organisation's node has a state
+directory of its own and never a personal installation, INV-1697), `box connect` (a machine being
+given to another installation), `box build` / `box push`, `watchdog` and `supervise` (clients of
+the side door), and `supervision` (started by the app once the server answers, which has opened
+the home by then). None of these made `~/.agentbox` before the number existed, and none does now.
+
+1. If the migration rewrites stored data (`rewrites: true`) and no copy has been taken in this
+   start, the whole home is copied first with the host's own snapshot (`backup.ts`), named
+   `<time>-before-format-<n>` beside the other backups. That name is not a dated snapshot's, so
+   the nightly prune neither counts nor removes it. A migration that only stamps takes no copy.
+2. The migration runs.
+3. A line is appended to `format-migrations.jsonl`: `{ format, from, name, at, appVersion, backup? }`.
+4. `FORMAT` is replaced atomically with `n`.
+
+A migration that throws leaves `FORMAT` where it was; the start is refused with a message naming
+the migration, the format the home is still at and where the copy is, and the next start runs it
+again. A crash between steps 2 and 4 does the same. So a migration is **idempotent and safe to
+meet its own half-finished work**, and is never edited or renumbered once a release has shipped
+it: a home that had migration 3 has had it, and the fix for a wrong one is migration 4. One
+process brings a home forward at a time (`FORMAT.lock` names its holder; a lock a crash left is
+taken over, a live holder stops the second start with a message).
+
+**A home that cannot be written.** When stamping fails because the home is read-only or another
+user's (`EACCES`, `EPERM`, `EROFS`), the format is at or below the current one, and no migration
+that rewrites is owed, the command says so once on stderr and goes on: `usage`, `agents`,
+`audit export` and the like read such a home as they did before there was a number. If a
+rewriting migration is owed, the layout is not one this version reads, and the command stops with
+a message saying which. A newer home is refused whether or not it can be written.
+
+**What a refusal looks like.** A refused home ends the command with exit status 78
+(`HOME_REFUSED_EXIT`) and one `error:` line. The desktop app treats that status apart from a crash
+(`electron/home-refused.cjs`): it does not restart the server, it shows that line in a dialog
+titled "LumenBox cannot open its data", and quits. "Another process is upgrading" is the one
+refusal that is an ordinary failure (exit 1), because starting again a moment later is the answer —
+the app's restart does exactly that.
+
+**The downgrade fence, for the whole home.** A binary that finds a number higher than it knows
+stops before reading anything else, saying which format it found, which version wrote it (from
+the ledger) and that a newer LumenBox is needed. It changes nothing. This is the fence §2.2.0
+builds for one transcript, for all of it. A `FORMAT` that is not a whole number is refused the
+same way rather than read as 0.
+
+**Format 1 is the layout this document describes, as 0.4.9 wrote it**, stamped without rewriting
+anything. It includes both forms of each repair that still finds its own trigger, because each is
+lazy or depends on what only a running host knows: the MiniMax key rename in `config.json`
+(`config-migrations.ts`, when that preset is in use), `boxes.json` made from `box.json` on first
+read, channel grants re-keyed to principals (when the channels are connected), `memory.md` imported
+once into `memory.jsonl`, and a transcript moved under `.epochs/` by its first `/new`. They stay
+where they are; a future change that needs one of them finished everywhere is a numbered migration.
+
+**The upgrade fixture.** `src/fixtures/home-0.4.9/` is a home 0.4.9 wrote — two agents, a
+conversation with a tool call, a memory record, a plan, a task, `config.json` — produced by
+`scripts/upgrade-fixture.ts` from a checkout of the `v0.4.9` tag with the real writers, and kept
+as files. `src/home-format.test.ts` copies it, opens it with the current code, and reads all of
+it back. A change to how any of those files is read or written keeps that test green or comes
+with a migration; each stable line adds the fixture its last release wrote (docs/27).
 
 ### Result-check authority
 
@@ -1312,10 +1385,11 @@ Honestly, since these are the findings a review should raise:
 - **No transactions.** Atomic profile writes and append-only transcripts cover the realistic
   cases; a crash between appending a `blocks` entry and its `results` entry leaves an orphan,
   which replay tolerates but which is real.
-- **No embedded transcript/profile schema version.** Context metadata has schema 1, but nothing in
-  an individual transcript entry or profile says which version wrote it. Such a
-  format change has to be backward-compatible by inspection, which is how a format change goes
-  wrong quietly.
+- **One format number for the home, none per record.** `FORMAT` (§2.0) says which layout the
+  whole directory is in, and a change to it is a numbered migration with a fixture behind it. An
+  individual transcript entry or profile still does not say which version wrote it: a change to
+  one record's shape that is not made a migration has to be backward-compatible by inspection, and
+  the upgrade fixture is what notices when it is not. Box volumes carry no number of their own.
 - **No backup.** Documented as a directory to copy ([06-deployment.md](06-deployment.md) §6);
   nothing does it.
 - **Concurrent orchestrators are undefined.** Two writing one agent's transcript interleave

@@ -35,6 +35,7 @@ import { DockerBoxProvisioner } from "./box/provisioner.ts";
 import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { deprecationsInUse } from "./deprecations.ts";
+import { HOME_REFUSED_EXIT, HomeFormatError, openHome, opensHome } from "./home-format.ts";
 import { startEgressRelay } from "./egress/relay.ts";
 import { relayOptionsFromFlags } from "./egress/relay-cli.ts";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "./egress/events.ts";
@@ -1456,6 +1457,8 @@ Environment:
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   const [command, ...rest] = argv;
+  // The one place every command passes: a command that uses the installation's home has it brought to this version's format, or refused, first (docs/05 §2.0).
+  if (opensHome(command, rest[0])) openHome({ home: agentboxHome(), appVersion: packageVersion(), backup: stamp => backupNow({ stamp }).path, log: line => err(dim(line)) });
 
   switch (command) {
     case undefined:
@@ -2027,5 +2030,5 @@ main()
   .then(code => process.exit(code))
   .catch(error => {
     err(`\nerror: ${error instanceof Error ? error.message : String(error)}`);
-    process.exit(1);
+    process.exit(error instanceof HomeFormatError && !error.transient ? HOME_REFUSED_EXIT : 1); // a refused home is not a crash: the app shows the message and does not retry
   });

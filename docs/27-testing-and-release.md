@@ -131,6 +131,35 @@ installers with three packages in node_modules and every new user's first launch
 | Release script | none (open) | version alignment, appcast floors, pack contents — and **the gate itself is unit-tested** | a changelog formatter that gates on nothing |
 | Self-heal | `agentbox box doctor` exists, not wired to updates | `doctor --non-interactive --fix` runs **automatically after every update** | `hermes doctor` / `hermes verify`, manual |
 
+## A stable line (INV-2201, docs/106 §2)
+
+`main` moves fast and promises one thing: data from the previous release loads. A **stable line**
+is what somebody builds on. The promises of docs/106 §3 are made for stable lines only.
+
+- **The branch** is `stable/0.N`, cut from a `main` release that passed the acceptance run
+  ([86](86-onboarding-acceptance.md)). Its releases are tagged `0.N.z`. A new `N` is a new line.
+- **It receives fixes only**: security, data loss, crashes, and a Stable interface that stopped
+  working. No features, no prompt or behaviour tuning.
+- **Fixes flow one way.** A fix is merged to `main` first, with its test, and then picked to the
+  stable branch (`git cherry-pick -x`, in a pull request against `stable/0.N`). A fix that exists
+  only on the stable branch is a fix the next line loses.
+- **The stable branch is checked on its own**, never on `main`'s word: its own `npm test`, its own
+  `npm run release:check`, and its own acceptance run, before a tag. Everything under "What guards
+  a release" applies to it unchanged.
+- **A line lasts 12 months** from its cut and overlaps the next by at least three.
+- **No stored-data change inside a line.** The home's format number (docs/05 §2.0) does not move
+  between `0.N.z` releases, so any `z` reads any other `z`'s home. Across lines it moves by numbered
+  migrations, run in order at start after a backup; an older binary refuses a newer home.
+- **Each line leaves a fixture behind.** Before the next line is cut, the last release of this one
+  writes its home with `scripts/upgrade-fixture.ts` (run from that release's tag; the script says
+  how) into `src/fixtures/home-<version>/`, and a test in `src/home-format.test.ts` opens it with
+  the current code and reads it back. `home-0.4.9` is the first. A fixture is never regenerated:
+  it is what that release wrote.
+
+Not yet part of the acceptance run: "install the previous line, use it, upgrade, check" on a real
+box and its volumes. The fixture covers the home; the volumes are covered by the update path
+(docs/12) and nothing automatic.
+
 ## What changed today
 
 - `scripts/test-env.mjs` — an allowlisted environment for test runs (`TZ=UTC`,
