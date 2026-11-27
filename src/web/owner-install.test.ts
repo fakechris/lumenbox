@@ -29,6 +29,9 @@ test("desktop first start: one Owner, tokens and the watchdog are theirs, and ev
 
     assert.equal(existsSync(join(home, "bootstrap-code")), false, "the desktop app arms no bootstrap code");
     assert.equal((await fetch(`${base}/bootstrap`)).status, 404);
+    const desktopBootstrap = await fetch(`${base}/bootstrap?lang=en`, { headers: { accept: "text/html" } });
+    assert.equal(desktopBootstrap.status, 404);
+    assert.match(await desktopBootstrap.text(), /personal desktop installation[\s\S]*17777:7777/, "explains personal Owner installation and port-forward collision");
     assert.ok(logs.some(line => line.startsWith("Owner created for this computer")));
     const me = await call("/api/me");
     assert.equal(me.body.role, "admin");

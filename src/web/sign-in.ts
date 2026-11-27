@@ -58,8 +58,10 @@ function escapeHtml(value: string): string {
 /** The sign-in page with one "Sign in with <door>" button per door, above the invite-code form. */
 export function loginPageWithDoors(page: string, doors: readonly SignInDoor[], locale: Locale): string {
   if (doors.length === 0) return page.replace(SIGN_IN_DOORS_MARKER, "");
+  const channelLabel = (door: SignInDoor) =>
+    door.name.toLowerCase() === door.type ? tr(`page.bootstrap.vendor-${door.type}`, locale) : door.name;
   const buttons = doors
-    .map(door => `<a class="door" data-sign-in-door="${escapeHtml(door.id)}" href="/auth/${encodeURIComponent(door.id)}">${escapeHtml(tr("page.login.with-channel", locale, { channel: door.name }))}</a>`)
+    .map(door => `<a class="door" data-sign-in-door="${escapeHtml(door.id)}" href="/auth/${encodeURIComponent(door.id)}">${escapeHtml(tr("page.login.with-channel", locale, { channel: channelLabel(door) }))}</a>`)
     .join("");
   return page.replace(SIGN_IN_DOORS_MARKER, `<div class="doors">${buttons}</div><p class="note">${escapeHtml(tr("page.login.or-code", locale))}</p>`);
 }

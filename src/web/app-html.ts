@@ -7338,29 +7338,31 @@ export const LOGIN_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{ui.login.lumenbox-sign-in}}</title>
 <style>
-  :root { color-scheme: light dark; --bg:#fbfbfa; --text:#1d1d1b; --muted:#6b6b66; --border:#e3e3df; --accent:#2f6f4f; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --text:#eceae4; --muted:#9a9a92; --border:#2c2c2a; --accent:#7fbf9a; } }
-  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-         background:var(--bg); color:var(--text);
-         font:15px/1.5 ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif; }
-  .card { width:min(420px,92vw); padding:28px 30px; border:1px solid var(--border); border-radius:14px; }
-  h1 { margin:0 0 4px; font-size:19px; font-weight:600; }
-  p.sub { margin:0 0 20px; color:var(--muted); font-size:13px; }
-  label { display:block; font-size:12px; color:var(--muted); margin:14px 0 5px; }
-  input { width:100%; box-sizing:border-box; padding:9px 11px; font:inherit; border-radius:9px;
-          border:1px solid var(--border); background:transparent; color:var(--text); }
-  #code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:2px; text-transform:uppercase; }
-  button { margin-top:18px; width:100%; padding:10px; font:inherit; font-weight:500; cursor:pointer;
-           border:0; border-radius:9px; background:var(--accent); color:#fff; }
-  .note { margin-top:16px; font-size:12px; color:var(--muted); } .doors a.door { display:block; margin-top:10px; padding:10px; text-align:center; border:1px solid var(--accent); border-radius:9px; color:var(--accent); font-weight:500; text-decoration:none; }
-  .err { margin-top:14px; font-size:13px; color:#b3261e; min-height:18px; }
+  :root { color-scheme:light dark; --bg:#f7f6f2; --surface:#fffdfa; --text:#1f1a17; --soft:#443a32; --muted:#71675d;
+          --border:#e7e1d8; --strong:#cdc4b6; --accent:#9f4f24; --accent-soft:#f4dfd2; --accent-fg:#fff; --bad:#b04545; }
+  @media (prefers-color-scheme:dark) { :root { --bg:#0f1218; --surface:#161b24; --text:#e6edf5; --soft:#c2cfde; --muted:#8492a6;
+          --border:#232b38; --strong:#364357; --accent:#e08a5b; --accent-soft:rgba(224,138,91,.16); --accent-fg:#0f1218; --bad:#f08a8a; } }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:28px 16px; box-sizing:border-box;
+         background:var(--bg); color:var(--text); font:15px/1.55 "IBM Plex Sans","PingFang SC",-apple-system,"Segoe UI",system-ui,sans-serif; }
+  .card { width:min(440px,100%); box-sizing:border-box; padding:28px 30px; background:var(--surface); border:1px solid var(--border); border-radius:18px; box-shadow:0 12px 36px rgba(31,26,23,.06); }
+  .top { display:flex; align-items:center; gap:10px; margin-bottom:18px; padding-bottom:14px; border-bottom:1px solid var(--border); font-weight:600; font-size:15px; }
+  .logo { width:26px; height:26px; border-radius:7px; background:var(--text); color:var(--bg); display:grid; place-items:center; font-weight:700; font-size:13px; }
+  h1 { margin:0 0 6px; font-size:21px; font-weight:650; letter-spacing:-.01em; } p.sub { margin:0 0 18px; color:var(--muted); font-size:13.5px; }
+  .setup-banner { margin:0 0 16px; padding:12px 14px; border-radius:11px; background:var(--accent-soft); color:var(--text); font-size:13px; line-height:1.5; }
+  .setup-banner a { color:var(--accent); font-weight:600; text-decoration:underline; } label { display:block; font-size:12.5px; font-weight:600; color:var(--soft); margin:14px 0 6px; }
+  input { width:100%; box-sizing:border-box; padding:10px 12px; font:inherit; border-radius:10px; border:1px solid var(--strong); background:var(--bg); color:var(--text); }
+  input:focus { outline:2px solid var(--accent); outline-offset:1px; border-color:var(--accent); } #code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:2px; text-transform:uppercase; }
+  button { margin-top:18px; width:100%; padding:10.5px; font:600 14.5px/1.3 inherit; cursor:pointer; border:0; border-radius:10px; background:var(--accent); color:var(--accent-fg); }
+  .note { margin-top:16px; font-size:12.5px; color:var(--muted); line-height:1.5; } .err { margin-top:12px; font-size:13px; color:var(--bad); min-height:18px; }
+  .doors a.door { display:block; margin-top:10px; padding:10.5px 14px; text-align:center; border:1px solid var(--accent); border-radius:10px; background:var(--accent-soft); color:var(--accent); font-weight:600; text-decoration:none; }
 </style>
 </head>
 <body>
 <div class="card">
+  <div class="top"><span class="logo" aria-hidden="true">L</span><span>LumenBox</span></div>
   <h1>{{ui.login.sign-in-to-lumenbox}}</h1>
   <p class="sub">{{ui.login.an-admin-gives-you-a}}</p>
-  <!--bootstrap-setup--><p class="note"><a href="/bootstrap">{{ui.login.set-up-the-first-administrator}}</a> {{ui.login.on-a-new-installation}}</p><!--/bootstrap-setup--><!--sign-in-doors-->
+  <!--bootstrap-setup--><p class="setup-banner"><a href="/bootstrap">{{ui.login.set-up-the-first-administrator}}</a> {{ui.login.on-a-new-installation}}</p><!--/bootstrap-setup--><!--sign-in-doors-->
   <label for="code">{{ui.login.invite-code}}</label>
   <input id="code" autocomplete="off" spellcheck="false" placeholder="4F7KQZ" autofocus>
   <label for="name">{{ui.login.your-name}}</label>
