@@ -154,6 +154,6 @@ function connectorsBlock() {
 function renderDoorsPane(view) {
   if (doors.data === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadDoors(); return; }
   if (doors.error) { view.appendChild(el("p", "why", doors.error)); return; }
-  [knocksBlock(), channelsBlock(), connectorsBlock()].forEach(function (block) { if (block) view.appendChild(block); });
+  [knocksBlock(), joinRequestsBlock(true), channelsBlock(), connectorsBlock()].forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

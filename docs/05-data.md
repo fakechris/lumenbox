@@ -40,6 +40,7 @@ skill-provenance.jsonl      which agent the host saw write each skill (skill-pro
 hooks.json                  lifecycle hooks in Claude Code's dialect (hooks.ts); read on mtime
 org-knowledge.jsonl         the organisation's knowledge, L1: one extended memory record per line (org-knowledge.ts, INV-1726)
 memory-conflicts.jsonl      pairs of items of different layers that disagree, by version (memory-conflicts.ts, INV-1732)
+activations.jsonl           an organisation's admissions: who an Admin activated, who asked to join, who left (activations.ts, INV-2202)
 agents/<agentId>/
   profile.json              identity and persona
   config-versions.jsonl     every version of its configuration, and where conversations and tasks switched (INV-1669)
@@ -493,6 +494,30 @@ owner, so it waits in the same organisation review, which shows what approving i
 line supersedes nothing until a person approves it.
 The prompt renders the pairs under "These disagree", higher layer first, newest pair first, in
 1,200 characters, the rest counted.
+
+### 2.2f `activations.jsonl` — admission by activation (INV-2202, docs/107)
+
+One line per act, on an organisation installation, append-only and never compacted, so it is the
+state and the audit at once. Every line carries `at` and the directory `source` it was made against
+(`channelId`, `incarnation`, `tenantKey`): state is the fold of the lines keyed by the whole source
+and the person's subject in it, so an activation made against one door incarnation or tenant does
+not apply to another.
+
+| `type` | what it records |
+|---|---|
+| `activate-person` | an Admin (`by`) activated `subject` at `role`; `listed` says whether the directory listed them then |
+| `activate-department` | an Admin activated everybody a department listed at that moment: `department` (`vendorId`, `name`), `includeSub`, `role`, `count`, `alreadyActive`, and the `people` it covered. One line for the bulk act, never one per person |
+| `request` | `subject` signed in through the door without an activation: asked to join. One per person until it is answered, however often they scan |
+| `dismiss` | an Admin put a request away |
+| `admitted` | the activated subject signed in and became `principalId` on the roster |
+| `listed` | a sync listed people who had been activated before the directory showed them |
+| `left` | a sync no longer listed an activated person: their sign-ins and tokens were ended (`principalId` when they had signed in). Nothing else was changed |
+
+An activation is a record, not a roster row: `principals.json` gains the person only at `admitted`.
+A person whose line says `admitted` and whose identity nobody holds any more — an Admin removed
+them, or `left` — is *left*, and the activation admits nobody until an Admin activates again.
+`left` is written only for an activation of that source; the first Admin, an invite code and a chat
+request leave no line here, so a sync never touches them.
 
 ### 2.2b `memory.jsonl`
 

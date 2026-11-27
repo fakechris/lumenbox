@@ -39,7 +39,7 @@ test("a door is offered only for a Feishu or DingTalk channel with its app set o
   assert.deepEqual(invitationLink(" ", "4F7KQZ"), { linkUnavailable: "public-url-unset" });
 });
 
-test("an organisation's /login offers its Feishu door; the door's sign-in gives a known person the session the app reads, a stranger the knock page; the invite comes as a link (INV-1701)", async t => {
+test("an organisation's /login offers its Feishu door; the door's sign-in gives a known person the session the app reads, a stranger the waiting page; the invite comes as a link (INV-1701)", async t => {
   const home = mkdtempSync(join(tmpdir(), "inv1701-sign-in-"));
   const previousHome = process.env.AGENTBOX_HOME, previousUrl = process.env.AGENTBOX_PUBLIC_URL;
   const publicUrl = "https://org.example";
@@ -126,7 +126,7 @@ test("an organisation's /login offers its Feishu door; the door's sign-in gives 
   assert.match(deniedApi.headers.get("content-type")!, /^application\/json/);
 
   const stranger = await signIn("ou_stranger");
-  assert.equal(stranger.status, 403, "somebody nobody linked is told how to knock");
+  assert.equal(stranger.status, 403, "somebody nobody linked or activated has asked to join");
   assert.equal(stranger.headers.getSetCookie().length, 0, "and gets no session");
 
   const invite = async () => (await fetch(`${base}/api/channels/invite`, { method: "POST", headers: { authorization: "Bearer fixture", "content-type": "application/json" }, body: JSON.stringify({ role: "driver" }) })).json() as Promise<{ code: string; link?: string; linkUnavailable?: string }>;
@@ -222,7 +222,7 @@ test("a DingTalk door signs in the organisation's employee as the identity their
   assert.equal(stranger.status, 403, "an employee nobody linked is refused");
   assert.equal(stranger.headers.getSetCookie().length, 0);
   const strangerPage = await stranger.text();
-  assert.match(strangerPage, /This DingTalk account is not linked[\s\S]*ding:bob-staff[\s\S]*Send a message to this installation&#39;s agent in DingTalk/, "and told how to ask");
+  assert.match(strangerPage, /Your request to join is with the Admins[\s\S]*signed in with DingTalk as union-bob[\s\S]*Once an Admin activates you/, "and told their request waits for an Admin (INV-2202)");
 
   for (const unionId of ["union-nobody", "union-eve"]) {
     const outsider = await callback(await begin(), unionId);

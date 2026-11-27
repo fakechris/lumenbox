@@ -103,6 +103,10 @@ export const SERVER_ERRORS = {
   "err.cpus-from-env": ["环境变量里设了 AGENTBOX_CPUS={cpus}，它优先于这里的设置。取消它之后才能在这里选择。", "AGENTBOX_CPUS={cpus} is set in the environment, and it wins over this setting. Unset it to choose here."],
   "err.cpus-out-of-range": ["请在 0.5 到 {max} 个核心之间选择。", "Choose between 0.5 and {max} cores."],
   // ── personal boxes and the directory ─────────────────────────────────────────────────────────
+  "err.activation-role-invalid": ["请选一个角色：管理员、可以交代工作，或只能看。", "Choose a role: Admin, gives work, or watches."],
+  "err.directory-person-unknown": ["通讯录里没有这个人，他也没有申请加入。请先同步通讯录。", "The directory does not list this person and they have not asked to join. Sync the directory first."],
+  "err.directory-department-unknown": ["通讯录里没有这个部门。请先同步通讯录。", "The directory has no such department. Sync the directory first."],
+  "err.directory-not-synced": ["这个渠道的通讯录还没有同步。", "This channel's directory has not been synced yet."],
   "err.directory-channel-needed": ["请选一个已配置的飞书或钉钉渠道。", "Choose a configured Feishu or DingTalk channel."],
   "err.directory-sync-failed": ["通讯录同步失败。上一份完整快照已保留，新的分配已暂停。请检查权限后重试。如果换了租户，请用新的渠道 ID 并重新绑定身份。", "Directory sync failed. Previous complete snapshot retained; new allocations paused. Check permissions and retry. If the tenant changed, use a new channel ID and bind its identities."],
   "err.cleanup-admin-only": ["只有管理员可以清理。", "Administrator cleanup only."],

@@ -314,6 +314,6 @@ function renderTeamPane(view) {
   if (Date.now() - team.loadedAt > 15000) loadPeople();
   if (team.error) { view.appendChild(el("p", "why", team.error)); return; }
   watchTeamInvite();
-  [mergeBlock(), peopleBlock(), limitsBlock(), memoryReviewBlock(), scopesBlock(), secretsBlock(), toolServersBlock()].forEach(function (block) { if (block) view.appendChild(block); });
+  [mergeBlock(), peopleBlock(), directoryBlock(), limitsBlock(), memoryReviewBlock(), scopesBlock(), secretsBlock(), toolServersBlock()].forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

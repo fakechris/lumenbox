@@ -102,6 +102,14 @@ export class McpTokenStore {
     return true;
   }
 
+  /** Every token issued to these ids — a person and the sign-ins they held — when the directory says they left (INV-2202). */
+  revokeFor(ids: readonly string[]): number {
+    const before = this.tokens.length;
+    this.tokens = this.tokens.filter(entry => !ids.includes(entry.principalId));
+    if (this.tokens.length !== before) this.save();
+    return before - this.tokens.length;
+  }
+
   /** Whose, what and when: never the secret, never the hash. */
   list(): { principalId: string; label: string; createdAt: string }[] {
     return this.tokens.map(({ principalId, label, createdAt }) => ({ principalId, label, createdAt }));

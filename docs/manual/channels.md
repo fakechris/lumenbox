@@ -34,6 +34,14 @@ Channels.
 - **Let people in:** Settings → Team → *New invite code*. A code works once, for 15 minutes.
   People who wrote before they were let in wait under Settings → Channels → *Waiting to be let
   in*; one click lets them in.
+- **Let an organisation's people in:** on an organisation installation, Settings → Team → People
+  → *Directory* shows the departments synced from the channel, closed, with a head count each.
+  *Sync the directory now* reads it again; it also refreshes daily. Open a department to see its
+  people and where each stands: *Listed*, *Asked to join*, *Active* or *Left*. Choose a role and
+  press *Activate* beside a person, or *Activate the N listed now* for a whole department, with
+  its sub-departments if you tick that. The person joins the next time they sign in through the
+  channel. Somebody who signs in before being activated sees "Your request to join is with the
+  Admins" and waits under *Asked to join*, here and in Settings → Channels.
 - **Connect a service:** Settings → Channels → Connectors → *Connect* links an outside service,
   such as Notion, for the agents to use.
 
@@ -58,12 +66,18 @@ credentials in `~/.agentbox/config.json`.
 
 ## Limits
 
+- Being listed in the directory lets nobody in, and activating a department is done once, for
+  the people it lists at that moment: somebody who joins it later is *Listed* until an Admin
+  activates them.
+- When a sync no longer lists somebody who was let in by activation, their sign-ins and tokens
+  end and they are shown as *Left*. Their computers and files are kept until an Admin decides in
+  the People list. People let in another way, and the only Admin, are never signed out by a sync.
 - A channel's id is chosen once; it becomes part of the name of everyone it lets in. Its
   display name and default agent can change at any time.
 - *Add channel* offers Feishu and DingTalk.
 - Signing in to the web page with a chat account works for Feishu and DingTalk channels, only on an
   installation with a public address (`AGENTBOX_PUBLIC_URL`), and only for an account already let
-  in; anyone else is told how to ask. For DingTalk, only members of the organisation the app
+  in or activated by an Admin; anyone else has asked to join and waits. For DingTalk, only members of the organisation the app
   belongs to can sign in, and the app needs `<public address>/auth/<channel id>/callback` as its
   login redirect address and the permissions to read a member's contact profile and member
   information. WeCom has no channel yet.
