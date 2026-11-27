@@ -7,9 +7,11 @@ Secret holding the box's tokens — credentials travel by `envFrom` reference, n
 the Pod spec.
 
 For a standalone organization server running `agentbox web` instead of this control-plane
-gateway, mount a PVC at the directory named in `AGENTBOX_HOME` (for example, `/state`).
-The generated operator credential is stored in `$AGENTBOX_HOME/ui-token`, not printed in
-the pod logs. Keep that volume across rollouts so browser sessions keep working. If supplying
+gateway, use `organisation.yaml`: it mounts the `agentbox-organisation-state` PVC at the
+directory named in `AGENTBOX_HOME` (`/state`). The generated operator credential is stored in
+`$AGENTBOX_HOME/ui-token`, not printed in the pod logs. Browser sessions are signed with a key
+derived from it. Keep that volume across rollouts so browser sessions keep working. Without the
+volume, every restart creates a new token and signs out the whole organization. If you supply
 `AGENTBOX_UI_TOKEN` yourself, reference a stable Kubernetes Secret.
 
 ## Apply order
