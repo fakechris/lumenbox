@@ -30,8 +30,8 @@ export const SERVER_ERRORS = {
   "err.hook-too-often": ["这个 hook 触发得太频繁了。请 {seconds} 秒后再试。", "This hook has fired too often. Try again in {seconds}s."],
   "err.webhook-unknown": ["没有叫 \"{slug}\" 的 webhook 例行任务。", "No webhook routine \"{slug}\"."],
   // ── signing in and the first Admin ───────────────────────────────────────────────────────────
-  "err.feishu-channel-unknown": ["没有叫 {channel} 的飞书渠道。", "No Feishu channel named {channel}."],
-  "err.channel-app-unset": ["请先设置 {base}_APP_ID 和 {base}_APP_SECRET。", "Set {base}_APP_ID and {base}_APP_SECRET first."],
+  "err.sign-in-channel-unknown": ["没有叫 {channel} 的可登录渠道（飞书或钉钉）。", "No Feishu or DingTalk channel named {channel} to sign in through."],
+  "err.channel-app-unset": ["请先设置 {id} 和 {secret}。", "Set {id} and {secret} first."],
   "err.public-url-unset": ["请先设置 AGENTBOX_PUBLIC_URL：登录后跳回来的地址必须指向这个安装。", "Set AGENTBOX_PUBLIC_URL first: the redirect back has to name this installation."],
   "err.bootstrap-code-invalid": ["首位管理员的验证码无效、已过期或已经用过。", "The first-admin code is invalid, expired or already used."],
   "err.sign-in-path-unknown": ["不是登录地址：{path}", "Not a sign-in path: {path}"],

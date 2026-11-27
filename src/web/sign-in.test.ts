@@ -17,15 +17,16 @@ const { allowedRequest } = createRequire(import.meta.url)("../../electron/instal
   allowedRequest(url: string, origin: string): boolean;
 };
 
-test("a door is offered only for a Feishu channel with its app set on an installation with a public address; an invite link needs that address too (INV-1701)", () => {
+test("a door is offered only for a Feishu or DingTalk channel with its app set on an installation with a public address; an invite link needs that address too (INV-1701, INV-729)", () => {
   const records = [
     { id: "feishu", name: "Feishu", type: "feishu" },
     { id: "feishu-b", name: "", type: "feishu" },
     { id: "ding", name: "DingTalk", type: "dingtalk" },
+    { id: "telegram", name: "Telegram", type: "telegram" },
   ];
   const set = (record: { id: string }) => record.id !== "feishu-b";
-  assert.deepEqual(webSignInDoors(records, set, "https://org.example"), [{ id: "feishu", name: "Feishu" }]);
-  assert.deepEqual(webSignInDoors(records, () => true, "https://org.example").map(door => door.name), ["Feishu", "feishu-b"], "no name: the id");
+  assert.deepEqual(webSignInDoors(records, set, "https://org.example"), [{ id: "feishu", name: "Feishu" }, { id: "ding", name: "DingTalk" }]);
+  assert.deepEqual(webSignInDoors(records, () => true, "https://org.example").map(door => door.name), ["Feishu", "feishu-b", "DingTalk"], "no name: the id; no web sign-in for Telegram");
   assert.deepEqual(webSignInDoors(records, () => true, undefined), [], "the vendor has nowhere to send the person back to");
   const page = `<p>${SIGN_IN_DOORS_MARKER}</p>`;
   assert.equal(loginPageWithDoors(page, [], "en"), "<p></p>");
@@ -138,4 +139,110 @@ test("an organisation's /login offers its Feishu door; the door's sign-in gives 
   const withoutLink = await invite();
   assert.equal(withoutLink.link, undefined);
   assert.equal(withoutLink.linkUnavailable, "public-url-unset");
+});
+
+test("a DingTalk door signs in the organisation's employee as the identity their chat messages carry; a stranger, an outsider and a stale state get no session (INV-729)", async t => {
+  const home = mkdtempSync(join(tmpdir(), "inv729-dingtalk-sign-in-"));
+  const previousHome = process.env.AGENTBOX_HOME, previousUrl = process.env.AGENTBOX_PUBLIC_URL;
+  process.env.AGENTBOX_HOME = home; process.env.AGENTBOX_PUBLIC_URL = "https://org.example";
+  let stop: (() => void) | undefined;
+  t.after(() => {
+    stop?.();
+    if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome;
+    if (previousUrl === undefined) delete process.env.AGENTBOX_PUBLIC_URL; else process.env.AGENTBOX_PUBLIC_URL = previousUrl;
+    rmSync(home, { recursive: true, force: true });
+  });
+  writeFileSync(join(home, "channels.json"), JSON.stringify({ channels: [{ id: "ding", name: "DingTalk", type: "dingtalk", incarnation: 1, boxId: "default", createdAt: new Date().toISOString() }] }));
+  writeFileSync(join(home, "config.json"), JSON.stringify({ env: { DING_CLIENT_ID: "ding-app", DING_CLIENT_SECRET: "secret" } }));
+  // The chat side names a person `<door>:<senderStaffId>` — the organisation's userid — so that is
+  // what Ana's Principal was linked as, and what the web sign-in must arrive at.
+  writeFileSync(join(home, "principals.json"), JSON.stringify({
+    principals: [{ id: "p-ana", name: "Ana", role: "admin", identities: ["ding:ana-staff"] }],
+    installation: { mode: "organisation" },
+  }));
+  // DingTalk, faked: the authorization code is the unionId it vouches for; the organisation knows
+  // Ana and Bob as employees and Eve as an external contact, and nobody else.
+  const employees: Record<string, { userid: string; contact_type: number }> = {
+    "union-ana": { userid: "ana-staff", contact_type: 0 }, "union-bob": { userid: "bob-staff", contact_type: 0 }, "union-eve": { userid: "eve-ext", contact_type: 1 },
+  };
+  const lookups: { token: string | null; unionid: string }[] = [];
+  const loginFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const body = init?.body === undefined ? {} : JSON.parse(String(init.body));
+    if (url.href === "https://api.dingtalk.com/v1.0/oauth2/userAccessToken") {
+      assert.deepEqual({ clientId: body.clientId, grantType: body.grantType }, { clientId: "ding-app", grantType: "authorization_code" });
+      return Response.json({ accessToken: body.code, refreshToken: "r", expireIn: 7200 });
+    }
+    if (url.href === "https://api.dingtalk.com/v1.0/contact/users/me") {
+      const unionId = new Headers(init?.headers).get("x-acs-dingtalk-access-token")!;
+      return Response.json({ unionId, openId: `open-${unionId}`, nick: unionId });
+    }
+    if (url.href === "https://api.dingtalk.com/v1.0/oauth2/accessToken") return Response.json({ accessToken: "app-token", expireIn: 7200 });
+    if (url.origin + url.pathname === "https://oapi.dingtalk.com/topapi/user/getbyunionid") {
+      lookups.push({ token: url.searchParams.get("access_token"), unionid: body.unionid });
+      const found = employees[body.unionid];
+      return Response.json(found ? { errcode: 0, errmsg: "ok", result: found } : { errcode: 60121, errmsg: "未找到对应员工" });
+    }
+    throw new Error(`unexpected vendor call ${url.href}`);
+  }) as typeof fetch;
+  let base = "";
+  stop = await startWebServer({ port: 0, host: "127.0.0.1", token: "fixture", useBox: false, loginFetch, onLog: () => {}, onReady: url => { base = url; } });
+
+  const login = await (await fetch(`${base}/login?lang=en`)).text();
+  assert.match(login, /<a class="door"[^>]*href="\/auth\/ding"[^>]*>Sign in with DingTalk<\/a>/, "/login offers the DingTalk door");
+
+  const begin = async (next?: string) => {
+    const response = await fetch(`${base}/auth/ding${next === undefined ? "" : `?next=${encodeURIComponent(next)}`}`, { redirect: "manual" });
+    assert.equal(response.status, 302);
+    const vendor = new URL(response.headers.get("location")!);
+    assert.equal(vendor.origin + vendor.pathname, "https://login.dingtalk.com/oauth2/auth");
+    assert.deepEqual(
+      ["client_id", "response_type", "scope", "prompt", "redirect_uri"].map(key => vendor.searchParams.get(key)),
+      ["ding-app", "code", "openid", "consent", "https://org.example/auth/ding/callback"],
+    );
+    return vendor.searchParams.get("state")!;
+  };
+  // DingTalk returns the code as both `code` and `authCode`.
+  const callback = (state: string, unionId: string) =>
+    fetch(`${base}/auth/ding/callback?state=${state}&code=${unionId}&authCode=${unionId}`, { redirect: "manual", headers: { "accept-language": "en" } });
+
+  const known = await callback(await begin("/?view=settings"), "union-ana");
+  assert.equal(known.status, 302);
+  assert.equal(known.headers.get("location"), "/?view=settings", "back where they were going");
+  assert.deepEqual(lookups.at(-1), { token: "app-token", unionid: "union-ana" }, "the unionId is mapped by the app's own organisation");
+  const cookies = known.headers.getSetCookie().map(line => { const [pair] = line.split(";"); const at = pair!.indexOf("="); return { name: pair!.slice(0, at), value: pair!.slice(at + 1) }; });
+  const token = orgs.sessionTokenIn(cookies);
+  assert.ok(token, "a linked employee gets the session");
+  assert.deepEqual(await orgs.readOrganisation(base, token), { identity: "ding:ana-staff", name: "Ana", role: "admin" }, "as the identity the DingTalk chat mints");
+
+  const offSite = await callback(await begin("https://evil.example/steal"), "union-ana");
+  assert.equal(offSite.headers.get("location"), "/", "a return address off this origin goes through safeNext to /");
+
+  const stranger = await callback(await begin(), "union-bob");
+  assert.equal(stranger.status, 403, "an employee nobody linked is refused");
+  assert.equal(stranger.headers.getSetCookie().length, 0);
+  const strangerPage = await stranger.text();
+  assert.match(strangerPage, /This DingTalk account is not linked[\s\S]*ding:bob-staff[\s\S]*Send a message to this installation&#39;s agent in DingTalk/, "and told how to ask");
+
+  for (const unionId of ["union-nobody", "union-eve"]) {
+    const outsider = await callback(await begin(), unionId);
+    assert.equal(outsider.status, 403, `${unionId}: not a member of the door's organisation`);
+    assert.equal(outsider.headers.getSetCookie().length, 0);
+    assert.match(await outsider.text(), /not a member of this channel&#39;s organisation/);
+  }
+
+  const forged = await fetch(`${base}/auth/ding/callback?state=forged&code=union-ana`, { redirect: "manual" });
+  assert.equal(forged.status, 400);
+  assert.equal((await forged.json()).code, "sign-in-expired", "a state this server never issued is refused");
+  const replayState = await begin();
+  assert.equal((await callback(replayState, "union-ana")).status, 302);
+  assert.equal((await callback(replayState, "union-ana")).status, 400, "a state is used once");
+
+  const late = await begin();
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() + 11 * 60_000 });
+  const expired = await callback(late, "union-ana");
+  t.mock.timers.reset();
+  assert.equal(expired.status, 400, "a state older than ten minutes is refused");
+  assert.equal(expired.headers.getSetCookie().length, 0);
+  assert.equal((await expired.json()).code, "sign-in-expired");
 });

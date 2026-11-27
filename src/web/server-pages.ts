@@ -37,12 +37,21 @@ export function bootstrapPage(doors: readonly { id: string; name: string }[], lo
 }
 
 /** Signed in with the vendor, unknown here: the knock path, as a page a person can act on. */
-export function notLinkedPage(identity: string, locale: Locale): string {
+export function notLinkedPage(identity: string, channel: string, locale: Locale): string {
   return (
     `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><body style="font:15px/1.7 sans-serif;max-width:560px;margin:80px auto;padding:0 20px">` +
-    `<h3>${escapeHtml(tr("page.not-linked.title", locale))}</h3>` +
+    `<h3>${escapeHtml(tr("page.not-linked.title", locale, { channel }))}</h3>` +
     `<p>${escapeHtml(tr("page.not-linked.your-id", locale))}<code>${escapeHtml(identity)}</code></p>` +
-    `<p>${escapeHtml(tr("page.not-linked.how", locale))}</p></body></html>`
+    `<p>${escapeHtml(tr("page.not-linked.how", locale, { channel }))}</p></body></html>`
+  );
+}
+
+/** Signed in with the vendor as somebody outside the organisation the door's app belongs to (INV-729). */
+export function notMemberPage(channel: string, locale: Locale): string {
+  return (
+    `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><body style="font:15px/1.7 sans-serif;max-width:560px;margin:80px auto;padding:0 20px">` +
+    `<h3>${escapeHtml(tr("page.not-member.title", locale, { channel }))}</h3>` +
+    `<p>${escapeHtml(tr("page.not-member.how", locale))}</p></body></html>`
   );
 }
 
