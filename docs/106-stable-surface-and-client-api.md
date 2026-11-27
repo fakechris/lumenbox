@@ -72,9 +72,14 @@ moves to `/api/v1` feature by feature; a feature a second client needs is built 
 
 - **Its own module** (`src/web/client-api/`). A handler never returns an internal object: it
   builds a documented resource from it. This is what lets the inside keep changing.
+- **Pure default-deny routing, `404` outside visibility**: a pure route table lists every allowed
+  method and path; anything unlisted is refused. A resource (`agent`, `work`, `conversation`,
+  `deliverable`) outside what the caller may see answers `404`, not `403`, because whether another
+  person's box or department project exists is itself not the caller's business.
 - **One schema file is the source**: the resources and operations are declared once; the OpenAPI
   document (`docs/api/v1.openapi.json`), the request validation and the contract tests all come
-  from it. A generated client is what a phone app imports.
+  from it. A generated client is what a phone app imports, over an abstract transport so the same
+  client runs directly over HTTPS or over the multiplexed encrypted relay channel (docs/110).
 - **Conventions**, the same everywhere:
   - JSON, camelCase, opaque string ids, RFC 3339 UTC timestamps.
   - Lists: `?limit=` (≤100) and `?cursor=`; the answer is `{ items, nextCursor }`.
@@ -82,31 +87,36 @@ moves to `/api/v1` feature by feature; a feature a second client needs is built 
     (INV-1686) and is what a program reads; `error` is a sentence in the reader's language.
   - Every `POST` accepts `Idempotency-Key`; a repeat within 24 hours returns the first answer.
   - `429` with `Retry-After`; `ETag` / `If-None-Match` on reads, so a phone polls cheaply.
-  - A client ignores fields it does not know and treats an enum value it does not know as
-    "other". That rule is what makes "additions only" safe, so it is in the contract.
+  - A client ignores fields it does not know and treats an enum value or discriminated union kind
+    it does not know as "other" (rendering the summary sentence and pointing to the web or desktop
+    when an action is unknown). That rule is what makes "additions only" safe, so it is in the
+    contract and enforced in code generation.
 - **Versioning**: the major version is in the path. `GET /api/v1/meta` answers
-  `{ api: "1.<revision>", server, capabilities, preview: [...] }`; the revision goes up with every
-  addition. A deprecated operation answers with `Deprecation` and `Sunset` headers for a full
-  line before it goes. Preview operations are named in `meta.preview` and nowhere promised.
+  `{ api: "1.<revision>", server, installation, capabilities, preview: [...] }`; the revision goes
+  up with every addition. A deprecated operation answers with `Deprecation` and `Sunset` headers
+  for a full line before it goes. Preview operations are named in `meta.preview` and nowhere
+  promised.
 
 ### 4.2 Resources in v1
 
 | Area | Operations | Scope needed |
 |---|---|---|
 | Discovery | `GET /meta`, `GET /me` | any |
+| Auth & devices | `GET /auth/providers`, `POST /auth/oauth/start`, `POST /auth/oauth/exchange` (PKCE `S256`), `POST /auth/pair`, `POST /auth/refresh`, `POST /auth/logout`; `GET /devices`, `DELETE /devices/{id}`; `PUT /devices/self/push`, `DELETE /devices/self/push` | any for `/auth/*`; `devices:manage` (own devices) |
 | Agents | `GET /agents`, `GET /agents/{id}` | `agents:read` |
 | Work (All work) | `GET /work` (filter by state, agent, top-level work, "waits on me"), `GET /work/{id}`, `GET /work/{id}/history` | `work:read` |
 | Board | `GET /board` — the same work as columns and ordered cards, the projection the page shows | `work:read` |
-| Decisions | `GET /inbox` (what waits on this person), `POST /work/{id}/decisions` (count as done, put off, stop), `POST /approvals/{id}` (allow, deny) | `work:decide` |
-| Conversations | `GET /conversations`, `GET /conversations/{id}/messages`, `POST /conversations/{id}/messages` | `chat:read`, `chat:write` |
+| Decisions | `GET /inbox` (all discriminated decision kinds waiting on this person: tool approvals, outbox drafts, questions, close proposals, pauses, exceptions), `GET /notifications/{seq}` (summary for wake-only push, docs/110 §5), `POST /work/{id}/decisions` (count as done, put off, stop), `POST /approvals/{id}` (allow `once` or `session`, deny; requires a server-verifiable biometric step-up proof bound to `(approvalId, decision)` when `stepUpRequired` is true, docs/110 §4), `POST /inbox/{id}/answer` (questions, outbox drafts, secret prompts to vault) | `work:decide` |
+| Conversations | `GET /conversations`, `GET /conversations/{id}/messages`, `POST /conversations/{id}/messages` (`clientMessageId` + `attachmentIds`), `POST /conversations/{id}/card-actions` (structured `ShowUI` actions), `POST /conversations/{id}/stop`, `POST /uploads` (scoped image, file and voice attachments) | `chat:read`, `chat:write` |
 | Results | `GET /deliverables/{id}`, content by a link that expires in minutes | `files:read` |
-| Live changes | `GET /events` (server-sent events, resumable by `Last-Event-ID`, with a `reset` event when the gap is too old), `GET /changes?since=` for a client that cannot hold a connection | as the resource |
+| Live changes | `GET /conversations/{id}/stream` (ephemeral live turn deltas while a conversation is open), `GET /events` (resumable SSE for durable changes), `GET /changes?since=<durableSeq>` (ledger-backed incremental sync for a phone waking from background sleep, independent of the in-memory SSE ring) | as the resource |
 | Desktop | `POST /desktops/{agentId}/tickets` → a link valid for one use within 60 s, `view` or `control` | `desktop:view`, `desktop:control` |
 
 Not in v1, on purpose: administration (people, quotas, settings, provider keys), skills and
-routines authoring, anything about the box itself. They stay with the page until somebody needs
-them from elsewhere. Outbound webhooks ("this work changed") are the first Preview candidate,
-because a company's own back end wants to be told rather than to poll.
+routines authoring, anything about the box itself, and standing (`"always"`) approval grants from a
+device credential (docs/110 §4). They stay with the page until somebody needs them from elsewhere.
+Outbound webhooks ("this work changed") are the first Preview candidate, because a company's own
+back end wants to be told rather than to poll.
 
 What v1 never returns: a secret or vault value, a prompt, a raw tool input, a policy record,
 another person's private conversation. A message list is what the page shows that person.
@@ -115,7 +125,7 @@ another person's private conversation. A message list is what the page shows tha
 
 | Credential | For | How it is obtained | Lifetime |
 |---|---|---|---|
-| **Device credential** | A person's phone or desktop client | Pairing: a signed-in page shows a one-time code (QR), valid two minutes; the device exchanges it | Access token 15 min; refresh token rotates on every use, bound to that device; revocable per device |
+| **Device credential** | A person's phone or desktop client | Pairing: a signed-in page shows a one-time code (QR), valid two minutes; or mobile OAuth + PKCE against an organisation's configured sign-in channel (docs/109, docs/110) | Access token 15 min (memory only); refresh token in non-migratable device keychain, rotates on every use (idempotent retries with the same `Idempotency-Key` and concurrent refreshes within a 30 s overlap window do not revoke the family; out-of-window reuse of a spent refresh token revokes the whole device family); revocable per device |
 | **Personal token** | A person's script | Minted on the page, shown once | Chosen at minting (≤ 1 year), revocable |
 | **Service token** | A company's back end, e.g. one that renders the board for its customers | Minted by an admin for a named integration | Chosen at minting, revocable; carries a **view** |
 
@@ -206,9 +216,9 @@ first delivery; the client API is needed only when they show the board on a scre
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
 | 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
 | 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 part 1): the declared level and its start-up check, R1, R2, and S-2 closed for private. R4–R8 not built. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
-| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`; service and personal tokens with scopes and views; OpenAPI + contract tests | Not built. Paged work list, resumable event stream and stable error codes exist internally |
-| 5. Client API, the rest; remote access, public level | Conversations, decisions, deliverables, device pairing, desktop tickets; R9–R10 | Not built |
-| 6. Shared storage for an organisation; mobile apps | A design of its own each; mobile in its own repository | Not started |
+| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Not built. Paged work list, resumable event stream and stable error codes exist internally |
+| 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Not built |
+| 6. Shared storage for an organisation; mobile apps | Shared storage: a design of its own. Native iOS and Android clients, encrypted relay and wake-only push: docs/110 | Decided in docs/110; not built |
 
 Step 4 is what a company needs to show the work board to its customers. Steps 5 and 6 can follow
 without changing anything a step-4 client relies on — which is the test of whether the design

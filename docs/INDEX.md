@@ -101,6 +101,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [102-verification-reports](102-verification-reports.md) | 带录像的验证报告：场景与断言两级、时间轴、结论，在对话里是一张卡 | current | 2026-11-20 |
 | [104-axiomatic-design](104-axiomatic-design.md) | LumenBox 功能需求提取与 MIT 公理设计分析 | current | 2026-11-26 |
 | [107-organisation-sign-in](107-organisation-sign-in.md) | Signing in to an organisation with DingTalk: activation by an Admin, a box on first sign-in | superseded by [109-organisation-onboarding](109-organisation-onboarding.md) — activation now makes the person, their box and their agent at once; the rest is restated there | 2026-11-27 |
+| [110-mobile-clients](110-mobile-clients.md) | Native mobile clients: two repositories, one API over two transports, encrypted relay, and wake-only push | current | 2026-11-27 |
 | [14-from-outside-reading](14-from-outside-reading.md) | Ideas taken from outside reading | current | 2026-08-26 |
 | [15-secrets-in-the-record](15-secrets-in-the-record.md) | R7: secrets an agent reads land in the record in clear | current | 2026-11-01 |
 | [16-long-work](16-long-work.md) | Finishing long work: the protocol, the cost, and the stop | current | 2026-10-20 |
