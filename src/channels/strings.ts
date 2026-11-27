@@ -175,6 +175,11 @@ export function guestsClosed(locale: Locale = DEFAULT_LOCALE): string {
   return tr("guests.closed", locale);
 }
 
+/** 名册上的观察者:不是陌生人,不该被告知"你不在名单上",也不该产生一条管理员批不了的申请 (INV-2226)。 */
+export function viewerOnly(locale: Locale = DEFAULT_LOCALE): string {
+  return tr("access.viewer", locale);
+}
+
 /** 不是"没在跑",是"这个不归你管" (INV-538)。含糊其辞会让人以为自己按错了。 */
 export function notYours(who: string | undefined, locale: Locale = DEFAULT_LOCALE): string {
   return tr("run.notYours", locale, { who: who ?? tr("run.it", locale) });
