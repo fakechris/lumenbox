@@ -27,13 +27,48 @@ export function signInRecoveryPage(
     `<p>${action}</p>${setup ? `<p><a href="/bootstrap">${say("page.bootstrap.title")}</a></p>` : ""}</body></html>`;
 }
 
-/** GET /bootstrap: the one-use code and a Feishu channel to sign in through. */
-export function bootstrapPage(doors: readonly { id: string; name: string }[], locale: Locale, codePath: string, callbackTemplate?: string): string {
+/** A channel that could sign the first Admin in once its app is in the server's environment. */
+export interface DoorToSet { id: string; type: "feishu" | "dingtalk"; keys: { id: string; secret: string }; callback?: string }
+
+/**
+ * GET /bootstrap: the one-use code, and one button per channel that can sign in now, named by its
+ * type. Off the local level the operator cannot open a page with the installation token (R2,
+ * docs/106 §5), so nothing here sends them to one: a channel's app comes from the server's
+ * environment (docs/109 §2 step o), and with none set the page says which variables, and which
+ * callback address to register with the vendor. At the local level the token still opens the
+ * settings, and the steps say so as they always have.
+ */
+export function bootstrapPage(page: {
+  doors: readonly { id: string; name: string; type: "feishu" | "dingtalk" }[]; toSet: readonly DoorToSet[];
+  local: boolean; locale: Locale; codePath: string; callbackTemplate?: string;
+}): string {
+  const { doors, locale } = page;
   const say = (key: string) => escapeHtml(tr(key, locale));
-  const steps = `<ol><li><a href="/?ui=next&amp;once=1&amp;view=settings&amp;pane=doors">${say("page.bootstrap.operator")}</a> ${say("page.bootstrap.operator-how")}</li>
-<li>${say("page.bootstrap.configure")}</li><li>${say("page.bootstrap.register")} ${callbackTemplate ? `<code>${escapeHtml(callbackTemplate)}</code>` : say("page.bootstrap.public-url")}</li>
-<li>${say("page.bootstrap.scan")} <code>${escapeHtml(codePath)}</code>.</li></ol>`;
-  return `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><title>${say("page.bootstrap.title")}</title><body style="font:16px system-ui;max-width:680px;margin:80px auto;padding:20px"><h1>${say("page.bootstrap.title")}</h1>${steps}<form id="bootstrap"><label>${say("page.bootstrap.code")} <input id="code" type="password" autocomplete="off" maxlength="128" required></label><label> ${say("page.bootstrap.channel")} <select id="door">${doors.map(door => `<option value="${escapeHtml(door.id)}">${escapeHtml(door.name)}</option>`).join("")}</select></label><button ${doors.length ? "" : "disabled"}>${say("page.bootstrap.sign-in")}</button></form><p id="status">${doors.length ? say("page.bootstrap.expires") : say("page.bootstrap.no-channel")}</p><script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();var button=this.querySelector('button');button.disabled=true;try{var response=await fetch('/auth/'+encodeURIComponent(document.getElementById('door').value),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}catch(error){document.getElementById('status').textContent=error.message;button.disabled=false;}};</script></body></html>`;
+  const code = `<code>${escapeHtml(page.codePath)}</code>`;
+  const label = (door: (typeof doors)[number]) =>
+    say(`page.bootstrap.with-${door.type}`) + (doors.filter(other => other.type === door.type).length > 1 ? ` (${escapeHtml(door.name)})` : "");
+  const buttons = doors.map(door => `<button name="door" value="${escapeHtml(door.id)}">${label(door)}</button>`).join(" ");
+  const form = `<form id="bootstrap"><label>${say("page.bootstrap.code")} <input id="code" type="password" autocomplete="off" maxlength="128" required></label> ${buttons}</form>`;
+  const toSet = page.toSet.map(door => `<li>${say(`page.bootstrap.set-${door.type}`)} <code>${escapeHtml(door.keys.id)}</code>, <code>${escapeHtml(door.keys.secret)}</code>` +
+    `${say("page.bootstrap.set-callback")}<code>${escapeHtml(door.callback ?? "")}</code></li>`).join("");
+  const steps = page.local
+    ? `<ol><li><a href="/?ui=next&amp;once=1&amp;view=settings&amp;pane=doors">${say("page.bootstrap.operator")}</a> ${say("page.bootstrap.operator-how")}</li>
+<li>${say("page.bootstrap.configure")}</li><li>${say("page.bootstrap.register")} ${page.callbackTemplate ? `<code>${escapeHtml(page.callbackTemplate)}</code>` : say("page.bootstrap.public-url")}</li>
+<li>${say("page.bootstrap.scan")} ${code}.</li></ol>`
+    : doors.length > 0
+      ? `<p>${say("page.bootstrap.enter")} ${code}</p>`
+      : `<p>${say("page.bootstrap.none")}</p><ul>${toSet}</ul><p>${say("page.bootstrap.then")} ${code}</p>`;
+  const body = page.local || doors.length > 0
+    ? `${steps}${form}<p id="status">${doors.length ? say("page.bootstrap.expires") : say("page.bootstrap.no-channel")}</p>`
+    : steps;
+  const script = doors.length === 0 ? "" : "<script>document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();" +
+    "var buttons=this.querySelectorAll('button'),door=(event.submitter||buttons[0]).value,status=document.getElementById('status');" +
+    "buttons.forEach(function(b){b.disabled=true;});try{var response=await fetch('/auth/'+encodeURIComponent(door),{method:'POST'," +
+    "headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});" +
+    "var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}" +
+    "catch(error){status.textContent=error.message;buttons.forEach(function(b){b.disabled=false;});}};</script>";
+  return `<!doctype html><html lang="${lang(locale)}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${say("page.bootstrap.title")}</title>` +
+    `<body style="font:16px/1.7 system-ui;max-width:680px;margin:80px auto;padding:20px"><h1>${say("page.bootstrap.title")}</h1>${body}${script}</body></html>`;
 }
 
 /** Signed in with the vendor, unknown here: the knock path, as a page a person can act on. */

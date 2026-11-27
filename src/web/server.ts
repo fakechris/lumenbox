@@ -89,7 +89,7 @@ import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
 import { modelPresets, modelTestError } from "./model-settings.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
-import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, invitationLink, loginPageWithDoors, webSignInDoors, wantsHtml } from "./sign-in.ts";
+import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import {
   authorize,
@@ -3059,9 +3059,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const reason = "bootstrap-unavailable", html = wantsHtml(req.headers.accept);
           send(res, 404, html ? signInRecoveryPage(reason, localeOf(req, url)) : apiError(reason), html ? "text/html" : "application/json"); return;
         }
-        const doors = webSignInDoors(channelRecords, channelCredentialsSet, process.env.AGENTBOX_PUBLIC_URL);
-        res.setHeader("referrer-policy", "no-referrer");
-        send(res, 200, bootstrapPage(doors, localeOf(req, url), bootstrap.codePath, signInCallbackUrl(process.env.AGENTBOX_PUBLIC_URL, "CHANNEL_ID")), "text/html");
+        const publicUrl = process.env.AGENTBOX_PUBLIC_URL, doors = webSignInDoors(channelRecords, channelCredentialsSet, publicUrl);
+        const toSet = channelRecords.filter(record => signsInOnWeb(record.type)).map(record => ({ id: record.id, type: record.type as WebSignInType,
+          keys: doorSignInFor(record.type, { feishuDomain: "feishu" })!.keys(channelEnvBase(record.id)), callback: signInCallbackUrl(publicUrl, record.id) }));
+        res.setHeader("referrer-policy", "no-referrer"); // INV-2227: off local no step may need a page opened with the token
+        send(res, 200, bootstrapPage({ doors, toSet, local: (exposure?.level ?? "local") === "local", locale: localeOf(req, url), codePath: bootstrap.codePath, callbackTemplate: signInCallbackUrl(publicUrl, "CHANNEL_ID") }), "text/html");
         } catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
         return;
       }

@@ -14,7 +14,7 @@
 import type { Locale } from "../i18n/locale.ts";
 import { tr } from "../i18n/messages.ts";
 
-export type SignInDoor = { id: string; name: string };
+export type SignInDoor = { id: string; name: string; type: WebSignInType };
 
 /** Where `LOGIN_HTML` takes its doors: replaced by nothing when there are none. */
 export const SIGN_IN_DOORS_MARKER = "<!--sign-in-doors-->";
@@ -48,7 +48,7 @@ export function webSignInDoors(
   publicUrl: string | undefined,
 ): SignInDoor[] {
   if (publicUrl === undefined || publicUrl.trim() === "") return [];
-  return records.filter(record => signsInOnWeb(record.type) && credentialsSet(record)).map(record => ({ id: record.id, name: record.name || record.id }));
+  return records.filter(record => signsInOnWeb(record.type) && credentialsSet(record)).map(record => ({ id: record.id, name: record.name || record.id, type: record.type as WebSignInType }));
 }
 
 function escapeHtml(value: string): string {

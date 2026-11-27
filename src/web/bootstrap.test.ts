@@ -34,7 +34,7 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     const code = readFileSync(join(home, "bootstrap-code"), "utf8").trim();
     assert.equal((await fetch(base + "/bootstrap")).status, 200);
     const page = await (await fetch(base + "/bootstrap?lang=en")).text();
-    assert.match(page, /pane=doors[\s\S]+Add channel[\s\S]+OAuth callback URL[\s\S]+scan the QR code/);
+    assert.match(page, /pane=doors[\s\S]+Add channel[\s\S]+OAuth callback URL[\s\S]+scan the QR code[\s\S]+<button name="door" value="fixture">Sign in with Feishu<\/button>/, "local: the token still opens the settings, and the channel is named by its type");
     assert.ok(page.includes(join(home, "bootstrap-code")));
     assert.ok(!page.includes(code), "never put the setup code in the page");
     assert.ok(logs.some(line => line.includes(join(home, "bootstrap-code"))));
@@ -107,5 +107,74 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     if (previousHome === undefined) delete process.env.AGENTBOX_HOME; else process.env.AGENTBOX_HOME = previousHome;
     if (previousUrl === undefined) delete process.env.AGENTBOX_PUBLIC_URL; else process.env.AGENTBOX_PUBLIC_URL = previousUrl;
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("at the private level the first Admin needs no token anywhere: the environment sets up the DingTalk channel, /bootstrap names it, and the code plus the DingTalk sign-in make the Admin; with nothing set the page says what to set (INV-2227)", async t => {
+  const KEYS = ["AGENTBOX_HOME", "AGENTBOX_PUBLIC_URL", "AGENTBOX_EXPOSURE", "AGENTBOX_UI_TOKEN", "DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET", "FEISHU_APP_ID", "FEISHU_APP_SECRET"] as const;
+  const original = Object.fromEntries(KEYS.map(key => [key, process.env[key]]));
+  const homes: string[] = [];
+  let stop: (() => void) | undefined;
+  t.after(() => {
+    stop?.();
+    for (const key of KEYS) { if (original[key] === undefined) delete process.env[key]; else process.env[key] = original[key]; }
+    for (const home of homes) rmSync(home, { recursive: true, force: true });
+  });
+  // A fresh organisation home, and only what the manifest's Secret would put in the environment.
+  const fresh = async (env: Partial<Record<(typeof KEYS)[number], string>>, loginFetch?: typeof fetch) => {
+    stop?.();
+    const home = mkdtempSync(join(tmpdir(), "bootstrap-private-")); homes.push(home);
+    for (const key of KEYS) delete process.env[key];
+    Object.assign(process.env, { AGENTBOX_HOME: home, AGENTBOX_EXPOSURE: "private", AGENTBOX_PUBLIC_URL: "https://org.example.test" }, env);
+    writeFileSync(join(home, "principals.json"), JSON.stringify({ principals: [], installation: { mode: "organisation" } }));
+    let base = "";
+    stop = await startWebServer({ port: 0, host: "127.0.0.1", useBox: false, ...(loginFetch ? { loginFetch } : {}), onLog: () => {}, onReady: url => { base = url; } });
+    return { home, base };
+  };
+  // What a browser across the network looks like once the Ingress hands it over: never the CLI beside the server.
+  const browser = { "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https" };
+
+  const loginFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const body = init?.body === undefined ? {} : JSON.parse(String(init.body));
+    if (url.href === "https://api.dingtalk.com/v1.0/oauth2/userAccessToken") return Response.json({ accessToken: body.code, expireIn: 7200 });
+    if (url.href === "https://api.dingtalk.com/v1.0/contact/users/me") return Response.json({ unionId: new Headers(init?.headers).get("x-acs-dingtalk-access-token"), nick: "Ana" });
+    if (url.href === "https://api.dingtalk.com/v1.0/oauth2/accessToken") return Response.json({ accessToken: "app-token", expireIn: 7200 });
+    if (url.origin + url.pathname === "https://oapi.dingtalk.com/topapi/user/getbyunionid") return Response.json({ errcode: 0, errmsg: "ok", result: { userid: "ana-staff", contact_type: 0 } });
+    throw new Error(`unexpected vendor call ${url.href}`);
+  }) as typeof fetch;
+  const { home, base } = await fresh({ DINGTALK_CLIENT_ID: "ding-app", DINGTALK_CLIENT_SECRET: "ding-secret" }, loginFetch);
+  const zh = await (await fetch(`${base}/bootstrap?lang=zh`, { headers: browser })).text();
+  assert.match(zh, /<button[^>]*value="dingtalk"[^>]*>用钉钉登录<\/button>/, "the DingTalk channel the environment set up, named by its type");
+  assert.doesNotMatch(zh, /token|pane=doors|飞书/i, "no page opened with a token, and no channel that cannot sign in");
+  assert.ok(zh.includes(join(home, "bootstrap-code")), "where the code is");
+  const en = await (await fetch(`${base}/bootstrap?lang=en`, { headers: browser })).text();
+  assert.match(en, />Sign in with DingTalk<\/button>/);
+
+  // The page's own request, as the browser sends it, and DingTalk's return.
+  const code = readFileSync(join(home, "bootstrap-code"), "utf8").trim();
+  const begin = await fetch(`${base}/auth/dingtalk`, { method: "POST", headers: { ...browser, "content-type": "application/json", origin: "https://org.example.test" }, body: JSON.stringify({ bootstrapCode: code }) });
+  assert.equal(begin.status, 200);
+  const carried = begin.headers.getSetCookie().map(line => line.split(";")[0]).join("; "); // whatever binds the sign-in to this browser
+  const vendor = new URL((await begin.json() as { url: string }).url);
+  assert.equal(vendor.searchParams.get("redirect_uri"), "https://org.example.test/auth/dingtalk/callback");
+  const back = await fetch(`${base}/auth/dingtalk/callback?state=${vendor.searchParams.get("state")}&code=union-ana&authCode=union-ana`, { headers: { ...browser, ...(carried ? { cookie: carried } : {}) }, redirect: "manual" });
+  assert.equal(back.status, 302);
+  const session = back.headers.getSetCookie().find(line => line.startsWith("agentbox_who="));
+  assert.match(session ?? "", /; Secure;/, "the Admin's session, Secure at this level");
+  const me = await fetch(`${base}/api/me`, { headers: { ...browser, cookie: session!.split(";")[0]! } });
+  assert.equal(me.status, 200);
+  assert.equal((await me.json() as { role: string }).role, "admin");
+  assert.deepEqual(new Principals().list().map(person => [person.id, person.role]), [["dingtalk:ana-staff", "admin"]]);
+
+  // Nothing in the environment: no channel can sign in, and the page says what to set and what to register.
+  const empty = await fresh({});
+  for (const [lang, words] of [["zh", /部署的 Secret/], ["en", /the deployment&#39;s Secret/]] as const) {
+    const page = await (await fetch(`${empty.base}/bootstrap?lang=${lang}`, { headers: browser })).text();
+    assert.match(page, words);
+    for (const name of ["DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET", "FEISHU_APP_ID", "FEISHU_APP_SECRET", "https://org.example.test/auth/dingtalk/callback", "https://org.example.test/auth/feishu/callback"]) {
+      assert.ok(page.includes(name), `${lang}: the page names ${name}`);
+    }
+    assert.doesNotMatch(page, /token|pane=doors|<button/i, `${lang}: no token page and no button that leads nowhere`);
   }
 });
