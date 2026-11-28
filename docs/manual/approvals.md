@@ -13,7 +13,7 @@ What an agent may do on its own, what it has to ask you first, and how you answe
 ## What it is
 
 An **approval** is your answer to one request: an agent wants to do something that reaches
-past its box, such as posting to an outside service, and it waits until a person answers. A
+past its sandbox, such as posting to an outside service, and it waits until a person answers. A
 **tool permission** is set beforehand, per agent and per tool: *allowed*, *ask me*, or *off*.
 A **credential check** runs before work starts: if the work needs a secret or a connector that
 is not there, nothing starts and a card says what is missing.
@@ -58,7 +58,7 @@ rule ([Rules reference](reference-rules.md)).
 - Standing rules for the whole installation are Markdown files in `~/.agentbox/rules`, one per
   rule, each saying what it matches and `allow`, `ask` or `deny`. The
   [rules grammar](reference-rules.md) lists every field.
-- `AGENTBOX_TIER_GATE=enforce` makes LumenBox ask before every action that reaches past the box.
+- `AGENTBOX_TIER_GATE=enforce` makes LumenBox ask before every action that reaches past the sandbox.
   By default it only records them.
 
 ## Where to see the result

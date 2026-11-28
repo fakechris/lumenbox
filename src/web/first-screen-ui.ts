@@ -9,8 +9,9 @@
  * the one button that works.
  */
 export const FIRST_SCREEN_CSS = `
-.sandbox-head { display: flex; align-items: center; gap: 8px; width: 100%; margin: 10px 0 2px; padding: 4px 8px; border-radius: 8px; text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
-.sandbox-head:first-child { margin-top: 0; }
+.sandbox-line { display: flex; align-items: center; gap: 6px; margin: 10px 0 2px; } .sandbox-line:first-child { margin-top: 0; }
+.sandbox-line .act { padding: 3px 10px; font-size: 12px; margin-right: 30px; }
+.sandbox-head { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 4px 8px; border-radius: 8px; text-align: left; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
 .sandbox-head[aria-pressed="true"] { color: var(--text); }
 .sandbox-state { font-weight: 500; }
 .sandbox-state[data-state="failed"] { color: var(--bad); } .sandbox-state[data-state="preparing"] { color: var(--blue); }
@@ -35,31 +36,33 @@ function mySandboxes(known) {
 /** "Your sandbox · Ready", or the sandbox's name for one that is not theirs. */
 function sandboxTitle(box) { return box.yours ? t("ui.first.yours") : box.name; }
 
-/** A sandbox's heading in the sidebar: pressed, it is the one the list adds to. */
+/** A sandbox's heading in the sidebar: pressed, it is the one the list adds to; a sandbox that is not ready carries its one button on this line. */
 function sandboxHeading(box) {
-  var head = el("button", "sandbox-head");
+  var line = el("div", "sandbox-line"), head = el("button", "sandbox-head");
   head.setAttribute("aria-pressed", String(box.id === chat.box));
   head.appendChild(el("span", "", sandboxTitle(box) + " ·"));
   var state = el("span", "sandbox-state", t("ui.first.state." + box.state)); state.dataset.state = box.state;
   head.appendChild(state);
   head.addEventListener("click", function () { if (box.id && box.id !== chat.box) { chat.box = box.id; chat.agentId = ""; render(); } });
-  return head;
-}
-
-/** Under a sandbox that is not ready: why, and the one button that works. Nothing for one that is ready or being prepared. */
-function sandboxWhy(box) {
-  if (box.state !== "failed" && !(box.state === "stopped" && box.act) && !(box.state === "preparing" && boxes.log.length && box.id === boxes.own)) return null;
-  var why = el("div", "sandbox-why"); why.dataset.state = box.state;
-  if (box.reason) why.appendChild(el("span", "", t("ui.first.why." + box.reason)));
-  if (box.detail) why.appendChild(el("pre", "", box.detail));
-  if (box.id === boxes.own && (boxes.starting || boxes.log.length)) { var log = el("pre", "box-log"); log.textContent = boxes.log.slice(-8).join(String.fromCharCode(10)); why.appendChild(log); }
-  var act = sandboxActOf(box);
+  line.appendChild(head);
+  var act = box.state === "ready" || box.state === "preparing" ? undefined : sandboxActOf(box);
   if (act) {
     var press = el("button", "act", t(act.words, act.vars));
     press.disabled = !!boxes.starting;
     press.addEventListener("click", function () { goTo(act.to); });
-    why.appendChild(press);
+    line.appendChild(press);
   }
+  return line;
+}
+
+/** Under a sandbox that failed: why (its button is on the heading line). While the installation's own one starts: what Docker says. */
+function sandboxWhy(box) {
+  var starting = box.id === boxes.own && (boxes.starting || boxes.log.length) && box.state !== "ready";
+  if (box.state !== "failed" && !starting) return null;
+  var why = el("div", "sandbox-why"); why.dataset.state = box.state;
+  if (box.reason) why.appendChild(el("span", "", t("ui.first.why." + box.reason)));
+  if (box.detail) why.appendChild(el("pre", "", box.detail));
+  if (starting) { var log = el("pre", "box-log"); log.textContent = boxes.log.slice(-8).join(String.fromCharCode(10)); why.appendChild(log); }
   return why;
 }
 
@@ -123,13 +126,15 @@ function setupCard() {
   // What has happened in their sandbox: an installation already in use has nothing to start (as before INV-2311), and closed stays closed.
   var here = (state.byBox && yours && state.byBox[yours.id]) || {}, legacy = "lumen-setup-closed:" + state.installationId + ":" + ((settings.me && settings.me.identity) || "operator") + ":" + chat.box;
   var closed = firstScreenSeen("closed"); try { closed = closed || localStorage.getItem(legacy) === "1"; } catch (error) {}
+  settings.listShowsModel = false;
   if (closed || here.established) return card.firstChild ? card : null;
   var auto = state.autoBox, organisation = isOrganisation();
   var steps = gettingStartedOf({ admin: admin, key: state.key, door: !!state.door, yours: yours, quota: !!(auto && auto.state === "quota"),
     canCreate: organisation && !yours && !auto && state.hasPersonalBox === false, readyOnce: firstScreenReadyBefore === null ? (firstScreenReadyBefore = firstScreenSeen("ready")) : firstScreenReadyBefore,
     agent: agent ? { id: agent.id, name: agent.name } : undefined, opened: firstScreenSeen("opened") || !!here.agentTurn });
   if (yours && yours.state === "ready") firstScreenSee("ready");
-  if (!steps.some(function (step) { return !step.done; })) return card.firstChild ? card : null;
+  settings.listShowsModel = steps.some(function (step) { return step.key === "model"; });
+  if (!steps.some(function (step) { return !step.done; })) { settings.listShowsModel = false; return card.firstChild ? card : null; }
   card.appendChild(el("div", "card-head", t("ui.next.setup.title")));
   steps.forEach(function (step) {
     var row = el("div", "setup-step"), words = t(step.words, step.vars);

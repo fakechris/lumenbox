@@ -326,7 +326,7 @@ function renderChat(view) {
   var agent = next.agents[chat.agentId];
   rememberPlace();
   $("view-title").textContent = agent ? agent.name : t("ui.next.nav.chat"); $("view-title").title = agent ? t("ui.next.thread.agent") : "";
-  $("view-hint").textContent = agent ? (agent.title || agent.description || "") : "";
+  $("view-hint").textContent = agent ? roleOf(agent) : "";
   $("composer").hidden = !agent;
   renderModelNotice(); renderWatchOnly();
   syncChatComposer(agent ? chatTarget() : "");

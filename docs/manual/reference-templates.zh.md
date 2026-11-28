@@ -88,7 +88,7 @@
 
 ## 小队
 
-| slug | 领域 | 名称 | 简介 | 成员 |
+| slug | 领域 | 名称 | 简介 | 智能体 |
 |---|---|---|---|---|
 | `ship` | engineering | 研发小队 | Product specifies, engineering builds, review is a different person. | mo, lin, heng |
 | `media-desk` | media | 内容小队 | One source, three forms: long article, Xiaohongshu note, short-video script. | jian, he, jing |

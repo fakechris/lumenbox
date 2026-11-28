@@ -170,7 +170,7 @@ export const TEAM_SECTIONS = [
   "## Build the minimal version",
   ...MANUAL_ENTRIES.map(s => `### ${s}`),
   "## Run monitoring",
-  "## Outside the box",
+  "## Outside the sandbox",
   "## Extensions",
   "## The run this page is based on",
 ];
@@ -234,7 +234,7 @@ export const TEAM_SECTIONS_ZH = [
   "## 搭一个最小版本",
   ...MANUAL_ENTRIES_ZH.map(s => `### ${s}`),
   "## 运行监控",
-  "## box 之外",
+  "## 沙盒之外",
   "## 扩展",
   "## 本页依据的那次运行",
 ];
@@ -471,8 +471,10 @@ const ticked = cell => [...cell.matchAll(/`([^`]+)`/g)].map(m => m[1]);
 export function parseGlossary(text) {
   const tables = tablesOf(text);
   const deprecated = [];
-  for (const [terms, instead] of tables.get("Deprecated synonyms") ?? []) {
-    for (const term of ticked(terms)) deprecated.push({ term, instead: (instead ?? "").replace(/`/g, "") });
+  for (const [terms, instead, note] of tables.get("Deprecated synonyms") ?? []) {
+    // "In Chinese copy only": a word that is right in English and wrong in Chinese (`agent`, docs/112).
+    const chineseOnly = /^In Chinese copy only/i.test(note ?? "");
+    for (const term of ticked(terms)) deprecated.push({ term, instead: (instead ?? "").replace(/`/g, ""), ...(chineseOnly ? { chineseOnly } : {}) });
   }
   const allowed = (tables.get("Allowed names") ?? []).flatMap(([name]) => ticked(name));
   return { concepts: tables.get("Concepts") ?? [], deprecated, allowed };
@@ -482,6 +484,9 @@ export function parseGlossary(text) {
 function proseOf(line, allowed) {
   let prose = line
     .replace(/`[^`]*`/g, " ")
+    .replace(/\{\{?[\w.@-]+\}\}?/g, " ") // a placeholder ({box}, {{ui.key}}) is code: the word put there is checked where it is written
+    .replace(/(^|[\s(（"“])~?\/[\w.\/-]+/g, "$1 ") // a path, typed as it is (/home/box/work)
+    .replace(/\bagentbox(?:\s+[a-z][\w-]*){1,2}/g, " ") // a command, typed as it is (agentbox box up)
     .replace(/<!--.*?-->/g, " ")
     .replace(/\]\([^)]*\)/g, "] ")
     .replace(/[\w:-]+\s*=\s*"[^"]*"/g, " ")
@@ -501,7 +506,7 @@ function matcherFor(term) {
 /** `file:line` for every deprecated synonym in one text. */
 export function vocabularyProblems(file, text, glossary) {
   const problems = [];
-  const rules = glossary.deprecated.map(rule => ({ ...rule, hit: matcherFor(rule.term) }));
+  const rules = glossary.deprecated.filter(rule => !rule.chineseOnly || file.endsWith(".zh.md")).map(rule => ({ ...rule, hit: matcherFor(rule.term) }));
   const lines = text.split("\n");
   let fenced = false;
   let header = text.startsWith("<!--");
@@ -556,15 +561,21 @@ export const BUNDLE = "src/i18n/{messages,ui-*,server-*}.ts";
 export function bundleVocabularyProblems(file, text, glossary) {
   const problems = [];
   const rules = glossary.deprecated.map(rule => ({ ...rule, hit: matcherFor(rule.term) }));
+  // Which language a value is: a pair `["中文", "English"]` says so by position; a `zh: { … }` block says so for its lines.
+  let section = "";
   text.split("\n").forEach((line, index) => {
+    if (/^\s*(zh|en):\s*\{/.test(line)) section = /^\s*zh/.test(line) ? "zh" : "en";
     if (!/^\s*"[\w.-]+": [["]/.test(line)) return;
     const strings = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(match => JSON.parse(`"${match[1]}"`));
-    for (const value of strings.slice(1)) {
+    const pair = /^\s*"[\w.-]+": \[/.test(line);
+    strings.slice(1).forEach((value, at) => {
+      const chinese = pair ? at === 0 : section === "zh";
       const prose = proseOf(value, glossary.allowed);
       for (const rule of rules) {
+        if (rule.chineseOnly && !chinese) continue;
         if (rule.hit(prose)) problems.push(`${file}:${index + 1}: "${rule.term}" is a deprecated synonym; write "${rule.instead}" (${GLOSSARY}).`);
       }
-    }
+    });
   });
   return problems;
 }

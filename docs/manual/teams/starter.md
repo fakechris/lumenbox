@@ -51,8 +51,8 @@ inventing one.
 
 ### Skills
 
-The starter skills and the hub skills ship with every box (see
-[skills that ship](../reference-skills.md)). Type `/` in the chat box to see them. Rex reaches
+The starter skills and the hub skills ship with every sandbox (see
+[skills that ship](../reference-skills.md)). Type `/` in the chat sandbox to see them. Rex reaches
 for `deep-research`; Ops for `engine-check` when a coding engine is needed.
 
 ### Memory
@@ -82,7 +82,7 @@ card instead of starting.
 
 **Basis:** the measured comparison in [docs/83](../../83-team-vs-single-eval.md) (INV-1340), run
 on 2026-10-24 with this team as shipped. It used the MiniMax (China) provider with
-MiniMax-M3.1-Flash, in a scratch home and a dedicated box. The raw file is
+MiniMax-M3.1-Flash, in a scratch home and a dedicated sandbox. The raw file is
 `research/2026-10-24-inv1340/eval.json`. That file records input tokens with cached tokens
 included and no split. So money is a range at this installation's configured rates (per million
 tokens: 0.30 input, 1.20 output, 0.06 cache read). The high end treats all input as uncached; the
@@ -139,7 +139,7 @@ agentbox usage --day 2026-11-06    # what the day cost
 - **The task card:** *Division of work* shows each fork Ada or a teammate started and whether it
   reported. *Configuration vN* shows which settings the work ran on.
 
-## Outside the box
+## Outside the sandbox
 
 - The Feishu or DingTalk app: registered in that platform's console by someone with the right to
   add apps, with the permissions the channel page lists.

@@ -12,14 +12,14 @@ What an agent knows how to do, written down so it does it the same way next time
 
 ## What it is
 
-A **skill** is a `SKILL.md` file in a box, under `/home/box/work/skills/<name>/`: a description
+A **skill** is a `SKILL.md` file in a sandbox, under `/home/box/work/skills/<name>/`: a description
 of when it applies, and the steps. An agent reads a skill when a request matches its
-description. Agents write skills themselves when they work something out; every box also starts
+description. Agents write skills themselves when they work something out; every sandbox also starts
 with a set of starter skills. A skill with a `schedule:` or a `trigger:` is a routine (see
 [automations](automations.md)).
 
 In an organisation, an Admin can publish a skill to everybody: an **organisation skill** is
-available in every box, the same everywhere, and read-only there.
+available in every sandbox, the same everywhere, and read-only there.
 
 An imported skill is not an installed one: `agentbox skills import` makes each skill a teaching
 draft, and a person publishes it. Check *Teaching drafts* at the top of the app.
@@ -31,16 +31,16 @@ Code or Codex a skill that drives LumenBox through its MCP endpoint.
 
 ### In the app
 
-- **See the skills:** type `/` at the start of the chat box. A menu lists the skills in this
-  agent's box; picking one writes "Use the … skill." in the chat box for you to send.
+- **See the skills:** type `/` at the start of the chat sandbox. A menu lists the skills in this
+  agent's sandbox; picking one writes "Use the … skill." in the chat sandbox for you to send.
 - **Review imported skills:** press *Teaching drafts* at the top of the app.
 - **Publish a skill to the whole organisation** (Admins): Settings → Team → *Organisation
   skills* → *Publish or update a skill*. Choose a skill folder on your computer, a skill of a
-  template file, or a skill in a box you may enter, and press *Publish*. Publishing a name that
-  is already there makes a new version. *Withdraw* removes it from every box. Tick *Required*
-  to have it read even in a box that has its own skill of the same name.
+  template file, or a skill in a sandbox you may enter, and press *Publish*. Publishing a name that
+  is already there makes a new version. *Withdraw* removes it from every sandbox. Tick *Required*
+  to have it read even in a sandbox that has its own skill of the same name.
 - **Offer a skill of yours to the organisation:** Settings → Mine → *Offer a skill of mine to
-  the organisation*: choose a box and one of its skills, press *Offer it*. An Admin sees it under
+  the organisation*: choose a sandbox and one of its skills, press *Offer it*. An Admin sees it under
   Settings → Team → *Organisation skills*, with every file it holds, and approves it (it is then
   published to everybody) or declines it with a reason you read on the same page.
 
@@ -65,20 +65,20 @@ The app must be running.
 
 ## Where to see the result
 
-- The `/` menu in the chat box.
+- The `/` menu in the chat sandbox.
 - The agent's *Files* tab, under `skills/`.
 - Settings → Team → *Organisation skills*: each skill's version, who published it and when, how
-  many boxes are up to date, and by name every box that is behind, not connected, or where the
+  many sandboxes are up to date, and by name every sandbox that is behind, not connected, or where the
   skill was changed from inside (it is written over).
 - The [skills that ship](reference-skills.md) reference: every starter skill, generated from
   the code.
 
 ## Limits
 
-- A skill lives in one box. Agents in another box do not see it, unless an Admin published it
+- A skill lives in one sandbox. Agents in another sandbox do not see it, unless an Admin published it
   as an organisation skill.
 - An organisation skill cannot carry a password or a key, a schedule or a trigger; publishing
-  one is refused and says why. A box that is not connected gets it when it comes back.
+  one is refused and says why. A sandbox that is not connected gets it when it comes back.
 - A skill can say what it installs and which sign-in it needs. When the organisation requires
   such a skill, your agent sets it up in your first conversation and gives you the link or code
   to sign in yourself; it never asks for your password, and it mentions this once.

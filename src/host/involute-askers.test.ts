@@ -30,7 +30,7 @@ test("A1: a linked driver in the agent's box is answered, by the roster", () => 
 test("A2: a linked driver who is not in this agent's box is refused by name", () => {
   const verdict = mayAnswerFrom(deps({ members: ["ada"] }), { agentId: "bob", requestedByActorId: "actor-dana" });
   assert.equal(verdict.ok, false);
-  assert.match((verdict as { why: string }).why, /workshop is not a box Dana is in/);
+  assert.match((verdict as { why: string }).why, /workshop is not a sandbox Dana is in/);
 });
 
 test("A3: a viewer is refused and told what role it takes", () => {

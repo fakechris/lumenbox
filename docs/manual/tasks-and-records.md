@@ -42,12 +42,12 @@ nobody takes it until a person presses *Commit*.
 ### In the app
 
 - **Follow the current work:** open *Work* for everything you asked for, one row each; a row
-  opens the work's panel. In the classic view: choose a member and a conversation, then open *Tasks*. The
-  heading names that member and conversation. Tasks from their other conversations are folded
+  opens the work's panel. In the classic view: choose an agent and a conversation, then open *Tasks*. The
+  heading names that agent and conversation. Tasks from their other conversations are folded
   under a separate heading and load only when expanded. *Team tasks* in the top bar opens the
-  clearly labelled view across members; the return link takes you back to the current conversation.
+  clearly labelled view across agents; the return link takes you back to the current conversation.
 - **Give someone work:** describe the goal and requirements in their conversation. You do not
-  need to select that member again in the task-reading panel.
+  need to select that agent again in the task-reading panel.
 - **See what needs you:** the sidebar's waiting summary opens the team view, with waiting
   tasks first and other decisions in the expandable attention area. Open a proposed task to
   review it; *Commit* makes it real work and *Dismiss* declines it.
@@ -94,7 +94,7 @@ From another tool over MCP, `fetch_deliverable` reads a task's deliverable.
 ## Where to see the result
 
 - *Work*, or the classic view's Tasks tab: read-only state, sourced progress, and a link to the task. A missing association
-  is shown as an empty conversation view; use the member’s other conversations or Team tasks
+  is shown as an empty conversation view; use the agent’s other conversations or Team tasks
   to find older work.
 - The task detail: its deliverables, the configuration version and the division of work.
 - The work panel's *Diagnostics* tab, the classic Audit tab, and `agentbox usage`: what was done

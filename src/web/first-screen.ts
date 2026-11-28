@@ -114,7 +114,7 @@ function gettingStartedOf(person: PersonState): Step[] {
   const steps: Step[] = [];
   if (person.key === false) {
     steps.push(person.admin
-      ? { key: "model", done: false, words: "ui.first.step.model", act: { words: "ui.first.model.choose", to: { pane: "model" } } }
+      ? { key: "model", done: false, words: "ui.first.model.none", act: { words: "ui.first.model.choose", to: { pane: "model" } } }
       : { key: "model", done: false, words: "ui.first.model.member" });
   }
   const box = person.yours;

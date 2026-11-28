@@ -32,7 +32,7 @@ import { CLASSIC_AUTO_COMPUTER_HTML, CLASSIC_AUTO_COMPUTER_JS } from "./classic-
 
 import { MARKDOWN_OPTIONS } from "./markdown.ts";
 import { SETTINGS_DIALOG_HTML } from "./settings-dialog-html.ts";
-import { CHANNEL_SETUP_JS } from "./channel-setup-ui.ts";
+import { CHANNEL_SETUP_JS } from "./channel-setup-ui.ts"; import { FILL_WORDS_JS } from "../i18n/fill.ts";
 
 export const APP_HTML = String.raw`<!doctype html>
 <html lang="{{@lang}}">
@@ -5631,10 +5631,9 @@ function taskDetail(t) {
 function t(key, vars) {
   var text = MSG[key];
   if (text === undefined) return key;
-  return String(text).replace(/\{(\w+)\}/g, function (whole, name) {
-    return vars && name in vars ? String(vars[name]) : whole;
-  });
+  return fillWords(String(text), vars);
 }
+${FILL_WORDS_JS}
 
 /** Relative, because "in 3 hours" is the thing a person acts on; absolute dates read as decoration. */
 function whenOf(iso) {

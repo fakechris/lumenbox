@@ -1231,7 +1231,7 @@ test("a row's one line: what the member asks of the person, else what it says it
   const MSG = MESSAGES.en, page: { rows: Record<string, unknown>[]; mine: unknown[]; agents: Record<string, unknown> } = { rows: [], mine: [], agents: {} };
   const base = { t, MSG, next: page, putOff: pageFunction("putOff", {}), nextNeedOf: nextLogic.nextNeedOf, nextStateOf: nextLogic.nextStateOf, NOW_FRESH_MS: 15 * 60_000, owedText: () => "" };
   const waitsOnPerson = pageFunction("waitsOnPerson", base), askLine = pageFunction("askLine", base), nowLine = pageFunction("nowLine", base);
-  const memberLine = pageFunction("memberLine", { ...base, waitsOnPerson, askLine, nowLine }), reasonOf = pageFunction("reasonOf", { ...base, nowOnRow: pageFunction("nowOnRow", { ...base, nowLine }) });
+  const memberLine = pageFunction("memberLine", { ...base, waitsOnPerson, askLine, nowLine, roleOf: pageFunction("roleOf", base) }), reasonOf = pageFunction("reasonOf", { ...base, nowOnRow: pageFunction("nowOnRow", { ...base, nowLine }) });
   const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString(), said = "Matching the October statement against the ledger";
   const mia = { id: "mia", name: "Mia", title: "Operations", running: true, facts: { unreadCount: 0, now: { text: said, at: ago(2), conversation: "main", taskId: "t1" } as Record<string, unknown> } };
   const working = { id: "t1", assigneeId: "mia", conversation: "main", status: "doing", title: "Reconcile October", updatedAt: ago(30), reading: { phase: "working", reason: "working" } };
@@ -1251,6 +1251,8 @@ test("a row's one line: what the member asks of the person, else what it says it
   page.rows = [working, other]; mia.facts.now.at = ago(20);
   assert.deepEqual([memberLine(mia), reasonOf(working)], ["ui.next.agent.working", "ui.next.line.reason.working"]);
   assert.equal(memberLine({ ...mia, running: false, facts: { unreadCount: 0 } }), "Operations", "idle and asking nothing: as it was");
+  // A role the starter team ships with is a word in the tables, so a Chinese page does not show it in English (INV-2311).
+  assert.equal(memberLine({ ...mia, title: "coordinator", running: false, facts: { unreadCount: 0 } }), "ui.role.coordinator");
   // Words with no work named go on the one piece it is doing in that conversation, and are not guessed between two.
   mia.facts.now = { text: "Drafting the notice", at: ago(1), conversation: "main" };
   page.rows = [working];
