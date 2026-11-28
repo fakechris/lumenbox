@@ -160,6 +160,23 @@ test("user-facing pages use the glossary's words, and the glossary names every c
   assert.ok(!glossary.deprecated.some(rule => rule.term === "智能体"));
 });
 
+test("a page holds text only: a NUL or other control character in the README or a docs page fails, tab, newline and CR do not (INV-2311)", () => {
+  const { lintControlCharacters } = awaitImported;
+  assert.deepEqual(lintControlCharacters(root), [], lintControlCharacters(root).join("\n"));
+  const dir = mkdtempSync(join(tmpdir(), "control-"));
+  try {
+    mkdirSync(join(dir, "docs", "manual"), { recursive: true });
+    // What a rewrite once left where a URL was: a NUL, the mask's number, a U+0001.
+    writeFileSync(join(dir, "README.md"), "# LumenBox\n\n<a href=\"\u00000\u0001\">Download</a>\n");
+    writeFileSync(join(dir, "docs", "manual", "page.md"), "Tab\there, a CRLF line\r\nand a bell \u0007.\n");
+    writeFileSync(join(dir, "docs", "fine.md"), "Plain text, 中文 too.\n");
+    assert.deepEqual(lintControlCharacters(dir), [
+      "README.md:3: control character U+0000; a page holds text only.",
+      "docs/manual/page.md:2: control character U+0007; a page holds text only.",
+    ]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a deprecated synonym is reported by file and line, in the listed files and in audience: user pages; code, links, allowed names and specs are not checked", () => {
   const { lintVocabulary, GLOSSARY } = awaitImported;
   const dir = mkdtempSync(join(tmpdir(), "vocabulary-"));

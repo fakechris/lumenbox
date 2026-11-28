@@ -523,6 +523,23 @@ export function vocabularyProblems(file, text, glossary) {
 }
 
 /**
+ * A control character in a page (INV-2311): a NUL or any C0 byte but tab, newline and carriage
+ * return. One makes git read the file as binary and hides what the page says — a rewrite once left
+ * NUL markers where eight URLs were. Every Markdown file under docs/ and the README is read as bytes.
+ */
+export function lintControlCharacters(root, patterns = ["README.md", "docs/**/*.md"]) {
+  const problems = [];
+  for (const file of [...new Set(patterns.flatMap(pattern => globSync(pattern, { cwd: root })))].sort()) {
+    readFileSync(join(root, file), "latin1").split("\n").forEach((line, index) => {
+      // By code, not a regular expression of control characters (which the linter rightly refuses to read).
+      const code = [...line].map(ch => ch.charCodeAt(0)).find(c => c < 0x20 && c !== 0x09 && c !== 0x0d);
+      if (code !== undefined) problems.push(`${file}:${index + 1}: control character U+${code.toString(16).padStart(4, "0").toUpperCase()}; a page holds text only.`);
+    });
+  }
+  return problems;
+}
+
+/**
  * The check: `patterns` are files or globs relative to `root` (default: the user-facing pages),
  * plus every `docs/` document whose header says `audience: user`.
  */
