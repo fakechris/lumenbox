@@ -76,6 +76,8 @@ interface StoredDevice {
   familyExpiresAt: string;
   /** The device's own signing key for step-up proofs (docs/110 §4): an id it names and a P-256 public key (SPKI, base64url). */
   stepUpKey?: { id: string; publicKey: string };
+  /** Paired through the relay (personal mode, src/web/phone-relay.ts): the phone's X25519 static key it reconnects with (base64url), and its push handle. */
+  relay?: { publicKey: string; connId: string };
   access: { hash: string; expiresAt: string }[];
   /** Refresh tokens not yet spent. */
   refresh: { hash: string; issuedAt: string; expiresAt: string }[];
@@ -132,6 +134,7 @@ export interface DeviceSignInInput {
   platform: string;
   scopes: readonly Scope[];
   stepUpKey?: { id: string; publicKey: string };
+  relay?: { publicKey: string; connId: string };
   /** Who made it, for the record: the person, or who showed the pairing code. */
   by: string;
   /** The sign-in the pairing code was shown after (recent-sign-in.ts), for the record. */
@@ -183,7 +186,7 @@ export class DeviceStore {
       id: `dev_${randomBytes(8).toString("hex")}`, principalId: input.principalId, identity: input.identity, via: input.via, method: input.method,
       ...(input.providerId !== undefined ? { providerId: input.providerId } : {}), name: input.name.trim().slice(0, 60) || "unnamed", platform: input.platform,
       scopes: [...new Set(input.scopes)], createdAt: at(now), familyId: `fam_${randomBytes(8).toString("hex")}`, familyExpiresAt: at(now + FAMILY_TTL_MS),
-      ...(input.stepUpKey !== undefined ? { stepUpKey: input.stepUpKey } : {}), access: [], refresh: [],
+      ...(input.stepUpKey !== undefined ? { stepUpKey: input.stepUpKey } : {}), ...(input.relay !== undefined ? { relay: input.relay } : {}), access: [], refresh: [],
     };
     const tokens = this.mintPair(device, now);
     this.devices.push(device);
@@ -276,6 +279,13 @@ export class DeviceStore {
   get(id: string, may: (device: DeviceView) => boolean = () => true): DeviceView | undefined {
     const device = this.devices.find(entry => entry.id === id && entry.endedAt === undefined);
     return device !== undefined && may(viewOf(device)) ? viewOf(device) : undefined;
+  }
+
+  /** The live device that reconnects through the relay with this static key, while its sign-in is still its person's; and its push handle. */
+  byRelayKey(publicKey: string, holds: (device: DeviceHolder) => boolean): { device: DeviceView; connId: string } | undefined {
+    const now = this.now().getTime();
+    const device = this.readOnly ? undefined : this.devices.find(entry => entry.relay?.publicKey === publicKey && entry.endedAt === undefined && Date.parse(entry.familyExpiresAt) > now);
+    return device !== undefined && holds(device) ? { device: viewOf(device), connId: device.relay!.connId } : undefined;
   }
 
   /** The step-up key a device registered, for checking its proofs (INV-2214 part 2). */

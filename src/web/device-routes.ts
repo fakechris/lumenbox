@@ -5,7 +5,8 @@
  * - `POST /api/devices/pairing`: a pairing code and its QR code, for two minutes, once. Only after a
  *   sign-in in the last ten minutes (recent-sign-in.ts): a copied cookie must not become a phone that
  *   stays signed in for months. The QR code holds `lumenbox://pair#server=<origin>&code=<code>` — in the
- *   fragment, so nothing on the way logs it.
+ *   fragment, so nothing on the way logs it. A personal installation with phone access on shows the
+ *   relay's instead (`lumenbox://pair#hostPub=…&relay=…&route=…&pairSecret=…`, phone-relay.ts).
  * - `GET /api/devices`: the person's signed-in devices. Never a token.
  * - `POST /api/devices/remove` (`id`): ends one — the person's own, or anyone's for an Admin.
  *
@@ -31,6 +32,12 @@ export interface DeviceRouteDeps {
   };
   freshSignIn(): { ok: true; signedInAt?: string } | { ok: false; error: ApiError };
   publicUrl(): string | undefined;
+  /**
+   * A personal installation's phones (docs/110 §3, INV-2327): `on`, they pair through the encrypted relay
+   * (phone-relay.ts) and this mints the QR code; off, with no public address either, the page says how to
+   * turn phone access on. Absent in an organisation, which pairs through its public address.
+   */
+  relay?: { on: false } | { on: true; pair(pairing: PairingFor, by: string): { link: string; expiresAt: string; qrSvg: string } | ApiError };
 }
 
 type Answer = { status: number; body: unknown };
@@ -53,15 +60,19 @@ export async function deviceRoute(route: string, deps: DeviceRouteDeps): Promise
 
   const fresh = deps.freshSignIn();
   if (!fresh.ok) return { status: 403, body: fresh.error };
-  const origin = deps.publicUrl()?.trim().replace(/\/+$/, "") ?? "";
-  // The phone needs an address it can reach: this installation's public one.
-  if (origin === "") return { status: 503, body: apiError("public-url-unset") };
-  // And one a QR code can hold with the code beside it (43 characters): refused before any code is made.
-  const linkOf = (code: string) => `lumenbox://pair#server=${encodeURIComponent(origin)}&code=${code}`;
-  if (Buffer.byteLength(linkOf("x".repeat(43))) > QR_MAX_BYTES) return { status: 503, body: apiError("public-url-too-long", { bytes: QR_MAX_BYTES }) };
   const pairing: PairingFor = deps.userId === undefined
     ? { principalId: me, identity: me, via: "person" }
     : { principalId: me, identity: deps.userId, via: "sign-in", ...(fresh.signedInAt !== undefined ? { signedInAt: fresh.signedInAt } : {}) };
+  if (deps.relay?.on === true) {
+    const shown = deps.relay.pair(pairing, deps.userId ?? "operator");
+    return "code" in shown ? { status: 503, body: shown } : { status: 200, body: shown };
+  }
+  const origin = deps.publicUrl()?.trim().replace(/\/+$/, "") ?? "";
+  // The phone needs an address it can reach: this installation's public one, or (personal) the relay.
+  if (origin === "") return { status: 503, body: apiError(deps.relay !== undefined ? "phone-access-off" : "public-url-unset") };
+  // And one a QR code can hold with the code beside it (43 characters): refused before any code is made.
+  const linkOf = (code: string) => `lumenbox://pair#server=${encodeURIComponent(origin)}&code=${code}`;
+  if (Buffer.byteLength(linkOf("x".repeat(43))) > QR_MAX_BYTES) return { status: 503, body: apiError("public-url-too-long", { bytes: QR_MAX_BYTES }) };
   const shown = deps.devices.showPairing(pairing, deps.userId ?? "operator");
   const link = linkOf(shown.code);
   return { status: 200, body: { link, expiresAt: new Date(shown.expiresAt).toISOString(), qrSvg: qrSvg(link) } };

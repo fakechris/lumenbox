@@ -1027,6 +1027,7 @@
   "env/AGENTBOX_K8S_STORAGE_CLASS": "listed by agentbox help",
   "env/AGENTBOX_KEY_ENV": "listed by agentbox help",
   "env/AGENTBOX_MCP_TOKEN": "listed by agentbox help",
+  "env/AGENTBOX_MOBILE_RELAY": "listed by agentbox help",
   "env/AGENTBOX_MODEL": "listed by agentbox help",
   "env/AGENTBOX_PROVIDER": "listed by agentbox help",
   "env/AGENTBOX_PUBLIC_URL": "listed by agentbox help",

@@ -636,9 +636,7 @@ export function validCpus(raw: unknown): string | undefined {
   return Number.isFinite(n) && n >= 0.5 && n <= 1024 ? String(n) : undefined;
 }
 
-export function boxCpusFromEnvironment(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.AGENTBOX_CPUS?.trim() || undefined;
-}
+export function boxCpusFromEnvironment(env: NodeJS.ProcessEnv = process.env): string | undefined { return env.AGENTBOX_CPUS?.trim() || undefined; }
 
 export function chosenBoxCpus(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return env.AGENTBOX_CPUS?.trim() || loadConfig().boxCpus || undefined;
@@ -653,6 +651,7 @@ export function chosenBoxCpus(env: NodeJS.ProcessEnv = process.env): string | un
 export function trustsGatewayIdentity(env: NodeJS.ProcessEnv = process.env): boolean { return env.AGENTBOX_TRUST_GATEWAY_IDENTITY === "1"; }
 
 /** An eval run (docs/105), set by the benchmark adapter: see host/missing-tools.ts. */ export const evalMode = (env: NodeJS.ProcessEnv = process.env): boolean => env.AGENTBOX_EVAL === "1";
+/** The phone relay (docs/110 §3); unset, phone access is off. */ export const mobileRelayAddress = (env = process.env): string | undefined => (env.AGENTBOX_MOBILE_RELAY ?? loadConfig().env?.AGENTBOX_MOBILE_RELAY)?.trim() || undefined;
 
 /**
  * This machine's own web credential, kept out of what agents are shown (INV-1543): the UI token

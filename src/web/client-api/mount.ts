@@ -233,6 +233,8 @@ export function mountClientApi(server: {
       list: (principalId: string) => devices.list(principalId),
       remove: (id: string, by: string, may: (device: { principalId: string }) => boolean) => { const done = devices.remove(id, "removed", by, may); if (done) ended(); return done; },
     },
+    /** The relay's half (phone-relay.ts, INV-2327): a phone paired in personal mode is a device of this store, judged by the same `holds`. */
+    relayDevices: { store: devices, holds, ended },
     /**
      * Somebody's access ended — a directory sync's *left*, an Admin removing them, a sign-out everywhere: their
      * devices end now (`signInOnly`: only those made from these sign-ins), and their open streams and desktops close.
