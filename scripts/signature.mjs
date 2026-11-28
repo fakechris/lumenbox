@@ -111,7 +111,9 @@ export function developerIdProblems(artifacts, distDir, { run = runTool, team = 
     const mount = mkdtempSync(join(mountRoot, "lumenbox-dmg-"));
     const attached = run("hdiutil", ["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount, artifact.path]);
     if (attached.code !== 0) {
-      problems.push(`${name}: could not be mounted to read its app (hdiutil: ${firstLine(attached.output)})`);
+      // hdiutil prints progress first and its complaint last.
+      const complaint = attached.output.split("\n").map(line => line.trim()).filter(line => line !== "").at(-1) ?? "no output";
+      problems.push(`${name}: could not be mounted read-only to read its app (${complaint}); a dmg still being written or stapled fails this too`);
       removeMountPoint(mount);
       continue;
     }
