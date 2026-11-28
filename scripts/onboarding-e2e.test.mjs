@@ -24,6 +24,8 @@ test("arguments: an upgrade run names the previous release, walks its own phases
   assert.throws(() => parseArgs(["--version", "0.4.12", "--upgrade-from", "latest"]), /--upgrade-from X\.Y\.Z/);
   assert.throws(() => parseArgs(["--version", "0.4.12", "--upgrade-from", "0.4.11", "--phases", "full"]), /leave out --phases/);
   assert.throws(() => parseArgs(["--version", "0.4.12", "--downgrade-check"]), /needs --upgrade-from/);
+  assert.throws(() => parseArgs(["--version", "0.4.12", "--from-dmg", "old.dmg"]), /need --upgrade-from/);
+  assert.equal(parseArgs(["--version", "0.4.12", "--upgrade-from", "0.4.11", "--from-dmg", "old.dmg", "--from-sums", "S"]).fromDmg, "old.dmg");
   assert.equal(parseArgs(["--version", "0.4.12"]).downgradeCheck, false);
 });
 

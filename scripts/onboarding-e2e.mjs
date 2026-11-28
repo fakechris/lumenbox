@@ -21,7 +21,8 @@
  *   node scripts/onboarding-e2e.mjs --version 0.3.8 [--phases nodocker,full] [--provider minimax]
  *        [--key-env MINIMAX_API_KEY] [--port 7796] [--cdp-port 9341] [--run-dir DIR] [--dmg FILE]
  *        [--box-timeout-min 40] [--reply-timeout-min 6] [--allow-unnotarized]
- *   node scripts/onboarding-e2e.mjs --version 0.4.12 --dmg FILE --sums FILE --upgrade-from 0.4.11 [--downgrade-check] …
+ *   node scripts/onboarding-e2e.mjs --version 0.4.12 --dmg FILE --sums FILE --upgrade-from 0.4.11 [--downgrade-check]
+ *        [--from-dmg FILE --from-sums FILE] …
  *   node scripts/onboarding-e2e.mjs --cleanup DIR [--yes] [--remove-image]
  *
  * `--upgrade-from` walks an upgrade instead of a first run: the previous release used, then the
@@ -60,6 +61,8 @@ export function parseArgs(argv) {
       case "--phases": out.phases = next().split(",").map(p => p.trim()).filter(Boolean); phasesGiven = true; break;
       case "--upgrade-from": out.upgradeFrom = next(); break;
       case "--downgrade-check": out.downgradeCheck = true; break;
+      case "--from-dmg": out.fromDmg = next(); break;
+      case "--from-sums": out.fromSums = next(); break;
       case "--provider": out.provider = next(); break;
       case "--key-env": out.keyEnv = next(); break;
       case "--port": out.port = Number(next()); break;
@@ -81,6 +84,7 @@ export function parseArgs(argv) {
     for (const phase of out.phases) if (!["nodocker", "full"].includes(phase)) throw new Error(`unknown phase ${phase}`);
     for (const [name, value] of [["--port", out.port], ["--cdp-port", out.cdpPort]]) if (!Number.isInteger(value) || value < 1024 || value > 65535) throw new Error(`${name} must be a port above 1023`);
     if (out.port === 7777) throw new Error("--port 7777 is the default app's port; pick another so a running LumenBox is never touched");
+    if ((out.fromDmg !== undefined || out.fromSums !== undefined) && out.upgradeFrom === undefined) throw new Error("--from-dmg / --from-sums are the previous release's; they need --upgrade-from");
     if (out.downgradeCheck && out.upgradeFrom === undefined) throw new Error("--downgrade-check starts the previous app on the upgraded home; it needs --upgrade-from");
     if (out.upgradeFrom !== undefined) {
       if (!/^\d+\.\d+\.\d+$/.test(out.upgradeFrom)) throw new Error("--upgrade-from X.Y.Z names the previous release");
@@ -611,7 +615,7 @@ async function main() {
   }
   try {
     // Both apps are fetched first, so a missing or tampered DMG fails before half an hour of use.
-    const previousReady = options.upgradeFrom === undefined || (await fetchArtifacts(run, { version: options.upgradeFrom, into: join(run.dir, "previous"), label: "previous" }));
+    const previousReady = options.upgradeFrom === undefined || (await fetchArtifacts(run, { version: options.upgradeFrom, dmg: options.fromDmg, sums: options.fromSums, into: join(run.dir, "previous"), label: "previous" }));
     // Gatekeeper refusing the download does not stop the walk: what happens after it is still worth knowing.
     if (previousReady && (await fetchArtifacts(run))) {
       if (options.phases.includes("nodocker")) await phaseNoDocker(run);

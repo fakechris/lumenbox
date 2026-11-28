@@ -92,7 +92,9 @@ node scripts/onboarding-e2e.mjs --version 0.4.12 --dmg dist-app/LumenBox-0.4.12-
 A candidate may carry the published version's number (a rebuild with a new home format): then
 `--dmg` is required, since an upgrade from a release to itself is no upgrade. Both DMGs are
 fetched and checked first; the previous one is installed in `<run-dir>/previous/`, the candidate
-in `<run-dir>/`. Both apps share `<run-dir>/upgrade/home` and `<run-dir>/upgrade/user-data` and
+in `<run-dir>/`. A previous release whose GitHub page carries no DMG (0.4.10 and 0.4.11 were
+published without assets) is given as a local build of its tag with `--from-dmg FILE --from-sums
+FILE`, checked the same way. Both apps share `<run-dir>/upgrade/home` and `<run-dir>/upgrade/user-data` and
 the run's one box container and volumes, as one person's machine does across an upgrade.
 
 | step | passes when |
