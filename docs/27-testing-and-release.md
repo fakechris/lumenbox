@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: testing-and-release
-     updated: 2026-11-27
+     updated: 2026-11-28
 -->
 # Testing and release stability: ours, against OpenClaw and Hermes
 
@@ -117,7 +117,15 @@ installers with three packages in node_modules and every new user's first launch
    A69VRB2X6U), its `.p8` kept outside the repository, stored once with
    `xcrun notarytool store-credentials lumenbox --key <AuthKey_ID.p8> --key-id <ID> --issuer <issuer>`.
    The secret then lives in the keychain; nothing in the repository or the build log names it.
-4. **After publishing, a new user's first run on another Mac** (INV-1447):
+4. **Before publishing: an upgrade run from the previous release** (INV-2209). The candidate
+   dmg from step 3, checked against the sums about to be published, walked by
+   `scripts/onboarding-e2e.mjs --upgrade-from <previous> --downgrade-check`: the previous release
+   installed and used (key, box, a second agent, a conversation, a memory, a routine, a task, a
+   file in each box volume), then the candidate started on that home and box, and every item read
+   back, the format record checked, a new message answered; then the previous app started on the
+   upgraded home must refuse it. "Data from the previous version loads unchanged" goes into the
+   release note only after this passed. Runbook: [86](86-onboarding-acceptance.md).
+5. **After publishing, a new user's first run on another Mac** (INV-1447):
    `scripts/onboarding-e2e.mjs` downloads the published DMG, checks it against SHA256SUMS,
    and walks no-Docker guidance → key in Settings → Start the box (a real first pull) →
    green dot → first reply, isolated from whatever already runs there. Runbook:
@@ -156,9 +164,9 @@ is what somebody builds on. The promises of docs/106 §3 are made for stable lin
   the current code and reads it back. `home-0.4.9` is the first. A fixture is never regenerated:
   it is what that release wrote.
 
-Not yet part of the acceptance run: "install the previous line, use it, upgrade, check" on a real
-box and its volumes. The fixture covers the home; the volumes are covered by the update path
-(docs/12) and nothing automatic.
+The fixture covers the home in the suite; the real upgrade — the previous line's app installed and
+used, the candidate started on its home, box and volumes — is the acceptance run's upgrade mode,
+step 4 of the release order above.
 
 ## What changed today
 

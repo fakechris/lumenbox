@@ -15,6 +15,20 @@ test("arguments: a version is required, the default app's port is refused, and c
   assert.equal(parseArgs(["--cleanup", "/tmp/run", "--yes"]).yes, true);
 });
 
+test("arguments: an upgrade run names the previous release, walks its own phases, and refuses what would not be an upgrade", () => {
+  const run = parseArgs(["--version", "0.4.12", "--upgrade-from", "0.4.11", "--downgrade-check", "--key-env", "K"]);
+  assert.deepEqual({ from: run.upgradeFrom, phases: run.phases, downgrade: run.downgradeCheck }, { from: "0.4.11", phases: ["upgrade"], downgrade: true });
+  assert.equal(parseArgs(["--version", "0.4.11", "--dmg", "c.dmg", "--upgrade-from", "0.4.11"]).upgradeFrom, "0.4.11", "a candidate of the same version is an upgrade of its data");
+  assert.throws(() => parseArgs(["--version", "0.4.11", "--upgrade-from", "0.4.11"]), /needs a candidate --dmg/);
+  assert.throws(() => parseArgs(["--version", "0.4.9", "--upgrade-from", "0.4.10"]), /downgrade/);
+  assert.throws(() => parseArgs(["--version", "0.4.12", "--upgrade-from", "latest"]), /--upgrade-from X\.Y\.Z/);
+  assert.throws(() => parseArgs(["--version", "0.4.12", "--upgrade-from", "0.4.11", "--phases", "full"]), /leave out --phases/);
+  assert.throws(() => parseArgs(["--version", "0.4.12", "--downgrade-check"]), /needs --upgrade-from/);
+  assert.throws(() => parseArgs(["--version", "0.4.12", "--from-dmg", "old.dmg"]), /need --upgrade-from/);
+  assert.equal(parseArgs(["--version", "0.4.12", "--upgrade-from", "0.4.11", "--from-dmg", "old.dmg", "--from-sums", "S"]).fromDmg, "old.dmg");
+  assert.equal(parseArgs(["--version", "0.4.12"]).downgradeCheck, false);
+});
+
 test("the DMG a person downloads, and the digest SHA256SUMS publishes for exactly that file", () => {
   assert.equal(dmgName("0.3.8", "arm64"), "LumenBox-0.3.8-arm64.dmg");
   assert.equal(dmgName("0.3.8", "x64"), "LumenBox-0.3.8.dmg");
