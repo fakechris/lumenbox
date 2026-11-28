@@ -1,8 +1,13 @@
 /** The onboarding run's pure parts (INV-1447): arguments, the published digest, isolation, and the untouched check. */
 
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { constants, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { once } from "node:events";
 import { test } from "node:test";
-import { boxResources, cleanEnv, disturbed, dmgName, expectedDigest, parseArgs, summarize } from "./onboarding-e2e.mjs";
+import { appEnv, boxResources, cleanup, disturbed, dmgName, expectedDigest, ownProcess, parseArgs, runBundles, summarize } from "./onboarding-e2e.mjs";
 
 test("arguments: a version is required, the default app's port is refused, and cleanup needs no version", () => {
   const run = parseArgs(["--version", "0.3.8", "--key-env", "MINIMAX_API_KEY"]);
@@ -40,10 +45,13 @@ test("the DMG a person downloads, and the digest SHA256SUMS publishes for exactl
   assert.equal(expectedDigest(sums, "LumenBox-0.3.8-arm64-mac.zip"), undefined);
 });
 
-test("the app's environment keeps a login session's basics and nothing else from the operator's shell", () => {
-  const env = cleanEnv({ HOME: "/Users/x", PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-secret", MINIMAX_API_KEY: "mm", AGENTBOX_HOME: "/Users/x/.agentbox", DOCKER_HOST: "tcp://elsewhere" }, { AGENTBOX_HOME: "/run/home" });
-  assert.equal(env.HOME, "/Users/x");
-  assert.equal(env.AGENTBOX_HOME, "/run/home");
+test("the app's environment keeps a login session's basics and nothing else from the operator's shell, and points it at the run's own home and logs", () => {
+  const operator = { HOME: "/Users/x", PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-secret", MINIMAX_API_KEY: "mm", AGENTBOX_HOME: "/Users/x/.agentbox", DOCKER_HOST: "tcp://elsewhere", LUMENBOX_LOGS_DIR: "/Users/x/elsewhere" };
+  const env = appEnv(operator, { home: "/run/full/home", logs: "/run/full/logs", container: "lumenbox-onboard-1", port: 7796 });
+  assert.equal(env.HOME, "/Users/x", "the real HOME is kept, so the shell's default logs directory would be the owner's");
+  assert.equal(env.LUMENBOX_LOGS_DIR, "/run/full/logs", "so the run names its own (INV-2307)");
+  assert.deepEqual([env.AGENTBOX_HOME, env.AGENTBOX_CONTAINER, env.LUMENBOX_PORT], ["/run/full/home", "lumenbox-onboard-1", "7796"]);
+  assert.equal(appEnv(operator, { home: "/h", logs: "/l", container: "c" }, { ELECTRON_RUN_AS_NODE: "1" }).LUMENBOX_LOGS_DIR, "/l", "the server started alone gets one too");
   for (const leak of ["ANTHROPIC_API_KEY", "MINIMAX_API_KEY", "DOCKER_HOST"]) assert.equal(env[leak], undefined, `${leak} does not reach the app`);
   assert.match(env.PATH, /\/usr\/local\/bin/, "Docker's usual places are on PATH, as a GUI launch has them");
 });
@@ -63,4 +71,53 @@ test("a run passes only when it ran something and nothing failed; notes do not f
   assert.deepEqual(summarize([]), { passed: false, failed: [] });
   assert.deepEqual(summarize([{ name: "a", status: "pass" }, { name: "g", status: "note" }]), { passed: true, failed: [] });
   assert.deepEqual(summarize([{ name: "a", status: "pass" }, { name: "b", status: "fail" }]), { passed: false, failed: ["b"] });
+});
+
+test("cleanup stops a recorded process only while it is provably the run's own: its executable in the run's app, started before it was recorded", () => {
+  const bundles = runBundles("/runs/r1");
+  const app = "/runs/r1/LumenBox.app/Contents/MacOS/LumenBox";
+  const at = "2026-11-28T06:00:00.000Z";
+  const t = Date.parse(at);
+  assert.equal(ownProcess({ pid: 5, startedAt: at }, { executable: app, startedAt: t - 1000 }, bundles).stop, true);
+  assert.equal(ownProcess({ pid: 5, startedAt: at }, { executable: "/runs/r1/previous/LumenBox.app/Contents/Frameworks/x", startedAt: t }, bundles).stop, true, "the previous release's app is the run's too");
+  assert.match(ownProcess(5, { executable: app, startedAt: t }, bundles).why, /no start time, so the executable alone decides; stopped/, "a manifest without start times is judged by the executable alone, and says so");
+  assert.match(ownProcess({ pid: 5, startedAt: at }, { executable: app, startedAt: undefined }, bundles).why, /executable alone decides; stopped/, "where ps cannot run, the executable still proves it");
+  for (const [entry, now, why] of [
+    [{ pid: 5, startedAt: at }, undefined, /no longer running/],
+    [{ pid: 5, startedAt: at }, { executable: "/bin/sleep", startedAt: t - 1000 }, /not ours.*\/bin\/sleep/],
+    [{ pid: 5, startedAt: at }, { executable: "/runs/r1/LumenBox.app-other/LumenBox", startedAt: t - 1000 }, /not ours/],
+    [{ pid: 5, startedAt: at }, { executable: "/runs/r10/LumenBox.app/Contents/MacOS/LumenBox", startedAt: t - 1000 }, /not ours/],
+    [{ pid: 5, startedAt: at }, { executable: app, startedAt: t + 60_000 }, /after the run recorded it/],
+    [{ pid: 5, startedAt: at }, { executable: undefined, startedAt: t }, /could not be read/],
+    [{ pid: 5, startedAt: at }, { executable: "/bin/sleep", startedAt: undefined }, /not ours/],
+  ]) {
+    const verdict = ownProcess(entry, now, bundles);
+    assert.equal(verdict.stop, false, verdict.why);
+    assert.match(verdict.why, why);
+  }
+});
+
+test("--cleanup --yes leaves alone a process that took a recorded number, and stops the one running from the run's own app", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "onboarding-cleanup-"));
+  const macos = join(dir, "LumenBox.app", "Contents", "MacOS");
+  mkdirSync(macos, { recursive: true });
+  // A real executable inside the run's bundle: a copy of this node (a copy of a system binary will not start on macOS).
+  copyFileSync(process.execPath, join(macos, "LumenBox"), constants.COPYFILE_FICLONE);
+  const unrelated = spawn("sleep", ["60"], { stdio: "ignore" });
+  const ours = spawn(join(macos, "LumenBox"), ["-e", "console.log('up'); setTimeout(() => {}, 60000)"], { stdio: ["ignore", "pipe", "ignore"] });
+  t.after(() => { unrelated.kill("SIGKILL"); ours.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); });
+  await once(ours.stdout, "data");
+  const recorded = new Date().toISOString();
+  writeFileSync(join(dir, "manifest.json"), JSON.stringify({ box: boxResources("lumenbox-onboard-test0"), image: "fakechris/lumenbox:9.9.9", imageWasCached: true, appProcesses: [unrelated.pid, { pid: ours.pid, startedAt: recorded }] }));
+  const docker = { sh: () => { throw new Error("no Docker in this test"); }, shOk: () => false };
+  const listed = [];
+  await cleanup({ cleanup: dir, yes: false }, { ...docker, log: line => listed.push(line) });
+  const list = listed.join("\n");
+  assert.match(list, new RegExp(`process +${unrelated.pid} — not ours, left alone: it runs \\S*sleep`), "the list says which numbers are left alone and why");
+  assert.match(list, new RegExp(`process +${ours.pid} — this run's app .*stopped with --yes`), "the list names the process --yes stops");
+  const exited = once(ours, "exit");
+  await cleanup({ cleanup: dir, yes: true }, { ...docker, log: () => {} });
+  assert.deepEqual(await exited, [null, "SIGTERM"]);
+  assert.equal(unrelated.exitCode, null);
+  assert.doesNotThrow(() => process.kill(unrelated.pid, 0), "the unrelated process is still running");
 });

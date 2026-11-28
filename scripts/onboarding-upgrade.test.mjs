@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { compareVersions, downgradeExpectation, homeSnapshot, judgeFormat, judgeRefusal, knownFormat, readBackProblems, requiredFreeGb } from "./onboarding-upgrade.mjs";
+import { compareVersions, downgradeExpectation, homeSnapshot, judgeFormat, judgeRefusal, knownFormat, readBackProblems, requiredFreeGb, servingProblems } from "./onboarding-upgrade.mjs";
 
 const made = { format: 1, from: null, name: "new home", at: "t0", appVersion: "0.4.11" };
 const stamp2 = { format: 2, from: 1, name: "activations nobody signed in on become roster people", at: "t1", appVersion: "0.4.12" };
@@ -81,4 +81,15 @@ test("the home's record is read from disk the way the candidate wrote it, a torn
   writeFileSync(join(home, "format-migrations.jsonl"), `${JSON.stringify(made)}\n${JSON.stringify(stamp2)}\n{"torn`);
   mkdirSync(join(`${home}-backups`, "2026-11-28-before-format-2"), { recursive: true });
   assert.deepEqual(homeSnapshot(home), { format: 2, ledger: [made, stamp2], backups: ["2026-11-28-before-format-2"] });
+});
+
+test("after the upgrade the server answering must be the candidate's version and build, not a previous server left on the port", () => {
+  const stamped = { version: "0.4.12", buildCommit: "6128a7bf" };
+  assert.deepEqual(servingProblems({ version: "0.4.12", commit: "6128a7b" }, stamped), [], "a short and a longer form of one commit agree");
+  assert.deepEqual(servingProblems({ version: "0.4.12", commit: "unknown" }, { version: "0.4.12" }), [], "a build with no stamp is judged by the version");
+  const old = servingProblems({ version: "0.4.11", commit: "a1b2c3d" }, stamped);
+  assert.equal(old.length, 2);
+  assert.match(old.join("; "), /version 0\.4\.11, the candidate is 0\.4\.12.*build a1b2c3d, the candidate is 6128a7bf/);
+  assert.match(servingProblems({ version: "0.4.12", commit: "0000000" }, stamped)[0], /build 0000000/, "the same version from another build (an upgrade of 0.4.11 to a 0.4.11 candidate) is caught by the commit");
+  assert.match(servingProblems(undefined, stamped)[0], /says version nothing/);
 });
