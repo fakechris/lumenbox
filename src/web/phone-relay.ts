@@ -198,7 +198,8 @@ export function startPhoneRelay(deps: PhoneRelayDeps): PhoneRelay {
         const { near, far } = socketPair(meta.deviceId!);
         inner.emit("connection", far);
         // `host` is only a name: the connection is the in-memory socket above, never the network.
-        const out = http.request({ host: "localhost", createConnection: () => near as never, method: req.method, path, headers: { ...headers, host: "relay.invalid", connection: "close", "content-length": String(body.byteLength) } }, res => {
+        const sent = { ...headers, host: "relay.invalid", connection: "close", "content-length": String(body.byteLength) };
+        const out = http.request({ host: "localhost", createConnection: () => near as never, method: req.method, path, headers: sent }, res => {
           const answer: Record<string, string> = {};
           for (const [name, value] of Object.entries(res.headers)) if (value !== undefined && !HOP.has(name)) answer[name] = Array.isArray(value) ? value.join(", ") : value;
           resolve({ status: res.statusCode ?? 502, headers: answer, body: res });
