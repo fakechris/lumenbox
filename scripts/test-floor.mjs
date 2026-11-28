@@ -34,8 +34,12 @@ import { underOsNetworkDeny } from "./test-sandbox.mjs";
  * prevent, arrived at by neglect rather than by design (audit 2026-09-01). A number a person has to
  * remember to raise is a number that goes stale, so staleness is now itself reported: passing far
  * above the floor prints how to raise it, every run, until somebody does.
+ *
+ * Count passes on a Mac, not on CI: Linux runs tests a Mac skips (the real sandbox, /proc), so a
+ * floor taken from CI's number fails `npm test` on every Mac. 2026-11-28: CI passed 3978, a Mac
+ * 3971 with 9 skipped; the floor sits below both (INV-2319).
  */
-const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 3448);
+const FLOOR = Number(process.env.AGENTBOX_TEST_FLOOR ?? 3960);
 /** How far above the floor the suite may sit before the floor is called stale. */
 const STALE_MARGIN = 40;
 
