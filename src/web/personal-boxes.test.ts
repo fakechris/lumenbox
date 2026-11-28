@@ -84,30 +84,29 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.equal(recovery.status, 409, "admin connection retry must not report success while the computer remains unreachable");
   assert.equal(recovery.data.error, box.detail);
   const state = await request("/api/state", "web:alice");
+  // The installation's own box never runs on Kubernetes, so it is shown nowhere (INV-2310, docs/112 §3 rule 1).
   for (const [data, own] of [[state.data, state.data.box.own], [computers.data, computers.data.own]]) {
-    const shared = data.boxes.find((row: { id: string }) => row.id === own);
-    assert.equal(shared.connected, false);
-    assert.equal(shared.kind, "kubernetes");
+    assert.ok(!data.boxes.some((row: { id: string }) => row.id === own), "the box that cannot run is not listed");
   }
 
   const page = APP_PAGE("en"), bar = { innerHTML: "" };
+  const external = { id: "external", kind: "attached", name: "Remote VM", displayFloor: 1, agents: 0 };
   const classic = page.slice(page.indexOf("function renderBoxBar()"), page.indexOf('$("boxbar").onclick'));
   runInNewContext(classic + "renderBoxBar();", {
-    boxesSeen: state.data.boxes, currentBox: state.data.box.own, $: () => bar, esc: String,
+    boxesSeen: [...computers.data.boxes, external], currentBox: personal.data.boxId, $: () => bar, esc: String,
   });
   assert.match(bar.innerHTML, /title="kubernetes"[^>]*>.*<span class="kind">kubernetes<\/span>/);
   assert.doesNotMatch(bar.innerHTML, /docker|the box on this machine/i);
   const footer = { textContent: "" };
   const footerSource = page.slice(page.indexOf("function renderClusterBoxStatus()"), page.indexOf("function refresh()"));
   runInNewContext(`${footerSource}; renderClusterBoxStatus();`, {
-    $: () => footer, boxesSeen: state.data.boxes, boxState: state.data.box, currentBox: state.data.box.own, t: String,
+    $: () => footer, boxesSeen: computers.data.boxes, boxState: state.data.box, currentBox: personal.data.boxId, t: String, personalBoxError: () => "unreachable",
   });
-  assert.equal(footer.textContent, "ui.next.box.sharedKubernetes");
+  assert.equal(footer.textContent, "unreachable", "the footer speaks of the person's own box, never of the one that cannot run");
 
   const settings = { innerHTML: "" };
   const listStart = page.indexOf("function renderBoxes()");
   const listScript = page.slice(listStart, page.indexOf('\ndocument.addEventListener("click"', listStart));
-  const external = { id: "external", kind: "attached", name: "Remote VM", displayFloor: 1, agents: 0 };
   await runInNewContext(listScript + "renderBoxes();", {
     $: () => settings, esc: String, t: String, myRole: "admin", renderDesktopResources: () => "",
     fetch: async (path: string) => {
@@ -152,10 +151,9 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
       };
     },
   });
-  assert.match(subtitles[computers.data.boxes.findIndex((row: { id: string }) => row.id === computers.data.own)] ?? "", /^kubernetes · /);
-  assert.ok(subtitles.every(value => !/docker/i.test(value)));
-  assert.ok(subtitles.includes("ui.next.box.sharedKubernetes"));
-  assert.deepEqual(notice, ["ui.next.box.sharedKubernetes"]);
+  assert.match(subtitles[computers.data.boxes.findIndex((row: { id: string }) => row.id === personal.data.boxId)] ?? "", /^kubernetes · /);
+  assert.ok(subtitles.every(value => !/docker|Kubernetes backend/i.test(value)));
+  assert.deepEqual(notice, [], "no refusal is drawn for a box nobody is shown");
   assert.ok(!buttons.includes("ui.next.box.start"));
   const otherComputers = await request("/api/boxes", "web:bob");
   assert.ok(!otherComputers.data.boxes.some((row: { id: string }) => row.id === personal.data.boxId));
@@ -171,7 +169,7 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   const select = { innerHTML: "" };
   const panel = { innerHTML: "", style: {}, textContent: "" };
   runInNewContext(shelfPage + "openShelf(currentBox);", {
-    currentBox: state.data.box.own, esc: String, $: (id: string) => id === "shelfbox" ? select : panel,
+    currentBox: personal.data.boxId, esc: String, $: (id: string) => id === "shelfbox" ? select : panel,
     loadPersonalBoxes() {}, shelfCard: () => "", document: { getElementById: () => null },
     fetch: async (path: string) => {
       assert.equal(path, "/api/templates/shelf");
@@ -179,7 +177,8 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
     },
   });
   await new Promise(resolve => setImmediate(resolve));
-  assert.match(select.innerHTML, / selected>[^<]+ \(kubernetes\)<\/option>/, "INV-2069: Stamp into names the shared backend");
+  assert.ok(!shelf.data.boxes.some((row: { id: string }) => row.id === state.data.box.own), "the box picker offers no box that cannot run (INV-2310)");
+  assert.match(select.innerHTML, / selected>[^<]+<\/option>/, "the person's own box is the one chosen");
   assert.doesNotMatch(select.innerHTML, /docker/i);
   assert.equal(sharedDials, 0);
   assert.ok(!logs.some(line => /Docker lookup|docker inspect|box update:/.test(line)));

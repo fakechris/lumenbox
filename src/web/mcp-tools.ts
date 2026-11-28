@@ -6,14 +6,14 @@ import type { ProgressSourceAccess } from "../host/task-progress.ts";
  */
 
 import { randomUUID } from "node:crypto";
-import type { AgentRegistry } from "../agents/registry.ts";
+import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import type { Orchestrator } from "../host/orchestrator.ts";
 import type { StageWorld } from "../host/task-stage.ts";
 import { describeTask, isLive, type Task, type TaskStore } from "../host/tasks.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { describeOutcome, outcomeOf } from "./mcp-contract.ts";
 import { fetchDeliverableTool } from "./mcp-deliverable-tool.ts";
-import { agentNamed, mcpGoalTools } from "./mcp-goal-tools.ts";
+import { agentNamed, coordinatorOf, mcpGoalTools } from "./mcp-goal-tools.ts";
 import { taskRecord } from "./mcp-record.ts";
 import { type ChangeFeed, describeWatch, WAIT_MAX_SECONDS } from "./mcp-watch.ts";
 import type { McpServerTool } from "./mcp-server.ts";
@@ -39,6 +39,8 @@ export interface McpToolsDeps {
   mayReadTask?: (task: Task, principalId: string) => boolean;
   /** Scrubs held secrets from a reply before it is written on a task (INV-1676), as a chat reply is on its way out; absent, the reply as said. */
   redact?: (text: string) => string;
+  /** Who a call naming no agent reaches (INV-2310); absent, the first agent, made if there is none. */
+  coordinator?: (principalId: string) => AgentRecord | undefined;
 }
 
 export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
@@ -92,7 +94,7 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
       run: async (input, principalId) => {
         const brief = String(input.brief ?? "").trim();
         if (brief === "") throw new Error("A task needs a brief.");
-        const agent = agentNamed(registry, input.agent, () => registry.list()[0] ?? orchestrator.ensureDefaultAgent());
+        const agent = agentNamed(registry, input.agent, () => coordinatorOf(deps, principalId));
         const task = orchestrator.tasks?.create({
           title: brief.split("\n", 1)[0] ?? brief,
           description: brief,
@@ -231,7 +233,8 @@ export function mcpServerTools(deps: McpToolsDeps): McpServerTool[] {
         return `Saved the current desktop of ${agent.profile.name} to ${path}.`;
       },
     },
-    ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, aliasesOf: id => principals.byId?.(id)?.aliases ?? [], owns, log }) : []),
+    ...(deps.mayDrive !== undefined ? mcpGoalTools({ registry, orchestrator, coordinator: deps.coordinator,
+      mayDrive: deps.mayDrive, nameOf: id => principals.resolve(id).name, aliasesOf: id => principals.byId?.(id)?.aliases ?? [], owns, log }) : []),
     ...(deps.changeFeed !== undefined ? [watchTool(deps.changeFeed, owns)] : []),
     ...(orchestrator.tasks !== undefined ? [raiseAttentionTool(orchestrator.tasks, principals, deps.notifyTask)] : []),
     ...(orchestrator.tasks !== undefined ? [fetchDeliverableTool(orchestrator.tasks, deps.mayReadTask ?? ((task, principalId) => owns(task.requester, principalId)))] : []),

@@ -125,7 +125,9 @@ function setupCard() {
     var link = el("a", "act", t("ui.channels.bootstrap-pending"));
     link.href = "/bootstrap"; card.appendChild(link);
   }
-  if (!chat.box && (admin || state.hasPersonalBox !== false)) return bootstrap ? card : null;
+  // On an organisation (hasPersonalBox said) an Admin is a member like the others: their own box is the step, not the installation's (INV-2310).
+  var organisation = state.hasPersonalBox !== undefined;
+  if (!chat.box && state.hasPersonalBox !== false) return bootstrap ? card : null;
   var who = settings.me.identity || "operator";
   var storageKey = "lumen-setup-closed:" + state.installationId + ":" + who + ":" + chat.box;
   if ((admin && here.established) || localStorage.getItem(storageKey) === "1") return bootstrap ? card : null;
@@ -134,9 +136,9 @@ function setupCard() {
     { key: "box", done: here.box, open: function () { openSettingsPane("boxes"); } },
     { key: "agent", done: agent, open: function () { openMember(""); } },
     { key: "door", done: state.door, optional: true, open: function () { openSettingsPane("doors"); } },
-  ] : chat.box ? [{ key: "agent", done: agent, open: function () { openMember(""); } }] : [];
+  ].filter(function (step) { return step.key !== "box" || !organisation; }) : chat.box ? [{ key: "agent", done: agent, open: function () { openMember(""); } }] : [];
   // A box made at first sign-in (INV-2203): said while it is prepared, why it failed, or that the quota is used up.
-  if (!admin && state.hasPersonalBox !== undefined) steps.unshift({ key: "personalBox", done: state.hasPersonalBox, auto: state.autoBox,
+  if (organisation) steps.unshift({ key: "personalBox", done: state.hasPersonalBox, auto: state.autoBox,
     open: !state.autoBox ? createSetupBox : state.autoBox.state === "failed" ? function () { navigateView("boxes"); } : null });
   if (!admin && steps.every(function (step) { return step.done; })) return null;
   var close = el("button", "act", t("ui.next.act.close"));

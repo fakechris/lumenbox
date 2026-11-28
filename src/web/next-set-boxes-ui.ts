@@ -16,6 +16,7 @@ function loadBoxSet() {
     boxSet.list = got;
     if (got.backend === "kubernetes") {
       also("/api/personal-boxes", function (personal) { boxSet.personal = personal; });
+      also("/api/boxes/stranded", function (stranded) { boxSet.stranded = stranded.agents; });
     } else {
       also("/api/box/limits", function (limits) { boxSet.limits = limits; });
       also("/api/box/image", function (image) {
@@ -199,11 +200,33 @@ function clusterBlock() {
   return section;
 }
 
+/**
+ * Agents an earlier version made in this installation's own box, which cannot run here (INV-2310):
+ * named, kept, and deleted on the Admin's word, their records archived.
+ */
+function strandedBlock() {
+  var agents = boxSet.stranded || [];
+  if (!agents.length) return null;
+  var section = el("section", "setting"), remove = el("button", "act", t("ui.personal.strandedDelete"));
+  section.appendChild(el("h2", "group", t("ui.personal.strandedTitle")));
+  section.appendChild(el("p", "why", t("ui.personal.stranded", { names: agents.map(function (agent) { return agent.name; }).join(", ") })));
+  remove.addEventListener("click", function () {
+    var sure = el("button", "act-danger", t("ui.personal.strandedSure"));
+    sure.addEventListener("click", function () {
+      sure.disabled = true;
+      postJson("/api/boxes/stranded/delete", { agentIds: agents.map(function (agent) { return agent.id; }) }).then(function () { boxSet.stranded = []; loadBoxSet(); refreshSoon(); }, failed);
+    });
+    remove.replaceWith(sure);
+  });
+  section.appendChild(remove);
+  return section;
+}
+
 function renderBoxesPane(view) {
   if (boxSet.config === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadBoxSet(); return; }
   if (boxSet.error) view.appendChild(el("p", "why", boxSet.error));
   var backend = boxSet.list && boxSet.list.backend;
-  var blocks = backend === "kubernetes" ? [clusterBlock()] : backend ? [imageBlock(), limitsAndResetBlock(), hostBlock()] : [];
+  var blocks = backend === "kubernetes" ? [strandedBlock(), clusterBlock()] : backend ? [imageBlock(), limitsAndResetBlock(), hostBlock()] : [];
   blocks.concat([attachBlock(), quotaBlock(), nodesBlock(), diagnosticsBlock()]).forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

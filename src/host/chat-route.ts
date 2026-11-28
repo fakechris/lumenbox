@@ -15,7 +15,8 @@
  *  4. In a direct message: the one agent they may reach, when there is exactly one — it is the only
  *     one they could mean (docs/22 §2: "the box's only agent, an error when ambiguous").
  *  5. On a single-machine installation only: its first agent, as before — one person, every agent
- *     theirs, and doors there were set up with no default.
+ *     theirs, and doors there were set up with no default. The registry this is given leaves out
+ *     the agents of a box that cannot run here (INV-2310), so none of them is ever the answer.
  *  6. Nobody. A direct message is told so, with what to do; a room is told once, then left alone.
  *
  * **Who `@Name` names** (`named`): an agent in a box the speaker may enter — one in a box that is
@@ -43,8 +44,8 @@ export interface ChatRouteDeps {
   door(adapterName: string): { defaultAgent?: string; type?: string } | undefined;
   /** This person's own box is queued or starting (INV-2220): their agent is made when it has come up. */
   preparing(principalId: string): boolean;
-  /** A single-machine installation with no agent at all makes its first one, as it always has. */
-  firstAgent(): AgentRecord;
+  /** A single-machine installation with no agent at all makes its first one, as it always has; undefined where none is made (INV-2310). */
+  firstAgent(): AgentRecord | undefined;
   log(line: string): void;
 }
 
@@ -152,7 +153,8 @@ export class ChatRoute {
     if (byDoor !== undefined && (!direct || mayEnterBox(registry.boxOf(byDoor.id), person.id))) return { agent: byDoor };
     const reach = direct ? this.reachable(person.id).filter(entry => entry.agent.profile.hidden !== true) : [];
     if (reach.length === 1) return { agent: reach[0]!.agent };
-    if (principals.installation().mode === "single-machine") return { agent: registry.list()[0] ?? this.deps.firstAgent() };
+    const first = principals.installation().mode === "single-machine" ? registry.list()[0] ?? this.deps.firstAgent() : undefined;
+    if (first !== undefined) return { agent: first };
     if (direct) return { none: () => tr("agent.noneHere", locale) + (reach.length > 0 ? tr("agent.reachHint", locale, { roster: this.rosterOf(reach, locale) }) : "") };
     return { none: () => {
       const room = `${adapterName}\n${origin.chatKey ?? origin.identity}`;
@@ -161,6 +163,20 @@ export class ChatRoute {
       this.toldRooms.add(room);
       return tr("agent.noneForRooms", locale);
     } };
+  }
+
+  /**
+   * Who a call from this person that names no agent reaches when it came through no door (the MCP
+   * side door's "the coordinator", INV-2310): on a single-machine installation its first agent, as
+   * always; elsewhere their home agent, else the first in a box of their own, else the first in a
+   * box they may enter; with no agent at all, the first one made (none where there is no starter
+   * team); else nobody, and the caller says so. Never one in a box that cannot run.
+   */
+  coordinatorFor(principalId: string): AgentRecord | undefined {
+    const { registry } = this.deps;
+    if (this.deps.principals.installation().mode === "single-machine") return registry.list()[0] ?? this.deps.firstAgent();
+    const mayUse = registry.list().filter(agent => agent.profile.hidden !== true && mayEnterBox(registry.boxOf(agent.id), principalId));
+    return this.homeOf(principalId) ?? mayUse.find(agent => soleMember(registry.boxOf(agent.id)) === principalId) ?? mayUse[0] ?? (registry.list().length === 0 ? this.deps.firstAgent() : undefined);
   }
 
   /** The agent a direct message from this person reaches now, when they have one they may still enter. What the page marks. */

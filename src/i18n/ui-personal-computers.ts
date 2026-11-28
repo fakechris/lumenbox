@@ -53,5 +53,10 @@ export const UI_PERSONAL_COMPUTERS: Record<string, readonly [string, string]> = 
   "ui.personal.transferAgree": ["同意转交", "Agree to hand it over"],
   "ui.personal.transferDecline": ["拒绝", "Decline"],
   "ui.personal.handedFrom": ["这台电脑原来归 {name}。里面的浏览器和工具可能还登录着 {name} 的账号：使用前请先退出这些登录。", "This computer was {name}’s. Its browser and tools may still be signed in as {name}: sign out of those before you use it."],
+  // Settings → Computers, an Admin's: the agents an earlier version made in the box that cannot run here (INV-2310).
+  "ui.personal.strandedTitle": ["无法运行的 agent", "Agents that cannot run here"],
+  "ui.personal.stranded": ["这些 agent 在一台无法在这里运行的 box 上：{names}。它们的记录都还在。", "These agents are in a box that cannot run here: {names}. Their records are kept."],
+  "ui.personal.strandedDelete": ["删除它们", "Delete them"],
+  "ui.personal.strandedSure": ["确认删除，记录归档", "Delete, and archive their records"],
   "ui.personal.waiting": ["配额已满，首次登录时没有创建个人电脑", "quota full, no personal computer made at first sign-in"],
 };

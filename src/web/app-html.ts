@@ -2353,7 +2353,7 @@ function renderBoxSection() {
   document.querySelectorAll("[data-docker-box], #setboximage, #setboximagenote").forEach(function (node) { node.hidden = cluster; });
   $("setboxup").disabled = !!boxState.starting;
   if (cluster) {
-    $("setboxstate").textContent = t("ui.next.boxset.backend") + ": Kubernetes · " + t("ui.next.boxset.namespace") + ": " + boxState.namespace + ". " + t("ui.next.box.sharedKubernetes");
+    $("setboxstate").textContent = t("ui.next.boxset.backend") + ": Kubernetes · " + t("ui.next.boxset.namespace") + ": " + boxState.namespace + ".";
     fetch("/api/personal-boxes").then(function (r) { return r.json(); }).then(function (data) {
       $("setclusterpods").textContent = (data.boxes || []).map(function (b) { return b.name + " · " + (b.podStatus || b.status) + (b.status === "unreachable" ? " · " + personalBoxError(b) : ""); }).join(" | ");
     }).catch(function () {});
@@ -4607,7 +4607,7 @@ function updateComposerTarget() {
 function renderClusterBoxStatus() {
   var selected = boxesSeen.find(function (b) { return b.id === currentBox; });
   $("boxinfo").textContent = !selected ? "" : selected.connected ? "{{ui.app.box-online}}" :
-    selected.id === boxState.own ? (selected.kind === "kubernetes" ? t("ui.next.box.sharedKubernetes") : boxState.detail) :
+    selected.id === boxState.own ? boxState.detail :
     personalBoxError({ status: "unreachable", connectionError: selected.detail });
   $("boxdot").className = "dot " + (selected && selected.connected ? "ok" : "bad");
 }
