@@ -180,6 +180,8 @@ function encodeChaChaNonce(n: bigint): Buffer {
 export class CipherState {
   private key: Buffer | null;
   private nonce = 0n;
+  /** Set by destroy(): a destroyed state refuses, rather than act as the empty-key pass-through. */
+  private destroyed = false;
 
   constructor(key: Uint8Array | null = null) {
     this.key = key ? Buffer.from(key) : null;
@@ -194,6 +196,7 @@ export class CipherState {
   }
 
   encryptWithAd(ad: Uint8Array, plaintext: Uint8Array): Uint8Array {
+    this.refuseIfDestroyed();
     if (this.key === null) return new Uint8Array(plaintext);
     if (this.nonce > MAX_NONCE) {
       throw new NoiseError("nonce_exhausted", "Noise cipher nonce exhausted");
@@ -211,6 +214,7 @@ export class CipherState {
   }
 
   decryptWithAd(ad: Uint8Array, ciphertext: Uint8Array): Uint8Array {
+    this.refuseIfDestroyed();
     if (this.key === null) return new Uint8Array(ciphertext);
     if (this.nonce > MAX_NONCE) {
       throw new NoiseError("nonce_exhausted", "Noise cipher nonce exhausted");
@@ -237,10 +241,15 @@ export class CipherState {
   }
 
   destroy(): void {
+    this.destroyed = true;
     if (this.key) {
       this.key.fill(0);
       this.key = null;
     }
+  }
+
+  private refuseIfDestroyed(): void {
+    if (this.destroyed) throw new NoiseError("cipher_destroyed", "Noise cipher state was destroyed");
   }
 }
 
