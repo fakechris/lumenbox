@@ -281,7 +281,7 @@ class App {
   async api(path, init = {}) {
     const token = this.token();
     const response = await fetch(`http://127.0.0.1:${this.run.options.port}${path}`, { ...init, headers: { ...(init.headers ?? {}), ...(token ? { authorization: `Bearer ${token}` } : {}) } });
-    if (!response.ok) throw new Error(`${path} answered ${response.status}`);
+    if (!response.ok) throw new Error(`${path} answered ${response.status}${await response.json().then(body => (body?.error ? `: ${String(body.error).slice(0, 200)}` : ""), () => "")}`);
     return response.json();
   }
 
@@ -552,7 +552,8 @@ async function firstUse(run, app, label) {
     pullSeconds = Math.round((Date.now() - started) / 1000);
     writeFileSync(join(run.dir, label, "box-start.log"), lastLog);
     await app.shot("04-box-started");
-    return `connected after ${pullSeconds}s (${run.manifest.imageWasCached ? "image was cached" : "including the first pull"})`;
+    const cached = label === "previous" ? run.manifest.previousImageWasCached : run.manifest.imageWasCached;
+    return `connected after ${pullSeconds}s (${cached ? "image was cached" : "including the first pull"})`;
   }))) return false;
   if (!(await run.step(`${label}: green dot`, async () => {
     // The rebuilt page has no dot: a computer that is up says nothing, and the notice that it is not goes away.

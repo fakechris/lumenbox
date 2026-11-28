@@ -299,7 +299,7 @@ export async function phaseUpgrade(kit) {
         return `${lines.length} line(s); one holds ${word}`;
       }))
       && (await run.step("previous: a routine (a skill with schedule:)", async () => {
-        const made = await previous.api("/api/automations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: `Upgrade probe ${word}`, body: `Say the upgrade code word ${word}.`, triggerType: "schedule", schedule: "0 9 * * 1", agent: seed.agent.name }) });
+        const made = await previous.api("/api/automations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: `Upgrade probe ${word}`, body: `Say the upgrade code word ${word}.`, triggerType: "schedule", schedule: "0 9 * * 1" }) }); // run by the box's default runner: naming an agent is refused unless it is one the runner rules allow
         const listed = await previous.waitFor("the routine in /api/schedules", async () => (await previous.api("/api/schedules")).schedules?.find(entry => entry.slug === made.slug), 30_000);
         seed.routine = { slug: made.slug, schedule: listed.schedule };
         return `${made.slug}, schedule ${listed.schedule ?? "?"}, written paused`;
