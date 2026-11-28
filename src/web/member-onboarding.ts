@@ -67,13 +67,24 @@ export class MemberOnboarding {
     }
   }
 
+  /** A personal box came up by another path than the queue (the retry route): as `boxReady`, telling its person when the box is the one their activation made (INV-2304). */
+  async reconnected(id: string): Promise<void> { await this.boxReady(id, this.deps.boxes.requestOf(id) === AUTO_REQUEST); }
+
+  /** At a server start: the people owed a telling by the record are told (INV-2304). */
+  async catchUp(channelIds: readonly string[], sourceOf: (channelId: string) => DirectorySource | undefined): Promise<void> {
+    if (this.ready === undefined) return;
+    try { if (await this.ready.catchUp(channelIds.flatMap(id => sourceOf(id) ?? [])) > 0) this.deps.changed(); }
+    catch (error) { this.deps.log(`assistant ready, at start: not caught up (${error instanceof Error ? error.message : String(error)})`); }
+  }
+
   /** The rest, once the ledger and the path to a person exist: what the activation routes' estimate, progress and telling-again use. */
   attach(more: {
     activations: Activations; reach: Pick<PersonReach, "tellOwner">; autoBoxes: OnboardingDeps["autoBoxes"]; publicUrl(): string | undefined;
     sourceOf(channelId: string): DirectorySource | undefined; quotaOf(identity: string): number | undefined;
   }): OnboardingDeps {
     this.ready = new AssistantReady({ activations: more.activations, principals: this.deps.principals, registry: this.deps.registry, reach: more.reach, publicUrl: more.publicUrl,
-      locale: this.deps.locale, log: this.deps.log, sourceOf: more.sourceOf });
+      locale: this.deps.locale, log: this.deps.log, sourceOf: more.sourceOf,
+      boxReady: id => this.deps.boxes.list(id).some(box => box.status === "ready" && this.deps.boxes.requestOf(box.id) === AUTO_REQUEST) });
     return { autoBoxes: more.autoBoxes, boxes: this.deps.boxes, ready: this.ready, quotaOf: more.quotaOf,
       boxName: person => tr("ui.personal.defaultName", this.deps.locale(person.id), { name: person.name }) };
   }
