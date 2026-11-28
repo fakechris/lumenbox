@@ -48,7 +48,7 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
   const roster: { id: string; name: string; role: "admin" | "driver" | "viewer"; identities: string[] }[] = [
     { id: "ann", name: "Ann", role: "admin" as const, identities: ["ding:ann-staff"] },
     { id: "ada", name: "Ada", role: "admin" as const, identities: [] },
-    { id: "dee", name: "Dee", role: "driver" as const, identities: ["ding:dee-staff", "feishu:ou_dee"] },
+    { id: "dee", name: "Dee", role: "driver" as const, identities: ["ding:dee-staff", "feishu:ou_dee", "feishu:ou_dee2"] },
     { id: "ivy", name: "Ivy", role: "driver" as const, identities: ["ding:ivy-staff"] },
     { id: "vic", name: "Vic", role: "viewer" as const, identities: [] },
     { id: "gus", name: "Gus", role: "driver" as const, identities: [] },
@@ -359,6 +359,8 @@ test("every error the document lists for an operation is provoked on it, and an 
       const token = (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token;
       // A body's string field given as a number.
       if (operation.requestBody !== undefined) return box.call(operation, { body: { ...WELL_FORMED[operation.operationId], [CONFLICT_FIELD[operation.operationId]!]: 12345 } });
+      // A POST that takes no body still reads one: a JSON array is not one.
+      if (operation.method === "POST") return box.call(operation, { token, body: [] });
       return (operation.query ?? []).some(param => param.name === "limit") ? box.call(operation, { token, query: "?limit=0" }) : box.call(operation, { token, id: "x".repeat(201) });
     },
     "api-not-found": async operation => box.call(operation, { token: (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token, id: "no-such-thing" }),
@@ -760,10 +762,17 @@ test("a phone signs in through the organisation's door with PKCE or a page's pai
   for (;;) { const { done } = await pairedStream.read(); if (done) break; }
   assert.ok(Date.now() - revoked < 5_000, "the stream closed when the sign-in was taken");
   await assertRefusal(await box.call(op("getMe"), { token: paired.tokens.accessToken }), "access-removed", "a device of a sign-in taken away");
-  // Then an Admin removes Dee, and her last device — paired from her other sign-in — ends with her.
+  // A roster saved without one of Dee's sign-ins ends the devices made from it, as taking it does.
+  const fifth = await json<{ tokens: Tokens }>(post("pairDevice", { code: (await box.pairingCode("feishu:ou_dee2")).code, deviceName: "Dee's tablet", platform: "android" }));
+  const roster = new box.Principals().list().map(person => (person.id === "dee" ? { ...person, identities: person.identities.filter(identity => identity !== "feishu:ou_dee2") } : person));
+  assert.equal((await fetch(`${box.base}/api/principals`, { method: "POST", headers: box.operator, body: JSON.stringify({ principals: roster }) })).status, 200);
+  await assertRefusal(await box.call(op("getMe"), { token: fifth.tokens.accessToken }), "access-removed", "a device of a sign-in a roster save dropped");
+  // Then an Admin removes Dee, and her last device — paired from her other sign-in — ends with her, as does a code shown a moment before.
   const fourth = await json<{ tokens: Tokens }>(post("pairDevice", { code: (await box.pairingCode("feishu:ou_dee")).code, deviceName: "Dee's laptop", platform: "macos" }));
+  const shownBefore = await box.pairingCode("feishu:ou_dee");
   assert.equal((await fetch(`${box.base}/api/principals/remove`, { method: "POST", headers: box.operator, body: JSON.stringify({ principalId: "dee" }) })).status, 200);
   await assertRefusal(await box.call(op("getMe"), { token: fourth.tokens.accessToken }), "access-removed", "a removed person's device");
+  await assertRefusal(await post("pairDevice", { code: shownBefore.code, deviceName: "late", platform: "ios" }), "pairing-code-invalid", "a code shown before the removal makes no device after it");
 
   // On the record: who signed in which device, each rotation, each end and why — and no token anywhere.
   const ledger = readFileSync(join(box.home, "tokens.jsonl"), "utf8"), lines = ledger.trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
@@ -773,6 +782,7 @@ test("a phone signs in through the organisation's door with PKCE or a page's pai
   assert.deepEqual(of(third.tokens.deviceId).at(-1), ["revoked", "signed-out", "dee"]);
   assert.deepEqual(of(paired.tokens.deviceId), [["minted", "pairing", "dee"], ["revoked", "access-ended", "operator"]]);
   assert.deepEqual(of(fourth.tokens.deviceId), [["minted", "pairing", "dee"], ["revoked", "access-ended", "operator"]]);
+  assert.deepEqual(of(fifth.tokens.deviceId), [["minted", "pairing", "dee"], ["revoked", "access-ended", "operator"]]);
   assert.ok(lines.some(line => line.event === "pairing-shown" && line.for === "dee" && line.by === "ding:dee-staff" && typeof line.signedInAt === "string"));
   const stored = readFileSync(join(box.home, "devices.json"), "utf8");
   for (const token of [signedIn.tokens.accessToken, signedIn.tokens.refreshToken, rotated.refreshToken, paired.tokens.accessToken, shown.code]) {
@@ -815,7 +825,12 @@ test("minting a token or showing a pairing code needs a sign-in in the last ten 
   assert.equal(freshInvite.status, 200);
   const inviteLine = readFileSync(join(box.home, "tokens.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>).find(line => line.kind === "invite")!;
   assert.deepEqual([inviteLine.for, inviteLine.by, typeof inviteLine.signedInAt], ["ann", "ding:ann-staff", "string"], "the invite on the record, with the sign-in it relied on");
-  assert.ok(!JSON.stringify(inviteLine).includes(((await freshInvite.json()) as { code: string }).code), "never the code");
+  const inviteCode = ((await freshInvite.json()) as { code: string }).code;
+  assert.ok(!JSON.stringify(inviteLine).includes(inviteCode), "never the code");
+  // Nor may a stale sign-in read a live invite's code off the people list: it would redeem into a fresh session.
+  const listed = async (cookie: string) => JSON.stringify(await (await fetch(`${box.base}/api/people`, { headers: { cookie } })).json());
+  assert.ok(!(await listed(staleAnn)).includes(inviteCode), "a stale sign-in sees the invite, not its code");
+  assert.ok((await listed(box.session("ding:ann-staff"))).includes(inviteCode), "a recent one sees the code");
 
   // Signed in again through the door: the new cookie carries the time, and the mint names it on the record.
   const entry = await fetch(`${box.base}/auth/ding`, { redirect: "manual" });

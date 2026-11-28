@@ -4866,6 +4866,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 409, apiError("principals-use-remove")); return;
           }
           principals.save(roster);
+          const dropped = previous.flatMap(person => person.identities.filter(identity => !(roster.find(next => next.id === person.id)?.identities ?? []).includes(identity)));
+          if (dropped.length > 0) v1.endAccess(dropped, true, caller.userId ?? "operator"); // a sign-in a save took away ends its devices (INV-2214)
           log(`principals roster updated (${roster.length} people)`);
           send(res, 200, { principals: principals.list() });
           return;

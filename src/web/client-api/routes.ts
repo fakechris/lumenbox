@@ -100,16 +100,19 @@ export function readParams(operation: Operation, pathParams: Record<string, stri
 export function readBody(operation: Operation, raw: unknown): { values: Record<string, unknown> } | Refusal {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { code: "api-param-invalid", vars: { name: "body", why: "a JSON object" } };
   const shape = operation.requestBody === undefined ? { properties: {}, required: [] } : resolve({ $ref: `#/components/schemas/${operation.requestBody}` });
-  const values: Record<string, unknown> = {};
+  // No prototype, and only a field the schema declares as its own: `__proto__` is a field like any other here.
+  const values: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
-    const declared = shape.properties?.[name];
+    const declared = shape.properties !== undefined && Object.hasOwn(shape.properties, name) ? shape.properties[name]! : undefined;
     if (declared === undefined) return { code: "api-param-unknown", vars: { name } };
     if (value === null) continue;
     const invalid = (why: string): Refusal => ({ code: "api-param-invalid", vars: { name, why } });
     if (declared.type === "string") {
       if (typeof value !== "string") return invalid("a string");
-      if (declared.minLength !== undefined && value.length < declared.minLength) return invalid(`at least ${declared.minLength} characters`);
-      if (declared.maxLength !== undefined && value.length > declared.maxLength) return invalid(`at most ${declared.maxLength} characters`);
+      // Characters as JSON Schema counts them: code points, not UTF-16 units.
+      const length = [...value].length;
+      if (declared.minLength !== undefined && length < declared.minLength) return invalid(`at least ${declared.minLength} characters`);
+      if (declared.maxLength !== undefined && length > declared.maxLength) return invalid(`at most ${declared.maxLength} characters`);
       if (declared.pattern !== undefined && !new RegExp(declared.pattern).test(value)) return invalid(`of the form ${declared.pattern}`);
     } else if (declared.type === "integer") {
       if (!Number.isInteger(value)) return invalid("a whole number");
@@ -121,7 +124,7 @@ export function readBody(operation: Operation, raw: unknown): { values: Record<s
     values[name] = value;
   }
   for (const name of shape.required ?? []) if (values[name] === undefined) return { code: "api-param-invalid", vars: { name, why: "required" } };
-  return { values };
+  return { values: { ...values } };
 }
 
 // --- checking a body against the schema (the contract tests, and nothing at run time) ------------

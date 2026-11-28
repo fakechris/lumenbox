@@ -16,7 +16,7 @@ import { type Principals, type Role, roleAtLeast, soleAdmin } from "../host/prin
 import { type ApiError, apiError } from "./api-error.ts";
 import type { DeviceView } from "./device-credentials.ts";
 import type { PairingFor } from "./device-sign-in.ts";
-import { qrSvg } from "./qr.ts";
+import { QR_MAX_BYTES, qrSvg } from "./qr.ts";
 
 export interface DeviceRouteDeps {
   readJson(): Promise<Record<string, unknown>>;
@@ -45,7 +45,7 @@ export async function deviceRoute(route: string, deps: DeviceRouteDeps): Promise
 
   if (route === "POST /api/devices/remove") {
     const body = await deps.readJson().catch(() => undefined);
-    if (body === undefined || typeof body !== "object" || Array.isArray(body)) return { status: 400, body: apiError("body-invalid") };
+    if (body === undefined || body === null || typeof body !== "object" || Array.isArray(body)) return { status: 400, body: apiError("body-invalid") };
     const isAdmin = roleAtLeast(deps.role, "admin");
     const done = deps.devices.remove(String(body.id ?? ""), deps.userId ?? "operator", device => isAdmin || device.principalId === me);
     return done ? { status: 200, body: { removed: true } } : { status: 404, body: apiError("device-unknown") };
@@ -56,10 +56,13 @@ export async function deviceRoute(route: string, deps: DeviceRouteDeps): Promise
   const origin = deps.publicUrl()?.trim().replace(/\/+$/, "") ?? "";
   // The phone needs an address it can reach: this installation's public one.
   if (origin === "") return { status: 503, body: apiError("public-url-unset") };
+  // And one a QR code can hold with the code beside it (43 characters): refused before any code is made.
+  const linkOf = (code: string) => `lumenbox://pair#server=${encodeURIComponent(origin)}&code=${code}`;
+  if (Buffer.byteLength(linkOf("x".repeat(43))) > QR_MAX_BYTES) return { status: 503, body: apiError("public-url-too-long", { bytes: QR_MAX_BYTES }) };
   const pairing: PairingFor = deps.userId === undefined
     ? { principalId: me, identity: me, via: "person" }
     : { principalId: me, identity: deps.userId, via: "sign-in", ...(fresh.signedInAt !== undefined ? { signedInAt: fresh.signedInAt } : {}) };
   const shown = deps.devices.showPairing(pairing, deps.userId ?? "operator");
-  const link = `lumenbox://pair#server=${encodeURIComponent(origin)}&code=${shown.code}`;
+  const link = linkOf(shown.code);
   return { status: 200, body: { link, expiresAt: new Date(shown.expiresAt).toISOString(), qrSvg: qrSvg(link) } };
 }

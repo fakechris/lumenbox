@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACCESS_TTL_MS, DeviceStore, REFRESH_OVERLAP_MS, REFRESH_TTL_MS } from "./device-credentials.ts";
 import { DeviceSignIns, CODE_TTL_MS, PAIRING_TTL_MS, START_TTL_MS, isAppRedirect } from "./device-sign-in.ts";
+import { chmodSync } from "node:fs";
+import { deviceRoute } from "./device-routes.ts";
 import type { TokenRecord } from "./token-ledger.ts";
 
 const holds = () => true;
@@ -60,6 +62,28 @@ test("a refresh token is spent by its use; within 30 seconds it ends nothing, af
   const text = readFileSync(join(home, "devices.json"), "utf8");
   for (const token of [made.tokens.accessToken, made.tokens.refreshToken, second.tokens.refreshToken, idle.tokens.refreshToken]) assert.ok(!text.includes(token));
   assert.ok(text.includes(createHash("sha256").update(made.tokens.refreshToken).digest("hex").slice(0, 32)), "a spent one as the start of its SHA-256, to know it again");
+
+  // A rotation that cannot be written is not made: the token presented still works once the disk does.
+  const careful = store.signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "careful phone", platform: "ios", scopes: ["work:read"], by: "dee" });
+  chmodSync(home, 0o500);
+  assert.throws(() => store.refresh(careful.tokens.refreshToken, holds));
+  chmodSync(home, 0o700);
+  assert.ok("tokens" in store.refresh(careful.tokens.refreshToken, holds), "not superseded, not reused: as if nothing happened");
+
+  // Neither token outlives the device's year: the last refresh before it gives what is left.
+  const yearly = store.signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "old faithful", platform: "ios", scopes: ["work:read"], by: "dee" });
+  const ends = clock.ms + 365 * 24 * 3_600_000;
+  let current = yearly.tokens.refreshToken;
+  while (clock.ms + REFRESH_TTL_MS - 60_000 < ends - 60_000) {
+    clock.ms = Math.min(clock.ms + REFRESH_TTL_MS - 60_000, ends - 60_000);
+    const next = store.refresh(current, holds);
+    assert.ok("tokens" in next);
+    current = next.tokens.refreshToken;
+    if (clock.ms === ends - 60_000) {
+      assert.equal(Date.parse(next.tokens.accessTokenExpiresAt), ends, "a minute of access, not fifteen");
+      assert.equal(Date.parse(next.tokens.refreshTokenExpiresAt), ends);
+    }
+  }
 });
 
 test("a person's access ending ends their devices — only those of one sign-in when they keep another — and a sign-in taken from them ends the devices made from it", () => {
@@ -106,6 +130,13 @@ test("a sign-in through a door: the start is taken once, its code works once, wi
   const refused = begin(); sign.take(refused.id);
   assert.equal(new URL(sign.finish(refused.id, { kind: "refused", why: "not-a-member" })!).searchParams.get("error_description"), "not-a-member");
 
+  // A person's access ending stops the codes waiting for them: only that sign-in's, or all of theirs.
+  const dropped = [sign.showPairing({ principalId: "dee", identity: "ding:dee", via: "sign-in" }), sign.showPairing({ principalId: "dee", identity: "feishu:dee", via: "sign-in" })];
+  sign.dropFor(["ding:dee"], true);
+  assert.equal(sign.pair(dropped[0]!.code), undefined, "the sign-in that ended");
+  const kept = sign.showPairing({ principalId: "dee", identity: "dee", via: "person" });
+  sign.dropFor(["dee"], false);
+  assert.deepEqual([sign.pair(dropped[1]!.code), sign.pair(kept.code)], [undefined, undefined], "everything of a person whose access ended");
   const shown = sign.showPairing({ principalId: "dee", identity: "ding:dee", via: "sign-in" });
   assert.deepEqual(sign.pair(shown.code), { principalId: "dee", identity: "ding:dee", via: "sign-in" });
   assert.equal(sign.pair(shown.code), undefined, "once");
@@ -115,4 +146,19 @@ test("a sign-in through a door: the start is taken once, its code works once, wi
 
   for (const address of ["lumenbox://oauth/callback", "http://127.0.0.1:53682/cb", "http://[::1]:8080/"]) assert.ok(isAppRedirect(address), address);
   for (const address of ["https://evil.example/cb", "http://127.0.0.1/cb", "http://localhost:8080/", "lumenbox://cb#frag", "javascript:alert(1)"]) assert.ok(!isAppRedirect(address), address);
+});
+
+test("the page's pairing and removal refuse what they cannot serve before anything is made: an address too long for the QR code, a body that is not an object", async () => {
+  let shown = 0;
+  const deps = (publicUrl: string, body: unknown = {}) => ({
+    readJson: async () => body as Record<string, unknown>, userId: "ding:dee", role: "driver" as const,
+    principals: { list: () => [], isKnown: () => true, resolve: () => ({ id: "dee" }) } as never,
+    devices: { showPairing: () => { shown += 1; return { code: "c".repeat(43), expiresAt: Date.now() + 120_000 }; }, list: () => [], remove: () => false },
+    freshSignIn: () => ({ ok: true as const }), publicUrl: () => publicUrl,
+  });
+  const long = `https://${Array.from({ length: 4 }, () => "a".repeat(50)).join(".")}.example.com`;
+  const refused = await deviceRoute("POST /api/devices/pairing", deps(long));
+  assert.deepEqual([refused?.status, (refused?.body as { code: string }).code, shown], [503, "public-url-too-long", 0], "no code made for a QR code that cannot be drawn");
+  assert.equal((await deviceRoute("POST /api/devices/pairing", deps("https://box.example.test")))?.status, 200);
+  assert.equal((await deviceRoute("POST /api/devices/remove", deps("https://box.example.test", null)))?.status, 400, "null is not a body");
 });

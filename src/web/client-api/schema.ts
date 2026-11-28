@@ -41,6 +41,8 @@ export interface Schema {
   pattern?: string;
   /** Known values of an open enumeration: a reader treats any other value as "other". */
   "x-extensible-enum"?: string[];
+  /** On a request body only: a field it does not declare is refused (`api-param-unknown`). Answers stay open. */
+  additionalProperties?: false;
 }
 
 const text = (description: string, extra: Partial<Schema> = {}): Schema => ({ type: "string", description, ...extra });
@@ -55,6 +57,8 @@ const ref = (name: string): Schema => ({ $ref: `#/components/schemas/${name}` })
 const object = (description: string, fields: Record<string, Schema>, required: readonly string[]): Schema => ({
   type: "object", description, properties: fields, required: [...required],
 });
+/** A request body: an object that takes no field it does not declare. Never an answer, which stays open for new fields. */
+const request = (description: string, fields: Record<string, Schema>, required: readonly string[]): Schema => ({ ...object(description, fields, required), additionalProperties: false });
 
 // --- scopes and credentials (docs/106 §4.3) ----------------------------------------------------
 
@@ -123,7 +127,7 @@ export const ERRORS = {
   "api-cursor-invalid": { status: 400, meaning: "The cursor is not one this list gave, or was given for other filters. Start the list again without it." },
   "api-not-found": { status: 404, meaning: "No such resource, or none the credential may read: the two are one answer." },
   "api-idempotency-key-invalid": { status: 400, meaning: "`Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`." },
-  "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used within 24 hours for a different request." },
+  "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token)." },
   "api-rate-limited": { status: 429, meaning: "Too many requests; wait the seconds `Retry-After` names." },
   "sign-in-limited": { status: 429, meaning: "Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names." },
   "api-internal": { status: 500, meaning: "The server failed; `requestId` names the failure in its log." },
@@ -274,7 +278,7 @@ export const SCHEMAS = {
   AuthProviderList: object("The channels a device can sign in through here; empty when none is set up (no public address, or no channel's app).", {
     items: list(ref("AuthProvider"), "The channels."),
   }, ["items"]),
-  OAuthStart: object("Starting a device's sign-in (OAuth 2.0 authorization code with PKCE, RFC 7636).", {
+  OAuthStart: request("Starting a device's sign-in (OAuth 2.0 authorization code with PKCE, RFC 7636).", {
     provider: text("An `AuthProvider.id`.", { maxLength: 200 }),
     codeChallenge: text("BASE64URL(SHA-256(code verifier)), without padding: 43 characters.", { pattern: "^[A-Za-z0-9_-]{43}$" }),
     codeChallengeMethod: known("`S256`; nothing else is accepted.", ["S256"]),
@@ -286,7 +290,7 @@ export const SCHEMAS = {
     state: text("The `state` that was given."),
     expiresAt: time("When this sign-in can no longer be finished (ten minutes)."),
   }, ["authorizationUrl", "expiresAt"]),
-  OAuthExchange: object("The code the app's `redirectUri` received, for a device credential.", {
+  OAuthExchange: request("The code the app's `redirectUri` received, for a device credential.", {
     code: text("From `redirectUri`'s `code`.", { maxLength: 200 }),
     codeVerifier: text("The PKCE code verifier (RFC 7636 §4.1).", { pattern: "^[A-Za-z0-9._~-]{43,128}$" }),
     provider: text("When given, it must be the one the sign-in started with.", { maxLength: 200 }),
@@ -296,14 +300,14 @@ export const SCHEMAS = {
     stepUpKeyId: text("The device's own id for its step-up signing key (docs/110 §4); with `stepUpPublicKey`.", { maxLength: 100, pattern: "^[A-Za-z0-9._:-]{1,100}$" }),
     stepUpPublicKey: text("That key's public half: a P-256 key, SubjectPublicKeyInfo DER, base64url without padding.", { maxLength: 400, pattern: "^[A-Za-z0-9_-]+$" }),
   }, ["code", "codeVerifier", "redirectUri", "deviceName", "platform"]),
-  DevicePairing: object("A pairing code a signed-in page showed (its QR code), for a device credential.", {
+  DevicePairing: request("A pairing code a signed-in page showed (its QR code), for a device credential.", {
     code: text("The code from the QR code.", { maxLength: 200 }),
     deviceName: text("What the person calls this device.", { maxLength: 60 }),
     platform: known("The device's system.", DEVICE_PLATFORMS),
     stepUpKeyId: text("As in `OAuthExchange`.", { maxLength: 100, pattern: "^[A-Za-z0-9._:-]{1,100}$" }),
     stepUpPublicKey: text("As in `OAuthExchange`.", { maxLength: 400, pattern: "^[A-Za-z0-9_-]+$" }),
   }, ["code", "deviceName", "platform"]),
-  TokenRefresh: object("A device's refresh token, for a new pair.", {
+  TokenRefresh: request("A device's refresh token, for a new pair.", {
     refreshToken: text("The refresh token (`lbxr_…`) the device holds now.", { maxLength: 200 }),
   }, ["refreshToken"]),
   DeviceTokens: object([
@@ -313,7 +317,7 @@ export const SCHEMAS = {
     deviceId: text("The device: what `DELETE /devices/{id}` names."),
     tokenType: known("`Bearer`.", ["Bearer"]),
     accessToken: text("`lbxd_…`, for fifteen minutes."),
-    expiresInSeconds: { type: "integer", description: "Seconds the access token works for from now." },
+    expiresInSeconds: { type: "integer", description: "Seconds the access token works for, counted when it was issued (a replayed answer repeats it): schedule the next refresh from `accessTokenExpiresAt`." },
     accessTokenExpiresAt: time("When the access token stops."),
     refreshToken: text("`lbxr_…`: used once."),
     refreshTokenExpiresAt: time("When the refresh token stops if it is not used: thirty days, and never past a year from the sign-in."),
@@ -520,13 +524,17 @@ export const OPERATIONS = [
       "Spends the refresh token and answers a new access token and a new refresh token. A refresh token is used once: presented again more than",
       "30 seconds after it was spent, the device is ended — for whoever holds its tokens — and the answer is `access-removed`; within those 30 seconds the",
       "answer is `refresh-superseded` and nothing ends. Send an `Idempotency-Key` kept for the attempt: a retry with it within 30 seconds answers the same pair.",
+      "A device that sent no key, or retries later, and cannot find the newer pair where it keeps its tokens, signs in again.",
     ].join(" "),
   },
   {
     operationId: "signOutDevice", method: "POST", path: "/auth/logout", auth: "credential", tier: "stable", response: "DeviceEnded",
     errors: ["device-credential-needed"],
     summary: "Sign this device out",
-    description: "Ends the calling device: its access and refresh tokens stop at once and its open streams close. A device credential only.",
+    description: [
+      "Ends the calling device: its access and refresh tokens stop at once and its open streams close. A device credential only.",
+      "A retry after a lost answer cannot be replayed — the token it would carry is ended — and answers `access-removed`: that is the confirmation.",
+    ].join(" "),
   },
   {
     operationId: "listDevices", method: "GET", path: "/devices", auth: "credential", scope: "devices:manage", tier: "stable", response: "DevicePage",
@@ -548,7 +556,8 @@ export function commonErrors(operation: Operation): ApiErrorCode[] {
   const codes: ApiErrorCode[] = [];
   if (operation.auth === "credential") codes.push("api-credential-needed", "api-credential-invalid", "api-credential-expired", "access-removed", "sign-in-limited");
   if (operation.scope !== undefined) codes.push("api-scope-needed");
-  if ((operation.query ?? []).length > 0 || (operation.pathParams ?? []).length > 0 || operation.requestBody !== undefined) codes.push("api-param-invalid");
+  // Every POST reads a body, and a body that is not a JSON object (or not JSON) is refused with this code.
+  if ((operation.query ?? []).length > 0 || (operation.pathParams ?? []).length > 0 || operation.method === "POST") codes.push("api-param-invalid");
   codes.push("api-param-unknown", "api-rate-limited", "api-internal");
   // A conflict is the same key on another body: an operation that takes no body cannot have one.
   if (operation.method === "POST") codes.push("api-idempotency-key-invalid", ...(operation.requestBody !== undefined ? ["api-idempotency-conflict" as const] : []));

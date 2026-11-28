@@ -2145,7 +2145,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used within 24 hours for a different request.",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
             "x-error-codes": [
               "api-idempotency-conflict"
             ],
@@ -2320,7 +2320,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used within 24 hours for a different request.",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
             "x-error-codes": [
               "api-idempotency-conflict"
             ],
@@ -2496,7 +2496,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used within 24 hours for a different request.",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
             "x-error-codes": [
               "api-idempotency-conflict"
             ],
@@ -2572,7 +2572,7 @@
       "post": {
         "operationId": "refreshDeviceToken",
         "summary": "A new pair for a device's refresh token",
-        "description": "Spends the refresh token and answers a new access token and a new refresh token. A refresh token is used once: presented again more than 30 seconds after it was spent, the device is ended — for whoever holds its tokens — and the answer is `access-removed`; within those 30 seconds the answer is `refresh-superseded` and nothing ends. Send an `Idempotency-Key` kept for the attempt: a retry with it within 30 seconds answers the same pair.\n\nNo credential needed.",
+        "description": "Spends the refresh token and answers a new access token and a new refresh token. A refresh token is used once: presented again more than 30 seconds after it was spent, the device is ended — for whoever holds its tokens — and the answer is `access-removed`; within those 30 seconds the answer is `refresh-superseded` and nothing ends. Send an `Idempotency-Key` kept for the attempt: a retry with it within 30 seconds answers the same pair. A device that sent no key, or retries later, and cannot find the newer pair where it keeps its tokens, signs in again.\n\nNo credential needed.",
         "tags": [
           "stable"
         ],
@@ -2673,7 +2673,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used within 24 hours for a different request.\n`refresh-superseded`: This refresh token was used in the last 30 seconds, and nothing was ended: the device holds the new pair where it keeps them, and a retry with the first request's `Idempotency-Key` answers it again.",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).\n`refresh-superseded`: This refresh token was used in the last 30 seconds, and nothing was ended: the device holds the new pair where it keeps them, and a retry with the first request's `Idempotency-Key` answers it again.",
             "x-error-codes": [
               "api-idempotency-conflict",
               "refresh-superseded"
@@ -2750,7 +2750,7 @@
       "post": {
         "operationId": "signOutDevice",
         "summary": "Sign this device out",
-        "description": "Ends the calling device: its access and refresh tokens stop at once and its open streams close. A device credential only.\n\nAny credential.",
+        "description": "Ends the calling device: its access and refresh tokens stop at once and its open streams close. A device credential only. A retry after a lost answer cannot be replayed — the token it would carry is ended — and answers `access-removed`: that is the confirmation.\n\nAny credential.",
         "tags": [
           "stable"
         ],
@@ -2792,8 +2792,9 @@
             }
           },
           "400": {
-            "description": "`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.",
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.",
             "x-error-codes": [
+              "api-param-invalid",
               "api-param-unknown",
               "api-idempotency-key-invalid"
             ],
@@ -4042,7 +4043,8 @@
           "codeChallenge",
           "codeChallengeMethod",
           "redirectUri"
-        ]
+        ],
+        "additionalProperties": false
       },
       "OAuthStarted": {
         "type": "object",
@@ -4126,7 +4128,8 @@
           "redirectUri",
           "deviceName",
           "platform"
-        ]
+        ],
+        "additionalProperties": false
       },
       "DevicePairing": {
         "type": "object",
@@ -4170,7 +4173,8 @@
           "code",
           "deviceName",
           "platform"
-        ]
+        ],
+        "additionalProperties": false
       },
       "TokenRefresh": {
         "type": "object",
@@ -4184,7 +4188,8 @@
         },
         "required": [
           "refreshToken"
-        ]
+        ],
+        "additionalProperties": false
       },
       "DeviceTokens": {
         "type": "object",
@@ -4207,7 +4212,7 @@
           },
           "expiresInSeconds": {
             "type": "integer",
-            "description": "Seconds the access token works for from now."
+            "description": "Seconds the access token works for, counted when it was issued (a replayed answer repeats it): schedule the next refresh from `accessTokenExpiresAt`."
           },
           "accessTokenExpiresAt": {
             "type": "string",

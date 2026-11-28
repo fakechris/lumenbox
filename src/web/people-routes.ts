@@ -77,6 +77,8 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
   if (!removing && !revoking) invites.dropWhere(invite => invite.expiresAt < now);
 
   if (route === "GET /api/people") {
+    // A live invite's code is a sign-in waiting to happen: shown only to a recent sign-in, as making one is.
+    const showCodes = deps.freshSignIn().ok;
     const people = principals.list(), active = deps.lastActive(people), admins = people.filter(person => person.role === "admin").length;
     const me = deps.callerId(), self = me === undefined || !principals.isKnown(me) ? undefined : principals.resolve(me).id;
     return {
@@ -92,7 +94,7 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
           self: person.id === self,
         })),
         invites: invites.list().map(invite => ({
-          ...(invite.code !== undefined ? { code: invite.code } : {}), role: invite.role, expiresAt: invite.expiresAt,
+          ...(invite.code !== undefined && showCodes ? { code: invite.code } : {}), role: invite.role, expiresAt: invite.expiresAt,
           ...(invite.principalId !== undefined ? { principalId: invite.principalId, name: principals.byId(invite.principalId)?.name } : {}),
           ...(invite.note !== undefined ? { note: invite.note } : {}),
         })),

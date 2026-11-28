@@ -23,6 +23,9 @@ function rawModules(version: number): number {
   return result;
 }
 
+/** The longest text, in UTF-8 bytes, a QR code here holds (version 10, level M, byte mode). */
+export const QR_MAX_BYTES = 213;
+
 const dataCodewords = (version: number) => Math.floor(rawModules(version) / 8) - ECC_PER_BLOCK[version]! * BLOCKS[version]!;
 
 /** Multiplication in GF(2^8) modulo x^8 + x^4 + x^3 + x^2 + 1. */

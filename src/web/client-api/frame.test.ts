@@ -77,6 +77,9 @@ test("parameters are read against their schema: unknown, repeated, out of range,
   assert.deepEqual(body({ refreshToken: 7 }), { code: "api-param-invalid", vars: { name: "refreshToken", why: "a string" } });
   assert.deepEqual(body([]), { code: "api-param-invalid", vars: { name: "body", why: "a JSON object" } });
   assert.deepEqual(readBody(OPS[1]!, { anything: true }), { code: "api-param-unknown", vars: { name: "anything" } }, "an operation that declares no body takes none");
+  assert.deepEqual(body(JSON.parse('{"__proto__":{"refreshToken":7}}')), { code: "api-param-unknown", vars: { name: "__proto__" } }, "__proto__ is a field like any other, and not one it takes");
+  assert.deepEqual(body({ refreshToken: "😀".repeat(200) }), { values: { refreshToken: "😀".repeat(200) } }, "a length counts characters, not UTF-16 units");
+  assert.equal((body({ refreshToken: "😀".repeat(201) }) as { code: string }).code, "api-param-invalid");
 });
 
 test("a POST with an Idempotency-Key answers its first answer on a repeat, refuses the key on another body, and refuses a key not worth storing; an answer holding a secret is replayed for 30 seconds only, and never stored", async t => {

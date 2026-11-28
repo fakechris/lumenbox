@@ -332,6 +332,7 @@ export const SERVER_ERRORS = {
   "err.refresh-superseded": ["这个刷新令牌刚在30秒内用过，设备已拿到新的令牌，什么都没有被吊销。", "This refresh token was used in the last 30 seconds: the device has the new pair, and nothing was ended."],
   "err.device-credential-needed": ["只有设备凭据能这样退出登录；个人令牌和服务令牌请在页面上吊销。", "Only a device credential signs itself out this way; revoke a personal or service token on the page."],
   "err.sign-in-again": ["为了安全，请先重新登录：签发令牌或连接手机需要在{minutes}分钟内登录过。", "For safety, sign in again first: minting a token or connecting a phone needs a sign-in in the last {minutes} minutes."],
+  "err.public-url-too-long": ["这个公开地址太长，连接手机的二维码放不下（最多{bytes}字节）。请换一个更短的地址。", "The public address is too long for the QR code that connects a phone (at most {bytes} bytes with the code). Use a shorter one."],
   "err.device-unknown": ["没有这台设备，或它不是你的。", "No such device, or it is not yours."],
 } as const satisfies Record<string, readonly [zh: string, en: string]>;
 

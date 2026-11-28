@@ -196,6 +196,7 @@ export function mountClientApi(server: {
      */
     endAccess(ids: readonly string[], signInOnly: boolean, by: string): void {
       devices.endFor(ids, signInOnly, by);
+      signIns.dropFor(ids, signInOnly);
       ended();
     },
     /** When the server stops: no agent diff of an old registry beside a new one, and no stream left open. */

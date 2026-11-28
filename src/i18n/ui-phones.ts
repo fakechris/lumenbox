@@ -9,6 +9,8 @@ export const UI_PHONES: Record<string, readonly [string, string]> = {
   "ui.next.mine.connectPhone": ["连接手机", "Connect a phone"],
   "ui.next.mine.pairNote": ["用手机应用扫描这个二维码。它只能用一次，{minutes}分钟内有效。", "Scan this QR code with the phone app. It works once, for {minutes} minutes."],
   "ui.next.mine.pairAlt": ["连接手机的二维码", "QR code to connect a phone"],
+  "ui.next.mine.phonesFailed": ["读不到你的手机列表：{error}", "Could not read your phones: {error}"],
+  "ui.next.mine.phonesRetry": ["再试一次", "Try again"],
   "ui.next.mine.noPhones": ["还没有连接手机。", "No phone is connected yet."],
   "ui.next.mine.removePhone": ["移除", "Remove"],
   "ui.next.mine.lastUsed": ["上次使用{when}", "last used {when}"],

@@ -5,12 +5,13 @@
  * told to sign in again, as minting a token is (INV-2318).
  */
 export const NEXT_SET_PHONES_JS = `
-var phones = { devices: null, pairing: null, again: "", timer: 0 };
+var phones = { devices: null, failed: "", pairing: null, again: "", timer: 0 };
 /** The platforms this page has a name for; one it does not know is shown as the server said it. */
 var KNOWN_PLATFORMS = ["ios", "android", "macos", "windows", "linux"];
 
 function loadPhones() {
-  getJson("/api/devices").then(function (got) { phones.devices = got.devices || []; }, function () { phones.devices = []; })
+  // A list that could not be read says so, with a way to ask again: never "no phone" when it does not know.
+  getJson("/api/devices").then(function (got) { phones.devices = got.devices || []; phones.failed = ""; }, function (error) { phones.devices = []; phones.failed = error.message || String(error); })
     .then(function () { if (next.view === "settings") render(); });
 }
 
@@ -39,7 +40,12 @@ function phonesBlock() {
     shown.appendChild(el("p", "", t("ui.next.mine.pairNote", { minutes: 2 })));
     box.appendChild(shown);
   }
-  if (!phones.devices.length) box.appendChild(el("p", "empty", t("ui.next.mine.noPhones")));
+  if (phones.failed) {
+    var retry = el("button", "act", t("ui.next.mine.phonesRetry"));
+    retry.addEventListener("click", loadPhones);
+    box.appendChild(el("p", "why", t("ui.next.mine.phonesFailed", { error: phones.failed })));
+    box.appendChild(retry);
+  } else if (!phones.devices.length) box.appendChild(el("p", "empty", t("ui.next.mine.noPhones")));
   phones.devices.forEach(function (device) {
     var line = el("div", "fact"), remove = el("button", "act", t("ui.next.mine.removePhone"));
     var when = device.lastUsedAt ? " · " + t("ui.next.mine.lastUsed", { when: new Date(device.lastUsedAt).toLocaleDateString() }) : "";

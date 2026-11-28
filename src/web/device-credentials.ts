@@ -167,7 +167,9 @@ export class DeviceStore {
   /** A new pair for a device: the tokens are in the answer and nowhere else. */
   private mintPair(device: StoredDevice, now: number): IssuedTokens {
     const accessToken = `${ACCESS_PREFIX}${randomBytes(32).toString("hex")}`, refreshToken = `${REFRESH_PREFIX}${randomBytes(32).toString("hex")}`;
-    const accessTokenExpiresAt = at(now + ACCESS_TTL_MS), refreshTokenExpiresAt = at(Math.min(now + REFRESH_TTL_MS, Date.parse(device.familyExpiresAt)));
+    // Neither outlives the device's sign-in: a refresh a minute before its year is up gives a minute.
+    const familyEnds = Date.parse(device.familyExpiresAt);
+    const accessTokenExpiresAt = at(Math.min(now + ACCESS_TTL_MS, familyEnds)), refreshTokenExpiresAt = at(Math.min(now + REFRESH_TTL_MS, familyEnds));
     device.access = [...device.access.filter(token => Date.parse(token.expiresAt) > now), { hash: hashOf(accessToken), expiresAt: accessTokenExpiresAt }];
     device.refresh.push({ hash: hashOf(refreshToken), issuedAt: at(now), expiresAt: refreshTokenExpiresAt });
     return { deviceId: device.id, accessToken, accessTokenExpiresAt, refreshToken, refreshTokenExpiresAt, scopes: [...device.scopes] };
@@ -236,12 +238,20 @@ export class DeviceStore {
       return { refused: "reused" };
     }
     if (Date.parse(token.expiresAt) <= now) return { refused: "expired" };
+    // A rotation that cannot be written is not made: the device keeps the token it presented, as the file does.
+    const before = structuredClone(device);
     device.lastUsedAt = `${at(now).slice(0, 16)}:00.000Z`;
     // Spent: kept as a short hash for thirty days, to know it again; the unspent ones that are still in time stay.
     device.refresh = device.refresh.filter(entry => entry !== token && Date.parse(entry.expiresAt) > now);
     device.spent = [...(device.spent ?? []).filter(([, when]) => now - when < SPENT_KEPT_MS), [short, now] as [string, number]].slice(-SPENT_KEPT);
     const tokens = this.mintPair(device, now);
-    this.save();
+    try {
+      this.save();
+    } catch (error) {
+      const index = this.devices.findIndex(entry => entry.id === before.id);
+      if (index >= 0) this.devices[index] = before; else this.devices.push(before);
+      throw error;
+    }
     this.record({ at: at(now), event: "rotated", kind: "device", id: device.id, for: device.principalId, family: device.familyId, by: device.principalId });
     return { tokens, device: viewOf(device) };
   }

@@ -261,6 +261,7 @@
   "api/op/POST /api/v1/auth/logout/error/api-credential-needed": "401",
   "api/op/POST /api/v1/auth/logout/error/api-idempotency-key-invalid": "400",
   "api/op/POST /api/v1/auth/logout/error/api-internal": "500",
+  "api/op/POST /api/v1/auth/logout/error/api-param-invalid": "400",
   "api/op/POST /api/v1/auth/logout/error/api-param-unknown": "400",
   "api/op/POST /api/v1/auth/logout/error/api-rate-limited": "429",
   "api/op/POST /api/v1/auth/logout/error/device-credential-needed": "403",

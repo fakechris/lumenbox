@@ -132,6 +132,17 @@ export class DeviceSignIns {
     return { code, expiresAt: this.now() + PAIRING_TTL_MS };
   }
 
+  /**
+   * Somebody's access ended: the pairing codes shown for them, and the sign-in codes waiting for them, stop now —
+   * `signInOnly`, only those of these sign-ins. Otherwise a code shown a minute before a sign-out would still make a device.
+   */
+  dropFor(ids: readonly string[], signInOnly: boolean): void {
+    const ends = (who: { principalId: string; identity: string; via?: "sign-in" | "person" }) =>
+      (ids.includes(who.identity) && who.via !== "person") || (!signInOnly && ids.includes(who.principalId));
+    for (const [key, { pairing }] of this.pairings) if (ends(pairing)) this.pairings.delete(key);
+    for (const [key, { outcome }] of this.codes) if (outcome.kind === "person" && ends({ ...outcome, via: "sign-in" })) this.codes.delete(key);
+  }
+
   /** Who a pairing code signs in as, once; undefined when it is not one, was used, or is over. */
   pair(code: string): PairingFor | undefined {
     this.sweep();
