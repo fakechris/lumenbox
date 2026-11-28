@@ -95,7 +95,7 @@ export function messagesOf(conversationId: string, epoch: number, entries: reado
       if (entry.role === "user") add(index, 0, { kind: "person", ...at, text: entry.text, ...from, ...sent });
       else add(index, 0, { kind: "agent", ...at, text: entry.text, ...(entry.aside === true ? { aside: true } : {}), ...files });
     } else if (entry.kind === "peer") {
-      entry.messages.forEach((said, sub) => add(index, sub, { kind: "teammate", ...at, from: said.from, text: said.text }));
+      entry.messages.forEach((said, sub) => { add(index, sub, { kind: "teammate", ...at, from: said.from, text: said.text }); });
     } else if (entry.kind === "trigger") {
       add(index, 0, { kind: "notice", ...at, label: entry.label });
     } else if (entry.kind === "status") {
