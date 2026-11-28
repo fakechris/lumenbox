@@ -17,12 +17,21 @@
  * the ticket. release:check refuses anything not notarized; SHA256SUMS is made after this,
  * since stapling changes the dmg.
  *
+ * Signing identity (INV-2309): when the shell running electron-builder cannot reach the Developer
+ * ID certificate in the keychain, it signs ad-hoc with one warning line and the build succeeds —
+ * 0.4.12 was published that way and every download opened as "damaged". So after a --mac build
+ * this wrapper reads every built app with codesign (scripts/signature.mjs) and fails unless all are
+ * Developer-ID signed by the project's team. DIST_SKIP_SIGNING_CHECK=1 lets a local build that will
+ * never be published through, and says so first and last; release:check refuses it either way.
+ *
  * Usage: node scripts/dist.mjs --mac | --win | --linux | --dir   (args pass through)
  */
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { macArtifacts } from "./notarization.mjs";
+import { DEVELOPER_ID_TEAM, developerIdProblems, signingRefusal } from "./signature.mjs";
 
 /**
  * notarytool's credential arguments from the same variables electron-builder reads, or
@@ -49,6 +58,24 @@ export function submissionStatus(output) {
 const UNNOTARIZED =
   "[dist] NOT NOTARIZED: no Apple credentials (APPLE_KEYCHAIN_PROFILE, see docs/27). This build is " +
   "fine on this machine, but a browser download of it is blocked on first open, and release:check refuses it.";
+
+const UNCHECKED_SIGNATURE =
+  `[dist] SIGNING NOT CHECKED: DIST_SKIP_SIGNING_CHECK=1. This build may be ad-hoc signed; it is for this machine only. ` +
+  "A download of an ad-hoc app opens as \"damaged\", and release:check refuses it.";
+
+/**
+ * Whether the --mac build just made may stand: undefined when every app is Developer-ID signed, the
+ * refusal otherwise. With DIST_SKIP_SIGNING_CHECK=1 nothing is read. `read` is the seam the tests fake.
+ */
+export function signingFailure(env, distDir, version, read = developerIdProblems) {
+  if (env.DIST_SKIP_SIGNING_CHECK === "1") return undefined;
+  const artifacts = macArtifacts(distDir, version);
+  if (artifacts.length === 0) return `[dist] NOT SIGNED AS A RELEASE: no LumenBox ${version} app or dmg in ${distDir} to read the signature of.`;
+  const found = read(artifacts, distDir);
+  if (found.problems.length === 0) return undefined;
+  return `[dist] NOT SIGNED WITH THE DEVELOPER ID of team ${DEVELOPER_ID_TEAM}: ${signingRefusal(found)} ` +
+    "This build is not a release. Fix the signing and rebuild, or set DIST_SKIP_SIGNING_CHECK=1 for a build that will never be published.";
+}
 
 function notarizeDmgs(distDir, version, credentials) {
   const dmgs = readdirSync(distDir).filter(name => name.startsWith(`LumenBox-${version}`) && name.endsWith(".dmg"));
@@ -87,19 +114,27 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const args = process.argv.slice(2);
   const mac = args.includes("--mac");
   const credentials = notaryCredentials(process.env);
+  const skipSigning = process.env.DIST_SKIP_SIGNING_CHECK === "1";
+  if (mac && skipSigning) console.warn(UNCHECKED_SIGNATURE);
   if (mac && credentials === undefined) console.warn(UNNOTARIZED);
   if (commit !== "") args.push(`-c.extraMetadata.buildCommit=${commit}`);
   execFileSync("electron-builder", args, { stdio: "inherit" });
 
   if (mac) {
-    if (credentials === undefined) {
-      console.warn(UNNOTARIZED);
-    } else {
-      const root = fileURLToPath(new URL("..", import.meta.url));
-      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-      // Where electron-builder just wrote — its -c override if given — not AGENTBOX_DIST_DIR (that points release:check at a candidate).
-      const override = args.find(arg => arg.startsWith("-c.directories.output="))?.split("=")[1];
-      notarizeDmgs(resolve(root, override ?? manifest.build?.directories?.output ?? "dist"), manifest.version, credentials);
+    const root = fileURLToPath(new URL("..", import.meta.url));
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    // Where electron-builder just wrote — its -c override if given — not AGENTBOX_DIST_DIR (that points release:check at a candidate).
+    const override = args.find(arg => arg.startsWith("-c.directories.output="))?.split("=")[1];
+    const distDir = resolve(root, override ?? manifest.build?.directories?.output ?? "dist");
+    // Before notarizing: Apple refuses an ad-hoc app anyway, after a wait, with a less useful answer.
+    const failure = signingFailure(process.env, distDir, manifest.version);
+    if (failure !== undefined) {
+      console.error(failure);
+      process.exit(1);
     }
+    if (credentials === undefined) console.warn(UNNOTARIZED);
+    else notarizeDmgs(distDir, manifest.version, credentials);
+    if (skipSigning) console.warn(UNCHECKED_SIGNATURE);
+    else console.log(`[dist] every app is signed with the Developer ID of team ${DEVELOPER_ID_TEAM}`);
   }
 }

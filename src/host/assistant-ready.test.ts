@@ -66,19 +66,26 @@ function organisation(t: { after(fn: () => void): void }) {
   });
   manager.register({ name: ding.name, start: async () => {}, stop() {}, send: (identity, text) => ding.send(identity, text), sendToChat: (key, text, more) => ding.sendToChat!(key, text, more) } as ChannelAdapter, true, "test");
   manager.start();
-  const ready = new AssistantReady({ activations, principals, registry, reach, publicUrl: () => "https://org.example", locale: () => "en", log: () => {}, sourceOf: door => door === "ding" ? source : undefined });
+  const boxUp = { ready: true }; // whether the box each activation made is up
+  const ready = new AssistantReady({ activations, principals, registry, reach, publicUrl: () => "https://org.example", locale: () => "en", log: () => {}, sourceOf: door => door === "ding" ? source : undefined, boxReady: () => boxUp.ready });
   t.after(() => { manager.stop(); globalThis.fetch = realFetch; rmSync(home, { recursive: true, force: true }); });
-  return { home, source, activations, ready, sends, vendor, agents };
+  return { home, source, activations, ready, sends, vendor, agents, boxUp };
 }
 
 test("a ready box makes one message, to its owner and nobody else, with the address and no credential; a migrated person and somebody not activated get none", async t => {
   const org = organisation(t);
+  // The record decides who is owed it (INV-2304): Ana's box is up and her agent exists, and nobody has written to her.
+  org.boxUp.ready = false;
+  assert.deepEqual(org.ready.notTold(org.source), [], "nobody is owed a telling before their box is up");
+  org.boxUp.ready = true;
+  assert.deepEqual(org.ready.notTold(org.source).map(activation => activation.subject), ["ana"], "then she is, and the Admins see her as not told; Dan, made by the upgrade, is not");
   const told = await org.ready.tell("ding:ana");
   assert.equal(told?.reached.delivered, true);
   assert.deepEqual(org.sends, [{ userIds: ["ana"], text: "Hello, I'm 助手, your LumenBox assistant, and I'm ready. Sign in at https://org.example with this account to find me, or just talk to me here." }]);
   assert.equal(await org.ready.tell("ding:ana"), undefined, "the box coming up again says nothing twice");
   assert.equal(await org.ready.tell("ding:dan"), undefined, "made by the upgrade: their box comes at their first use, and nobody writes to them");
   assert.equal(await org.ready.tell("ding:eve"), undefined, "on the roster another way");
+  assert.equal(await org.ready.catchUp([org.source]), 0, "a server start owes her nothing more");
   assert.equal(org.sends.length, 1);
   const lines = readFileSync(join(org.home, "activations.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
   assert.deepEqual(lines.filter(line => line.type === "told").map(({ by, subject, principalId, delivered }) => ({ by, subject, principalId, delivered })),
@@ -103,7 +110,7 @@ test("a door that will not carry it lists the person as not told, with the reaso
 
   // A send that throws (an outbox that cannot be written) is written down as not told, so it can be asked again.
   const broken = new AssistantReady({ activations: org.activations, principals: new Principals(join(org.home, "principals.json")), registry: new AgentRegistry(join(org.home, "agents")),
-    reach: { tellOwner: async () => { throw new Error("outbox not writable"); } }, publicUrl: () => undefined, locale: () => "en", log: () => {}, sourceOf: () => org.source });
+    reach: { tellOwner: async () => { throw new Error("outbox not writable"); } }, publicUrl: () => undefined, locale: () => "en", log: () => {}, sourceOf: () => org.source, boxReady: () => true });
   assert.deepEqual((await broken.tellAgain(org.source, ["ana"], "p-admin")), { told: 0, notTold: 0 }, "Ana was told already: not asked again");
   org.activations.told(org.source, "activation", { subject: "ana", principalId: "ding:ana" }, { delivered: false, why: "pretend" });
   assert.deepEqual(await broken.tellAgain(org.source, ["ana"], "p-admin"), { told: 0, notTold: 1 });

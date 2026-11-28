@@ -11,6 +11,11 @@
  * nor for a box made at a first page load. A door that will not carry it — the bot may not write
  * first, the person never opened a chat with it — is written down once with its reason, and the
  * Admin's page lists them as not told until an Admin asks again.
+ *
+ * The record decides who is owed it, not the moment (INV-2304): somebody whose box made at
+ * activation is ready and whose agent exists, with no telling written down, is owed one — told at
+ * the next server start (`catchUp`) or when their box comes up again, and listed as not told until
+ * then. A server that stopped between the box coming up and the telling no longer loses them.
  */
 
 import type { AgentRegistry } from "../agents/registry.ts";
@@ -31,13 +36,20 @@ export interface AssistantReadyDeps {
   /** The installation's address a person opens (`AGENTBOX_PUBLIC_URL`); undefined when none is set. */
   publicUrl(): string | undefined;
   locale(principalId: string): Locale;
+  /** Whether the box an activation made for this person is up (`AUTO_REQUEST`, ready). */
+  boxReady(principalId: string): boolean;
   log(line: string): void;
 }
+
+/** How many people owed a telling one server start writes to; the rest stay listed as not told for an Admin to ask again. */
+export const TELL_AT_START = 100;
 
 /** A person told, or not, and the activation it was for. */
 export interface Telling { source: DirectorySource; activation: Activation; reached: Reached }
 
 export class AssistantReady {
+  /** Whose telling is under way in this process: not owed a second one meanwhile. */
+  private readonly telling = new Set<string>();
   constructor(private readonly deps: AssistantReadyDeps) {}
 
   /** The standing activation that made this person and asked a box for them; undefined for anybody else. */
@@ -56,7 +68,12 @@ export class AssistantReady {
     this.deps.principals.reload();
     const found = this.activationOf(principalId);
     if (found === undefined) return undefined;
-    if (by === "activation" && found.activation.told !== undefined) return undefined; // a box started again after it was up says nothing twice
+    if (by === "activation" && (found.activation.told !== undefined || this.telling.has(principalId))) return undefined; // a box started again after it was up says nothing twice
+    this.telling.add(principalId);
+    try { return await this.attempt(principalId, by, found); } finally { this.telling.delete(principalId); }
+  }
+
+  private async attempt(principalId: string, by: string, found: { source: DirectorySource; activation: Activation }): Promise<Telling> {
     const person = this.deps.principals.byId(principalId)!, agent = person.homeAgentId === undefined ? undefined : this.deps.registry.tryGet(person.homeAgentId);
     const url = this.deps.publicUrl(), locale = this.deps.locale(principalId);
     // A send that throws (an outbox that cannot be written) is a failed telling like any other: written down, so the Admin can ask again.
@@ -72,9 +89,26 @@ export class AssistantReady {
     return { ...found, reached };
   }
 
-  /** Who an activation of this source asked a box for and has not been told, with the reason the door gave. */
+  /** Who an activation of this source asked a box for and has not been told: the door refused (with the reason it gave), or nobody has tried yet. */
   notTold(source: DirectorySource): Activation[] {
-    return this.deps.activations.activations(source).filter(activation => activation.leftAt === undefined && activation.told !== undefined && !activation.told.delivered);
+    const refused = this.deps.activations.activations(source).filter(activation => activation.leftAt === undefined && activation.told !== undefined && !activation.told.delivered);
+    return [...refused, ...this.owed(source)];
+  }
+
+  /** Who is owed a first telling by the record: their activation asked a box, it is up, their agent exists, and no telling is written down or under way. */
+  owed(source: DirectorySource): Activation[] {
+    return this.deps.activations.activations(source).filter(activation => activation.told === undefined && activation.principalId !== undefined && !this.telling.has(activation.principalId)
+      && this.activationOf(activation.principalId) !== undefined && this.deps.boxReady(activation.principalId)
+      && this.deps.registry.tryGet(this.deps.principals.byId(activation.principalId)?.homeAgentId ?? "") !== undefined);
+  }
+
+  /** At a server start: everybody owed a telling is told now, at most `limit` of them; the number told. */
+  async catchUp(sources: readonly DirectorySource[], limit = TELL_AT_START): Promise<number> {
+    this.deps.principals.reload();
+    const owed = sources.flatMap(source => this.owed(source)).slice(0, limit);
+    for (const activation of owed) await this.tell(activation.principalId!);
+    if (owed.length > 0) this.deps.log(`assistant ready, at start: ${owed.length} owed a telling, attempted`);
+    return owed.length;
   }
 
   /** An Admin asks again: these people (or every one not told, when none are named) are written to once more. */

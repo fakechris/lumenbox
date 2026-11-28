@@ -113,6 +113,28 @@ installers with three packages in node_modules and every new user's first launch
    app or dmg that `stapler validate` and `spctl --assess` do not pass
    (`RELEASE_CHECK_SKIP_NOTARIZE=1` for a build that will not be published). Make
    `SHA256SUMS` only after this; stapling changes the dmg.
+   **The signing identity is checked always, and cannot be skipped** (INV-2309). After a `--mac`
+   build, `scripts/dist.mjs` reads every built app and the app inside every dmg with
+   `codesign --verify --deep --strict` and `codesign -dv --verbose=2`, and fails unless each
+   verifies and names `Authority=Developer ID Application: …` with `TeamIdentifier=A69VRB2X6U`
+   (the constant in `scripts/signature.mjs`; `build.mac` names no identity). Only
+   `DIST_SKIP_SIGNING_CHECK=1`, for a build that will never be published, lets it through, and the
+   build says so first and last. `release:check` reads the same and has no switch for it:
+   `RELEASE_CHECK_SKIP_NOTARIZE=1` skips `spctl` and the stapler only. A refusal names what was
+   found (ad-hoc, another team, not signed, a bundle that does not verify) and the likely cause —
+   usually the shell that ran electron-builder could not reach the Developer ID certificate in the
+   keychain, which electron-builder answers with ad-hoc signing and one warning line. To confirm by
+   hand before uploading, for each app and each dmg's app (`hdiutil attach -nobrowse -readonly`):
+   `codesign -dv --verbose=2 <app>` must show that authority and team and no `Signature=adhoc`;
+   `codesign --verify --deep --strict <app>` must print nothing and exit 0; and once notarized,
+   `spctl --assess --type execute -vv <app>` must say `accepted`.
+   *The 0.4.12 incident (2026-11-28):* v0.4.12 was published with four mac packages that were
+   ad-hoc signed (`Signature=adhoc`, `TeamIdentifier=not set`) and failed
+   `codesign --verify --deep --strict` ("code has no resources but signature indicates they must
+   be present"); every download opened as "LumenBox is damaged and can't be opened" until the
+   release was put back to draft. The build had fallen back to ad-hoc signing, and release:check
+   passed it because its only signature reading sat inside the notarization gate, which the
+   publishing machine skips for want of notary credentials.
    One-time setup on the publishing Mac: an App Store Connect API key (Developer role, team
    A69VRB2X6U), its `.p8` kept outside the repository, stored once with
    `xcrun notarytool store-credentials lumenbox --key <AuthKey_ID.p8> --key-id <ID> --issuer <issuer>`.
