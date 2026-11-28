@@ -39,6 +39,14 @@ const ARTIFACT = /\b(create|generate|save|edit|modify|install|configure|convert)
 const OUTPUT_VERB = /(?:\b(?:write|writes|save|export|output|into|create|generate|produce)\b|写入|写到|保存到|输出到|生成)[^.\n。]{0,40}?/.source;
 const FILE_NAME = /(?:\.{1,2}\/)?[\w~/-]*[\w~-]\.(?:md|csv|tsv|json|jsonl|txt|ya?ml|html?|py|ts|js|sh|sql|xlsx?|docx?|pptx?|pdf|png|svg|toml)\b/.source;
 const OUTPUT_FILE = new RegExp(OUTPUT_VERB + FILE_NAME, "i");
+// A file asked for without a name — "导出一个 CSV 文件", "produce a CSV file", "export them as CSV" — is as
+// much the deliverable as one with a name (INV-2321). "into" stays out ("look into the CSV file" reads it), and
+// 导出的 / 输出文件 are the file someone already has, not one to make.
+const DELIVER_EN = /\b(?:write|writes|save|saves|export|exports|output|outputs|create|generate|produce|produces|deliver)\b/.source;
+const DELIVER_ZH = /导出(?!的)|输出(?:一个|一份|成|为|到)|做成|导成|存成|存为|保存为|保存成|写成|生成/.source;
+const DELIVER_VERB = `(?:${DELIVER_EN}|${DELIVER_ZH})[^.\n。；;]{0,40}?`;
+const DELIVERABLE = /(?:\b(?:files?|csv|tsv|json|excel|spreadsheet|xlsx?|pdf|markdown)\b|文件|表格|报表)/.source;
+const DELIVERABLE_FILE = new RegExp(`${DELIVER_VERB}(?:${FILE_NAME}|${DELIVERABLE})`, "i");
 const HOW_TO = /\bhow to\s+\w+(?:\s*(?:,|\band\b|\bor\b)\s*(?!(?:then|also|please)\b)\w+)*/gi; // a verb in "how to …" is the subject, not an instruction
 const NEGATED = /\b(?:do not|don't|never|without)\s+\w+(?:(?:\s*,\s*(?:(?:or|and|nor)\s+)?|\s+(?:or|and|nor)\s+)\w+)*|(?:不要|不用|无需|别|不)(?:修改|创建|生成|保存|写入|改动)/gi;
 
@@ -64,7 +72,8 @@ export interface Inferred {
 export function inferLevel(input: LevelInput): Inferred {
   const words = `${input.title}\n${input.description ?? ""}`;
   const reasons: string[] = [];
-  let level: Level; const affirmative = words.replace(NEGATED, " "); const instructions = affirmative.replace(HOW_TO, " "); const leavesArtifact = ARTIFACT.test(affirmative) || OUTPUT_FILE.test(affirmative);
+  let level: Level; const affirmative = words.replace(NEGATED, " "); const instructions = affirmative.replace(HOW_TO, " "); const leavesArtifact = ARTIFACT.test(affirmative) || OUTPUT_FILE.test(affirmative)
+    || DELIVERABLE_FILE.test(affirmative);
   if (TIDY.test(words) && !PLAN.test(words) && !OUTWARD.test(words) && !leavesArtifact && !WORK.test(instructions)) {
     level = 1; reasons.push("asks to collect or summarise, not to act");
   } else if (PLAN.test(words) && !OUTWARD.test(words) && !leavesArtifact && !WORK.test(instructions)) {
