@@ -20,6 +20,9 @@
  *     crashed on every new user's first import — a green check above would not have seen it)
  *   - the image tag this app pulls at its version exists on Docker Hub, because a fresh
  *     install's first "Start the box" pulls exactly that tag (skippable per environment)
+ *   - every macOS app, and the app inside every dmg, of this version passes
+ *     `codesign --verify --deep --strict` and is signed with this project's Developer ID — with
+ *     no switch, because 0.4.12 shipped ad-hoc signed past a skipped notarization gate (INV-2309)
  *   - every macOS app and dmg of this version is notarized and stapled, because Gatekeeper
  *     blocks a downloaded app that is not, and the build skips notarizing without a word
  *     when it has no Apple credentials (every release through 0.3.8; skippable per environment)
@@ -34,6 +37,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { assess, macArtifacts } from "./notarization.mjs";
+import { DEVELOPER_ID_TEAM, developerIdProblems, signingRefusal } from "./signature.mjs";
 import { publishedEngineContract, releaseEngines, requireDeclaredEngines, requireReleasePlatforms } from "./image-release.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -235,6 +239,19 @@ check("the image at this version carries the delegated engines this release decl
   note(`${image} carries ${requireDeclaredEngines(contract, declared, image).join(", ")}; declared: ${declared.join(", ")}`);
 });
 
+check(`every macOS app and dmg of this version is signed with the Developer ID of team ${DEVELOPER_ID_TEAM}`, () => {
+  // Not skippable, and not by RELEASE_CHECK_SKIP_NOTARIZE either: the publishing machine sets that
+  // on every release, which is how 0.4.12 shipped ad-hoc signed with no check reading it (INV-2309).
+  const artifacts = macArtifacts(distDir, version);
+  if (artifacts.length === 0) {
+    note(`no macOS artifacts for ${version} in ${distDir}; signing-identity gate has nothing to read`);
+    return;
+  }
+  const found = developerIdProblems(artifacts, distDir);
+  if (found.problems.length > 0) throw new Error(`${signingRefusal(found)} Every download of this would open as "LumenBox is damaged": do not publish it.`);
+  for (const artifact of artifacts) note(`${artifact.path.slice(distDir.length + 1)}: Developer ID, team ${DEVELOPER_ID_TEAM}, verifies deep and strict`);
+});
+
 check("every macOS app and dmg of this version is notarized and stapled", () => {
   const artifacts = macArtifacts(distDir, version);
   if (artifacts.length === 0) {
@@ -242,7 +259,7 @@ check("every macOS app and dmg of this version is notarized and stapled", () => 
     return;
   }
   if (process.env.RELEASE_CHECK_SKIP_NOTARIZE === "1") {
-    note("RELEASE_CHECK_SKIP_NOTARIZE=1 — notarization gate skipped (a local build, not a release)");
+    note("RELEASE_CHECK_SKIP_NOTARIZE=1 — notarization gate skipped (spctl and stapler only; the signing identity was still checked above)");
     return;
   }
   if (process.platform !== "darwin") throw new Error("macOS artifacts can only be assessed on macOS; set RELEASE_CHECK_SKIP_NOTARIZE=1 if this is not the publishing machine");
