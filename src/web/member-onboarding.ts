@@ -74,7 +74,8 @@ export class MemberOnboarding {
   }): OnboardingDeps {
     this.ready = new AssistantReady({ activations: more.activations, principals: this.deps.principals, registry: this.deps.registry, reach: more.reach, publicUrl: more.publicUrl,
       locale: this.deps.locale, log: this.deps.log, sourceOf: more.sourceOf });
-    return { autoBoxes: more.autoBoxes, boxes: this.deps.boxes, ready: this.ready, quotaOf: more.quotaOf };
+    return { autoBoxes: more.autoBoxes, boxes: this.deps.boxes, ready: this.ready, quotaOf: more.quotaOf,
+      boxName: person => tr("ui.personal.defaultName", this.deps.locale(person.id), { name: person.name }) };
   }
 }
 

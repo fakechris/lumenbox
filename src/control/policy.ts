@@ -83,9 +83,9 @@ export function staticDecision(overrides: { memory?: string; storage?: string } 
 
 /** A Kubernetes quantity in bytes (`4Gi` → 4294967296), or undefined for one that is not a size. */
 export function quantityBytes(value: string): number | undefined {
-  const match = /^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$/.exec(value);
+  const match = /^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E|m)?$/.exec(value);
   if (match === null) return undefined;
-  const powers: Record<string, number> = { Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, Ei: 2 ** 60, k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18 };
+  const powers: Record<string, number> = { m: 1e-3, Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40, Pi: 2 ** 50, Ei: 2 ** 60, k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18 };
   return Math.round(Number(match[1]) * (match[2] === undefined ? 1 : powers[match[2]]!));
 }
 

@@ -233,6 +233,14 @@ test("the page fills in both languages, and its script parses", () => {
   assert.match(NEXT_PAGE("en"), /All work/);
 });
 
+test("no function is declared twice in the page script: the second would silently replace the first for every caller", () => {
+  const script = pageScripts(NEXT_PAGE("en")).join("\n");
+  // Top-level declarations only: a nested helper may share a name with another module's nested one.
+  const names = [...script.matchAll(/^function ([A-Za-z_$][\w$]*)\(/gm)].map(match => match[1]!);
+  const twice = names.filter((name, index) => names.indexOf(name) !== index);
+  assert.deepEqual([...new Set(twice)], []);
+});
+
 test("every element the script looks up by id is in the markup", () => {
   const page = NEXT_PAGE("en");
   const ids = new Set([...page.matchAll(/\$\("([a-z-]+)"\)/g)].map(match => match[1]!));

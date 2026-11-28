@@ -143,16 +143,20 @@ export class AutoPersonalBoxes {
   }
 
   /**
-   * An Admin asks again for boxes made at activation that failed to start: each is started again
-   * through the same queue, a few at a time, by the member's own retry. Returns who was queued.
+   * An Admin asks again for boxes made at activation that failed: each goes through the same queue,
+   * a few at a time. A box that failed to start, was interrupted, or whose cleanup after a failed
+   * start did not finish is started again by the member's own retry; somebody whose box was never
+   * reserved (their role changed while they waited) is asked for one as at activation. Returns who was queued.
    */
-  retryFailed(people: readonly { id: string; name: string }[]): string[] {
+  retryFailed(people: readonly { id: string; name: string }[], nameOf: (person: { id: string; name: string }) => string): string[] {
     const queued: string[] = [];
     for (const person of people) {
       if (this.queued(person.id)) continue;
-      const box = this.options.boxes.list(person.id).find(row => (row.status === "failed" || row.status === "interrupted") && this.options.boxes.requestOf(row.id) === AUTO_REQUEST);
-      if (box === undefined) continue;
-      this.queue.push({ person, name: box.name, retry: box.id });
+      const box = this.options.boxes.list(person.id).find(row => (row.status === "failed" || row.status === "interrupted" || (row.status === "deleting" && row.error !== undefined))
+        && this.options.boxes.requestOf(row.id) === AUTO_REQUEST);
+      if (box !== undefined) this.queue.push({ person, name: box.name, retry: box.id });
+      else if (!this.options.boxes.known(person.id) && this.owed(person, "at an Admin's request")) this.queue.push({ person, name: nameOf(person) });
+      else continue;
       queued.push(person.id);
     }
     this.drain();
@@ -189,7 +193,9 @@ export class AutoPersonalBoxes {
 
   /** A failed box made at activation, started again by the member's own retry; ready as if it had come up the first time. */
   private async restart(owner: string, id: string): Promise<void> {
-    const row = await this.options.boxes.retry(owner, id, () => this.options.eligible(owner));
+    let row = await this.options.boxes.retry(owner, id, () => this.options.eligible(owner));
+    // A cleanup left half done is finished first, which leaves the box stopped with its data: then it is started.
+    if (row.status === "detached") row = await this.options.boxes.retry(owner, id, () => this.options.eligible(owner));
     this.options.log(`personal box for ${owner}: started again at an Admin's request, ${row.status}${row.stateReason ? ` (${row.stateReason})` : ""}`);
     if (row.status !== "ready") return;
     this.finishing.add(owner);

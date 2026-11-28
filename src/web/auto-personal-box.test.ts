@@ -219,6 +219,8 @@ test("INV-2220: activating a person makes their box and one agent in it, written
   const people = (await request("/api/personal-boxes/panel", "web:operator")).data.inventory.people as Array<{ id: string; waitingForQuota?: boolean }>;
   assert.deepEqual(["ding:v01", "ding:p03"].map(id => people.find(person => person.id === id)?.waitingForQuota), [undefined, true]);
   assert.deepEqual((await request("/api/setup", "ding:p03")).data.autoBox, { state: "quota" }, "and her own page says so");
+  const quota = (await request("/api/activations/progress?channelId=ding&state=quota", "web:operator")).data;
+  assert.deepEqual([quota.counts.quota, quota.people.map((row: { subject: string }) => row.subject)], [1, ["p03"]], "the activations page counts and names who needs a raise; the viewer is not counted");
   // The ledger says who asked for a box on whose behalf.
   const acts = (await request("/api/activations/audit", "web:operator")).data.acts as Array<{ type: string; by?: string; people?: unknown }>;
   assert.deepEqual(acts.filter(act => act.type === "boxes").map(act => [act.by, act.people]), [["web:operator", ["ding:p01"]]]);
@@ -286,6 +288,7 @@ test("INV-2220: a department of thirty is confirmed against its estimate, is on 
   for (let i = 0; i < 200 && (await again("/api/activations/progress?channelId=ding", "web:operator")).data.counts.ready < 30; i++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal(org.started.length, 31);
   assert.deepEqual((await again("/api/activations/progress?channelId=ding", "web:operator")).data.counts, { ready: 30, starting: 0, queued: 0, failed: 0, quota: 0 });
+  assert.equal((await again("/api/activations/retry-boxes", "web:operator", { channelId: "ding", subject: ["p07"] })).data.code, "activation-subject-invalid", "a malformed selector is refused, never read as everybody");
   // A driver is refused every one of these routes.
   for (const [path, body] of [["/api/activations/estimate?channelId=ding&department=10&role=driver", undefined], ["/api/activations/progress?channelId=ding", undefined],
     ["/api/activations/tell", { channelId: "ding" }], ["/api/activations/retry-boxes", { channelId: "ding" }]] as const) {

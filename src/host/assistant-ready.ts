@@ -59,13 +59,14 @@ export class AssistantReady {
     if (by === "activation" && found.activation.told !== undefined) return undefined; // a box started again after it was up says nothing twice
     const person = this.deps.principals.byId(principalId)!, agent = person.homeAgentId === undefined ? undefined : this.deps.registry.tryGet(person.homeAgentId);
     const url = this.deps.publicUrl(), locale = this.deps.locale(principalId);
+    // A send that throws (an outbox that cannot be written) is a failed telling like any other: written down, so the Admin can ask again.
     const reached: Reached = agent === undefined ? { delivered: false, why: "no agent has been made for them yet" }
-      : await this.deps.reach.tellOwner(agent.id, url !== undefined && url !== ""
+      : await Promise.resolve().then(() => this.deps.reach.tellOwner(agent.id, url !== undefined && url !== ""
         ? tr("activation.ready", locale, { agent: agent.profile.name, url })
         : tr("activation.ready-here", locale, { agent: agent.profile.name }), {
           // A notice is one receipt per chat, words and day: an Admin's retry is a new one, or it would meet the refused receipt again.
           about: by === "activation" ? "assistant ready" : `assistant ready, asked again by ${by} at ${new Date().toISOString()}`, exempt: true,
-        });
+        })).catch((error: unknown) => ({ delivered: false, why: error instanceof Error ? error.message : String(error) }));
     this.deps.activations.told(found.source, by, { subject: found.activation.subject, principalId }, reached);
     this.deps.log(`assistant ready, ${principalId}: ${reached.delivered ? "told" : `not told (${reached.why ?? "no reason given"})`}`);
     return { ...found, reached };

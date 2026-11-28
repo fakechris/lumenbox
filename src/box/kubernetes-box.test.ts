@@ -4,6 +4,7 @@
  * the server uses. The real-cluster run is scripts/k8s-org-boxes.ts.
  */
 
+import { quantityBytes } from "../control/policy.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -217,6 +218,7 @@ test("kubernetes is a server's backend: the desktop app refuses it, and docker s
   // What an activation's estimate multiplies (INV-2220): the memory the pod is placed with, as the operator set it.
   assert.deepEqual([provisionedBoxDriver(false, { api, env: { AGENTBOX_BOX_BACKEND: "kubernetes" } }).memoryRequest,
     provisionedBoxDriver(false, { api, env: { AGENTBOX_BOX_BACKEND: "kubernetes", AGENTBOX_K8S_MEMORY: "6Gi" } }).memoryRequest, provisionedBoxDriver(false, { api, env: {} }).memoryRequest], ["4Gi", "6Gi", undefined]);
+  assert.deepEqual(["4Gi", "500Mi", "4096000000000m", "4g"].map(quantityBytes), [4 * 2 ** 30, 500 * 2 ** 20, 4096000000, undefined], "and in bytes, millibytes too; what is not a size is none");
   assert.throws(() => provisionedBoxDriver(true, { api, env: { AGENTBOX_BOX_BACKEND: "kubernetes" } }), /server installation/);
   assert.throws(() => provisionedBoxDriver(false, { api, env: { AGENTBOX_BOX_BACKEND: "nomad" } }), /docker or kubernetes/);
 });

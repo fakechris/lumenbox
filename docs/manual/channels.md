@@ -42,8 +42,9 @@ Channels.
   its sub-departments if you tick that. The person is on the team at once: a message from them in
   the channel is theirs, their own computer is made with one assistant in it if their limit allows one (a
   few computers start at a time when a department is activated), and they sign in through the
-  channel whenever they come. When their computer is ready, their assistant writes to them in
-  the channel with the address to open. A department's press first says how many computers it
+  channel whenever they come. When a computer made at their activation is ready, their assistant
+  writes to them in the channel with the address to open; a computer made when they first open
+  the page sends nothing, since they are already there. A department's press first says how many computers it
   starts and how much memory that asks of the cluster, and starts nothing until you confirm.
   *Computers made at activation* then counts them as ready, starting, queued and failed, with the
   platform's reason; *Retry* starts a failed one again, and *Tell them again* writes to somebody

@@ -360,6 +360,8 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
     return { status: 200, body: progress(activations, source, deps.onboarding, state ? { state, offset: Math.max(0, Number(query.get("offset")) || 0) } : undefined) };
   }
   if (route === "POST /api/activations/tell" || route === "POST /api/activations/retry-boxes") {
+    // One person by their subject, or everybody when none is named; anything else is refused rather than read as everybody.
+    if (body.subject !== undefined && typeof body.subject !== "string") return { status: 400, body: apiError("activation-subject-invalid") };
     const subjects = typeof body.subject === "string" ? [body.subject] : undefined;
     if (deps.onboarding === undefined) return { status: 200, body: { told: 0, notTold: 0, retried: 0 } };
     if (route === "POST /api/activations/retry-boxes") return { status: 200, body: { retried: retryBoxes(activations, source, subjects, deps.onboarding, principals) } };

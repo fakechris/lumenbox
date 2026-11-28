@@ -22,11 +22,13 @@ import type { Principals, Role } from "../host/principals.ts";
 import { quantityBytes } from "../control/policy.ts";
 
 export interface OnboardingDeps {
-  autoBoxes: Pick<AutoPersonalBoxes, "estimate" | "queued" | "view" | "retryFailed">;
+  autoBoxes: Pick<AutoPersonalBoxes, "estimate" | "queued" | "view" | "retryFailed" | "waiting">;
   boxes: Pick<PersonalBoxes, "list" | "memoryRequest">;
   ready: Pick<AssistantReady, "notTold" | "tellAgain">;
   /** A personal-box quota by the identity somebody not yet on the roster will hold, as the directory places them. */
   quotaOf(identity: string): number | undefined;
+  /** The name a box made for this person is given, in their language. */
+  boxName(person: { id: string; name: string }): string;
 }
 
 export type BoxProgress = "ready" | "starting" | "queued" | "failed" | "quota";
@@ -51,14 +53,16 @@ function progressOf(principalId: string, deps: OnboardingDeps): { state: BoxProg
   return { state: "failed", reason: box.stateReason ?? box.error ?? box.status };
 }
 
-/** Everybody this source's activations asked a box for, standing. */
-function asked(activations: Activations, source: DirectorySource): Activation[] {
-  return activations.activations(source).filter(activation => activation.boxAskedAt !== undefined && activation.leftAt === undefined && activation.principalId !== undefined);
+/** Everybody this source's activations asked a box for, standing — and the ones out of quota, for whom none was asked, so the Admins see who needs a raise. */
+function asked(activations: Activations, source: DirectorySource, deps: OnboardingDeps): Activation[] {
+  const waiting = deps.autoBoxes.waiting();
+  return activations.activations(source).filter(activation => activation.leftAt === undefined && activation.principalId !== undefined
+    && (activation.boxAskedAt !== undefined || (activation.migrated !== true && waiting.has(activation.principalId))));
 }
 
 /** The counts, and the people of one state (or the ones not told) a page at a time. */
 export function progress(activations: Activations, source: DirectorySource, deps: OnboardingDeps, show?: { state: string; offset: number }) {
-  const rows = asked(activations, source).map(activation => ({ activation, ...progressOf(activation.principalId!, deps) }));
+  const rows = asked(activations, source, deps).map(activation => ({ activation, ...progressOf(activation.principalId!, deps) }));
   const counts = Object.fromEntries(PROGRESS_STATES.map(state => [state, rows.filter(row => row.state === state).length])) as Record<BoxProgress, number>;
   const notTold = deps.ready.notTold(source);
   const chosen = show === undefined ? [] : show.state === "not-told"
@@ -66,7 +70,7 @@ export function progress(activations: Activations, source: DirectorySource, deps
     : rows.filter(row => row.state === show.state);
   const page = chosen.sort((a, b) => a.activation.name.localeCompare(b.activation.name)).slice(show?.offset ?? 0, (show?.offset ?? 0) + PAGE);
   return {
-    counts, notTold: notTold.length, latest: rows.map(row => row.activation.boxAskedAt!).sort().at(-1) ?? null,
+    counts, notTold: notTold.length, latest: rows.map(row => row.activation.boxAskedAt ?? row.activation.at).sort().at(-1) ?? null,
     ...(show !== undefined ? {
       total: chosen.length, offset: show.offset,
       people: page.map(({ activation, state, reason }) => ({
@@ -79,7 +83,7 @@ export function progress(activations: Activations, source: DirectorySource, deps
 
 /** The failed boxes of these people (or every failed one), started again a few at a time. */
 export function retryBoxes(activations: Activations, source: DirectorySource, subjects: readonly string[] | undefined, deps: OnboardingDeps, principals: Pick<Principals, "byId">): number {
-  const people = asked(activations, source).filter(activation => (subjects === undefined || subjects.includes(activation.subject)) && progressOf(activation.principalId!, deps).state === "failed")
+  const people = asked(activations, source, deps).filter(activation => (subjects === undefined || subjects.includes(activation.subject)) && progressOf(activation.principalId!, deps).state === "failed")
     .flatMap(activation => { const person = principals.byId(activation.principalId!); return person === undefined ? [] : [{ id: person.id, name: person.name }]; });
-  return deps.autoBoxes.retryFailed(people).length;
+  return deps.autoBoxes.retryFailed(people, deps.boxName).length;
 }

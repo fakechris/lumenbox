@@ -100,4 +100,12 @@ test("a door that will not carry it lists the person as not told, with the reaso
   assert.deepEqual(org.ready.notTold(org.source), []);
   assert.deepEqual(await org.ready.tellAgain(org.source, undefined, "p-admin"), { told: 0, notTold: 0 }, "nobody is left to tell");
   assert.equal(org.sends.length, 2);
+
+  // A send that throws (an outbox that cannot be written) is written down as not told, so it can be asked again.
+  const broken = new AssistantReady({ activations: org.activations, principals: new Principals(join(org.home, "principals.json")), registry: new AgentRegistry(join(org.home, "agents")),
+    reach: { tellOwner: async () => { throw new Error("outbox not writable"); } }, publicUrl: () => undefined, locale: () => "en", log: () => {}, sourceOf: () => org.source });
+  assert.deepEqual((await broken.tellAgain(org.source, ["ana"], "p-admin")), { told: 0, notTold: 0 }, "Ana was told already: not asked again");
+  org.activations.told(org.source, "activation", { subject: "ana", principalId: "ding:ana" }, { delivered: false, why: "pretend" });
+  assert.deepEqual(await broken.tellAgain(org.source, ["ana"], "p-admin"), { told: 0, notTold: 1 });
+  assert.equal(broken.notTold(org.source)[0]?.told?.why, "outbox not writable");
 });
