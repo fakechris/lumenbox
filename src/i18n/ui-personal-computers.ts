@@ -44,5 +44,14 @@ export const UI_PERSONAL_COMPUTERS: Record<string, readonly [string, string]> = 
   "ui.personal.selectDestination": ["请选择要创建 agent 的电脑。", "Choose a computer for the new agent."],
   "ui.personal.working": ["正在处理电脑操作…", "Working on the computer…"],
   "ui.personal.preparing": ["正在为你准备第一台个人电脑。", "Your first personal computer is being prepared."],
+  // Handing a computer over (INV-2298): what it means, said before anyone confirms.
+  "ui.personal.transferSignIns": ["电脑里的一切都会随它转交，包括 {owner} 留在浏览器和工具里的登录。转交不会清除这些登录：接手的人应先退出它们。", "Everything in it goes with it, including the sign-ins {owner} left in its browser and tools. A transfer does not clear them: whoever takes it over should sign out of them first."],
+  "ui.personal.transferAsks": ["{owner} 仍能登录，所以这只是一个请求：{owner} 同意之前，电脑不会换主人。", "{owner} can still sign in, so this is a request: the computer does not change hands until {owner} agrees."],
+  "ui.personal.transferReason": ["理由（写进管理记录）", "Reason (kept in the administration record)"],
+  "ui.personal.transferWaiting": ["等待 {owner} 同意转交给 {to}", "Waiting for {owner} to agree to hand it to {to}"],
+  "ui.personal.transferAskedOfYou": ["管理员请求把这台电脑转交给 {to}。转交后 {to} 能看到里面的一切，包括你留在里面的登录。你答复之前什么都不会变。", "An Admin asked to hand this computer to {to}. {to} would then see everything in it, including the sign-ins you left there. Nothing changes until you answer."],
+  "ui.personal.transferAgree": ["同意转交", "Agree to hand it over"],
+  "ui.personal.transferDecline": ["拒绝", "Decline"],
+  "ui.personal.handedFrom": ["这台电脑原来归 {name}。里面的浏览器和工具可能还登录着 {name} 的账号：使用前请先退出这些登录。", "This computer was {name}’s. Its browser and tools may still be signed in as {name}: sign out of those before you use it."],
   "ui.personal.waiting": ["配额已满，首次登录时没有创建个人电脑", "quota full, no personal computer made at first sign-in"],
 };

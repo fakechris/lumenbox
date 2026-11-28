@@ -203,6 +203,10 @@ function computerRow(box, mine, people, locked) {
   body.appendChild(computerText("div", "why", metadata.join(" · ")));
   if (box.podStatus) body.appendChild(computerText("div", "why", box.podStatus));
   if (box.error || box.status === "unreachable") body.appendChild(computerText("div", "why", box.error || podUnreachable(box.connectionError)));
+  var asked = box.transferAsked;
+  if (asked && !mine) body.appendChild(computerText("div", "why", t("ui.personal.transferWaiting", { owner: box.ownerName, to: asked.toName })));
+  if (asked && mine) body.appendChild(computerText("div", "why", t("ui.personal.transferAskedOfYou", { to: asked.toName })));
+  if (box.handedFrom && mine) body.appendChild(computerText("div", "why", t("ui.personal.handedFrom", { name: box.handedFrom.name })));
   var statusLabel = box.status === "unreachable" ? t("ui.next.box.off") : t("ui.personal.state." + box.status);
   row.appendChild(body); row.appendChild(el("span", box.status === "ready" ? "chip-run" : "chip", statusLabel));
   function button(label, run, danger) {
@@ -214,15 +218,24 @@ function computerRow(box, mine, people, locked) {
     if (!mine) data.action = action;
     runComputer(mine ? action : "admin", data);
   }
+  if (asked && mine) {
+    button(t("ui.personal.transferAgree"), function () { runComputer("transfer-answer", { id: box.id, agree: true }); });
+    button(t("ui.personal.transferDecline"), function () { runComputer("transfer-answer", { id: box.id, agree: false }); });
+  }
   if (["ready", "unreachable", "detached", "failed"].indexOf(box.status) >= 0 || (box.status === "interrupted" && !box.pendingRemoval)) {
     if (mine && !locked) button(t("ui.personal.rename"), function () {
       editComputerName(t("ui.personal.rename"), box.name, function (name) { act("rename", { name: name }); });
     });
     if (!mine) button(t("ui.personal.transfer"), function () {
       computerDialog(t("ui.personal.transfer"), function (form, action) {
-        var recipient = el("select"); computerRecipients(recipient, people, box.orphaned ? "" : box.owner);
+        var recipient = el("select"), reason = el("input"); computerRecipients(recipient, people, box.orphaned ? "" : box.owner);
+        reason.maxLength = 300;
         form.appendChild(labelled(t("ui.personal.selectRecipient"), recipient));
-        var apply = action(t("ui.personal.transfer"), false, function (close) { if (recipient.value) { close(); act("transfer", { recipient: recipient.value }); } });
+        form.appendChild(labelled(t("ui.personal.transferReason"), reason));
+        // What a transfer means, before it is confirmed (INV-2298): the owner is asked while they can sign in; their sign-ins go with it.
+        if (box.ownerCanSignIn) form.appendChild(computerText("p", "why", t("ui.personal.transferAsks", { owner: box.ownerName })));
+        form.appendChild(computerText("p", "why", t("ui.personal.transferSignIns", { owner: box.ownerName })));
+        var apply = action(t("ui.personal.transfer"), false, function (close) { if (recipient.value) { close(); act("transfer", { recipient: recipient.value, reason: reason.value }); } });
         apply.disabled = true;
         recipient.addEventListener("change", function () { apply.disabled = !recipient.value; });
       });

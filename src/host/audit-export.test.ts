@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry } from "../agents/registry.ts";
 import { attachedBox } from "../box/boxes.ts";
+import { administrationLedger } from "./admin-ledger.ts";
 import { describeExport, exportAudit, heldValues, readAuditExport, redactLine } from "./audit-export.ts";
 
 const SECRET = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab";
@@ -71,6 +72,10 @@ test("an export is one box's ledgers inside the window, secrets redacted, and re
       { at: "2026-09-10T00:01:00Z", event: "rotated", kind: "box", box: registry.box.id, boxName: "own", by: "ann", confirmed: true },
       { at: "2026-09-10T00:02:00Z", event: "rotated", kind: "box", box: grokId, boxName: "grok", by: "ann", confirmed: true },
     ].map(line => JSON.stringify(line)).join("\n") + "\n");
+    // An Admin's acts on a box (INV-2298), written through the ledger's own writer: each with its box.
+    const administer = administrationLedger(root, () => new Date("2026-09-10T00:03:00Z"));
+    administer({ act: "personal-box.transfer", by: "admin", box: registry.box.id, boxName: "own", from: "ann", to: "bea", reason: "Ann left" });
+    administer({ act: "personal-box.keep", by: "admin", box: grokId, boxName: "grok", from: "bob" });
     const held = heldValues(root);
     assert.deepEqual([...held.keys()].sort(), ["config.channels.feishu.appSecret", "vault:SHOP_PASSWORD", "vault:short"]);
     const manifest = exportAudit({ home: root, registry, box: registry.box.name, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out, held, now: () => new Date("2026-09-11T00:00:00Z") });
@@ -86,6 +91,7 @@ test("an export is one box's ledgers inside the window, secrets redacted, and re
     assert.equal(manifest.files["turns.jsonl"], 1);
     assert.equal(manifest.files["org-skill-setup.jsonl"], 1, "this box's consent, not the other's");
     assert.equal(manifest.files["org-skills.jsonl"], 1, "who published which version; a member's offer is not this box's record");
+    assert.deepEqual(readFileSync(join(out, "administration.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line).act), ["personal-box.transfer"], "this box's hand-over, not the other's keep");
     assert.equal(manifest.files[join("transcripts", ada, "main.jsonl")], 2);
     assert.equal(manifest.files[join("transcripts", ada, "side-1.jsonl")], 1);
     assert.deepEqual(manifest.redactions, { exact: 1, pattern: 1 });
@@ -113,6 +119,7 @@ test("an export is one box's ledgers inside the window, secrets redacted, and re
     assert.equal(other.files["network-events.jsonl"], 1);
     assert.equal(other.files["vault-audit.jsonl"], 1);
     assert.equal(other.files["org-skill-setup.jsonl"], 1);
+    assert.equal(other.files["administration.jsonl"], 1);
     assert.throws(() => exportAudit({ home: root, registry, box: "nowhere", from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out: join(root, "x") }), /no box nowhere; known: /);
     assert.throws(() => exportAudit({ home: root, registry, box: grokId, from: "2026-09-30T00:00:00Z", to: "2026-09-01T00:00:00Z", out: join(root, "x") }), /not two instants in order/);
   } finally {
