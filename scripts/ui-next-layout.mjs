@@ -138,6 +138,32 @@ try {
     assert.deepEqual(errors, [], `${where}: the page reported errors`);
     await context.close(); cases++;
   }
+  // Settings → Channels at the desktop app's default and smallest windows (INV-2322): "Connect a channel" sends a person
+  // here to press Set credentials, so every row's controls sit inside its card, on screen, with nothing to scroll sideways.
+  for (const lang of ["en", "zh"]) for (const [width, height] of [[1360, 840], [1120, 720]]) {
+    const where = `channels ${lang} ${width}`;
+    const context = await browser.newContext({ viewport: { width, height }, extraHTTPHeaders: { authorization: "Bearer layout-fixture", "x-agentbox-user": "web:layout-viewer" } });
+    const page = await context.newPage();
+    await page.goto(`${meta.base}/?ui=next&lang=${lang}&view=settings&pane=doors`);
+    const set = page.getByRole("button", { name: lang === "en" ? "Set credentials" : "填写凭据", exact: true });
+    await set.first().waitFor();
+    assert.equal(await set.count(), 2, `${where}: Feishu and DingTalk each offer Set credentials`);
+    const rows = await page.locator(".setting .fact:has(.acts select)").evaluateAll(nodes => nodes.map(row => {
+      const card = row.closest(".setting").getBoundingClientRect();
+      const controls = [...row.querySelectorAll(".acts > *")].map(node => {
+        const r = node.getBoundingClientRect();
+        return { what: node.getAttribute("aria-label") || node.textContent.trim(), left: r.left, right: r.right };
+      });
+      return { card: { left: card.left, right: card.right }, controls };
+    }));
+    assert.ok(rows.length >= 2, `${where}: the channel rows are drawn`);
+    for (const row of rows) for (const control of row.controls) {
+      assert.ok(control.left >= row.card.left - 1 && control.right <= row.card.right + 1, `${where}: "${control.what}" leaves its card (${Math.round(control.right)} > ${Math.round(row.card.right)})`);
+      assert.ok(control.right <= width + 1, `${where}: "${control.what}" is past the window's edge (${Math.round(control.right)} > ${width})`);
+    }
+    assert.equal(await page.locator("#view").evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, `${where}: Settings → Channels scrolls sideways`);
+    await context.close(); cases++;
+  }
   const admin = await browser.newContext({
     extraHTTPHeaders: { authorization: "Bearer layout-fixture", "x-agentbox-user": "web:layout-viewer" },
   });
@@ -164,6 +190,20 @@ try {
   await settings.getByRole("button", { name: /Settings · Team/ }).click();
   await overview.waitFor();
   assert.equal(new URL(settings.url()).searchParams.has("pane"), false);
+
+  // An agent opened from the sidebar while in Settings: the address is the conversation's, so a reload stays in it (INV-2324).
+  await settings.goto(`${meta.base}/?ui=next&lang=en&view=settings&pane=doors`);
+  await settings.getByRole("heading", { name: "Chat channels", exact: true }).waitFor();
+  await settings.locator("#agents .agent").first().click();
+  await settings.locator("#composer-text").waitFor();
+  const back = new URL(settings.url()).searchParams;
+  assert.equal(back.has("view") || back.has("pane"), false, `the conversation's address still says Settings: ${settings.url()}`);
+  assert.equal(back.get("agent"), meta.agent, "the address names the agent whose conversation is open");
+  await settings.reload();
+  await settings.locator("#composer-text").waitFor();
+  assert.equal(await settings.evaluate(() => document.body.dataset.view), "chat", "a reload lands in the conversation, not in Settings");
+  await settings.goBack();
+  await settings.getByRole("heading", { name: "Chat channels", exact: true }).waitFor();
 
   const deepLink = await admin.newPage();
   await deepLink.goto(teamUrl.replace("pane=team", "pane=constructor"));

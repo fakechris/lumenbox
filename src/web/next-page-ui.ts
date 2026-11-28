@@ -31,7 +31,7 @@ import { NEXT_MANAGE_JS } from "./next-manage-ui.ts";
 import { NEXT_TEACH_JS } from "./next-teach-ui.ts";
 import { NEXT_SET_MINE_JS } from "./next-set-mine-ui.ts"; import { NEXT_SET_PHONES_JS } from "./next-set-phones-ui.ts";
 import { NEXT_SET_MODEL_JS } from "./next-set-model-ui.ts";
-import { NEXT_SET_DOORS_JS } from "./next-set-doors-ui.ts";
+import { NEXT_SET_DOORS_CSS, NEXT_SET_DOORS_JS } from "./next-set-doors-ui.ts";
 import { NEXT_SET_TEAM_JS } from "./next-set-team-ui.ts"; import { NEXT_SET_DIRECTORY_CSS, NEXT_SET_DIRECTORY_JS } from "./next-set-directory-ui.ts";
 import { NEXT_SET_ORG_SKILLS_CSS, NEXT_SET_ORG_SKILLS_JS } from "./next-set-org-skills-ui.ts";
 import { NEXT_SET_LIMITS_JS } from "./next-set-limits-ui.ts";
@@ -381,7 +381,7 @@ export const NEXT_HTML = `<!doctype html>
 <link rel="icon" href="data:,">
 <script>${STRIP_TOKEN_JS}${SIGN_IN_AGAIN_JS}</script>
 <script src="/vendor/markdown-it.js"></script>
-<style>${STYLE}${NEXT_SET_DIRECTORY_CSS}${NEXT_SET_ORG_SKILLS_CSS}${FIRST_SCREEN_CSS}${NEXT_SET_ORGANISATION_CSS}</style>
+<style>${STYLE}${NEXT_SET_DIRECTORY_CSS}${NEXT_SET_ORG_SKILLS_CSS}${FIRST_SCREEN_CSS}${NEXT_SET_ORGANISATION_CSS}${NEXT_SET_DOORS_CSS}</style>
 </head>
 <body>
 <script>

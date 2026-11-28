@@ -6,6 +6,17 @@
  */
 import { CHANNEL_SETUP_JS } from "./channel-setup-ui.ts";
 
+/**
+ * A channel row: its name and status, then who answers, when it answers in groups and Set credentials. The words wrap
+ * and the controls move under them when the card is too narrow for one line (INV-2322): on one unwrapped line the
+ * Set credentials button sat past the right edge of the desktop app's default window.
+ */
+export const NEXT_SET_DOORS_CSS = `
+.setting .fact.channel-row { flex-wrap: wrap; row-gap: 8px; }
+.channel-row > span:first-child { flex: 1 1 260px; min-width: 0; } .channel-row .why { white-space: normal; }
+.setting .channel-row > .acts { flex: 0 1 auto; max-width: 100%; justify-content: flex-start; }
+`;
+
 export const NEXT_SET_DOORS_JS = `
 ${CHANNEL_SETUP_JS}
 var doors = { data: null, connectors: null, error: "", adding: false, editing: null, note: "" };
@@ -64,6 +75,7 @@ function channelsBlock() {
   };
   (data.records || []).forEach(function (record) {
     var state = running[record.id] || running[record.name] || {}, line = el("div", "fact"), text = el("span", ""), acts = el("span", "acts");
+    line.classList.add("channel-row");
     var status = state.running ? t("ui.next.doors.on") : record.credentialsSet ? t("ui.next.doors.off") : t("ui.next.doors.noCredentials");
     var detail = record.credentialsSet ? state.detail : t(record.type === "telegram" ? "ui.channels.telegram-setup" : "ui.channels.add-credentials");
     text.appendChild(el("b", "", record.name || record.id)); text.appendChild(el("div", "why", record.type + " · " + status + (detail ? " · " + detail : "")));
@@ -82,7 +94,7 @@ function channelsBlock() {
       var remove = el("button", "act", t("ui.next.doors.remove"));
       remove.addEventListener("click", function () {
         var sure = el("button", "act-danger", t("ui.next.doors.removeSure"));
-        sure.addEventListener("click", function () { postJson("/api/channels/records/remove", { id: record.id }).then(function () { doors.note = t("ui.next.doors.restart"); loadDoors(); }, failed); });
+        sure.addEventListener("click", function () { postJson("/api/channels/records/remove", { id: record.id }).then(function () { doors.note = t("ui.next.doors.restart"); loadDoors(); refresh(); }, failed); });
         remove.replaceWith(sure);
       });
       acts.appendChild(remove);
@@ -110,7 +122,8 @@ function channelsBlock() {
     if (idVal) body.appId = idVal;
     if (secVal) body.appSecret = secVal;
     save.disabled = true;
-    postJson("/api/channels/records", body).then(function (got) { doors.adding = false; doors.editing = null; doors.note = doorSaved(got); loadDoors(); }, function (error) { save.disabled = false; failed(error); });
+    // Credentials decide Getting started's channel step, which reads /api/setup again only in refresh() (INV-2323).
+    postJson("/api/channels/records", body).then(function (got) { doors.adding = false; doors.editing = null; doors.note = doorSaved(got); loadDoors(); refresh(); }, function (error) { save.disabled = false; failed(error); });
   });
   cancel.addEventListener("click", function () { doors.adding = false; doors.editing = null; render(); });
   [labelled(t("ui.next.doors.type"), type), labelled(t("ui.next.doors.id"), id), labelled(t("ui.next.member.name"), name), labelled(t("ui.next.doors.appId"), appId),
