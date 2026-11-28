@@ -122,7 +122,8 @@ async function inboxOf(call: Call): Promise<Built[]> {
   for (const request of found.secrets) {
     built.push({
       id: `secret:${request.id}`, kind: "secret", title: `${request.agentName} asks for a secret: ${request.id}`, detail: request.description, decision: true,
-      actions: person.role === "admin" ? ["save", "dismiss"] : ["open-on-page"], stepUpRequired: false, agentId: request.agentId, agentName: request.agentName,
+      // Saving is stepped up: a value of somebody else's choosing (a key, an endpoint) is what the agent would then use.
+      actions: person.role === "admin" ? ["save", "dismiss"] : ["open-on-page"], stepUpRequired: true, agentId: request.agentId, agentName: request.agentName,
       secret: { name: request.id, description: request.description }, hidden: { secretId: request.id },
     });
   }
@@ -200,7 +201,11 @@ export async function answerInboxItem(call: Call) {
   }
   if (item.kind === "secret") {
     if (body.action === "dismiss") { decisions.dismissSecret(item.hidden.secretId!, by); return { id, outcome: "dismissed", at: now() }; }
-    const saved = decisions.saveSecret(item.hidden.secretId!, body.value ?? "", by, item.agentId!);
+    const value = body.value ?? "";
+    if (value.trim() === "") return refuse("inbox-answer-invalid", { why: "a secret has a value" });
+    // Planting a value is an effect: a stolen fifteen-minute token must not choose what the agent then uses. The proof covers the value.
+    stepUp(call, id, "save", wordsDigest(value));
+    const saved = decisions.saveSecret(item.hidden.secretId!, value, by, item.agentId!);
     if (saved === "unknown") return refuse("api-not-found");
     if (saved === "empty") return refuse("inbox-answer-invalid", { why: "a secret has a value" });
     return { id, outcome: "saved", at: now() };

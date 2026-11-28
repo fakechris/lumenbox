@@ -6,7 +6,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -21,7 +21,9 @@ import { decisionsFor, type DecisionWorld } from "../decisions.ts";
 import { personActions } from "../person-actions.ts";
 import { inboxChanges } from "./inbox.ts";
 
-const credential = (id: string): ClientCredential => ({ id, kind: "personal", principalId: id === "tok_ann" ? "ann" : "dee", label: "t", scopes: ["work:decide"], createdAt: "2026-11-28T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" });
+// Ann answers from her phone, a device with a step-up key (docs/110 §4); Dee with a personal token.
+const deviceKey = generateKeyPairSync("ec", { namedCurve: "P-256" });
+const credential = (id: string): ClientCredential => ({ id, kind: id === "dev_ann" ? "device" : "personal", principalId: id === "dev_ann" ? "ann" : "dee", label: "t", scopes: ["work:decide"], createdAt: "2026-11-28T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" });
 
 async function api(t: TestContext) {
   const home = mkdtempSync(join(tmpdir(), "inbox-secret-"));
@@ -31,13 +33,14 @@ async function api(t: TestContext) {
   const secretDeps = { pending, vault: { setSecret: (input: { id: string; value?: string; grants?: { holder: string }[] }) => { vault.push(input); } }, deliverSystem: (_agent: string, text: string) => { told.push(text); }, log: (line: string) => logs.push(line) };
   const decisions = {
     inbox: async () => ({ items: [], approvals: [], drafts: [], tasks: [], secrets: [...pending.values()] }),
-    saveSecret: (id: string, value: string, by: string) => answerSecret(secretDeps, id, value, by),
+    saveSecret: (id: string, value: string, by: string, forAgent: string) => answerSecret(secretDeps, id, value, by, forAgent),
+    stepUpKeyOf: (id: string) => (id === "dev_ann" ? { id: "key-1", publicKey: deviceKey.publicKey.export({ type: "spki", format: "der" }).toString("base64url") } : undefined),
   } as unknown as DecisionAccess;
   const persisted = join(home, "client-api-idempotency.jsonl");
   const frame = clientApi({
     world: { reachOf: () => ({ box: () => true, agent: () => true, task: () => true }), agents: () => [], tasks: () => [], attention: () => ({ mine: [], theirs: [] }), actor: () => undefined,
       changes: { latest: 0, after: () => ({ reset: false, lines: [] }), onAppend: () => () => {}, onClose: () => () => {} }, noteAgents: () => {} },
-    tokens: { clientFor: presented => (presented === "lbxp_ann" ? { credential: credential("tok_ann") } : presented === "lbxp_dee" ? { credential: credential("tok_dee") } : { refused: "invalid" }), touch: () => "2026-11-28T00:00:00.000Z" },
+    tokens: { clientFor: presented => (presented === "lbxd_ann" ? { credential: credential("dev_ann") } : presented === "lbxp_dee" ? { credential: credential("tok_dee") } : { refused: "invalid" }), touch: () => "2026-11-28T00:00:00.000Z" },
     person: id => (id === "ann" ? { id, name: "Ann", role: "admin" } : id === "dee" ? { id, name: "Dee", role: "driver" } : undefined),
     installationMode: () => "organisation", version: "0.0.0", homeAgentOf: () => undefined,
     signIns: { blocked: () => undefined, failed: () => {}, succeeded: () => {} }, address: () => "127.0.0.1", devices: {} as never, decisions,
@@ -53,7 +56,7 @@ async function api(t: TestContext) {
   return { answer, vault, told, logs, persisted, pending, list: (token: string) => fetch(`${base}/inbox`, { headers: { authorization: `Bearer ${token}` } }) };
 }
 
-test("a secret an agent asked for: listed for those who may read the agent, saved only by an Admin, straight to the vault, granted to that agent alone, and written nowhere else", async t => {
+test("a secret an agent asked for: listed for those who may read the agent, saved only by an Admin with a step-up proof over the value, straight to the vault, granted to that agent alone, and written nowhere else", async t => {
   const box = await api(t);
   const listed = await (await box.list("lbxp_dee")).json() as { items: { id: string; kind: string; actions: string[]; secret: { name: string } }[] };
   assert.deepEqual(listed.items.map(item => [item.id, item.kind, item.actions, item.secret.name]), [["secret:GITHUB_TOKEN", "secret", ["open-on-page"], "GITHUB_TOKEN"]], "a driver sees it and answers it on the page");
@@ -62,7 +65,18 @@ test("a secret an agent asked for: listed for those who may read the agent, save
   assert.equal(box.vault.length, 0);
 
   const value = "ghp_0123456789abcdefSECRET";
-  const saved = await box.answer("lbxp_ann", { action: "save", value }, "retry-key-0001");
+  // Saving plants a value the agent will use: without the device's proof over this value, refused — even for an Admin.
+  const unproved = await box.answer("lbxd_ann", { action: "save", value: "attacker-chosen" });
+  assert.deepEqual([unproved.status, ((await unproved.json()) as { code: string }).code], [403, "step-up-required"]);
+  const proof = (words: string) => ({
+    keyId: "key-1",
+    signature: sign("sha256", Buffer.from(stepUpText("dev_ann", "secret:GITHUB_TOKEN", "save", createHash("sha256").update(words).digest("base64url"))), { key: deviceKey.privateKey, dsaEncoding: "der" }).toString("base64url"),
+  });
+  const swapped = await box.answer("lbxd_ann", { action: "save", value: "attacker-chosen", stepUp: proof(value) });
+  assert.deepEqual([swapped.status, ((await swapped.json()) as { code: string }).code], [403, "step-up-invalid"], "the proof covers the value, not just the act");
+  assert.equal(box.vault.length, 0, "nothing planted");
+  const request = { action: "save", value, stepUp: proof(value) }; // a retry sends the same request, signature and all
+  const saved = await box.answer("lbxd_ann", request, "retry-key-0001");
   const text = await saved.text();
   assert.equal(saved.status, 200, text);
   assert.equal(saved.headers.get("cache-control"), "no-store");
@@ -72,7 +86,7 @@ test("a secret an agent asked for: listed for those who may read the agent, save
   assert.ok(box.told.every(line => !line.includes(value)) && box.told.some(line => line.includes("GITHUB_TOKEN")), "the agent is told it is saved, by name");
   assert.ok(box.logs.every(line => !line.includes(value)), "never in a log");
   assert.ok(!existsSync(box.persisted) || readFileSync(box.persisted, "utf8").trim() === "", "and nothing in the replay file: its retry lives in memory");
-  const again = await box.answer("lbxp_ann", { action: "save", value }, "retry-key-0001");
+  const again = await box.answer("lbxd_ann", request, "retry-key-0001");
   assert.deepEqual([again.status, again.headers.get("idempotent-replayed")], [200, "true"], "a retry gets the first answer, from memory");
   assert.equal(box.vault.length, 1, "saved once");
 });

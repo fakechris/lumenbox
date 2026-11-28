@@ -476,11 +476,15 @@ all `work:decide`. What was decided here:
   `reach`, `spend`, `credential`, `irreversible` or `run-later` needs a proof, and so does one whose tier
   is unknown (an extension's confirmation, an approval from before the tier was kept: `policy.jsonl`'s
   `approval-requested` now carries `tier`). Approving or editing an Outbox draft always does — it goes
-  outside. Denying and rejecting never do.
+  outside. Saving a secret does too, and its proof covers the value: a stolen fifteen-minute token must
+  not plant a key or an endpoint of its own choosing for an agent to use. Denying, rejecting, dismissing
+  and answering a question never do — a question's answer is the person's message to the agent, and
+  messages (conversations, part 3) are not stepped up either.
 - **The proof**: ECDSA P-256 / SHA-256 by the key the device registered at sign-in, over
   `lumenbox-step-up/1\n<deviceId>\n<item id>\n<decision>\n<detail>` — for an approval the decision
   `allow:once` or `allow:session` and the detail `-`, the item id the approval's; for a draft `approve`
-  with `-`, or `edit` with BASE64URL(SHA-256(UTF-8 words)) without padding, the item id the inbox item's —
+  with `-`, or `edit` with BASE64URL(SHA-256(UTF-8 words)) without padding; for a secret `save` with the
+  same digest of the value; the item id the inbox item's —
   DER or raw `r||s`. Only a device has one: a personal
   token cannot allow an outside action. Platform attestation (App Attest, Key Attestation) is not checked
   in v1: the server proves possession of the registered key, and the apps create it to need biometrics

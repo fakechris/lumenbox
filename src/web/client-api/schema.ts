@@ -441,7 +441,8 @@ export const SCHEMAS = {
   InboxAnswer: request([
     "An answer to a question, an Outbox draft or a secret request; nothing else is answered here. A question takes `answer` (`text`); a draft",
     "`approve`, `edit` (`body`) or `reject` (`reason`); a secret `save` (`value`) or `dismiss`. Approving signs `approve` with detail `-`; editing",
-    "signs `edit` with the detail BASE64URL(SHA-256(UTF-8 `body`)), no padding.",
+    "signs `edit` with the detail BASE64URL(SHA-256(UTF-8 `body`)), no padding; saving a secret signs `save` with the same digest of `value`.",
+    "Rejecting, dismissing and answering a question need no proof.",
   ].join(" "), {
     action: known("One of the item's `actions` this operation takes: `answer`, `approve`, `edit`, `reject`, `save`, `dismiss`.", INBOX_ACTIONS),
     text: text("For `answer`: the words, or one of the question's `options`.", { maxLength: 20_000 }),
@@ -695,7 +696,7 @@ export const OPERATIONS = [
     description: [
       "A question's answer goes to the agent as the person's message. Approving or editing a draft needs `stepUp` (decision `approve`, or `edit` with",
       "the SHA-256 of `body`, base64url, as the detail). A secret is saved to the vault, granted to the agent that asked, and never written anywhere",
-      "else; saving or dismissing one takes an Admin.",
+      "else; saving or dismissing one takes an Admin, and saving needs `stepUp` (decision `save`, the SHA-256 of `value` as the detail).",
     ].join(" "),
   },
   {
