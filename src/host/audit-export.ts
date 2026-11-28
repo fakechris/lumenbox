@@ -23,6 +23,7 @@ import { archivedLines } from "./jsonl.ts";
 import type { AgentRegistry } from "../agents/registry.ts";
 import { conversationIdFor } from "../agents/registry.ts";
 import { CREDENTIAL_PATTERNS, MIN_EXACT_LENGTH } from "./secret-scan.ts";
+import { ADMINISTRATION_LEDGER } from "./admin-ledger.ts";
 
 export interface ExportOptions {
   /** ~/.agentbox, where the host's ledgers are. */
@@ -202,6 +203,9 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   // Who watched or drove a desktop in this box, from when to when, and why it ended
   // (web/desktop-streams.ts, R6/R8). Each line names its box.
   write("desktop-sessions.jsonl", select(readLines(join(options.home, "desktop-sessions.jsonl")), record => record.box === box.id));
+  // What an Admin did to this box — handed it over, asked to, kept, deleted, recovered, cleaned it up — written before it took effect
+  // (admin-ledger.ts, docs/111 §3, INV-2298). Each line names its box.
+  write(ADMINISTRATION_LEDGER, select(readLines(join(options.home, ADMINISTRATION_LEDGER)), record => record.box === box.id));
   // What the organisation's skills were allowed to run in this box: each yes and no from the box's person, each time they were asked
   // or told (org-skill-setup.ts); and who published which version of what (org-skills.ts), which every box holds (INV-2222).
   write("org-skill-setup.jsonl", select(readLines(join(options.home, "org-skill-setup.jsonl")), record => record.box === box.id));

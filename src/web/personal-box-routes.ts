@@ -3,6 +3,8 @@ import { roleAtLeast, type Principal, type Principals } from "../host/principals
 import { personalBoxesOf } from "../host/box-quota.ts";
 import type { apiError } from "./api-error.ts";
 import type { AutoPersonalBoxes } from "../host/auto-personal-box.ts";
+import type { AdminAct, WriteAdminAct } from "../host/admin-ledger.ts";
+import type { AgentRegistry } from "../agents/registry.ts";
 
 interface Deps {
   boxes: PersonalBoxes;
@@ -18,6 +20,26 @@ interface Deps {
   error: typeof apiError;
   /** The box made at a first sign-in: what the person's own list and the Admins' say about it (INV-2203). */
   auto?: Pick<AutoPersonalBoxes, "view" | "waiting">;
+  /** The administration ledger: every act on a personal box is written here before it takes effect (INV-2298). */
+  record: WriteAdminAct;
+  /** Tells a person something through a door they hold (`PersonReach.tell`); a failure to deliver is theirs to log. */
+  tell(principalId: string, words: "asked" | "declined" | "handed", vars: Record<string, string>): void;
+}
+
+/**
+ * Whether the person a box is for can still sign in. While they can, the box is not handed to
+ * anybody without their yes; once they have left (removed, or a sync took their last sign-in),
+ * an Admin hands it to a successor (docs/111 §1 rule 1, INV-2298).
+ */
+export function ownerCanSignIn(principals: Pick<Principals, "byId" | "hasCurrentIdentity">, owner: string): boolean {
+  const person = principals.byId(owner);
+  return person !== undefined && person.identities.some(identity => principals.hasCurrentIdentity(person.id, identity));
+}
+
+/** Writes the act first; false, with the refusal sent, when it could not be written. */
+function noted(deps: Pick<Deps, "record" | "send" | "error">, act: AdminAct): boolean {
+  try { deps.record(act); return true; }
+  catch { deps.send(503, deps.error("admin-ledger-failed")); return false; }
 }
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : "Personal computer operation failed.";
@@ -54,11 +76,13 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
   });
   const inventory = (rows: Rows) => {
     const entries = boxes.quotaEntries(), waiting = deps.auto?.waiting() ?? new Set<string>();
-    const people = principals.list().map(person => ({ id: person.id, name: person.name, eligible: deps.authorize(person.id), ...counts(person.id, entries),
+    const caller = identity !== undefined && principals.isKnown(identity) ? principals.resolve(identity).id : undefined;
+    const people = principals.list().map(person => ({ id: person.id, name: person.name, eligible: deps.authorize(person.id), ...counts(person.id, entries), ...(person.id === caller ? { self: true } : {}),
       ...(waiting.has(person.id) ? { waitingForQuota: true } : {}) }));
     return { people, boxes: rows.map(box => {
       const person = people.find(row => row.id === box.owner);
-      return { ...box, ownerName: person?.name ?? box.ownerName ?? box.owner, orphaned: !person || box.retained };
+      // Whether a transfer asks the owner first: they can still sign in (INV-2298).
+      return { ...box, ownerName: person?.name ?? box.ownerName ?? box.owner, orphaned: !person || box.retained, ownerCanSignIn: !box.retained && ownerCanSignIn(principals, box.owner) };
     }) };
   };
   try {
@@ -78,10 +102,14 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
       principals.reload();
       if (!admin()) { send(403, error("cleanup-admin-only")); return; }
       if (typeof body.id !== "string") { send(400, error("cleanup-needs-choice")); return; }
+      const by = identity === undefined ? "operator" : principals.resolve(identity).id;
+      const reason = typeof body.reason === "string" && body.reason.trim() !== "" ? { reason: body.reason.trim() } : {};
       if (route === "POST /api/personal-boxes/admin-cleanup") {
-        if (typeof body.deleteData !== "boolean" || Object.keys(body).some(key => !["id", "deleteData"].includes(key))) {
+        if (typeof body.deleteData !== "boolean" || Object.keys(body).some(key => !["id", "deleteData", "reason"].includes(key))) {
           send(400, error("cleanup-needs-choice")); return;
         }
+        const row = boxes.cleanupList().find(entry => entry.id === body.id);
+        if (row && !noted(deps, { act: "personal-box.cleanup", by, box: row.id, boxName: row.name, from: row.owner, ...reason })) return;
         try { await boxes.cleanup(body.id, body.deleteData); }
         catch { send(409, error("cleanup-failed")); return; }
         send(200, { boxes: boxes.cleanupList() });
@@ -89,12 +117,26 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
       }
       const box = boxes.inventory().find(row => row.id === body.id);
       if (!box) { send(404, error("personal-box-not-found")); return; }
+      const act = (verb: string, to?: string) => noted(deps, { act: `personal-box.${verb}`, by, box: box.id, boxName: box.name, from: box.owner, ...(to !== undefined ? { to } : {}), ...reason });
       if (body.action === "transfer" && typeof body.recipient === "string") {
         const recipient = principals.byId(body.recipient);
         if (!recipient || recipient.id !== body.recipient) throw new Error("The recipient is not on the team.");
+        if (recipient.id === box.owner) { send(400, error("personal-box-transfer-same")); return; }
+        // An Admin does not make a member's box theirs: the box is the boundary, for Admins too (docs/111 §1 rule 1).
+        if (identity !== undefined && recipient.id === by) { send(403, error("personal-box-transfer-self")); return; }
+        if (by !== box.owner && !box.retained && ownerCanSignIn(principals, box.owner)) {
+          if (!act("transfer-asked", recipient.id)) return;
+          boxes.askTransfer(box.id, { to: recipient.id, toName: recipient.name, by, at: new Date().toISOString(), ...reason });
+          deps.tell(box.owner, "asked", { box: box.name, to: recipient.name });
+          send(202, { ok: true, asked: true });
+          return;
+        }
+        if (!act("transfer", recipient.id)) return;
         boxes.transfer(box.id, recipient.id, recipient.name);
+        deps.tell(recipient.id, "handed", { box: box.name, from: box.ownerName ?? box.owner });
       } else if (body.action === "recover") {
         if (!principals.byId(box.owner) && !box.pendingRemoval) throw new Error("Assign this computer to a team member first.");
+        if (!act("recover")) return;
         const result = await boxes.retry(box.owner, box.id, undefined, true);
         if (result.status === "ready") {
           await deps.reconnect(box.id);
@@ -104,6 +146,7 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
         } else if (result.error) throw new Error(result.error);
       } else if (body.action === "keep" || body.action === "delete") {
         if (body.action === "delete") confirmIds(body.agentIds, agentInfo(box.id).agentIds, changedAgents);
+        if (!act(body.action)) return;
         const result = await boxes.remove(box.owner, box.id, body.action === "delete", { deleteAgents: body.deleteAgents === true });
         if (result.error) throw new Error(result.error);
       } else { send(400, error("cleanup-needs-choice")); return; }
@@ -118,7 +161,7 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
     }
     const action = route.startsWith("POST /api/personal-boxes/") ? route.split("/").at(-1) : undefined;
     const fields = action === "create" ? ["requestId", "name"] : action === "rename" ? ["id", "name"] :
-      action === "remove" ? ["id", "deleteData", "deleteAgents", "agentIds"] : action === "retry" ? ["id"] : undefined;
+      action === "remove" ? ["id", "deleteData", "deleteAgents", "agentIds"] : action === "retry" ? ["id"] : action === "transfer-answer" ? ["id", "agree"] : undefined;
     if (!fields) { send(404, error("personal-box-action-unknown")); return; }
     const body = await read();
     principals.reload();
@@ -132,6 +175,11 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
       (action === "remove" && (typeof body.deleteData !== "boolean" || (body.deleteAgents !== undefined && typeof body.deleteAgents !== "boolean"))) ||
       (action === "rename" && typeof body.name !== "string") || (body.name !== undefined && typeof body.name !== "string")) {
       send(400, error("personal-box-params")); return;
+    }
+    if (action === "transfer-answer") {
+      if (typeof body.agree !== "boolean") { send(400, error("personal-box-params")); return; }
+      await answerTransfer(deps, person, body.id as string, body.agree);
+      return;
     }
     if (action === "rename") {
       boxes.rename(person.id, body.id as string, body.name as string);
@@ -161,11 +209,47 @@ export async function personalBoxRoute(route: string, deps: Deps): Promise<void>
   } catch (failure) { send(409, { error: errorText(failure) }); }
 }
 
+/**
+ * The owner answers an Admin's request to hand their box to somebody: a yes hands it over, a no
+ * takes the request away. Either is written first; the Admin who asked is told a no.
+ */
+async function answerTransfer(deps: Deps, person: Principal, id: string, agree: boolean): Promise<void> {
+  const { boxes, principals, send, error } = deps;
+  const box = boxes.list(person.id).find(row => row.id === id);
+  if (!box?.transferAsked) { send(404, error("personal-box-transfer-none")); return; }
+  const ask = box.transferAsked, recipient = principals.byId(ask.to);
+  const line = { by: person.id, box: box.id, boxName: box.name, from: person.id, to: ask.to, askedBy: ask.by, ...(ask.reason !== undefined ? { reason: ask.reason } : {}) };
+  if (agree && (!recipient || recipient.id !== ask.to)) { send(409, error("personal-box-transfer-gone")); return; }
+  if (!noted(deps, { act: agree ? "personal-box.transfer" : "personal-box.transfer-declined", ...line })) return;
+  boxes.answerTransfer(person.id, id);
+  if (agree) {
+    boxes.transfer(id, recipient!.id, recipient!.name);
+    deps.tell(recipient!.id, "handed", { box: box.name, from: person.name });
+  } else if (ask.by !== "operator") deps.tell(ask.by, "declined", { box: box.name, owner: person.name });
+  send(200, { ok: true });
+}
+
+/** The agents living in a box, and the check before one is stopped or deleted: none of them busy, and not every agent there is. */
+export function boxRules(registry: Pick<AgentRegistry, "agentsIn" | "list">, busyAgents: () => Iterable<string>) {
+  return {
+    residents: (id: string) => registry.agentsIn(id).map(agent => ({ id: agent.id, name: agent.profile.name })),
+    check: (target: string | string[], deleting: boolean) => {
+      const ids = typeof target === "string" ? [target] : target;
+      const residents = ids.flatMap(id => registry.agentsIn(id)), busy = new Set(busyAgents());
+      if (residents.some(agent => busy.has(agent.id))) throw new Error("Wait for the agents on this computer to finish before stopping it.");
+      if (deleting && residents.length > 0 && residents.length === registry.list().length) throw new Error("Keep at least one agent on another computer before deleting.");
+    },
+  };
+}
+
 export function planBoxDispositions(
   boxes: PersonalBoxes, owner: Principal, roster: Principal[], disposition: unknown,
-  quota: Deps["quota"], authorize: Deps["authorize"], checkResidents: (ids: string[], deleting: boolean) => void,
-  residents: Deps["residents"],
+  quota: Deps["quota"], authorize: Deps["authorize"], rules: ReturnType<typeof boxRules>,
+  audit: { identity: string | undefined; record: WriteAdminAct },
 ): () => Promise<void> {
+  const { check: checkResidents, residents } = rules;
+  // Who is acting: the roster id behind the caller's sign-in, or the installation's own credential.
+  const by = audit.identity === undefined ? "operator" : roster.find(person => person.identities.includes(audit.identity!))?.id ?? audit.identity;
   const rows = boxes.list(owner.id), ids = rows.map(box => box.id);
   const choice = disposition && typeof disposition === "object" && !Array.isArray(disposition)
     ? disposition as { action?: unknown; recipient?: unknown; boxIds?: unknown; agentIds?: unknown } : undefined;
@@ -180,6 +264,7 @@ export function planBoxDispositions(
   if (choice.action === "transfer") {
     const recipient = roster.find(person => person.id === choice.recipient && roleAtLeast(person.role, "driver") && person.identities.length > 0);
     if (!recipient || !authorize(recipient.id)) throw new Error("Choose an eligible team member for the transfer.");
+    if (recipient.id === by) throw new Error("An Admin cannot hand a member’s computers to themselves. Choose their successor.");
     const needed = rows.filter(box => personalBoxUsesQuota(box.status)).length;
     const limit = quota(recipient.id);
     if (needed && limit !== undefined && personalBoxesOf(boxes.quotaEntries(), recipient.id).length + needed > limit)
@@ -194,6 +279,10 @@ export function planBoxDispositions(
       if (result.error) throw new Error(result.error);
     };
   }
+  // Written before anything is removed or handed over; a line that cannot be written refuses the removal.
+  const to = choice.action === "transfer" ? { to: String(choice.recipient) } : {};
+  try { for (const row of rows) audit.record({ act: `personal-box.${choice.action}`, by, box: row.id, boxName: row.name, from: owner.id, ...to, reason: "member removed" }); }
+  catch { throw new Error("The administration record could not be written, so nothing was changed."); }
   return async () => {
     const results = await Promise.allSettled(ids.map(apply));
     if (results.some(result => result.status === "rejected"))

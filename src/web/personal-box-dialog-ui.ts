@@ -55,7 +55,8 @@ function deleteComputerDialog(box, erase) {
 function computerRecipients(select, people, excluded) {
   var blank = computerElement("option", t("ui.personal.selectRecipient"));
   blank.value = ""; select.appendChild(blank);
-  people.filter(function (person) { return person.eligible && person.id !== excluded; }).forEach(function (person) {
+  // Never the Admin choosing: a member's computer is not theirs to take (INV-2298).
+  people.filter(function (person) { return person.eligible && person.id !== excluded && !person.self; }).forEach(function (person) {
     var option = computerElement("option", person.name + " · " + computerQuota(person));
     option.value = person.id; select.appendChild(option);
   });
@@ -88,7 +89,7 @@ function removeMemberComputerDialog(person, inventory, remove) {
       var deleting = choice.value === "delete";
       recipient.hidden = choice.value !== "transfer"; apply.hidden = deleting; erase.hidden = !deleting;
       apply.disabled = !choice.value || (choice.value === "transfer" && !recipient.value);
-      note.textContent = deleting ? computerLoss(owned) : choice.value === "keep" ? t("ui.personal.keepNote") : "";
+      note.textContent = deleting ? computerLoss(owned) : choice.value === "keep" ? t("ui.personal.keepNote") : choice.value === "transfer" ? t("ui.personal.transferSignIns", { owner: person.name }) : "";
     }
     choice.addEventListener("change", show); recipient.addEventListener("change", show); show();
   });

@@ -30,7 +30,12 @@ export interface PersonalBoxRecord {
   stateReason?: string;
   stateMessage?: string;
   stateChangedAt?: string;
+  /** An Admin asked to hand this box to somebody else while its owner can still sign in: the owner agrees or declines (INV-2298). */
+  transferAsked?: TransferAsk;
+  /** Whose box this was before a hand-over: their sign-ins may still be in it (INV-2298). */
+  handedFrom?: { owner: string; name: string; at: string };
 }
+export interface TransferAsk { to: string; toName: string; by: string; at: string; reason?: string }
 /** What a driver found of a ready box after a server restart (INV-1692). */
 export interface RecoveredBox {
   state: "running" | "restarted" | "gone" | "failed";
@@ -223,6 +228,8 @@ export class PersonalBoxes {
       error: row.error,
       ...(row.stateReason !== undefined ? { stateReason: row.stateReason } : {}),
       dataRetained: row.status === "detached" || row.status === "failed",
+      ...(row.transferAsked !== undefined ? { transferAsked: row.transferAsked } : {}),
+      ...(row.handedFrom !== undefined ? { handedFrom: row.handedFrom } : {}),
     };
   }
   list(owner: string) { return this.listed(owner).map(row => this.summary(row)); }
@@ -485,7 +492,25 @@ export class PersonalBoxes {
       const held = personalBoxesOf(this.combined(db), owner).filter(entry => entry.id !== id).length;
       if (personalBoxUsesQuota(row.status) && quota !== undefined && held >= quota) throw new Error("The recipient has no personal box quota available");
       if (this.options.entries().some(entry => entry.id === id)) this.options.attach({ ...this.entry(row), members: [owner] });
-      this.save(db, { ...row, owner, ownerName, retained: false, request: `transfer-${randomUUID()}` });
+      const { transferAsked: _asked, ...rest } = row;
+      this.save(db, { ...rest, owner, ownerName, retained: false, request: `transfer-${randomUUID()}`,
+        ...(row.owner !== owner ? { handedFrom: { owner: row.owner, name: row.ownerName ?? row.owner, at: new Date().toISOString() } } : {}) });
+    });
+  }
+  /** Records an Admin's request to hand the box over; replaces an earlier one. Nothing changes hands until the owner agrees. */
+  askTransfer(id: string, ask: TransferAsk): void {
+    this.transaction(db => {
+      const row = this.records(db).find(record => record.id === id && record.status !== "deleted");
+      if (!row) throw new Error("Personal box not found");
+      this.save(db, { ...row, transferAsked: ask });
+    });
+  }
+  /** The owner's answer: the request is taken off the box either way, and returned so the caller can act on a yes. */
+  answerTransfer(owner: string, id: string): TransferAsk | undefined {
+    return this.transaction(db => {
+      const { transferAsked, ...row } = this.own(db, owner, id);
+      if (transferAsked !== undefined) this.save(db, row);
+      return transferAsked;
     });
   }
   private detach(row: PersonalBoxRecord): void {

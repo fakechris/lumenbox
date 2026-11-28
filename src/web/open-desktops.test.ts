@@ -130,7 +130,10 @@ test("sign-out, removal and changes to box access close open desktops; a sign-in
     const personalDesktop = `/desktop/b/${boxId}/1/websockify`;
     const oldOwner = await openDesktop(bobOwnerCookie, personalDesktop);
     const oldUpstream = upstreamClosed.at(-1)!;
-    const transferred = await post("/api/personal-boxes/admin", { action: "transfer", id: boxId, recipient: "chris" });
+    // Bob can still sign in, so the hand-over waits for his yes (INV-2298).
+    const asked = await post("/api/personal-boxes/admin", { action: "transfer", id: boxId, recipient: "chris" });
+    assert.equal(asked.status, 202, await asked.text());
+    const transferred = await post("/api/personal-boxes/transfer-answer", { id: boxId, agree: true }, { "content-type": "application/json", cookie: bobOwnerCookie });
     assert.equal(transferred.status, 200, await transferred.text());
     await within(oldOwner.closed, "Bob's desktop after his personal computer was transferred");
     await within(oldUpstream, "Bob's connection to the transferred computer");

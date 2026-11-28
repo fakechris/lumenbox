@@ -455,7 +455,7 @@ test("Computers inventories personal Kubernetes boxes and member removal keeps, 
     const row = (rows: { id: string }[], id: string) => rows.find(item => item.id === id);
     assert.deepEqual(row(inventory.data.boxes, bob), {
       id: bob, owner: "bob", ownerName: "Bob", name: "Bob’s computer", status: "ready", podStatus: "Running",
-      image, createdAt: own.mine.boxes[0].createdAt, retained: false, orphaned: false, pendingRemoval: false, dataRetained: false,
+      image, createdAt: own.mine.boxes[0].createdAt, retained: false, orphaned: false, ownerCanSignIn: true, pendingRemoval: false, dataRetained: false,
       agents: ["Bea"], agentIds: [bea.id],
     });
     assert.equal((row(inventory.data.boxes, alice) as { ownerName?: string } | undefined)?.ownerName, "Alice", "a second owner's computer is on the same list");
