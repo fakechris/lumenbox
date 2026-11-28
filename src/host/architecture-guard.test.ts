@@ -176,6 +176,8 @@ test("a ledger that compacts says what kind of thing it is, and a record archive
   // archive rather than drop.
   const ledgers = sources().filter(file => /\n\s*private compact\(/.test(file.text));
   assert.ok(ledgers.length >= 9, `expected to find the ledgers, found ${ledgers.length}`);
+  // The client API's change ledger (INV-2213) is a feed: a phone past its window is told to reset, and owed nothing older.
+  assert.match(ledgers.find(file => file.path === "web/client-api/change-ledger.ts")?.text ?? "", /export const LEDGER_KIND: LedgerKind = "feed"/, "changes.jsonl is declared, as a feed");
 
   const undeclared = ledgers
     .filter(file => !/export const LEDGER_KIND: LedgerKind = "(record|queue|state|feed)"/.test(file.text))

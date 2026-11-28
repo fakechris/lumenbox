@@ -4,6 +4,7 @@
 import com.lumenopen.lumenbox.generated.infrastructure.Serializer
 import com.lumenopen.lumenbox.generated.models.Me
 import com.lumenopen.lumenbox.generated.models.Meta
+import com.lumenopen.lumenbox.generated.models.Changes
 import com.lumenopen.lumenbox.generated.models.WorkPage
 import com.lumenopen.lumenbox.generated.models.Error as ApiError
 import java.io.File
@@ -35,6 +36,12 @@ class ForwardCompatibilityTest {
         assertEquals("paused", page.items.first().state)
         assertEquals("sign-off", page.items.first().waitKind)
         assertEquals(true, page.items.first().waitsOnMe)
+    }
+
+    @Test fun changesOfAKindThisClientDoesNotKnow() {
+        val changes = json.decodeFromString(Changes.serializer(), fixture("changes.json"))
+        assertEquals(listOf("work", "conversation"), changes.items.map { it.type })
+        assertEquals(9007199254740001L, changes.durableSeq)
     }
 
     @Test fun anErrorWithAnUnknownCode() {

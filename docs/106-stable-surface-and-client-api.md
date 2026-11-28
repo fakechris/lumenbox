@@ -275,7 +275,7 @@ first delivery; the client API is needed only when they show the board on a scre
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
 | 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
 | 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 parts 1–3): the declared level and its start-up check, R1, R2, R4, R5 (except a strict `script-src`), R6, R7, R8, and S-2 closed for private. Not done: the kind pass through a TLS Ingress. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
-| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Part built (INV-2213 parts 1–2): `/meta`, `/me`, `/agents`, `/work` (with history), `/board`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. Not yet: `/events`, `/changes` (part 3) |
+| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Built (INV-2213, three parts): `/meta`, `/me`, `/agents`, `/work` (with history), `/board`, `/changes`, `/events`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. The page has no form for the tokens yet (INV-2316); minting asks for a session, not a recent sign-in (INV-2318) |
 | 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Not built |
 | 6. Shared storage for an organisation; mobile apps | Shared storage: a design of its own. Native iOS and Android clients, encrypted relay and wake-only push: docs/110 | Decided in docs/110; not built |
 
@@ -353,6 +353,27 @@ Outside it the answer is `api-not-found`, the same as for nothing at all.
   result line (`summary`) remain.
 - An agent hidden from listings is not in `/agents` and still answers by id. `hasDesktop` is not
   there yet: it arrives with desktop tickets (INV-2214).
+
+**Durable sync (part 3).** `GET /changes?since=` and `GET /events` (SSE) both read one ledger on
+disk, `changes.jsonl` (docs/05 §2.4.1), not the page's 512-frame ring:
+
+- **A change record** is `{ seq, at, type, id, op }` — `work` or `agent`, `upsert` or `delete` — and
+  nothing of what the thing says; the client fetches it through the same sight as every read. A
+  record is listed only when the caller may read the thing now, or, gone, could have read it by
+  what the ledger kept (who asked, who held it, which box); a service token is not told of gone work
+  unless its view takes all work. Each type needs its read scope: `work:read`, `agents:read`.
+- **Each thing once**: a page of `/changes` (≤ 1000, 500 by default) holds the newest change of each
+  thing it covers; `durableSeq` is where to go on from, `hasMore` says to ask again at once.
+- **Retention and reset**: 30 days and at most 200,000 lines, the newest always. A `since` older
+  than what is kept, or beyond the newest (another installation's history), answers `reset: true`
+  with the current `durableSeq`: drop the cache, reload, go on from there. `/events` says the same
+  with a first `reset` event.
+- **`/events`**: `Last-Event-ID` is a `seq`; the stream replays from the ledger what changed since,
+  once each, then sends `ready` with the newest position, then live `change` events. No
+  `Last-Event-ID`: it starts now. It ends when the credential stops being valid, and when the
+  server stops. The page's own `/api/events` and its ring are unchanged.
+- An agent's `status` (working, idle) is not a durable change; agents are written when they come,
+  go or change what a client shows of them.
 
 **Generation.** `clients/codegen/` holds a Swift package (swift-openapi-generator) and a Kotlin
 project (openapi-generator, `kotlinx.serialization`, as lumenbox-android uses) that generate from
