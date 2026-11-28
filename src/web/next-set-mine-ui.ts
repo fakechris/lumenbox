@@ -115,6 +115,6 @@ function standingBlock() {
 function renderMinePane(view) {
   if (mine.person === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadMine(); return; }
   if (mine.error) view.appendChild(el("p", "why", mine.error));
-  [aboutMeBlock(), tokensBlock(), standingBlock(), offerSkillBlock()].forEach(function (block) { if (block) view.appendChild(block); });
+  [aboutMeBlock(), tokensBlock(), standingBlock(), consentBlock(), offerSkillBlock()].forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

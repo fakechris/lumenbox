@@ -293,6 +293,7 @@ export class Orchestrator {
   private readonly skillCaches = new Map<string, SkillCache>();
   /** Set by `attachOrgSkills` (INV-2222): the organisation's skills in a box, the sync a connecting box is due, and a turn's end (what was said once is said). */
   orgSkillRoot: (boxId: string) => OrgSkillRoot | undefined = () => undefined; boxConnected: (boxId: string) => void = () => {}; busNoted: (event: BusEvent) => void = () => {};
+  turnOpening: (agentId: string, inbound: readonly InboundMessage[]) => Promise<void> = async () => {}; // a person's "agree <slug>" counts in that turn
   private readonly memoryMirror: MemoryMirror;
 
   /** Pushes an agent's standing files to its box after a person edited them on the host (INV-777). */
@@ -1843,7 +1844,7 @@ export class Orchestrator {
     conversation: string = MAIN_CONVERSATION,
     acknowledge?: () => void
   ): Promise<void> {
-    const principalId = inbound[0]?.principalId;
+    const principalId = inbound[0]?.principalId; await this.turnOpening(agent.id, inbound).catch(() => undefined);
     return this.executionCaller.run({
       agentId: agent.id,
       ...(principalId !== undefined ? { caller: { userId: principalId } } : {}),

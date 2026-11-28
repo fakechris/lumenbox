@@ -110,6 +110,12 @@ function orgSkillRow(skill) {
   fold.appendChild(head);
   body.appendChild(el("p", "why", skill.description));
   (skill.warnings || []).forEach(function (line) { var w = el("p", "why", line); w.setAttribute("data-org-skill-warning", ""); body.appendChild(w); });
+  if (skill.consent) {
+    // Where each box's person stands on what it runs: counts, and who declined by name. Nothing here asks them again.
+    var c = el("p", "why", t("ui.next.orgSkills.consent", { agreed: skill.consent.agreed, waiting: skill.consent.waiting })
+      + (skill.consent.declined.length ? " · " + t("ui.next.orgSkills.consentDeclined", { n: skill.consent.declined.length, names: skill.consent.declined.join(", ") }) : ""));
+    c.setAttribute("data-org-skill-consent", ""); body.appendChild(c);
+  }
   body.appendChild(el("p", "why", t("ui.next.orgSkills.files", { slug: skill.slug, files: (skill.files || []).join(", "), source: skill.source })));
   box.type = "checkbox"; box.checked = !!skill.required;
   box.addEventListener("change", function () { postJson("/api/org-skills/require", { slug: skill.slug, required: box.checked }).then(keepOrgSkills, orgSkillsRefused); });
@@ -179,6 +185,48 @@ function orgOfferRow(offer) {
   fold.appendChild(body);
   fold.open = orgSkills.declining === offer.id;
   return fold;
+}
+
+/**
+ * Settings → Mine: what the organisation's required skills would run in the boxes you answer for —
+ * the exact lines, who published which version — and your answer. Nothing runs until you agree,
+ * and a changed version asks again. The agent asks once in a conversation; this is where you come back to it.
+ */
+var myConsents = { data: null };
+function consentBlock() {
+  if (myConsents.data === null) {
+    myConsents.data = false;
+    getJson("/api/org-skills/consents/mine").then(function (got) { myConsents.data = got; render(); }, function () { myConsents.data = false; });
+    return null;
+  }
+  var rows = ((myConsents.data || {}).boxes || []).flatMap(function (box) { return box.skills.map(function (skill) { return { box: box, skill: skill }; }); });
+  if (!rows.length) return null;
+  var section = el("section", "setting");
+  section.setAttribute("data-org-skills", "consent");
+  section.appendChild(el("h2", "group", t("ui.next.orgSkills.consentTitle")));
+  section.appendChild(el("p", "why", t("ui.next.orgSkills.consentNote")));
+  rows.forEach(function (row) {
+    var fold = el("details", "fold"), body = el("div", "fold-body"), acts = el("div", "dept-row");
+    fold.setAttribute("data-consent", row.skill.slug);
+    fold.open = row.skill.state === "waiting";
+    var head = t("ui.next.orgSkills.consentHead", { name: row.skill.slug, box: row.box.name, version: row.skill.version, by: row.skill.publishedBy || "" });
+    fold.appendChild(el("summary", "", head + " — " + t("ui.next.orgSkills.consentState." + row.skill.state)));
+    var pre = el("pre", "", row.skill.lines.join("\\n")); pre.style.whiteSpace = "pre-wrap";
+    body.appendChild(pre);
+    [[true, "act-primary", t("ui.next.orgSkills.agree")], [false, "act", t("ui.next.orgSkills.disagree")]].forEach(function (pair) {
+      var b = el("button", pair[1], pair[2]);
+      b.disabled = row.skill.state === (pair[0] ? "agreed" : "declined");
+      b.addEventListener("click", function () {
+        b.disabled = true;
+        postJson("/api/org-skills/consent", { box: row.box.boxId, slug: row.skill.slug, agree: pair[0] }).then(function (got) { myConsents.data = got; render(); }, failed);
+      });
+      acts.appendChild(b);
+    });
+    body.appendChild(acts);
+    fold.appendChild(body);
+    section.appendChild(fold);
+  });
+  return section;
 }
 
 /** Settings → Mine: offer a skill from a box you may enter, and what became of what you offered. On an organisation only. */

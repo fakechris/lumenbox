@@ -583,9 +583,12 @@ once, and the ledger wins: a version directory with no line is a publish that di
 | `offer` | a member (`by`) offered `slug` from `source` (`box:<box id>/<slug>`): `offer` (its id), `digest`, `name`, `description`, `files`. Its files are under `org-skills/.offers/<id>/`. Held: placed nowhere |
 | `decide` | an Admin (`by`) decided `offer`: `decision` `approved` (a `publish`/`update` naming the same `offer` is written just before) or `declined` with a `reason` the member reads |
 
-`org-skill-setup.jsonl` beside it (a `record` ledger, `src/host/org-skill-setup.ts`): one line,
-`{ at, box, slug, agent }`, each time a box's agents were told in a turn a person opened what a
-required skill's install and sign-in ask of that box (docs/93 §2a); it is not said there again.
+`org-skill-setup.jsonl` beside it (a `record` ledger, `src/host/org-skill-setup.ts`; docs/93 §2a).
+Every line names its `box`, `slug` and the `digest` of the lines it is about. `kind: "consent"` is
+a yes or a no from who may answer for that box (`agreed`, `by`, `version`, `via` chat or page);
+`asked` is a turn a person opened that carried the question; `told` (or no `kind`, as first
+written) is one that carried what is owed after a yes. Nothing of a skill runs in a box without a
+`consent` line for its current digest. `audit export` carries a box's lines.
 
 What a box holds of it is §3.1a′. Which boxes are behind is not stored: it is asked of the
 boxes, and a restart asks again.

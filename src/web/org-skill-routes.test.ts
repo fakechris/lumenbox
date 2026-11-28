@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InstallationMode } from "../host/installation.ts";
+import { OrgSkillSetup } from "../host/org-skill-setup.ts";
 import { OrgSkillSync } from "../host/org-skill-sync.ts";
 import { OrgSkills } from "../host/org-skills.ts";
 import { type Role, roleAtLeast } from "../host/principals.ts";
@@ -21,7 +22,7 @@ const ROUTES = [
   "POST /api/org-skills/require", "POST /api/org-skills/sync", "POST /api/org-skills/offers/decide",
 ];
 /** A member's own: a driver may, a viewer may not. */
-const MEMBER_ROUTES = ["POST /api/org-skills/offer", "GET /api/org-skills/offers/mine", "GET /api/org-skills/box"];
+const MEMBER_ROUTES = ["POST /api/org-skills/offer", "GET /api/org-skills/offers/mine", "GET /api/org-skills/box", "GET /api/org-skills/consents/mine", "POST /api/org-skills/consent"];
 
 test("admin only on every route, an organisation only; publish from an upload, a template and a box; update, require, withdraw; a credential is refused", async () => {
   const home = mkdtempSync(join(tmpdir(), "agentbox-org-skill-routes-"));
@@ -42,10 +43,18 @@ test("admin only on every route, an organisation only; publish from an upload, a
       readFile: async (path: string) => ({ content: boxFiles[path]! }),
     };
     const sync = new OrgSkillSync({ library, boxes: () => [{ id: "b1", name: "ann", root: "/w/.lumenbox/org-skills" }, { id: "b2", name: "bo", root: "/w/.lumenbox/org-skills" }], client: () => undefined, log: () => {} });
+    // b1 is Ann's personal box, b2 Bo's: each answers only for their own, an Admin for neither.
+    const owners: Record<string, string> = { b1: "p-ann", b2: "p-bo" };
+    const mayConsent = (boxId: string, principalId: string) => owners[boxId] === principalId;
+    const checked: string[] = [];
+    const setup = new OrgSkillSetup(undefined, {
+      client: () => ({ exec: async (command: string) => { checked.push(command); return { exit_code: 1 }; } }), place: () => ({ work: "/w", root: "/w/.lumenbox/org-skills" }),
+      personOpened: () => false, boxOf: () => undefined, mayConsent, log: () => {},
+    });
     const refusals: string[] = [], told: string[][] = [];
     let who = "p-admin";
     const call = (route: string, params = "") => orgSkillRoute(route, {
-      library, sync, boxes: () => [{ id: "b1", name: "ann", skills: "/w/skills" }], box: id => (id === "b1" ? box : undefined), readJson: async () => body, params: new URLSearchParams(params),
+      library, sync, setup, mayConsent, boxName: id => ({ b1: "ann", b2: "bo" })[id] ?? id, boxOwnerName: id => ({ b1: "Ann", b2: "Bo" })[id] ?? id, boxes: () => [{ id: "b1", name: "ann", skills: "/w/skills" }], box: id => (id === "b1" ? box : undefined), readJson: async () => body, params: new URLSearchParams(params),
       refusedAdmin: () => { if (roleAtLeast(role, "admin")) return false; refusals.push(route); return true; },
       refusedDriver: () => { if (roleAtLeast(role, "driver")) return false; refusals.push(route); return true; }, tell: (id, outcome) => { told.push([id, outcome.decision, outcome.reason ?? ""]); },
       by: () => who, nameOf: id => (id === "p-admin" ? "Chris" : id), log: () => {},
@@ -169,6 +178,36 @@ test("admin only on every route, an organisation only; publish from an upload, a
     assert.deepEqual(library.acts().filter(act => act.offer !== undefined).map(act => [act.act, act.by, act.decision ?? ""]), [
       ["offer", "p-ann", ""], ["publish", "p-admin", ""], ["decide", "p-admin", "approved"], ["offer", "p-ann", ""], ["decide", "p-admin", "declined"],
     ], "and every step is on the ledger with who took it");
+
+    // A required skill that declares an install: each box's own person answers for it on their page; the Admin sees counts and who declined, and cannot answer for them.
+    const hello = { "SKILL.md": "---\nname: Hello\ndescription: Use when asked about Hello.\ninstall: sh scripts/install.sh\ninstalled: test -x x\n---\n\nbody\n", "scripts/install.sh": "echo\n" };
+    role = "admin"; who = "p-admin";
+    body = { files: hello };
+    assert.equal((await call("POST /api/org-skills/publish"))!.status, 200);
+    body = { slug: "hello", required: true };
+    assert.equal((await call("POST /api/org-skills/require"))!.status, 200);
+    for (const id of ["b1", "b2"]) await setup.check(id, [{ slug: "hello", setup: { install: { run: "sh scripts/install.sh", check: "test -x x" } }, version: 1, publishedBy: "Chris" }]);
+    assert.deepEqual(checked, [], "nothing ran in either box before its person agreed");
+    const consentOf = async () => ((await call("GET /api/org-skills"))!.body as { skills: { slug: string; consent?: unknown }[] }).skills.find(skill => skill.slug === "hello")!.consent;
+    assert.deepEqual(await consentOf(), { agreed: 0, waiting: 2, declined: [] }, "both boxes wait for their member's agreement");
+    body = { box: "b1", slug: "hello", agree: true };
+    assert.equal((await call("POST /api/org-skills/consent"))!.status, 403, "an Admin does not agree for a member's personal box");
+    assert.deepEqual(((await call("GET /api/org-skills/consents/mine"))!.body as { boxes: unknown[] }).boxes, [], "and has no personal box to answer for here");
+    role = "driver"; who = "p-ann";
+    const answerable = (await call("GET /api/org-skills/consents/mine"))!.body as { boxes: { boxId: string; skills: { slug: string; lines: string[]; state: string; version: number; publishedBy: string }[] }[] };
+    assert.deepEqual(answerable.boxes.map(entry => entry.boxId), ["b1"], "Ann answers for her own box only");
+    assert.deepEqual(answerable.boxes[0]!.skills.map(entry => [entry.slug, entry.state, entry.version, entry.publishedBy, entry.lines]), [["hello", "waiting", 1, "Chris", ["install: sh scripts/install.sh", "installed: test -x x"]]], "she sees exactly what would run, who published which version");
+    body = { box: "b2", slug: "hello", agree: true };
+    assert.equal((await call("POST /api/org-skills/consent"))!.status, 403, "not for Bo's box");
+    body = { box: "b1", slug: "hello", agree: true };
+    assert.equal((await call("POST /api/org-skills/consent"))!.status, 200);
+    assert.equal(checked.length, 1, "her yes ran the check in her box, and only there");
+    who = "p-bo";
+    body = { box: "b2", slug: "hello", agree: false };
+    assert.equal((await call("POST /api/org-skills/consent"))!.status, 200);
+    role = "admin"; who = "p-admin";
+    assert.deepEqual(await consentOf(), { agreed: 1, waiting: 0, declined: ["Bo"] }, "who declined, by name, and nothing else is done about it");
+    assert.equal(checked.length, 1, "nothing ran in Bo's box");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

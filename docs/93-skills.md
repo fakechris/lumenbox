@@ -181,12 +181,29 @@ image, the box's own on a host box — so one skill names a kept place on every 
   place in the home directory that is neither `work` nor `.config` is published with a warning the
   Admin sees (`setupWarnings`, `src/host/org-skill-setup.ts`). A line of shell cannot be read for
   certain, so it is never a refusal.
-- **What is owed, and said once.** For each skill the organisation marked *required*, after a box is
-  synced the host runs `installed` and `signed_in` there. What is not done is added to that box's
-  skills index under "Set-up the organisation asks for, not done in this box yet", with the exact
-  lines to run. It stays until a turn a person opened has carried it, and is then written down
-  (`org-skill-setup.jsonl`) and never said again in that box — done or not, the skill's own
-  SKILL.md still says how. A box told once is not checked again.
+- **Nothing runs in a box until its person agrees** (decided 2026-11-28). A personal box holds its
+  member's own sign-ins, and an Admin cannot enter it; a required skill whose lines ran there by
+  themselves would be an Admin's code over everybody's credentials. So, per box and per skill, the
+  host keeps a consent to one *digest of the lines* (`install`, `installed`, `sign_in`,
+  `sign_in_start`, `signed_in`). A new version whose lines changed needs a new yes; one that changed
+  only its text does not. Before a yes, neither the host's checks nor the agent runs any of it.
+- **Who answers.** For a personal box, its owner and nobody else — an Admin included. For a box
+  several people share, an Admin who may enter it: their yes is the organisation's own decision
+  there. The answer is the person's own message `agree <slug>` / `decline <slug>` (also `同意` /
+  `拒绝`) — read from the message as admitted, with its authenticated principal; a synthetic message,
+  a routine's, an agent's or anybody else's is not an answer — or the buttons on Settings → Mine,
+  which show the exact lines, who published which version, and where it stands.
+- **Asked once per version.** Until an answer, the box's skills index shows what the skill would
+  run, who published which version, and how to answer, and says nothing of it runs before that.
+  Once a turn a person opened has carried the question, it is not asked again for those lines; the
+  person can answer later in Settings → Mine. A no is remembered and nothing more is done about it;
+  the Admin's page counts who agreed and who waits, and names who declined.
+- **What is owed, and said once.** After a yes — at once, in the turn that said it, and after every
+  sync — the host runs that skill's `installed` and `signed_in` there. What is not done is added to
+  that box's index with the exact lines to run, until a turn a person opened has carried it; then it
+  is not said again in that box, done or not.
+- **The record.** `org-skill-setup.jsonl`: each yes and no (who, box, skill, version, digest, by
+  chat or page), each question asked and each set-up told. `agentbox audit export` carries a box's.
 - **Who does what.** The agent runs an install. A sign-in is the person's act: the agent starts it
   and gives the person the link or code it prints, or hands over the desktop, and never asks for or
   types a password (docs/15). The index says that in the sentence that introduces what is owed.
@@ -196,7 +213,7 @@ image, the box's own on a host box — so one skill names a kept place on every 
   and the links go when the skill is withdrawn. An engine reads it through the link and cannot
   write it: the modes are the target's. LumenBox's own loader lists directories, not links, so it
   meets each skill once, where it really is.
-- Only an organisation's required skills are offered this way. A box's own skill may carry the same
+- Only an organisation's required skills ask, and are offered, this way. A box's own skill may carry the same
   keys; they document it, and nothing is run for it.
 
 ## 3. Where skills come from

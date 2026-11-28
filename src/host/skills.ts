@@ -679,9 +679,10 @@ export function renderSkills(skills: readonly Skill[]): string {
 
 /** What opens the set-up an organisation's required skills declare (docs/109 §5). The rule about passwords is docs/15's, said where it applies. */
 export const SETUP_DUE_HEAD =
-  "**Set-up the organisation asks for, not done in this box yet.** Run an install now, before the person's request, and say in one line that you did. " +
-  "A sign-in is the person's own act: offer it once, in this reply — start it, and give them the link or code it prints in the conversation, or hand over the desktop. " +
-  "Never ask for a password and never type one. If they would rather do it later, leave it; you will not be reminded.";
+  "**Set-up the organisation asks for in this box.** Nothing a skill below declares runs here until the person has agreed to it. " +
+  "Where it asks for agreement: show them exactly the lines it names, ask once in this reply, and run nothing of it. " +
+  "Where they agreed: run the install, say in one line that you did, and offer the sign-in — start it and give them the link or code it prints, or hand over the desktop. " +
+  "Never ask for a password and never type one. If they would rather not, leave it; you will not be reminded.";
 
 /** What the index says of whose a skill is: nothing for a box's own with no namesake, which is every skill of an installation with no organisation skills. */
 function whoseOf(skill: Skill): string {

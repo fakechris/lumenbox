@@ -41,6 +41,7 @@
  *   synced when it comes back), and the drift found by the last sync.
  */
 
+import type { InboundMessage } from "../agents/admitted-message.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import type { ExecResult } from "../protocol/index.ts";
 import { type BoxPlace, orgSkillsDir, skillsDir, workDir } from "./box-paths.ts";
@@ -354,6 +355,16 @@ export interface OrgSkillsHost {
   orgSkillRoot: (boxId: string) => OrgSkillRoot | undefined;
   boxConnected: (boxId: string) => void;
   busNoted: (event: BusEvent) => void;
+  /** Awaited when a turn starts, before its prompt is built: a person's "agree <slug>" counts for that turn. */
+  turnOpening: (agentId: string, inbound: readonly InboundMessage[]) => Promise<void>;
+}
+
+export interface OrgSkillsOptions {
+  setupLedger?: string;
+  /** Who may agree for a box (`OrgSkillSetupDeps.mayConsent`); absent, nobody may, and nothing a skill declares ever runs. */
+  mayConsent?: (boxId: string, principalId: string) => boolean;
+  /** A principal's name, for "published by". */
+  nameOf?: (principalId: string) => string;
 }
 
 /** Whether the last thing said to an agent, as opposed to a tool's result, was said by a person. */
@@ -372,10 +383,12 @@ function personOpened(transcript: readonly unknown[]): boolean {
  * checked after it is synced and said to its agents once. On a personal installation there are no
  * boxes to sync and no second root: nothing is placed and nothing is read.
  */
-export function attachOrgSkills(host: OrgSkillsHost, library: OrgSkills, log: (line: string) => void, setupLedger?: string): { sync: OrgSkillSync; setup: OrgSkillSetup } {
+export function attachOrgSkills(host: OrgSkillsHost, library: OrgSkills, log: (line: string) => void, options: OrgSkillsOptions = {}): { sync: OrgSkillSync; setup: OrgSkillSetup } {
   const organisation = () => library.mode() !== "single-machine";
   const place = (boxId: string) => ({ work: workDir(host.registry.boxById(boxId)), root: orgSkillsDir(host.registry.boxById(boxId)) });
-  const setup = new OrgSkillSetup(setupLedger, {
+  const setup = new OrgSkillSetup(options.setupLedger, {
+    mayConsent: options.mayConsent ?? (() => false),
+    consented: async boxId => { await host.skillsFor(boxId).refresh(true); },
     client: boxId => host.boxClientById(boxId),
     place,
     personOpened: (agentId, conversation) => personOpened(host.registry.readTranscript(agentId, conversation)),
@@ -385,7 +398,7 @@ export function attachOrgSkills(host: OrgSkillsHost, library: OrgSkills, log: (l
   // What each required skill declares, read from the library's own copy: the same text every box holds.
   const declared = () => library.list().filter(skill => skill.required).map(skill => {
     const parsed = skillSetupFrom(skill.slug, parseSkillFile(library.filesOf(skill)?.[SKILL_FILENAME] ?? "").meta);
-    return { slug: skill.slug, ...("setup" in parsed && parsed.setup !== undefined ? { setup: parsed.setup } : {}) };
+    return { slug: skill.slug, version: skill.version, publishedBy: options.nameOf?.(skill.by) ?? skill.by, ...("setup" in parsed && parsed.setup !== undefined ? { setup: parsed.setup } : {}) };
   });
   const sync = new OrgSkillSync({
     library,
@@ -404,6 +417,7 @@ export function attachOrgSkills(host: OrgSkillsHost, library: OrgSkills, log: (l
     : undefined);
   host.boxConnected = () => { void sync.syncDue(); };
   host.busNoted = event => { if (event.type === "turn_finished") setup.noteTurn(event); };
+  host.turnOpening = (agentId, inbound) => setup.noteInbound(agentId, inbound);
   // A required mark changes what is owed without changing what is placed: the boxes are looked at whole again.
   library.changed = () => { sync.forget(); void sync.syncDue(); };
   return { sync, setup };

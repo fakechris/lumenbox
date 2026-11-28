@@ -21,6 +21,7 @@ import type { BoxClient } from "../box/client.ts";
 import { DOCKER_WORK, orgSkillsDir } from "./box-paths.ts";
 import type { InstallationMode } from "./installation.ts";
 import { Orchestrator } from "./orchestrator.ts";
+import type { InboundMessage } from "../agents/admitted-message.ts";
 import type { BusEvent } from "../agents/bus.ts";
 import { ORG_SKILL_SETUP_LEDGER, setupWarnings } from "./org-skill-setup.ts";
 import { attachOrgSkills, OrgSkillSync } from "./org-skill-sync.ts";
@@ -230,6 +231,7 @@ test("what is refused at publish: a credential, a routine, an agent's own scope,
       registry: { listBoxes: () => [{ id: "b1", name: "box" }], boxById: () => undefined, tryGet: () => undefined, boxOf: () => ({ id: "b1" }), readTranscript: () => [] },
       boxClientById: () => box, skillsFor: () => ({ refresh: async () => undefined }),
       orgSkillRoot: (_: string): { root: string; required: ReadonlySet<string> } | undefined => ({ root: "unset", required: new Set() }), boxConnected: (_: string): void => {}, busNoted: (): void => {},
+      turnOpening: async (): Promise<void> => {},
     };
     const { sync } = attachOrgSkills(host, library, () => {});
     await sync.syncDue();
@@ -303,25 +305,33 @@ function helloSkill(): Record<string, string> {
   return Object.fromEntries(["SKILL.md", "scripts/install.sh", "scripts/hello"].map(path => [path, readFileSync(join(dir, path), "utf8")]));
 }
 
-test("a required skill's install and sign-in: owed until done, said to the box's agents once, kept by an image update; engines read it through a link they cannot write", async () => {
+test("a required skill's install and sign-in run only after the box's person agrees to those exact lines: asked once, a no remembered, a routine cannot agree, changed lines ask again; then owed until done, kept by an image update; engines read it through a link they cannot write", async () => {
   const home = mkdtempSync(join(tmpdir(), "agentbox-org-skills-"));
   try {
     const dir = join(home, "box");
     mkdirSync(join(dir, "skills", "own-notes"), { recursive: true });
     writeFileSync(join(dir, "skills", "own-notes", "SKILL.md"), skillText("Own notes", "Use when asked for this box's notes."));
-    let box = diskBox(dir);
+    // Every command that reached the box, so "nothing of the skill ran" is asserted on the box's side.
+    const ran: string[] = [];
+    const counted = (inner: BoxClient) => new Proxy(inner, { get: (target, property) => (property === "exec" ? async (command: string, options?: never) => { ran.push(command); return target.exec(command, options); } : target[property as keyof BoxClient]) }) as BoxClient;
+    let box = counted(diskBox(dir));
+    const setupRan = () => ran.filter(command => command.includes("export LUMENBOX_WORK="));
     // The last thing said to the agent: a person's message, or the host's own.
     let lastSaid: Record<string, unknown> = { role: "user", text: "[first run] …", host: true };
     const host = {
       registry: { listBoxes: () => [{ id: "b1", name: "ann" }], boxById: () => undefined, tryGet: () => ({}), boxOf: () => ({ id: "b1" }), readTranscript: () => [lastSaid, { role: "user", kind: "results", blocks: [] }] },
       boxClientById: () => box, skillsFor: () => ({ refresh: async () => undefined }),
       orgSkillRoot: (_: string): OrgSkillRoot | undefined => undefined, boxConnected: (_: string): void => {}, busNoted: (_: BusEvent): void => {},
+      turnOpening: async (_: string, __: readonly InboundMessage[]): Promise<void> => {},
     };
+    const options = { setupLedger: join(home, ORG_SKILL_SETUP_LEDGER), mayConsent: (boxId: string, who: string) => boxId === "b1" && who === "p-ann", nameOf: (id: string) => (id === "p-admin" ? "Chris" : id) };
     const library = new OrgSkills(home, { mode: () => "organisation" });
-    const { sync } = attachOrgSkills(host, library, () => {}, join(home, ORG_SKILL_SETUP_LEDGER));
+    const { sync, setup } = attachOrgSkills(host, library, () => {}, options);
     assert.equal(library.publish("hello-tool", helloSkill(), "p-admin", "upload").ok, true);
     assert.deepEqual(setupWarnings(helloSkill()), [], "it installs into the work volume: nothing to warn of");
     const index = async () => renderSkills((await loadSkills(box, [], `${DOCKER_WORK}/skills`, host.orgSkillRoot("b1"))).skills);
+    const say = (text: string, more: Partial<InboundMessage> = {}) => host.turnOpening("a1", [{ fromId: "user", text, principalId: "p-ann", ...more } as InboundMessage]);
+    const personTurn = () => { lastSaid = { role: "user", text: "hi", fromPerson: true }; host.busNoted({ type: "turn_finished", agentId: "a1" }); };
 
     // Not required: placed and listed, and nothing is asked of the box.
     await sync.syncDue();
@@ -329,33 +339,80 @@ test("a required skill's install and sign-in: owed until done, said to the box's
     assert.equal(library.require("hello-tool", true, "p-admin").ok, true);
     await sync.syncDue();
 
-    // Required: the index says what is owed, with the lines to run and where; and never a word that asks for a password.
+    // Required, not agreed: the index asks, showing the exact lines, who published which version; nothing of the skill has run in the box.
+    const asking = await index();
+    assert.match(asking, /\*\*Set-up the organisation asks for in this box\.\*\* Nothing a skill below declares runs here until the person has agreed to it\./);
+    assert.match(asking, /nothing of it runs here until the person agrees\. Show them exactly what it would run, in its directory: install `sh scripts\/install\.sh`; check `test -x "\$LUMENBOX_WORK\/\.tools\/bin\/hello"`; Hello sign-in `"\$LUMENBOX_WORK\/\.tools\/bin\/hello" login`; sign-in check `test -s "\$LUMENBOX_WORK\/\.tools\/hello\/session"` — version 1, published by Chris\./);
+    assert.match(asking, /`agree hello-tool` or `decline hello-tool`/);
+    assert.deepEqual(setupRan(), [], "no check line reached the box before a yes");
+
+    // Who cannot agree: a routine's message, a synthetic one, an agent, another person, an unknown skill.
+    await say("agree hello-tool", { toolScope: ["bash"] });
+    await say("agree hello-tool", { synthetic: true });
+    await say("agree hello-tool", { fromId: "agent-ada" });
+    await say("agree hello-tool", { principalId: "p-bob" });
+    await say("agree some-other-skill");
+    assert.equal(setup.consent("b1", "hello-tool", setup.forBox("b1")[0]!.digest), "waiting");
+    assert.deepEqual(setupRan(), []);
+
+    // Asked once: a turn nobody opened has asked nobody; a person's turn has. Then not asked again, and still nothing runs.
+    host.busNoted({ type: "turn_finished", agentId: "a1" });
+    assert.match(await index(), /nothing of it runs here until the person agrees/);
+    personTurn();
+    assert.doesNotMatch(await index(), /Set-up the organisation asks for/, "asked once per version, not in every turn");
+    await sync.syncBox("b1");
+    assert.deepEqual(setupRan(), []);
+
+    // A no, from the person: remembered, nothing runs, nothing asked.
+    await say("decline hello-tool");
+    assert.equal(setup.forBox("b1")[0]!.state, "declined");
+    await sync.syncBox("b1");
+    assert.doesNotMatch(await index(), /Set-up the organisation asks for/);
+    assert.deepEqual(setupRan(), []);
+
+    // They change their mind (the person, in their own message): the check lines run now, and the index says what is owed with the lines to run.
+    await say("同意 hello-tool");
+    assert.equal(setupRan().length, 2, "the two check lines ran, once each, after the yes");
     const owed = await index();
-    assert.match(owed, /\*\*Set-up the organisation asks for, not done in this box yet\.\*\*.*Never ask for a password and never type one\./);
     const install = /install it with `([^`]+)`/.exec(owed)?.[1] ?? "";
     assert.equal(install, `cd '${ROOT}/hello-tool' && export LUMENBOX_WORK='${DOCKER_WORK}' && sh scripts/install.sh`);
     assert.match(owed, /then offer the Hello sign-in: `cd '[^']+' && export LUMENBOX_WORK='\/home\/box\/work' && "\$LUMENBOX_WORK\/\.tools\/bin\/hello" login` starts it/);
+    assert.match(owed, /Never ask for a password and never type one\./);
 
     // The agent runs the install as written: a real program lands in the work volume.
     assert.equal((await box.exec(install)).exit_code, 0);
     assert.equal(statSync(join(dir, ".tools", "bin", "hello")).mode & 0o100, 0o100, "installed where an image update keeps it, and executable");
     assert.match(execSync(`LUMENBOX_WORK='${dir}' '${join(dir, ".tools", "bin", "hello")}' login`).toString(), /enter the code HELLO-1234/, "its sign-in prints an address and a code for the person");
+    personTurn();
+    assert.doesNotMatch(await index(), /Set-up the organisation asks for/, "said once");
 
-    // A turn nobody opened (a cue, a routine) has told nobody: it is still owed. A person's turn has: said once.
-    host.busNoted({ type: "turn_finished", agentId: "a1" });
-    assert.match(await index(), /Set-up the organisation asks for/);
-    lastSaid = { role: "user", text: "good morning", fromPerson: true };
-    host.busNoted({ type: "turn_finished", agentId: "a1" });
-    assert.doesNotMatch(await index(), /Set-up the organisation asks for/, "not said again, whether or not they signed in");
-    assert.match(await index(), /\*\*Hello tool\*\*/, "the skill itself is still listed, and still says how to sign in");
-    assert.equal(readFileSync(join(home, ORG_SKILL_SETUP_LEDGER), "utf8").trim().split("\n").length, 1);
+    // A new version that changes only the text: the yes stands.
+    const textOnly = { ...helloSkill(), "SKILL.md": helloSkill()["SKILL.md"]!.replace("# Hello tool", "# Hello tool (v2)") };
+    assert.equal(library.publish("hello-tool", textOnly, "p-admin", "upload").ok, true);
+    await sync.syncDue();
+    assert.equal(setup.forBox("b1")[0]!.state, "agreed");
+    // A new version whose lines changed: waiting again, asked again, and its lines do not run.
+    const before = setupRan().length;
+    const newLines = { ...textOnly, "SKILL.md": textOnly["SKILL.md"]!.replace("install: sh scripts/install.sh", "install: sh scripts/install.sh --again") };
+    assert.equal(library.publish("hello-tool", newLines, "p-admin", "upload").ok, true);
+    await sync.syncDue();
+    assert.equal(setup.forBox("b1")[0]!.state, "waiting");
+    assert.match(await index(), /install `sh scripts\/install\.sh --again`.* — version 3, published by Chris/);
+    assert.equal(setupRan().length, before, "nothing of the new lines ran");
+    await say("agree hello-tool");
+    assert.equal(setup.forBox("b1")[0]!.state, "agreed");
+
+    // Every yes and no is on the ledger with who, which box, which version and digest; and a restarted host reads it.
+    const ledger = readFileSync(join(home, ORG_SKILL_SETUP_LEDGER), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>).filter(line => line.kind === "consent");
+    assert.deepEqual(ledger.map(line => [line.by, line.box, line.slug, line.version, line.agreed, line.via]), [["p-ann", "b1", "hello-tool", 1, false, "chat"], ["p-ann", "b1", "hello-tool", 1, true, "chat"], ["p-ann", "b1", "hello-tool", 3, true, "chat"]]);
+    assert.notEqual(ledger[2]!.digest, ledger[1]!.digest);
 
     // The person finishes signing in; then the image is updated: a new box over the same volume. Tool and sign-in are still there, and a restarted host says nothing again.
     execSync(`LUMENBOX_WORK='${dir}' '${join(dir, ".tools", "bin", "hello")}' confirm`);
-    box = diskBox(dir);
-    const again = attachOrgSkills(host, new OrgSkills(home, { mode: () => "organisation" }), () => {}, join(home, ORG_SKILL_SETUP_LEDGER));
+    box = counted(diskBox(dir));
+    const again = attachOrgSkills(host, new OrgSkills(home, { mode: () => "organisation" }), () => {}, options);
     await again.sync.syncDue();
-    assert.doesNotMatch(await index(), /Set-up the organisation asks for/);
+    assert.equal(again.setup.forBox("b1")[0]!.state, "agreed", "a yes outlives the host");
     assert.equal((await box.exec(`cd '${ROOT}/hello-tool' && export LUMENBOX_WORK='${DOCKER_WORK}' && test -x "$LUMENBOX_WORK/.tools/bin/hello" && test -s "$LUMENBOX_WORK/.tools/hello/session"`)).exit_code, 0);
 
     // Engines read the box's own skills directory: the organisation's skill is linked into it, and listed once by the host.
@@ -365,15 +422,13 @@ test("a required skill's install and sign-in: owed until done, said to the box's
     if (process.getuid?.() !== 0) assert.throws(() => writeFileSync(join(link, "SKILL.md"), "changed through the link"), /EACCES|EPERM/, "and cannot be written through the link");
     assert.equal((await loadSkills(box, [], `${DOCKER_WORK}/skills`, host.orgSkillRoot("b1"))).skills.filter(skill => skill.slug === "hello-tool").length, 1);
     // A box's own skill of that name is never replaced by a link; withdrawing takes the link away and leaves the box's own.
-    assert.equal(library.publish("own-notes", { "SKILL.md": skillText("Own notes", "Use when asked for the organisation's notes.") }, "p-admin", "upload").ok, true);
-    await again.sync.syncDue();
+    const current = new OrgSkills(home, { mode: () => "organisation" });
+    const last = attachOrgSkills(host, current, () => {}, options);
+    assert.equal(current.publish("own-notes", { "SKILL.md": skillText("Own notes", "Use when asked for the organisation's notes.") }, "p-admin", "upload").ok, true);
+    await last.sync.syncDue();
     assert.equal(lstatSync(join(dir, "skills", "own-notes")).isSymbolicLink(), false);
-    for (const slug of ["hello-tool", "own-notes"]) assert.equal(new OrgSkills(home, { mode: () => "organisation" }).get(slug) !== undefined, true);
-    const live = again.sync;
-    assert.equal(library.withdraw("hello-tool", "p-admin").ok && library.withdraw("own-notes", "p-admin").ok, true);
-    // `library` is the first host's; the second reads the same ledger at its next start. Sync the first's.
-    await sync.syncDue();
-    void live;
+    assert.equal(current.withdraw("hello-tool", "p-admin").ok && current.withdraw("own-notes", "p-admin").ok, true);
+    await last.sync.syncDue();
     assert.equal(existsSync(link), false, "withdrawn: the link is gone");
     assert.equal(existsSync(join(dir, "skills", "own-notes", "SKILL.md")), true);
   } finally {

@@ -384,6 +384,10 @@ export interface EpisodeOptions {
   display?: number;
   /** A credential vault, so `browser_fill_secret` and host secrets resolve (INV-1309). */
   vault?: Vault;
+  /** The person's authenticated principal on what they say, as a door or the page stamps it (INV-2222). */
+  principalId?: string;
+  /** Awaited as a turn starts, before its prompt: the orchestrator's `turnOpening` (INV-2222). */
+  turnOpening?: (agentId: string, inbound: readonly import("../agents/admitted-message.ts").InboundMessage[]) => Promise<void>;
   /** Skills the agents are offered, as the prompt would list them (INV-481); a function is read at each turn, as the host's cache is (INV-2222). */
   skills?: readonly Skill[] | (() => readonly Skill[]);
   /** Persisted history before the episode, including legacy compaction records. */
@@ -508,6 +512,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   if(options.tasks)focus.attach(options.tasks.workRoots);
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
     if (goalLoop !== undefined && !goalLoop.turnStarting(record.id, conversation, inbound)) return;
+    await options.turnOpening?.(record.id, inbound);
     if (goalLoop === undefined && goalGate?.verifierMayRun(inbound) === false) return;
     for (const inboundMessage of inbound) {
       if (inboundMessage.fromId !== "user") {
@@ -605,7 +610,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
 
   const say = async (line: string): Promise<void> => {
     const before = registry.readTranscript(front.id).length;
-    bus.sendFromUser(front.id, line);
+    bus.sendFromUser(front.id, line, options.principalId !== undefined ? { principalId: options.principalId } : {});
     await bus.wake(front.id);
     await bus.idle();
     if (rememberer === undefined) return;
