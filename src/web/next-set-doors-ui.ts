@@ -74,7 +74,8 @@ function channelsBlock() {
     postJson("/api/channels/records", Object.assign({ id: record.id, type: record.type }, extra)).then(function (got) { doors.note = doorSaved(got); loadDoors(); }, failed);
   };
   (data.records || []).forEach(function (record) {
-    var state = running[record.id] || running[record.name] || {}, line = el("div", "fact channel-row"), text = el("span", ""), acts = el("span", "acts");
+    var state = running[record.id] || running[record.name] || {}, line = el("div", "fact"), text = el("span", ""), acts = el("span", "acts");
+    line.classList.add("channel-row");
     var status = state.running ? t("ui.next.doors.on") : record.credentialsSet ? t("ui.next.doors.off") : t("ui.next.doors.noCredentials");
     var detail = record.credentialsSet ? state.detail : t(record.type === "telegram" ? "ui.channels.telegram-setup" : "ui.channels.add-credentials");
     text.appendChild(el("b", "", record.name || record.id)); text.appendChild(el("div", "why", record.type + " · " + status + (detail ? " · " + detail : "")));
