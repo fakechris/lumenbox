@@ -1766,7 +1766,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return "failed";
       },
     },
-    ...chatFiles({ boxOf: chatBoxOf, workRoot: workRootOf, log }), // a chat's inbox, outbox and named files, on the box of the agent it is for (INV-2261, chat-files.ts)
+    // A chat's inbox, outbox and named files, on the box of the agent it is for and never one its sender may not enter (INV-2261, INV-2303, chat-files.ts).
+    ...chatFiles({ boxOf: chatBoxOf, workRoot: workRootOf, log, mayEnter: (box, identity) => mayEnterBox(box, principals.resolve(identity).id) }),
     // The desktop as it is right now, for "屏幕" and for the finished-task poster.
     // Captured with the agent's own owner token, the same proof a turn presents; an
     // agent whose desktop never started answers undefined and the chat is told so.
