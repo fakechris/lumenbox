@@ -6,6 +6,8 @@
 
 import { getAgent, listAgents } from "./agents.ts";
 import { deleteDevice, exchangeOAuthCode, listAuthProviders, listDevices, pairDevice, refreshDeviceToken, signOutDevice, startOAuth } from "./auth.ts";
+import { sendCardAction, sendMessage, stopTurn, streamConversation, uploadFile } from "./chat.ts";
+import { listConversations, listMessages } from "./conversations.ts";
 import type { Handlers } from "./frame.ts";
 import { answerInboxItem, decideApproval, decideWork, getNotification, listInbox } from "./inbox.ts";
 import { meOf } from "./me.ts";
@@ -17,6 +19,7 @@ export const HANDLERS: Handlers = {
   listAgents, getAgent, listWork, getWork, listWorkHistory, getBoard, getChanges, streamEvents,
   listAuthProviders, startOAuth, exchangeOAuthCode, pairDevice, refreshDeviceToken, signOutDevice, listDevices, deleteDevice,
   listInbox, decideApproval, answerInboxItem, decideWork, getNotification,
+  listConversations, listMessages, sendMessage, sendCardAction, stopTurn, streamConversation, uploadFile,
 
   getMeta: ({ deps }) => ({
     api: API_VERSION,

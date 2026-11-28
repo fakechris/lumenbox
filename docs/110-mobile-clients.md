@@ -268,6 +268,11 @@ below.
      new enrolment) and signs `lumenbox-step-up/1\n<deviceId>\n<item id>\n<decision>\n<detail>` (docs/106 §8.1 lists each decision and detail). The server
      checks the signature, not how the key was made: attestation is not checked in v1. `always` is
      refused for every v1 credential. A device's answers are recorded as `user:<person> device:<id>`.
+   - *As built (INV-2214 part 3, docs/106 §8.1):* a message, a card press and Stop go through the page's own paths
+     and are not stepped up; a message sent again with the same `clientMessageId` within 24 hours reaches the
+     agent once. A photo, a voice note or a file is uploaded to one conversation (`POST /uploads`), lands in
+     that conversation's inbox in the agent's sandbox, and is sent by id; images are checked by their bytes,
+     never SVG. The conversation's live stream replays nothing; a phone reads what is kept from `/messages`.
    - *A requirement on both apps before general availability:* receive the sign-in's `redirectUri` on a
      verified https app link (iOS Universal Links, Android App Links with `autoVerify`), not only the
      `lumenbox:` scheme. A custom scheme can be registered by any other app on the phone; with a sign-in

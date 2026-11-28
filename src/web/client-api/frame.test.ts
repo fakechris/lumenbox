@@ -40,7 +40,7 @@ async function frame(t: TestContext, handlers: Record<string, Handler>, clock: {
     tokens: { clientFor: presented => (presented === "lbxp_good" ? { credential } : { refused: "invalid" }), touch: () => "2026-11-28T00:00:00.000Z" },
     person: id => (id === "dee" ? { id, name: "Dee", role: "driver" } : undefined),
     installationMode: () => "organisation", version: "0.0.0", homeAgentOf: () => undefined,
-    signIns: { blocked: () => undefined, failed: () => {}, succeeded: () => {} }, address: () => "127.0.0.1", devices: {} as never, decisions: {} as never,
+    signIns: { blocked: () => undefined, failed: () => {}, succeeded: () => {} }, address: () => "127.0.0.1", devices: {} as never, decisions: {} as never, chat: {} as never,
     idempotency: new IdempotencyStore({ ttlMs: 24 * 60 * 60_000 }), secretIdempotency: new IdempotencyStore({ ttlMs: 30_000, now: () => clock.ms }), log: line => logs.push(line),
   }, { operations: OPS, handlers });
   const server = createServer((req, res) => { void api.handle(req, res, new URL(req.url ?? "/", "http://localhost")); });

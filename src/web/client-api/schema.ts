@@ -19,7 +19,7 @@
 import type { ErrorCode } from "../../i18n/server-errors.ts";
 
 /** "1.<revision>": raised by every addition (docs/106 §4.1). The surface ratchet refuses an addition that leaves it. */
-export const API_REVISION = 4;
+export const API_REVISION = 5;
 export const API_VERSION = `1.${API_REVISION}`;
 export const API_PREFIX = "/api/v1";
 
@@ -103,7 +103,15 @@ export const WORK_STATES = ["open", "doing", "blocked", "review", "done", "dropp
 export const WAIT_KINDS = ["question", "review", "close-proposal", "reauthorize", "flagged", "nudged", "waiting"] as const;
 export const AGENT_STATUSES = ["working", "idle"] as const;
 export const ACTOR_KINDS = ["person", "agent", "system"] as const;
-export const CHANGE_TYPES = ["work", "agent", "inbox"] as const;
+export const CHANGE_TYPES = ["work", "agent", "inbox", "conversation", "message"] as const;
+/** A conversation: an agent's own (`main`, the page's chat), an outside chat's, or another thread. */
+export const CONVERSATION_KINDS = ["main", "chat", "other"] as const;
+/** What one entry of a conversation is, as the page draws it (web/transcript.ts). */
+export const MESSAGE_KINDS = ["person", "agent", "teammate", "notice", "status", "card", "question", "steps"] as const;
+export const UPLOAD_KINDS = ["image", "voice", "file"] as const;
+/** What a conversation's live stream says: words as they come, a step, a turn's start and end, a message sent, a message kept. */
+export const STREAM_EVENT_KINDS = ["text", "step", "turn", "sent", "message"] as const;
+export const TURN_STATES = ["started", "ended", "failed", "stopped"] as const;
 /**
  * What waits on a person (`InboxItem.kind`): the page's own kinds (host/attention.ts), and a secret an agent asked for.
  * Open: a newer server adds kinds, and a client shows an unknown one by its words and offers the page.
@@ -162,6 +170,13 @@ export const ERRORS = {
   "step-up-invalid": { status: 403, meaning: "The step-up proof is not this device's registered key's signature over this decision." },
   "inbox-answer-invalid": { status: 400, meaning: "The answer does not fit this item: `INBOX_ACTIONS` it takes are in its `actions`." },
   "decision-refused": { status: 409, meaning: "The board refused this decision for the work as it is now (for example done work cannot be put off); `error` says why." },
+  "console-context-command": { status: 409, meaning: "A context command (`/new`, a recovery, a retry, a goal) is not a message: it is given in a connected private chat." },
+  "model-not-configured": { status: 409, meaning: "No model is set up for this agent: an Owner or Admin chooses one on the page." },
+  "surface-work-unavailable": { status: 409, meaning: "The card's work has ended or changed, so the press did nothing and made no new work; `error` says why." },
+  "box-not-running": { status: 503, meaning: "The agent's sandbox is not running, so a file cannot be put there now." },
+  "upload-too-large": { status: 413, meaning: "Larger than this kind of file may be: an image 10 MB, a voice note or another file 20 MB." },
+  "upload-type-refused": { status: 415, meaning: "`Content-Type` is not one taken here, or an image's bytes are not the image type it names." },
+  "upload-unknown": { status: 400, meaning: "An `attachmentIds` entry is not an upload this person made to this conversation in the last 24 hours." },
 } as const satisfies Record<string, { status: number; meaning: string }>;
 export type ApiErrorCode = keyof typeof ERRORS & ErrorCode;
 
@@ -278,14 +293,18 @@ export const SCHEMAS = {
   ChangeRecord: object("That something a client may hold changed: never what it now says. Fetch it (`GET /work/{id}`, `GET /agents/{id}`); a 404 then means it is gone, or no longer the caller's to read, and the client drops it.", {
     seq: { type: "integer", format: "int64", description: "Rises with every change, across restarts: the position to resume from." },
     at: time("When it changed."),
-    type: known("What changed: `work`, `agent`, or `inbox` (something now waits on a person, or no longer does: `GET /inbox`; `upsert` is also what a wake-only push names).", CHANGE_TYPES),
+    type: known([
+      "What changed: `work`, `agent`, `inbox` (something now waits on a person, or no longer does: `GET /inbox`; `upsert` is also what a wake-only push names),",
+      "`conversation` (it is new, or something was sent in it) or `message` (a new one in `conversationId`: `GET /conversations/{conversationId}/messages?after=`).",
+    ].join(" "), CHANGE_TYPES),
     id: text("Its id."),
     op: known("`upsert`: it is new or changed. `delete`: it is gone.", CHANGE_OPS),
+    conversationId: text("For a `message`: the conversation it is in."),
   }, ["seq", "at", "type", "id", "op"]),
   Changes: object([
     "What changed since `since`, oldest first, each thing once (its newest change).",
     "When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history:",
-    "drop what is cached, read it again (`/work`, `/agents`, `/board`, and `/inbox` with `work:decide`), then go on from `durableSeq`.",
+    "drop what is cached, read it again (`/work`, `/agents`, `/board`, `/inbox` with `work:decide`, `/conversations` with `chat:read`), then go on from `durableSeq`.",
   ].join(" "), {
     items: list(ref("ChangeRecord"), "The changes the caller may be told of."),
     durableSeq: { type: "integer", format: "int64", description: "Send it as `since` next time: everything up to it has been looked at." },
@@ -388,6 +407,7 @@ export const SCHEMAS = {
     agentId: text("The agent it is with, when one is and the caller may read it."),
     agentName: text("That agent's name, or the person it is with."),
     workId: text("The work it is about, when it is about work."),
+    conversationId: text("The conversation an `answer` goes into (a question, a paused chain), when the caller may read it."),
     approval: ref("InboxApproval"),
     draft: ref("InboxDraft"),
     question: ref("InboxQuestion"),
@@ -469,6 +489,103 @@ export const SCHEMAS = {
     body: text("A line for its body."),
     at: time("When it arrived."),
   }, ["seq", "itemId", "kind", "title", "body", "at"]),
+  Conversation: object("A conversation with an agent the caller may reach, as the page's chat lists it. A service token reads none unless its view includes conversation text.", {
+    id: text("The conversation: what `/conversations/{id}/…` names. Opaque."),
+    agentId: text("The agent it is with."),
+    agentName: text("That agent's name."),
+    kind: known("`main`: the agent's own, the page's chat. `chat`: an outside chat's (DingTalk, Feishu). `other`: another thread.", CONVERSATION_KINDS),
+    title: text("Its first line, or the agent's name for `main`."),
+    updatedAt: time("When something was last written in it."),
+    running: flag("Whether the agent is in a turn in it now."),
+    canWrite: flag("Whether the caller may send in it: a driver's credential with `chat:write`."),
+  }, ["id", "agentId", "agentName", "kind", "title", "running", "canWrite"]),
+  ConversationPage: object("Conversations, most recently written first.", {
+    items: list(ref("Conversation"), "The conversations on this page."),
+    nextCursor: text("The next page's cursor; absent on the last page."),
+  }, ["items"]),
+  Message: object([
+    "One entry of a conversation, as the page draws it: never a prompt, a tool's input or a host note's words. The payload of `kind` is in the field of that name",
+    "where it has one (`card`, `question`, `steps`). A kind a client does not know is shown by `text` when there is one, else skipped.",
+  ].join(" "), {
+    id: text("The message. Opaque; ids rise in the order of the conversation."),
+    conversationId: text("The conversation."),
+    kind: known([
+      "`person`: what a person said. `agent`: what the agent said. `teammate`: another agent's message. `notice`: a turn nobody typed (a timer, a webhook,",
+      "a restart), by `label` only. `status`: how a turn ended. `card`: a card the agent drew. `question`: a question it asked. `steps`: what it did, in words.",
+    ].join(" "), MESSAGE_KINDS),
+    at: time("When it was written, when the record kept the time."),
+    text: text("The words, for `person`, `agent`, `teammate` and `status`."),
+    from: text("Who it is from: a teammate's name, or the chat a person wrote in (`dingtalk`, `feishu`, `telegram`, `routine`)."),
+    aside: flag("An agent's words beside its steps: commentary rather than its answer."),
+    label: text("For a `notice`: what started the turn."),
+    files: list(text("A file's name."), "Files the agent sent with these words."),
+    sentIds: list(text("A `messageId`."), "For `person`: the `messageId`s of what was sent and is answered here (`POST …/messages` answers one)."),
+    card: ref("MessageCard"),
+    question: ref("MessageQuestion"),
+    steps: list(text("A step, in the request's language."), "For `steps`: what the agent did, one line each."),
+  }, ["id", "conversationId", "kind"]),
+  MessageCard: object("A card the agent drew (ShowUI). A later card with the same `surfaceId` replaces it. A client that does not draw A2UI shows `title` and opens the page.", {
+    surfaceId: text("The card: what `POST …/card-actions` names."),
+    title: text("Its title."),
+    a2ui: text("The card as A2UI v0.9 messages, a JSON array in a string, as the page draws it."),
+    closed: flag("The agent took the card away."),
+  }, ["surfaceId", "a2ui"]),
+  MessageQuestion: object("A question the agent asked: answered with a message, or at `POST /inbox/{id}/answer` while it waits.", {
+    question: text("The question."),
+    options: list(text("A choice."), "The answers it offered."),
+    fallback: text("What it does with no answer."),
+  }, ["question"]),
+  MessagePage: object("Messages, oldest first. Without `after`, the newest ones, and `nextCursor` goes back to older ones; with `after`, those after it, and `nextCursor` goes on.", {
+    items: list(ref("Message"), "The messages on this page."),
+    nextCursor: text("The next page's cursor; absent on the last page."),
+  }, ["items"]),
+  SendMessage: request("A person's message to the agent. Sent twice with one `clientMessageId` (or one `Idempotency-Key`) within 24 hours, it reaches the agent once.", {
+    clientMessageId: text("The client's own id for this message, kept across retries: a UUID.", { pattern: "^[A-Za-z0-9_-]{8,128}$" }),
+    text: text("The words.", { minLength: 1, maxLength: 20_000 }),
+    attachmentIds: list(text("An `Upload.id`."), "Files uploaded to this conversation to send with it (`POST /uploads`), at most 10."),
+  }, ["clientMessageId", "text"]),
+  CardAction: request("A press on a card the agent drew (ShowUI): it reaches the agent as the page's press does, and continues the work the card was drawn for.", {
+    clientMessageId: text("As in `SendMessage`.", { pattern: "^[A-Za-z0-9_-]{8,128}$" }),
+    surfaceId: text("The card's `surfaceId`.", { maxLength: 200 }),
+    action: text("The action's name, as the card's A2UI names it.", { maxLength: 200 }),
+    contextJson: text("The action's context, a JSON object in a string, when the card gives one.", { maxLength: 4000 }),
+  }, ["clientMessageId", "surfaceId", "action"]),
+  MessageSent: object("The message is in the agent's queue. It appears in `/messages` once the agent starts on it, with `messageId` in its `sentIds`.", {
+    messageId: text("The message's id on the record."),
+    clientMessageId: text("The `clientMessageId` that was sent."),
+    conversationId: text("The conversation."),
+    acceptedAt: time("When it was taken."),
+  }, ["messageId", "clientMessageId", "conversationId", "acceptedAt"]),
+  TurnStop: object("A stop asked for. A stop ends the agent's turn as the page's Stop does; work it was doing stays on the board.", {
+    conversationId: text("The conversation."),
+    stopped: flag("Whether a turn was running in it to stop."),
+    at: time("When."),
+  }, ["conversationId", "stopped", "at"]),
+  Upload: object("A file put in the conversation's sandbox, to send with a message by `id` within 24 hours.", {
+    id: text("What `SendMessage.attachmentIds` names."),
+    conversationId: text("The conversation it was uploaded to: only a message there sends it."),
+    name: text("Its name in the sandbox, which may differ from the one given when a file of that name was there."),
+    mimeType: text("The `Content-Type` it was sent with."),
+    kind: known("What it is, by `Content-Type`.", UPLOAD_KINDS),
+    sizeBytes: { type: "integer", format: "int64", description: "Its size." },
+    expiresAt: time("When `id` stops naming it; the file stays in the sandbox."),
+  }, ["id", "conversationId", "name", "mimeType", "kind", "sizeBytes", "expiresAt"]),
+  ConversationEvent: object("One event of a conversation's live stream: `kind` and its payload in the field of that name. A kind a client does not know is skipped.", {
+    kind: known("`text`: the agent's words as they come. `step`: a step starting or ending. `turn`: a turn starting or ending. `sent`: a person's message taken. `message`: a message kept.", STREAM_EVENT_KINDS),
+    text: ref("StreamText"),
+    step: ref("StreamStep"),
+    turn: ref("StreamTurn"),
+    sent: ref("StreamMessage"),
+    message: ref("StreamMessage"),
+  }, ["kind"]),
+  StreamText: object("Words the agent is writing now; the message that keeps them follows as `message`.", { delta: text("The next words.") }, ["delta"]),
+  StreamStep: object("A step the agent takes.", {
+    phrase: text("What it is doing, in the request's language."),
+    state: known("`started` or `ended`.", ["started", "ended"]),
+    ok: flag("For `ended`: whether it worked."),
+  }, ["phrase", "state"]),
+  StreamTurn: object("A turn in this conversation.", { state: known("`started`, `ended`, `failed`, or `stopped`.", TURN_STATES) }, ["state"]),
+  StreamMessage: object("A message: for `sent`, the `messageId` a send answered; for `message`, a `Message.id` to read with `after`.", { id: text("The id.") }, ["id"]),
   DeviceEnded: object("A device signed out: its tokens stopped working, its open streams closed. Calling with them now answers `access-removed`.", {
     id: text("The device."),
     endedAt: time("When."),
@@ -478,6 +595,7 @@ export type SchemaName = keyof typeof SCHEMAS;
 
 const limit = (description: string, fallback: number): Param => ({ name: "limit", description: `${description} 1 to 100; ${fallback} when absent.`, schema: { type: "integer", minimum: 1, maximum: 100 } });
 const cursor: Param = { name: "cursor", description: "`nextCursor` from the page before.", schema: { type: "string", maxLength: 512 } };
+const conversationParam: Param = { name: "id", description: "The conversation's id.", schema: { type: "string", maxLength: 400 } };
 const idParam = (what: string): Param => ({ name: "id", description: `The ${what}'s id.`, schema: { type: "string", maxLength: 200 } });
 
 // --- operations -------------------------------------------------------------------------------
@@ -519,7 +637,12 @@ export interface Operation {
   errors?: ApiErrorCode[];
   /** Server-sent events: `response` is the schema of each event's data; no `ETag`. */
   stream?: true;
+  /** The body is a file's bytes (`application/octet-stream` in the document), at most `UPLOAD_MAX_BYTES`, not JSON. */
+  upload?: true;
 }
+
+/** The largest body an `upload` operation reads: what the sandbox's own upload takes, with room to spare. */
+export const UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
 
 export const OPERATIONS = [
   {
@@ -588,8 +711,9 @@ export const OPERATIONS = [
     description: [
       "For a client waking from sleep, starting, or reconnecting: what changed since `since`, read from a ledger on the server's disk that survives restarts",
       "and is kept 30 days. A change is listed only when the caller may read the thing now (or, gone, could have read it); its words are fetched, not sent.",
-      "Changes are of work, agents and the inbox; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs —",
-      "`work:read` for work, `agents:read` for agents, `work:decide` for the inbox — and a credential without that scope is not told of it.",
+      "Changes are of work, agents, the inbox, conversations and messages; an agent's `status` (working or idle) is not a change. Any credential: each change is shown",
+      "by the scope its type needs — `work:read` for work, `agents:read` for agents, `work:decide` for the inbox, `chat:read` for conversations and messages (and a",
+      "service token's view with conversation text) — and a credential without it is not told of it.",
     ].join(" "),
   },
   {
@@ -714,6 +838,70 @@ export const OPERATIONS = [
     summary: "The words for a wake-only push",
     description: "For a phone's notification handler: the item the change at `seq` is about, if it still waits on the person. Gone, or not theirs: 404, and the generic banner stays.",
   },
+  {
+    operationId: "listConversations", method: "GET", path: "/conversations", auth: "credential", scope: "chat:read", tier: "stable", response: "ConversationPage",
+    query: [{ name: "agentId", description: "Only this agent's.", schema: { type: "string", maxLength: 200 } }, limit("How many conversations.", 50), cursor], errors: ["api-cursor-invalid"],
+    summary: "The conversations the caller may read",
+    description: "Every conversation with an agent the person may reach — each agent's `main` first among equals by time — most recently written first. An agent hidden from listings is left out.",
+  },
+  {
+    operationId: "listMessages", method: "GET", path: "/conversations/{id}/messages", auth: "credential", scope: "chat:read", tier: "stable", response: "MessagePage",
+    pathParams: [conversationParam],
+    query: [
+      { name: "after", description: "A `Message.id`: only what came after it. One from an earlier context (`/new`) starts at the first message of this one.", schema: { type: "string", maxLength: 200 } },
+      limit("How many messages.", 50), cursor,
+    ],
+    errors: ["api-not-found", "api-cursor-invalid"],
+    summary: "What was said in a conversation",
+    description: "As the page draws it, in its current context. A message the person sent appears once the agent starts on it.",
+  },
+  {
+    operationId: "sendMessage", method: "POST", path: "/conversations/{id}/messages", auth: "credential", scope: "chat:write", tier: "stable", response: "MessageSent", requestBody: "SendMessage",
+    pathParams: [conversationParam],
+    errors: ["api-not-found", "api-role-needed", "console-context-command", "model-not-configured", "upload-unknown"],
+    summary: "Send the agent a message",
+    description: [
+      "The person's message, as the page sends one: it reaches the agent through the same path, and a conversation of an outside chat hears it there too.",
+      "`clientMessageId` makes a retry safe: the same one (or the same `Idempotency-Key`) within 24 hours answers the first answer and starts no second turn.",
+      "No step-up: what the agent then does outside the box is asked for on its own (`/inbox`).",
+    ].join(" "),
+  },
+  {
+    operationId: "sendCardAction", method: "POST", path: "/conversations/{id}/card-actions", auth: "credential", scope: "chat:write", tier: "stable", response: "MessageSent", requestBody: "CardAction",
+    pathParams: [conversationParam], errors: ["api-not-found", "api-role-needed", "model-not-configured", "surface-work-unavailable"],
+    summary: "Press a card's action",
+    description: "Reaches the agent as the page's press does: one line naming the card and the action, which continues the work the card was drawn for, or is refused.",
+  },
+  {
+    operationId: "stopTurn", method: "POST", path: "/conversations/{id}/stop", auth: "credential", scope: "chat:write", tier: "stable", response: "TurnStop",
+    pathParams: [conversationParam], errors: ["api-not-found", "api-role-needed"],
+    summary: "Stop the agent's turn",
+    description: "When the agent is in a turn in this conversation, it is stopped as the page's Stop stops it (the agent's turn, wherever it runs); otherwise nothing happens and `stopped` is false.",
+  },
+  {
+    operationId: "streamConversation", method: "GET", path: "/conversations/{id}/stream", auth: "credential", scope: "chat:read", tier: "stable", response: "ConversationEvent", stream: true,
+    pathParams: [conversationParam], errors: ["api-not-found"],
+    summary: "A conversation as it happens (server-sent events)",
+    description: [
+      "`text/event-stream` while a conversation is on screen: each event's name is its `kind` and its data a `ConversationEvent`. Nothing is replayed — what is",
+      "kept is read from `/messages` — and `Last-Event-ID` is not read. A `: ping` comment comes every 20 seconds. The stream ends when the credential stops",
+      "being valid or the person can no longer reach the agent.",
+    ].join(" "),
+  },
+  {
+    operationId: "uploadFile", method: "POST", path: "/uploads", auth: "credential", scope: "chat:write", tier: "stable", response: "Upload", upload: true,
+    query: [
+      { name: "conversationId", description: "The conversation it is for: it is put in that conversation's files in the agent's sandbox.", schema: { type: "string", maxLength: 400 }, required: true },
+      { name: "name", description: "The file's name.", schema: { type: "string", maxLength: 120 }, required: true },
+    ],
+    errors: ["api-not-found", "api-role-needed", "box-not-running", "upload-too-large", "upload-type-refused"],
+    summary: "Upload an image, a voice note or a file",
+    description: [
+      "The body is the file's bytes and `Content-Type` its type: an image (`image/png`, `jpeg`, `gif`, `webp`, `heic`, at most 10 MB, its bytes checked), a voice note",
+      "(`audio/…`, at most 20 MB) or another file (at most 20 MB). It goes where a file sent in a chat goes: the conversation's `inbox` in the agent's sandbox, which",
+      "the person must be able to enter. Then send it with a message (`attachmentIds`); the agent is told where it is.",
+    ].join(" "),
+  },
 ] as const satisfies readonly Operation[];
 export type OperationId = (typeof OPERATIONS)[number]["operationId"];
 
@@ -726,7 +914,7 @@ export function commonErrors(operation: Operation): ApiErrorCode[] {
   if ((operation.query ?? []).length > 0 || (operation.pathParams ?? []).length > 0 || operation.method === "POST") codes.push("api-param-invalid");
   codes.push("api-param-unknown", "api-rate-limited", "api-internal");
   // A conflict is the same key on another body: an operation that takes no body cannot have one.
-  if (operation.method === "POST") codes.push("api-idempotency-key-invalid", ...(operation.requestBody !== undefined ? ["api-idempotency-conflict" as const] : []));
+  if (operation.method === "POST") codes.push("api-idempotency-key-invalid", ...(operation.requestBody !== undefined || operation.upload === true ? ["api-idempotency-conflict" as const] : []));
   return [...codes, ...(operation.errors ?? [])];
 }
 

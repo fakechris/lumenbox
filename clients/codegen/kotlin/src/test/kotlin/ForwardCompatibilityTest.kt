@@ -11,6 +11,10 @@ import com.lumenopen.lumenbox.generated.models.DeviceSignIn
 import com.lumenopen.lumenbox.generated.models.InboxPage
 import com.lumenopen.lumenbox.generated.models.DecisionAck
 import com.lumenopen.lumenbox.generated.models.WorkPage
+import com.lumenopen.lumenbox.generated.models.MessagePage
+import com.lumenopen.lumenbox.generated.models.ConversationPage
+import com.lumenopen.lumenbox.generated.models.ConversationEvent
+import com.lumenopen.lumenbox.generated.models.Upload
 import com.lumenopen.lumenbox.generated.models.Error as ApiError
 import java.io.File
 import kotlin.test.Test
@@ -82,6 +86,30 @@ class ForwardCompatibilityTest {
     @Test fun aDecisionWithAnOutcomeThisClientDoesNotKnow() {
         val ack = json.decodeFromString(DecisionAck.serializer(), fixture("decision-ack.json"))
         assertEquals("escalated", ack.outcome)
+    }
+
+    @Test fun messagesOfAKindThisClientDoesNotKnow() {
+        val page = json.decodeFromString(MessagePage.serializer(), fixture("message-page.json"))
+        assertEquals(listOf("person", "card", "poll", "steps"), page.items.map { it.kind })
+        assertEquals("Red or blue?", page.items[2].text)
+        assertEquals("pick", page.items[1].card?.surfaceId)
+    }
+
+    @Test fun conversationsOfAKindThisClientDoesNotKnow() {
+        val page = json.decodeFromString(ConversationPage.serializer(), fixture("conversation-page.json"))
+        assertEquals(listOf("group", "main"), page.items.map { it.kind })
+    }
+
+    @Test fun aLiveEventOfAKindThisClientDoesNotKnow() {
+        val event = json.decodeFromString(ConversationEvent.serializer(), fixture("conversation-event.json"))
+        assertEquals("thinking", event.kind)
+        assertNull(event.text)
+    }
+
+    @Test fun anUploadOfAKindThisClientDoesNotKnow() {
+        val upload = json.decodeFromString(Upload.serializer(), fixture("upload.json"))
+        assertEquals("video", upload.kind)
+        assertEquals(5000000000L, upload.sizeBytes)
     }
 
     @Test fun anErrorWithAnUnknownCode() {

@@ -22,10 +22,11 @@ import { apiError, localizedBody } from "../api-error.ts";
 import { type IdempotencyStore, KEY_PATTERN } from "../idempotency.ts";
 import type { ClientCredential, McpTokenStore } from "../mcp-tokens.ts";
 import type { DeviceAuth } from "./auth.ts";
+import type { ChatAccess } from "./conversations.ts";
 import type { DecisionAccess } from "./inbox.ts";
 import { matchRoute, readBody, readParams, type ParamValue } from "./routes.ts";
 import { HANDLERS } from "./handlers.ts";
-import { API_PREFIX, ERRORS, OPERATIONS, type ApiErrorCode, type Operation, type OperationId } from "./schema.ts";
+import { API_PREFIX, ERRORS, OPERATIONS, UPLOAD_MAX_BYTES, type ApiErrorCode, type Operation, type OperationId } from "./schema.ts";
 
 /** The person a credential acts for, as the roster has them now. */
 export interface ClientPerson {
@@ -81,6 +82,8 @@ export interface ClientApiDeps {
   devices: DeviceAuth;
   /** What waits on a person, and their answers (inbox.ts). */
   decisions: DecisionAccess;
+  /** Conversations: what was said, sending, stopping, files, the live stream (conversations.ts). */
+  chat: ChatAccess;
   /** The roster person with this id, now; undefined once they are gone. */
   person(id: string): ClientPerson | undefined;
   installationMode(): "single-machine" | "organisation";
@@ -106,6 +109,8 @@ export interface Call {
   params: Record<string, ParamValue>;
   /** A `POST`'s body, checked against the operation's `requestBody`; empty for any other. */
   body: Record<string, unknown>;
+  /** An `upload` operation's body: the bytes and the `Content-Type` they came with. */
+  upload?: { bytes: Buffer; type: string };
   /** Absent only for an operation answered without a credential. */
   caller?: Caller;
   deps: ClientApiDeps;
@@ -226,6 +231,20 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
     if (wait !== undefined) throw new Refused("api-rate-limited", { seconds: wait }, { "retry-after": String(wait) });
   }
 
+  /** A file's bytes, at most `UPLOAD_MAX_BYTES`: refused before reading when the declared length is over, and when the bytes go over. */
+  async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+    const declared = Number(req.headers["content-length"] ?? "0");
+    if (declared > UPLOAD_MAX_BYTES) throw new Refused("upload-too-large");
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for await (const chunk of req) {
+      total += (chunk as Buffer).length;
+      if (total > UPLOAD_MAX_BYTES) throw new Refused("upload-too-large");
+      chunks.push(chunk as Buffer);
+    }
+    return Buffer.concat(chunks);
+  }
+
   async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     const chunks: Buffer[] = [];
     let total = 0;
@@ -256,8 +275,11 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
       if ("code" in read) throw new Refused(read.code, { name: read.vars.name, why: read.vars.why ?? "" });
       // A credential in the body is a sign-in try: an address that is waiting is refused before it is looked at (R4).
       if (operation.signIn === true) { const wait = deps.signIns.blocked(req); if (wait !== undefined) throw new Refused("sign-in-limited", { seconds: wait }, { "retry-after": String(wait) }); }
-      const raw = operation.method === "POST" ? await readJsonBody(req) : {};
-      const body = readBody(operation, raw);
+      const bytes = operation.upload === true ? await readRawBody(req) : undefined;
+      const upload = bytes === undefined ? undefined : { bytes, type: String(req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase() };
+      // An upload's request, for a repeat: what it is for and a digest of its bytes.
+      const raw = upload !== undefined ? { query: read.values, type: upload.type, sha256: createHash("sha256").update(upload.bytes).digest("hex") } : operation.method === "POST" ? await readJsonBody(req) : {};
+      const body = upload !== undefined ? { values: {} } : readBody(operation, raw);
       if ("code" in body) throw new Refused(body.code, { name: body.vars.name, why: body.vars.why ?? "" });
       // This request is a use: what it answers already says so.
       if (caller !== undefined) caller = { ...caller, credential: { ...caller.credential, lastUsedAt: deps.tokens.touch(caller.credential.id, now()) } };
@@ -266,7 +288,7 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
       const stillValid = (): boolean => { try { return caller === undefined || recheck(req, caller); } catch { return false; } };
       const track = (end: () => void) => { const entry = { stillValid, end }; streams.add(entry); return () => { streams.delete(entry); }; };
       const call: Call = {
-        operation, params: read.values, body: body.values, ...(caller !== undefined ? { caller } : {}), deps, requestId, locale: requestLocaleOf(req), stillValid, track,
+        operation, params: read.values, body: body.values, ...(upload !== undefined ? { upload } : {}), ...(caller !== undefined ? { caller } : {}), deps, requestId, locale: requestLocaleOf(req), stillValid, track,
         signInFailed: reason => deps.signIns.failed(req, reason), signInSucceeded: account => deps.signIns.succeeded(req, account),
       };
       if (operation.stream === true) {

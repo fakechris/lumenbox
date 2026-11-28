@@ -8,6 +8,11 @@
  * the turn rather than named at a path its box does not have.
  */
 
+/** What a turn is told it was handed with a message: the words, then where each file is. The chat's and a phone's message alike (INV-2214). */
+export function handedFilesNote(text: string, paths: readonly string[]): string {
+  return paths.length > 0 ? `${text}\n\n[随这条消息收到的文件: ${paths.join(", ")}]` : text;
+}
+
 /** A file dropped with no words: where it was stored, for which agent, and its bytes. */
 export type Drop = { path: string; agent: string | undefined; file: { name: string; base64: string } };
 

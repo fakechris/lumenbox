@@ -23,12 +23,17 @@ import type { Call, ClientPerson } from "./frame.ts";
 import { refuse } from "./frame.ts";
 import { stepUpRequiredFor, stepUpText, verifyStepUp, wordsDigest } from "./step-up.ts";
 import { apiTime } from "./times.ts";
+import { conversationIdOf } from "./conversations.ts";
 import { decodeCursor, encodeCursor, limitOf, sightOf } from "./visibility.ts";
 
 /** What the decision operations read and do (mount.ts wires it to the server's own paths). */
 export interface DecisionAccess {
   /** What waits on this person now, by the page's projection and their reach; with the records the items were made from. */
-  inbox(person: ClientPerson): Promise<{ items: readonly AttentionItem[]; approvals: readonly PendingApproval[]; drafts: readonly Draft[]; tasks: readonly Task[]; secrets: readonly SecretRequest[] }>;
+  inbox(person: ClientPerson): Promise<{
+    items: readonly AttentionItem[]; approvals: readonly PendingApproval[]; drafts: readonly Draft[]; tasks: readonly Task[]; secrets: readonly SecretRequest[];
+    /** The chains the bus paused (bus.ts): who wanted to message whom. */
+    paused?: readonly { fromId: string; toId: string }[];
+  }>;
   answerApproval(input: { id: string; allow: boolean; scope: "once" | "session"; reason?: string | undefined; decider: string }): boolean;
   answerDraft(id: string, answer: { decision: "approve" } | { decision: "edit"; body: string } | { decision: "reject"; reason: string }, by: string, decider: string): OutboxAnswer;
   /** The person's words to an agent, in a conversation, as their message (a question's answer). */
@@ -45,7 +50,7 @@ export interface DecisionAccess {
 
 type Built = {
   id: string; kind: string; title: string; detail: string; decision: boolean; actions: string[]; stepUpRequired: boolean;
-  deadline?: string; agentId?: string; agentName?: string; workId?: string;
+  deadline?: string; agentId?: string; agentName?: string; workId?: string; conversationId?: string;
   approval?: Record<string, unknown>; draft?: Record<string, unknown>; question?: Record<string, unknown>; secret?: Record<string, unknown>; closeProposal?: Record<string, unknown>;
   /** Not in the resource: what an answer needs. */
   hidden: { approvalId?: string; draftId?: string; secretId?: string; agentId?: string; conversation?: string; questionId?: string; options?: string[] };
@@ -70,6 +75,9 @@ async function inboxOf(call: Call): Promise<Built[]> {
   const drafts = new Map(found.drafts.map(draft => [draft.id, draft]));
   const tasks = new Map(found.tasks.map(task => [task.id, task]));
   const mayDecide = person.role !== "viewer";
+  const sight = sightOf(call);
+  /** The v1 id of the conversation an answer goes into, when the caller may read it. */
+  const conversationAt = (agentId: string, conversation: string) => (sight.text && sight.agent(agentId) ? { conversationId: conversationIdOf(agentId, conversation) } : {});
   const built: Built[] = [];
   for (const item of [...found.items].sort((a, b) => urgencyOf(a.kind) - urgencyOf(b.kind))) {
     const task = tasks.get(item.ref);
@@ -101,10 +109,18 @@ async function inboxOf(call: Call): Promise<Built[]> {
     } else if (item.kind === "question" && item.answer !== undefined) {
       const { agentId, conversation, questionId, options } = item.answer;
       built.push({
-        ...base, id: itemIdOf(item), actions: mayDecide ? ["answer"] : [], stepUpRequired: false, agentId,
+        ...base, id: itemIdOf(item), actions: mayDecide ? ["answer"] : [], stepUpRequired: false, agentId, ...conversationAt(agentId, conversation),
         ...(task !== undefined ? { workId: task.id } : {}),
         question: { ...(options !== undefined && options.length > 0 ? { options: [...options] } : {}), conversation },
         hidden: { agentId, conversation, ...(questionId !== undefined ? { questionId } : {}), ...(options !== undefined ? { options } : {}) },
+      });
+    } else if (item.kind === "paused") {
+      // A chain the budget stopped is answered by a message to either agent (bus.ts): the one the person reaches, the sender first.
+      const chain = found.paused?.find(entry => entry.fromId === item.ref);
+      const agentId = [item.ref, chain?.toId].find(id => id !== undefined && sight.agent(id));
+      built.push({
+        ...base, id: itemIdOf(item), actions: mayDecide && agentId !== undefined ? ["answer"] : ["open-on-page"], stepUpRequired: false,
+        ...(agentId !== undefined ? { agentId, ...conversationAt(agentId, "main") } : {}), hidden: agentId !== undefined ? { agentId, conversation: "main" } : {},
       });
     } else {
       const work = task !== undefined && WORK_ACTIONS[item.kind] !== undefined;
@@ -188,12 +204,12 @@ export async function answerInboxItem(call: Call) {
   if (item === undefined) return refuse("api-not-found");
   const body = call.body as { action: string; text?: string; body?: string; reason?: string; value?: string };
   // The role first: a viewer answers nothing for an agent, and only an Admin saves a secret.
-  const answersHere = item.kind === "question" || item.kind === "outbox" || item.kind === "secret";
+  const answersHere = item.kind === "question" || item.kind === "paused" || item.kind === "outbox" || item.kind === "secret";
   if (answersHere && (person.role === "viewer" || (item.kind === "secret" && person.role !== "admin"))) return refuse("api-role-needed");
   // Approvals and work have their own operations; anything else is answered on the page.
   if (!answersHere || !item.actions.includes(body.action)) return refuse("inbox-answer-invalid", { why: answersHere ? `it takes ${item.actions.join(", ")}` : "it is answered elsewhere" });
   const decisions = call.deps.decisions, by = person.id;
-  if (item.kind === "question") {
+  if (item.kind === "question" || item.kind === "paused") {
     const text = (body.text ?? "").trim();
     if (text === "") return refuse("inbox-answer-invalid", { why: "an answer has words" });
     await decisions.say(person, item.hidden.agentId!, item.hidden.conversation!, text, item.hidden.questionId);

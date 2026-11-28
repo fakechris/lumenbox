@@ -276,7 +276,7 @@ first delivery; the client API is needed only when they show the board on a scre
 | 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
 | 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 parts 1–3): the declared level and its start-up check, R1, R2, R4, R5 (except a strict `script-src`), R6, R7, R8, and S-2 closed for private. Not done: the kind pass through a TLS Ingress. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
 | 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Built (INV-2213, three parts): `/meta`, `/me`, `/agents`, `/work` (with history), `/board`, `/changes`, `/events`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. The page has no form for the tokens yet (INV-2316); minting asks for a sign-in in the last ten minutes (INV-2318, §8.1) |
-| 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Part built (INV-2214 parts 1–2): auth and device credentials; decisions, the inbox and step-up, §8.1. Conversations, uploads, deliverables and desktop tickets, R9–R10: not built |
+| 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Part built (INV-2214 parts 1–3): auth and device credentials; decisions, the inbox and step-up; conversations, uploads and the live stream, §8.1. Deliverables and desktop tickets, R9–R10: not built |
 | 6. Shared storage for an organisation; mobile apps | Shared storage: a design of its own. Native iOS and Android clients, encrypted relay and wake-only push: docs/110 | Decided in docs/110; not built |
 
 ### 8.1 The client API as built (INV-2213)
@@ -469,8 +469,8 @@ all `work:decide`. What was decided here:
   reject), questions (the person's words, which settle the question and reach the agent as their
   message), secrets (save to the vault, dismiss; Admins), and work (done, keep open against a close
   proposal, put off, stop — stop cancels what runs, and is refused rather than dropping work that runs and
-  cannot be cancelled from here). Listed and answered on
-  the page: a paused chain (answered by a message, which arrives with conversations), a held routine,
+  cannot be cancelled from here). A paused chain is answered here too since part 3: by a message, to
+  whichever of its two agents the person reaches. Listed and answered on the page: a held routine,
   a failure handed to a person, an undelivered message, a verification, organisation knowledge.
 - **The step-up rule** is the gate's own tiers (`host/side-effects.ts`): allowing an approval of
   `reach`, `spend`, `credential`, `irreversible` or `run-later` needs a proof, and so does one whose tier
@@ -502,6 +502,65 @@ all `work:decide`. What was decided here:
 - A paused chain is shown to whoever reaches either of its agents (the page too); a secret is saved only
   for the agent the person was shown; an `Idempotency-Key` reused for another target is a conflict; a
   cursor whose item was answered meanwhile answers `api-cursor-invalid` rather than restarting the list.
+
+**Conversations (INV-2214, part 3).** `client-api/conversations.ts` (ids, what a message is, the reads),
+`client-api/chat.ts` (sending, card presses, Stop, uploads, the live stream), `client-api/chat-access.ts`
+(the server's side: the live events and the change records); the page and the API share one send path,
+`web/send-message.ts` (`POST /api/prompt` is it now). Operations: `GET /conversations`,
+`GET /conversations/{id}/messages`, `GET /conversations/{id}/stream` (`chat:read`);
+`POST /conversations/{id}/messages`, `POST /conversations/{id}/card-actions`, `POST /conversations/{id}/stop`,
+`POST /uploads` (`chat:write`). What was decided here:
+
+- **A conversation is an agent's thread** as the page's switcher lists it — `main`, an outside chat's
+  (`chat`), another — with an opaque id naming the agent and the thread. A person reads those of every agent
+  in a box they may enter (reach.ts), as the page does; an agent hidden from listings is left out of the list
+  and still answers by id. A fork's thread is not a v1 conversation: the page shows it under its parent.
+- **A message is what the page draws** of the record (`web/transcript.ts`, the page's own reading), in the
+  conversation's current context, built field by field: a person's words (`sentIds`: the ids the sends
+  answered), the agent's (with `aside` for words beside its steps, and the names of files it sent), a
+  teammate's, a turn nobody typed as a `notice` **by its label only**, how a turn ended, a card the agent drew
+  (A2UI in a string), a question it asked, and its steps **as phrases** (activity-phrase.ts: the program,
+  never the command). Never a prompt, a tool's input or a host note's words. A turn nobody asked for in this
+  conversation (an audit) is left out, as the page folds it away. The newest page first, `nextCursor` back to
+  older ones; `after=<message id>` for what came since, which is how a client follows a `message` change.
+- **A service token reads no conversation** unless its view has `conversationText` (the list is empty, a
+  conversation is `api-not-found`, and no change record of one is told), and never writes: it has no
+  `chat:write`.
+- **A message goes through the page's own path**: the same refusals (a context command, a model not set up,
+  a card's ended work), the same turn, and in a conversation of an outside chat the same echo there marked as
+  from the console, with the agent's reply after it. Writing takes a driver and reach; a viewer instructs nobody.
+- **One message per `clientMessageId`**: for one person and conversation, the first answer is the answer for
+  24 hours, kept where `Idempotency-Key` answers are kept (`client-api-idempotency.jsonl`; a refusal too), with
+  or without that header; the same id with other words is `api-idempotency-conflict`. The record's id for the
+  message (`v1-…`) is made from the person, the conversation and that id, so even past the day the board's
+  admission sees the same message and keeps one. Measured on a real server (`conversations.test.ts`): three
+  concurrent sends of one `clientMessageId` under three keys made one turn of a scripted model; repeats with
+  the same key, another key, none, and after a restart answered the first answer and made one board request.
+- **No step-up for a message or a card press** — the decision part 2 recorded is kept. A message is words to
+  the agent; anything it then does outside its box is asked for on its own and is stepped up there (`/inbox`).
+  A press continues work the person already asked for, and is refused when that work has ended or changed.
+- **A card press** is the page's own line (`[Action "<name>" on card <id>: <context>]`, show-ui-catalog.ts)
+  with the page's `surfaceAction`, so it reaches the agent exactly as a click does. Its context is a JSON
+  object in a string (`contextJson`): a free-form object does not survive every code generator.
+- **Stop** is the page's: the policy stops the agent's turn, recorded with `user:<person> device:<id>`. It
+  acts only when a turn runs in this conversation (`stopped: false` otherwise), and it stops the agent's turn
+  wherever it runs, as the page's does.
+- **The live stream** (`/conversations/{id}/stream`) is transient: the agent's words as they come, a step
+  starting and ending (by phrase), a turn starting and ending, a message taken, a message kept — nothing
+  replayed, `Last-Event-ID` not read; what is kept is read from `/messages`. It ends when the credential stops
+  being valid (at once for a device ended, as `/events`), and when the person can no longer reach the agent
+  (asked when a turn starts and at each ping).
+- **Files go where a chat's files go**: `POST /uploads?conversationId=&name=` puts the bytes in the
+  conversation's `inbox` in the agent's sandbox through the chat door's own code (`web/chat-files.ts`: never
+  into a box the sender may not enter, a second file of one name renamed), and a message names it by its id;
+  the agent is told where it is in the chat door's words (`channels/drop-files.ts`). Images (`png`, `jpeg`,
+  `gif`, `webp`, `heic`/`heif`, checked by their first bytes; never SVG) up to 10 MB; voice (`audio/*`) and other
+  files (`application/*`, `text/*`) up to 20 MB, under the sandbox's 32 MB request. An upload's id lives 24 hours
+  in memory and is its person's and its conversation's alone; after a restart the file is still in the
+  sandbox and is uploaded again to be sent.
+- **Change records** `conversation` (one is new, or something was sent or written in it) and `message` (a new
+  one, with `conversationId`), routed by the agent, never the words, each needing `chat:read`. A conversation
+  the ledger has never named is named once, with no backlog of its old messages: a client reads it whole.
 
 Step 4 is what a company needs to show the work board to its customers. Steps 5 and 6 can follow
 without changing anything a step-4 client relies on — which is the test of whether the design

@@ -65,6 +65,11 @@ export function sightOf(call: Call): Sight {
       if (line.assigneeId !== undefined) return reach.agent(line.assigneeId);
       return line.requester === undefined || line.requester === person.id;
     }
+    if (line.type === "conversation" || line.type === "message") {
+      // Conversations are conversation text: told to whoever may read the agent's conversations, never to a view without the text.
+      if (!scopes.includes("chat:read") || (view !== undefined && !view.conversationText)) return false;
+      return line.assigneeId !== undefined && agent(line.assigneeId);
+    }
     if (!scopes.includes("work:read")) return false;
     const now = byId.get(line.id);
     if (now !== undefined) return task(now);

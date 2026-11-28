@@ -343,6 +343,10 @@ export const SERVER_ERRORS = {
   "err.inbox-answer-invalid": ["这个回答不适合这一项：{why}。", "This answer does not fit this item: {why}."],
   "err.decision-refused": ["看板拒绝了这个决定：{why}。", "The board refused this decision: {why}."],
   "err.device-unknown": ["没有这台设备，或它不是你的。", "No such device, or it is not yours."],
+  // ── conversations and files from a phone (docs/106 §4.2, INV-2214) ──
+  "err.upload-too-large": ["文件太大：图片最多10 MB，语音和其他文件最多20 MB。", "The file is too large: an image may be 10 MB, a voice note or another file 20 MB."],
+  "err.upload-type-refused": ["这里不接收这种文件，或图片的内容与它声明的类型不符。", "This kind of file is not taken here, or the image is not the type it says."],
+  "err.upload-unknown": ["附件不是你在24小时内上传到这个对话的文件。请重新上传。", "An attachment is not a file you uploaded to this conversation in the last 24 hours. Upload it again."],
 } as const satisfies Record<string, readonly [zh: string, en: string]>;
 
 /** A refusal's stable name: the key without `err.`. */

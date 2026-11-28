@@ -26,7 +26,7 @@
 
 import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
 import { followUpPrompt } from "../host/follow-up.ts";
-import { type Drop, type DropDeps, dropsFor } from "./drop-files.ts";
+import { type Drop, type DropDeps, dropsFor, handedFilesNote } from "./drop-files.ts";
 import { describePurpose, type OutboundPurpose } from "../host/outbound.ts";
 import type { OutboxSender } from "./outbox-sender.ts"; import { recording, type SentLedger } from "./sent-ledger.ts";
 import { CONNECTED, statusText, type ChannelStatus, type StatusLine } from "./status-line.ts";
@@ -2016,7 +2016,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       ...(await dropsFor(this.takeDrops(runningKey) ?? [], agentName, { key: runningKey, identity: message.identity }, this.deps)), // where this turn's agent finds them (INV-2303)
       ...(droppedFiles ?? []),
     ];
-    const prompt=handedFiles.length ? `${text}\n\n[随这条消息收到的文件: ${handedFiles.join(", ")}]` : text;
+    const prompt = handedFilesNote(text, handedFiles);
     // Everything this task says sits under the message that asked for it.
     const anchor: PushOptions | undefined =
       message.messageId !== undefined ? { replyTo: message.messageId } : undefined;

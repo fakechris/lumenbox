@@ -24,8 +24,11 @@ export const CHANGES_LEDGER = "changes.jsonl";
 export const RETAIN_DAYS = 30;
 export const RETAIN_LINES = 200_000;
 
-/** `inbox`: something now waits on a person, or no longer does (INV-2214); routed by `assigneeId` (its agent) and `requester`. */
-export type ChangeType = "work" | "agent" | "inbox";
+/**
+ * `inbox`: something now waits on a person, or no longer does (INV-2214); routed by `assigneeId` (its agent) and `requester`.
+ * `conversation`: one is new or something was sent in it; `message`: a new entry in `conversationId`. Both routed by `assigneeId`, the agent.
+ */
+export type ChangeType = "work" | "agent" | "inbox" | "conversation" | "message";
 export type ChangeOp = "upsert" | "delete";
 
 /** A line of the ledger. `seq`, `at`, `type`, `id`, `op` are what a client is shown; the rest is for judging who may be. */
@@ -41,6 +44,9 @@ export interface ChangeLine {
   /** Agent: its box, and a fingerprint of what a client shows of it, so a restart does not announce what did not change. */
   boxId?: string;
   print?: string;
+  /** Message: the conversation it is in (shown to a client). Conversation: how far its messages had been written, `<context>:<entries>`. */
+  conversationId?: string;
+  through?: string;
 }
 
 export type ChangeInput = Omit<ChangeLine, "seq" | "at">;
