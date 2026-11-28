@@ -835,7 +835,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const members = new MemberOnboarding({ registry, principals, boxes: personalBoxes, log, locale: localeOfPerson, memberTemplate: () => loadConfig().memberTemplate,
     changed: () => broadcast({ type: "activation_progress" }), reconnectBox: entry => orchestrator.reconnectBox(entry),
     importTemplate: (template, boxId, owner) => orchestrator.importTemplate(template, { caller: { userId: owner }, boxId, connected: ["browser", ...channelRecords.map(record => record.type)], log }).agent });
-  const reconnectPersonalBox = (id: string) => members.reconnect(id);
+  const reconnectPersonalBox = (id: string) => members.reconnected(id); // the retry route's box up: its person told if their activation made it and nobody has (INV-2304)
   const autoBoxes = new AutoPersonalBoxes({ home: join(agentboxHome(), "personal-boxes"), boxes: personalBoxes, quota: personalQuota, eligible: mayProvision, log,
     ready: (id, atActivation) => members.boxReady(id, atActivation), changed: () => broadcast({ type: "activation_progress" }),
     // At activation or at the first page load (INV-2220, INV-2203); by default where the boxes are the cluster's (or a given driver's), not this machine's Docker.
@@ -2979,6 +2979,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
 
+  const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
     signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log,
@@ -2987,8 +2988,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     quotaOf: id => personalQuotaFor(id, loadConfig(), directories.membership([id], directorySources())) }); // estimate, progress, telling people (INV-2220)
   const orgAdmission = admission(admissionDeps); chatDesk = orgAdmission;
   orgAdmission.catchUp(channelRecords.map(record => record.id)); // an activation a crash interrupted is finished, and boxes owed from before are queued (INV-2220)
+  void members.catchUp(channelRecords.map(record => record.id), door => directoryCredentials(door)?.source); // and whoever the record owes "assistant ready" is told (INV-2304)
   const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
-  const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // The web sign-in through a Feishu or DingTalk door (INV-1701, INV-729): one dispatcher in door-sign-in.ts.
   const handleDoorAuth = doorSignInHandler({
     records: () => channelRecords, envBase: channelEnvBase, env: key => process.env[key] ?? (loadConfig().env ?? {})[key],

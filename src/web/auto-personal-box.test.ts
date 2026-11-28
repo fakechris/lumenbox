@@ -395,3 +395,30 @@ test("INV-2305: \"assistant ready\" carries the installation's address when it i
   assert.equal(notices.length, 1, "her agent wrote to her once");
   assert.match(notices[0]!.text, /https:\/\/org\.example\.test/, "with the address the sign-in links on this installation carry");
 });
+
+test("INV-2304: somebody whose box came up while the server stopped before telling them is told at the next start, and the retry route tells too", async (t) => {
+  let failed = false;
+  const org = await organisation(t, { withDoor: true, start: async name => {
+    if (name.startsWith("P02") && !failed) { failed = true; throw new PersonalBoxStartError("pull failed", "ImagePullBackOff", "Check the image."); }
+    return "http://127.0.0.1:1";
+  } });
+  const request = await org.boot();
+  for (const subject of ["p01", "p02"]) assert.equal((await request("/api/activations/person", "web:operator", { channelId: "ding", subject, role: "driver" })).status, 200);
+  await allSettled(request, 2);
+  for (let i = 0; i < 100 && new Principals().byId("ding:p01")?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  await new Promise(resolve => setTimeout(resolve, 100));
+  org.stopAll();
+  // The server stopped between her box coming up and the telling: no line says she was told, or why not.
+  const ledger = join(org.home, "activations.jsonl");
+  writeFileSync(ledger, readFileSync(ledger, "utf8").split("\n").filter(line => !line.includes('"type":"told"')).join("\n"));
+  doorUp(t);
+  const again = await org.boot();
+  for (let i = 0; i < 100 && readyNotices(org.home).length === 0; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(readyNotices(org.home).map(notice => notice.chatKey), ["ding:@p01"], "her agent writes to her once, at the start; the person whose box failed is owed nothing yet");
+  // His box failed at activation; he starts it again himself, and when it is up his agent tells him.
+  const [box] = (await again("/api/personal-boxes", "ding:p02")).data.boxes as Array<{ id: string; status: string }>;
+  assert.equal(box!.status, "failed");
+  assert.equal((await again("/api/personal-boxes/retry", "ding:p02", { id: box!.id })).status, 200);
+  for (let i = 0; i < 100 && readyNotices(org.home).length < 2; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(readyNotices(org.home).map(notice => notice.chatKey), ["ding:@p01", "ding:@p02"]);
+});
