@@ -8,6 +8,8 @@ import com.lumenopen.lumenbox.generated.models.Changes
 import com.lumenopen.lumenbox.generated.models.AuthProviderList
 import com.lumenopen.lumenbox.generated.models.DevicePage
 import com.lumenopen.lumenbox.generated.models.DeviceSignIn
+import com.lumenopen.lumenbox.generated.models.InboxPage
+import com.lumenopen.lumenbox.generated.models.DecisionAck
 import com.lumenopen.lumenbox.generated.models.WorkPage
 import com.lumenopen.lumenbox.generated.models.Error as ApiError
 import java.io.File
@@ -67,6 +69,19 @@ class ForwardCompatibilityTest {
         val page = json.decodeFromString(DevicePage.serializer(), fixture("device-page.json"))
         assertEquals(listOf("visionos", "ios"), page.items.map { it.platform })
         assertEquals("passkey", page.items.first().signInMethod)
+    }
+
+    @Test fun anInboxWithKindsThisClientDoesNotKnow() {
+        val page = json.decodeFromString(InboxPage.serializer(), fixture("inbox-page.json"))
+        assertEquals(listOf("approval", "meeting-invite", "outbox"), page.items.map { it.kind })
+        assertEquals("Writer invites you to a review at 15:00", page.items[1].title)
+        assertEquals("teleport", page.items[0].approval?.tier)
+        assertEquals("fax", page.items[2].draft?.kind)
+    }
+
+    @Test fun aDecisionWithAnOutcomeThisClientDoesNotKnow() {
+        val ack = json.decodeFromString(DecisionAck.serializer(), fixture("decision-ack.json"))
+        assertEquals("escalated", ack.outcome)
     }
 
     @Test fun anErrorWithAnUnknownCode() {

@@ -31,9 +31,10 @@ function newest(call: Call, lines: readonly ChangeLine[], limit: number): { reco
   return { records: [...shown.values()], scanned };
 }
 
-export function getChanges(call: Call) {
+export async function getChanges(call: Call) {
   const { changes } = call.deps.world;
   call.deps.world.noteAgents();
+  await call.deps.decisions.noteInbox();
   const since = Number(call.params.since);
   const found = changes.after(since);
   if (found.reset) return { items: [], durableSeq: changes.latest, hasMore: false, reset: true };
@@ -48,6 +49,7 @@ export function streamEvents(call: Call) {
   return stream((req, res, requestId) => {
     const { changes } = call.deps.world;
     call.deps.world.noteAgents();
+    void call.deps.decisions.noteInbox();
     res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", connection: "keep-alive", "x-request-id": requestId, "x-accel-buffering": "no" });
     // False only once the response is gone: a full buffer is not an end, it drains on its own.
     const write = (text: string): boolean => { if (res.writableEnded || res.destroyed) return false; res.write(text); return true; };

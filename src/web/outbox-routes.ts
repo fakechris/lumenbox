@@ -8,6 +8,7 @@
 import type { Decision, Draft, OutboxDrafts } from "../host/outbox-drafts.ts";
 import type { PolicyGate } from "../host/policy.ts";
 import { apiError } from "./api-error.ts";
+import { answerDraft } from "./outbox-answer.ts";
 
 export async function outboxRoute(
   route: string,
@@ -36,12 +37,8 @@ export async function outboxRoute(
         : body.decision === "reject" ? { decision: "reject", reason: String(body.reason ?? "") }
           : undefined;
   if (answer === undefined) return { status: 400, body: apiError("outbox-decision") };
-  // A draft whose consent record is gone (expired, or answered from the chat a moment ago) is not the page's to decide.
-  if (draft.status !== "waiting" || !deps.policy.pending().some(approval => approval.id === draft.approvalId)) return { status: 409, body: apiError("outbox-settled") };
-  const decided = deps.drafts.decide(draft.id, answer, deps.by());
+  // The same path as an answer from a phone (outbox-answer.ts).
+  const decided = answerDraft(deps, draft.id, answer, deps.by(), deps.decider());
   if (!decided.ok) return { status: decided.why === "settled" ? 409 : 400, body: apiError(decided.why === "empty-body" ? "outbox-empty-body" : decided.why === "no-reason" ? "outbox-no-reason" : "outbox-settled") };
-  if (answer.decision === "reject") deps.policy.deny(draft.approvalId, deps.decider(), answer.reason);
-  else deps.policy.grant(draft.approvalId, deps.decider(), "once");
-  deps.answered?.(draft, answer.decision === "reject" ? "refused" : "allowed");
   return { status: 200, body: { id: draft.id, status: decided.draft.status } };
 }

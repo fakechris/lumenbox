@@ -19,7 +19,7 @@
 import type { ErrorCode } from "../../i18n/server-errors.ts";
 
 /** "1.<revision>": raised by every addition (docs/106 §4.1). The surface ratchet refuses an addition that leaves it. */
-export const API_REVISION = 3;
+export const API_REVISION = 4;
 export const API_VERSION = `1.${API_REVISION}`;
 export const API_PREFIX = "/api/v1";
 
@@ -103,7 +103,23 @@ export const WORK_STATES = ["open", "doing", "blocked", "review", "done", "dropp
 export const WAIT_KINDS = ["question", "review", "close-proposal", "reauthorize", "flagged", "nudged", "waiting"] as const;
 export const AGENT_STATUSES = ["working", "idle"] as const;
 export const ACTOR_KINDS = ["person", "agent", "system"] as const;
-export const CHANGE_TYPES = ["work", "agent"] as const;
+export const CHANGE_TYPES = ["work", "agent", "inbox"] as const;
+/**
+ * What waits on a person (`InboxItem.kind`): the page's own kinds (host/attention.ts), and a secret an agent asked for.
+ * Open: a newer server adds kinds, and a client shows an unknown one by its words and offers the page.
+ */
+export const INBOX_KINDS = [
+  "approval", "outbox", "question", "secret", "close-proposal", "review", "reauthorize", "flagged", "nudged",
+  "paused", "routine-paused", "exception", "undeliverable", "unanswered", "verification", "org-knowledge",
+] as const;
+/** What a client may do about an item here; anything else is done on the page (`open-on-page`). */
+export const INBOX_ACTIONS = ["allow", "deny", "approve", "edit", "reject", "answer", "save", "dismiss", "done", "keep-open", "put-off", "stop", "open-on-page"] as const;
+/** What an answer did. */
+export const DECISION_OUTCOMES = ["allowed", "denied", "approved", "edited", "rejected", "answered", "saved", "dismissed", "done", "kept-open", "put-off", "stopped"] as const;
+/** The policy gate's classes of what an action does (host/side-effects.ts `SideEffectTier`), as v1 names them. */
+export const EFFECT_TIERS = ["observe", "self", "reach", "spend", "credential", "irreversible", "run-later"] as const;
+/** What an Outbox draft is (host/outbox-drafts.ts `DRAFT_KINDS`), as v1 names them. */
+export const OUTBOX_DRAFT_KINDS = ["message", "publish", "submit", "email", "other"] as const;
 export const CHANGE_OPS = ["upsert", "delete"] as const;
 /** The organisation sign-in channels a device signs in through (docs/109): the door types with a web sign-in (src/web/sign-in.ts). */
 export const PROVIDER_TYPES = ["dingtalk", "feishu"] as const;
@@ -127,7 +143,7 @@ export const ERRORS = {
   "api-cursor-invalid": { status: 400, meaning: "The cursor is not one this list gave, or was given for other filters. Start the list again without it." },
   "api-not-found": { status: 404, meaning: "No such resource, or none the credential may read: the two are one answer." },
   "api-idempotency-key-invalid": { status: 400, meaning: "`Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`." },
-  "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token)." },
+  "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long)." },
   "api-rate-limited": { status: 429, meaning: "Too many requests; wait the seconds `Retry-After` names." },
   "sign-in-limited": { status: 429, meaning: "Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names." },
   "api-internal": { status: 500, meaning: "The server failed; `requestId` names the failure in its log." },
@@ -140,6 +156,12 @@ export const ERRORS = {
     meaning: "This refresh token was used in the last 30 seconds, and nothing was ended: the device holds the new pair where it keeps them, and a retry with the first request's `Idempotency-Key` answers it again.",
   },
   "device-credential-needed": { status: 403, meaning: "Only a device credential signs itself out; a personal or service token is revoked on the page." },
+  "api-role-needed": { status: 403, meaning: "The person's role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin." },
+  "approval-always-refused": { status: 403, meaning: "`always` is not granted through v1: a standing grant is made on the page. Answer `once` or `session`." },
+  "step-up-required": { status: 403, meaning: "Allowing this needs a step-up proof (`stepUp`) from a device that registered a step-up key; a token without one cannot allow it." },
+  "step-up-invalid": { status: 403, meaning: "The step-up proof is not this device's registered key's signature over this decision." },
+  "inbox-answer-invalid": { status: 400, meaning: "The answer does not fit this item: `INBOX_ACTIONS` it takes are in its `actions`." },
+  "decision-refused": { status: 409, meaning: "The board refused this decision for the work as it is now (for example done work cannot be put off); `error` says why." },
 } as const satisfies Record<string, { status: number; meaning: string }>;
 export type ApiErrorCode = keyof typeof ERRORS & ErrorCode;
 
@@ -256,14 +278,14 @@ export const SCHEMAS = {
   ChangeRecord: object("That something a client may hold changed: never what it now says. Fetch it (`GET /work/{id}`, `GET /agents/{id}`); a 404 then means it is gone, or no longer the caller's to read, and the client drops it.", {
     seq: { type: "integer", format: "int64", description: "Rises with every change, across restarts: the position to resume from." },
     at: time("When it changed."),
-    type: known("What changed: `work` or `agent`.", CHANGE_TYPES),
+    type: known("What changed: `work`, `agent`, or `inbox` (something now waits on a person, or no longer does: `GET /inbox`; `upsert` is also what a wake-only push names).", CHANGE_TYPES),
     id: text("Its id."),
     op: known("`upsert`: it is new or changed. `delete`: it is gone.", CHANGE_OPS),
   }, ["seq", "at", "type", "id", "op"]),
   Changes: object([
     "What changed since `since`, oldest first, each thing once (its newest change).",
     "When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history:",
-    "drop what is cached, read it again (`/work`, `/agents`, `/board`), then go on from `durableSeq`.",
+    "drop what is cached, read it again (`/work`, `/agents`, `/board`, and `/inbox` with `work:decide`), then go on from `durableSeq`.",
   ].join(" "), {
     items: list(ref("ChangeRecord"), "The changes the caller may be told of."),
     durableSeq: { type: "integer", format: "int64", description: "Send it as `since` next time: everything up to it has been looked at." },
@@ -348,6 +370,105 @@ export const SCHEMAS = {
     items: list(ref("Device"), "The devices on this page."),
     nextCursor: text("The next page's cursor; absent on the last page."),
   }, ["items"]),
+  InboxItem: object([
+    "One thing waiting on the person, as the page lists it under \"waiting on you\". Discriminated by `kind`: the field named like the kind",
+    "(`approval`, `draft`, `question`, `secret`, `closeProposal`) carries what that kind needs, and `actions` says what may be done here, each at its own operation:",
+    "`allow`/`deny` at `POST /approvals/{approval.id}`; `answer`, `approve`, `edit`, `reject`, `save`, `dismiss` at `POST /inbox/{id}/answer`;",
+    "`done`, `keep-open`, `put-off`, `stop` at `POST /work/{workId}/decisions`; `open-on-page`: nothing here.",
+    "A kind a client does not know is shown by `title` and `detail`, and opened on the page.",
+  ].join(" "), {
+    id: text("The item: what `POST /inbox/{id}/answer` names. Opaque."),
+    kind: known("What it is.", INBOX_KINDS),
+    title: text("What it is about, in a line."),
+    detail: text("One line a person can act on without opening anything."),
+    decision: flag("Whether the person's answer changes what happens next (a decision), rather than something to know (a notice)."),
+    actions: list(known("An action.", INBOX_ACTIONS), "What may be done here. Empty: open it on the page."),
+    stepUpRequired: flag("Whether allowing or approving needs a step-up proof (`stepUp`): the action leaves the box or touches authority."),
+    deadline: time("When the clock runs out and the default happens, when there is one."),
+    agentId: text("The agent it is with, when one is and the caller may read it."),
+    agentName: text("That agent's name, or the person it is with."),
+    workId: text("The work it is about, when it is about work."),
+    approval: ref("InboxApproval"),
+    draft: ref("InboxDraft"),
+    question: ref("InboxQuestion"),
+    secret: ref("InboxSecret"),
+    closeProposal: ref("InboxCloseProposal"),
+  }, ["id", "kind", "title", "detail", "decision", "actions", "stepUpRequired"]),
+  InboxApproval: object("An action waiting for consent (kind `approval`): answered at `POST /approvals/{id}`.", {
+    id: text("The approval: what `POST /approvals/{id}` names."),
+    description: text("The action exactly as it will run: what consent is given to."),
+    action: text("What the tool does, in the host's words, when it says."),
+    why: text("The agent's one-line case for it."),
+    tier: known("What the action does, in the policy gate's classes: `reach`, `spend`, `credential`, `irreversible`, `run-later` leave the box or touch authority.", EFFECT_TIERS),
+    scopes: list(known("A scope this item may be allowed for.", ["once", "session"]), "`once`, and `session` unless only this one call may be allowed."),
+    requestedAt: time("When it was asked."),
+  }, ["id", "description", "scopes", "requestedAt"]),
+  InboxDraft: object("What an agent wants to send or do outside the box, held in the Outbox (kind `outbox`).", {
+    kind: known("What the step is.", OUTBOX_DRAFT_KINDS),
+    target: text("Who or where it is for, as the agent named it."),
+    body: text("The words, or the command."),
+    why: text("The agent's one-line case for sending it."),
+    background: text("What the agent says led to it."),
+  }, ["kind", "target", "body", "why"]),
+  InboxQuestion: object("A question put to the person (kind `question`): answered with words, or one of `options`.", {
+    options: list(text("A choice."), "Choices offered, when the agent offered some."),
+    fallback: text("What the agent does with no answer by `deadline`."),
+    conversation: text("The conversation the answer goes into."),
+  }, []),
+  InboxSecret: object("A secret an agent asked for (kind `secret`): the value goes straight into the vault, granted to that agent alone.", {
+    name: text("The name it will be saved under."),
+    description: text("What the agent says it is for."),
+  }, ["name", "description"]),
+  InboxCloseProposal: object("An agent proposes closing work the person asked for (kind `close-proposal`): answered at `POST /work/{id}/decisions`.", {
+    by: text("Who proposes it."),
+    reason: text("Why."),
+    decideBy: time("Say nothing until then and it closes."),
+  }, ["by", "reason"]),
+  InboxPage: object("What waits on the person, most urgent first: what stops work, then questions, then the rest, each by its deadline.", {
+    items: list(ref("InboxItem"), "The items on this page."),
+    nextCursor: text("The next page's cursor; absent on the last page."),
+  }, ["items"]),
+  StepUpProof: object("A device's step-up proof (docs/110 §4): its registered key's ECDSA P-256 / SHA-256 signature over `lumenbox-step-up/1\\n<deviceId>\\n<item id>\\n<decision>\\n<detail>`.", {
+    keyId: text("The `stepUpKeyId` the device registered.", { maxLength: 100 }),
+    signature: text("The signature, DER or raw r||s, base64url.", { maxLength: 300, pattern: "^[A-Za-z0-9_-]+$" }),
+  }, ["keyId", "signature"]),
+  ApprovalDecision: request("An answer to an approval. `decision` `allow:once`/`allow:session` in the signed text; `detail` is `-`.", {
+    decision: known("`allow` or `deny`.", ["allow", "deny"]),
+    scope: known("For `allow`: `once` (this call) or `session` (this agent's turn). `always` is refused here.", ["once", "session"]),
+    reason: text("For `deny`: what the agent is told.", { maxLength: 1000 }),
+    stepUp: ref("StepUpProof"),
+  }, ["decision"]),
+  InboxAnswer: request([
+    "An answer to a question, an Outbox draft or a secret request; nothing else is answered here. A question takes `answer` (`text`); a draft",
+    "`approve`, `edit` (`body`) or `reject` (`reason`); a secret `save` (`value`) or `dismiss`. Approving signs `approve` with detail `-`; editing",
+    "signs `edit` with the detail BASE64URL(SHA-256(UTF-8 `body`)), no padding; saving a secret signs `save` with the same digest of `value`.",
+    "Rejecting, dismissing and answering a question need no proof.",
+  ].join(" "), {
+    action: known("One of the item's `actions` this operation takes: `answer`, `approve`, `edit`, `reject`, `save`, `dismiss`.", INBOX_ACTIONS),
+    text: text("For `answer`: the words, or one of the question's `options`.", { maxLength: 20_000 }),
+    body: text("For `edit`: the words to send instead.", { maxLength: 20_000 }),
+    reason: text("For `reject`: what the agent is told.", { maxLength: 1000 }),
+    value: text("For `save`: the secret. It goes to the vault and nowhere else — not a transcript, not a log, not a retry's memory.", { maxLength: 20_000 }),
+    stepUp: ref("StepUpProof"),
+  }, ["action"]),
+  WorkDecision: request("A decision on work the person asked for.", {
+    decision: known("`done`: count it as done. `keep-open`: refuse a proposal to close it. `put-off`: ask again at `until`. `stop`: stop it and drop it.", ["done", "keep-open", "put-off", "stop"]),
+    until: time("For `put-off`: when to ask again."),
+    note: text("What is said with it.", { maxLength: 2000 }),
+  }, ["decision"]),
+  DecisionAck: object("What the answer did.", {
+    id: text("What was answered."),
+    outcome: known("What happened.", DECISION_OUTCOMES),
+    at: time("When."),
+  }, ["id", "outcome", "at"]),
+  Notification: object("What a wake-only push is about (docs/110 §5): the push carried only `seq`; the words come from here, to a device that may read them.", {
+    seq: { type: "integer", format: "int64", description: "The position in the change record the push named." },
+    itemId: text("The inbox item."),
+    kind: known("Its kind.", INBOX_KINDS),
+    title: text("A line for the notification's title."),
+    body: text("A line for its body."),
+    at: time("When it arrived."),
+  }, ["seq", "itemId", "kind", "title", "body", "at"]),
   DeviceEnded: object("A device signed out: its tokens stopped working, its open streams closed. Calling with them now answers `access-removed`.", {
     id: text("The device."),
     endedAt: time("When."),
@@ -387,8 +508,9 @@ export interface Operation {
   /** A `POST`'s body: a resource of `SCHEMAS`, checked before the handler runs (routes.ts `readBody`). */
   requestBody?: SchemaName;
   /**
-   * The answer holds a secret (a token): it is sent with `Cache-Control: no-store`, and an `Idempotency-Key`
-   * repeat is answered from memory only, for 30 seconds — never from a file.
+   * The answer or the request holds a secret (a token; a secret's value for the vault): it is sent with
+   * `Cache-Control: no-store`, and an `Idempotency-Key` repeat is answered from memory only, for 30 seconds —
+   * never from a file, which would otherwise keep a digest of the request for a day.
    */
   secret?: true;
   /** A credential is tried in the body: tries that do not work count against the sign-in limiter (docs/106 §5 R4). */
@@ -466,8 +588,8 @@ export const OPERATIONS = [
     description: [
       "For a client waking from sleep, starting, or reconnecting: what changed since `since`, read from a ledger on the server's disk that survives restarts",
       "and is kept 30 days. A change is listed only when the caller may read the thing now (or, gone, could have read it); its words are fetched, not sent.",
-      "Changes are of work and agents; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs —",
-      "`work:read` for work, `agents:read` for agents — and a credential without that scope is not told of it.",
+      "Changes are of work, agents and the inbox; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs —",
+      "`work:read` for work, `agents:read` for agents, `work:decide` for the inbox — and a credential without that scope is not told of it.",
     ].join(" "),
   },
   {
@@ -548,6 +670,50 @@ export const OPERATIONS = [
     summary: "Sign one of the person's devices out",
     description: "Ends the device: its tokens stop at once, its open streams and desktops close, and it is told `access-removed`. Another person's device answers 404.",
   },
+  {
+    operationId: "listInbox", method: "GET", path: "/inbox", auth: "credential", scope: "work:decide", tier: "stable", response: "InboxPage",
+    query: [limit("How many items.", 50), cursor], errors: ["api-cursor-invalid"],
+    summary: "What waits on the person",
+    description: [
+      "Every decision and notice waiting on the person — approvals, Outbox drafts, questions, secrets agents asked for, close proposals, reviews,",
+      "paused chains and routines, failures handed to them — as the page lists them, only from agents and work the person may reach.",
+      "Changes to it arrive in `/changes` and `/events` as type `inbox`.",
+    ].join(" "),
+  },
+  {
+    operationId: "decideApproval", method: "POST", path: "/approvals/{id}", auth: "credential", scope: "work:decide", tier: "stable", response: "DecisionAck", requestBody: "ApprovalDecision",
+    pathParams: [idParam("approval")], errors: ["api-not-found", "api-role-needed", "approval-always-refused", "step-up-required", "step-up-invalid", "inbox-answer-invalid"],
+    summary: "Allow or deny an action waiting for consent",
+    description: [
+      "Allowing an item with `stepUpRequired` needs `stepUp`, signed over `allow:once` or `allow:session` as the decision; denying never does.",
+      "`always` is refused. Who answered is recorded as `user:<person> device:<id>` for a device. An approval answered already, or out of reach, is 404.",
+    ].join(" "),
+  },
+  {
+    operationId: "answerInboxItem", method: "POST", path: "/inbox/{id}/answer", auth: "credential", scope: "work:decide", tier: "stable", response: "DecisionAck", requestBody: "InboxAnswer", secret: true,
+    pathParams: [idParam("inbox item")], errors: ["api-not-found", "api-role-needed", "step-up-required", "step-up-invalid", "inbox-answer-invalid"],
+    summary: "Answer a question, a draft or a secret request",
+    description: [
+      "A question's answer goes to the agent as the person's message. Approving or editing a draft needs `stepUp` (decision `approve`, or `edit` with",
+      "the SHA-256 of `body`, base64url, as the detail). A secret is saved to the vault, granted to the agent that asked, and never written anywhere",
+      "else; saving or dismissing one takes an Admin, and saving needs `stepUp` (decision `save`, the SHA-256 of `value` as the detail).",
+    ].join(" "),
+  },
+  {
+    operationId: "decideWork", method: "POST", path: "/work/{id}/decisions", auth: "credential", scope: "work:decide", tier: "stable", response: "DecisionAck", requestBody: "WorkDecision",
+    pathParams: [idParam("work")], errors: ["api-not-found", "api-role-needed", "decision-refused", "inbox-answer-invalid"],
+    summary: "Count work as done, keep it open, put it off, or stop it",
+    description: [
+      "On work the person may read. `stop` cancels what runs for it and drops it; when something runs for it that cannot be cancelled from here",
+      "(no trusted record of what runs), it is refused with `decision-refused` and nothing is dropped: stop it on the page.",
+    ].join(" "),
+  },
+  {
+    operationId: "getNotification", method: "GET", path: "/notifications/{seq}", auth: "credential", scope: "work:decide", tier: "stable", response: "Notification",
+    pathParams: [{ name: "seq", description: "The `seq` the push carried.", schema: { type: "integer", minimum: 1, format: "int64" } }], errors: ["api-not-found"],
+    summary: "The words for a wake-only push",
+    description: "For a phone's notification handler: the item the change at `seq` is about, if it still waits on the person. Gone, or not theirs: 404, and the generic banner stays.",
+  },
 ] as const satisfies readonly Operation[];
 export type OperationId = (typeof OPERATIONS)[number]["operationId"];
 
@@ -577,7 +743,8 @@ export const CONVENTIONS = [
   "- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.",
   "- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.",
   "- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.",
-  "- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer — within 30 seconds, from memory only, for an answer that holds a token (`x-secret-answer`).",
+  "- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer —",
+  "  within 30 seconds, from memory only, for an operation whose answer or request holds a secret (`x-secret-answer`: a token, or a secret for the vault).",
   "- 429 carries `Retry-After` in seconds.",
   "- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.",
   "",

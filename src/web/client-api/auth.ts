@@ -139,7 +139,9 @@ export function listDevices(call: Call) {
   const { credential, person } = call.caller!;
   const all = call.deps.devices.list(person.id);
   const after = decodeCursor(call.params.cursor, "devices", position);
-  const rest = after === undefined ? all : all.slice(all.findIndex(device => device.id === after) + 1);
+  const at = after === undefined ? -1 : all.findIndex(device => device.id === after);
+  if (after !== undefined && at < 0) return refuse("api-cursor-invalid"); // the device a cursor stopped at was removed meanwhile
+  const rest = all.slice(at + 1);
   const page = rest.slice(0, limitOf(call));
   return {
     items: page.map(device => ({

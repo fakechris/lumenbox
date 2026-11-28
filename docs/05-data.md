@@ -793,9 +793,11 @@ the audit export — so ordinary reads stay as cheap as they were.
 `changes.jsonl` is the client API's change ledger (INV-2213, docs/106 §4.2, docs/110 §2;
 `src/web/client-api/change-ledger.ts`): one line each time a piece of work or an agent changes —
 `seq` (rising by one, across restarts: a reopen goes on from the last whole line), `at`, `type`
-(`work`, `agent`), `id`, `op` (`upsert`, `delete`) — and, to judge who may be told of a change to
+(`work`, `agent`, `inbox`), `id`, `op` (`upsert`, `delete`) — and, to judge who may be told of a change to
 something that is gone, `requester` and `assigneeId` for work, `boxId` and a fingerprint of what a
-client shows (`print`) for an agent. Never a title, a description or a note: a client is told
+client shows (`print`) for an agent, and for something that waits on a person (`inbox`, INV-2214) the
+agent it is with (`assigneeId`) or the person who asked (`requester`), written when it comes and when
+it goes, every five seconds and before each read. Never a title, a description or a note: a client is told
 *that* it changed and fetches it. Work is written from the board's hooks (`onCreate`, `onChange`);
 agents by comparing their prints with the ledger's last word, at start, before each read and every
 five seconds, so a restart announces only what changed. A feed: kept 30 days and at most 200,000

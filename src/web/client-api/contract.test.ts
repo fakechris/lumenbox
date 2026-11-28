@@ -13,7 +13,7 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { createHash, createHmac, generateKeyPairSync, randomBytes } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,6 +74,23 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
   const t5 = board.create({ title: "Vic's own note", requester: "vic" })!;
   assert.ok("task" in board.proposeClose(t1.id, writer.id, "the plan is in the shared folder"), "the close proposal Dee is asked to answer");
   const ids = { writer: writer.id, hidden: hidden.id, patBot: patBot.id, t1: t1.id, t2: t2.id, t3: t3.id, t4: t4.id, t5: t5.id };
+  // What waits on people (INV-2214), as the gate, the Outbox and the question watch keep it, written before the server reads them:
+  // an approval for an action that leaves the box, one that stays in it, one in Pat's box nobody else may see, an Outbox draft and
+  // its consent record, and a question the Writer put to Dee.
+  const asked = new Date().toISOString();
+  const approval = (id: string, agentId: string, description: string, more: Record<string, unknown> = {}) =>
+    JSON.stringify({ at: asked, kind: "approval-requested", id, fingerprint: `fp-${id}`, agentId, description, ...more });
+  writeFileSync(join(home, "policy.jsonl"), `${[
+    approval("ap-reach", writer.id, "post the issue to the newsletter list", { tier: "reach", action: "send a message outside the box" }),
+    approval("ap-self", writer.id, "rename draft.md to issue.md", { tier: "self" }),
+    approval("ap-pat", patBot.id, "Pat's private deploy", { tier: "reach" }),
+    approval("ap-draft", writer.id, "Send the December issue to the list", { harnessResumes: true }),
+  ].join("\n")}\n`);
+  const { OutboxDrafts, OUTBOX_FILE } = await import("../../host/outbox-drafts.ts");
+  new OutboxDrafts(join(home, OUTBOX_FILE)).record({ id: "dr-1", agentId: writer.id, agentName: "Writer", conversation: "main", kind: "message", target: "the newsletter list", body: "The December issue is out.", why: "The issue is ready", approvalId: "ap-draft" });
+  const { QuestionWatch } = await import("../../host/question-expiry.ts");
+  const question = new QuestionWatch(join(home, "questions.jsonl")).ask({ agentId: writer.id, agentName: "Writer", conversation: "main", question: "Which cover, the red or the blue?", asker: "dee", ttlMs: 3_600_000 }).question;
+  const questionId = question.id;
   // One token whose time is over, minted before the server reads the store.
   const expired = new McpTokenStore(join(home, "mcp-tokens.json")).mintClient({ kind: "personal", principalId: "dee", label: "old", scopes: SCOPE_NAMES, expiresAt: new Date(Date.now() - 60_000), by: "test" }).token;
   // And a device signed in 31 days ago and never used since: its refresh token's time is over.
@@ -125,7 +142,7 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
   const fresh = () => { address += 1; return `203.0.113.${address}`; };
   /** A request for an operation; `{id}` is an agent the caller reaches, or work they may read, unless `id` says which. */
   const call = (operation: Operation, init: { token?: string; query?: string; headers?: Record<string, string>; from?: string; id?: string; body?: unknown } = {}) =>
-    fetch(`${base}/api/v1${operation.path.replace("{id}", encodeURIComponent(init.id ?? (operation.path.startsWith("/agents") ? writer.id : t1.id)))}${init.query ?? ""}`, { method: operation.method, headers: {
+    fetch(`${base}/api/v1${operation.path.replace(/\{(id|seq)\}/, encodeURIComponent(init.id ?? (operation.path.startsWith("/agents") ? writer.id : t1.id)))}${init.query ?? ""}`, { method: operation.method, headers: {
       "x-forwarded-for": init.from ?? fresh(), ...(init.token !== undefined ? { authorization: `Bearer ${init.token}` } : {}), ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...init.headers,
     }, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) });
   const op = (id: string) => OPERATIONS.find(operation => operation.operationId === id) as Operation;
@@ -163,7 +180,27 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
     assert.equal(shown.status, 200, JSON.stringify(body));
     return { ...body, code: new URLSearchParams(new URL(body.link).hash.slice(1)).get("code")! };
   };
-  return { base, home, logs, expired, staleRefresh, reused, roster, mint, fresh, call, op, operator, Principals, ids, restart, url: () => base, session, doorCode, phone, pairingCode };
+  /** A device paired for `identity` with a step-up key (docs/110 §4): its tokens, and how it signs a decision. */
+  const keyedPhone = async (identity = "ding:dee-staff") => {
+    const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const answer = await call(op("pairDevice"), { body: {
+      code: (await pairingCode(identity)).code, deviceName: "Dee's keyed phone", platform: "ios", stepUpKeyId: "key-1", stepUpPublicKey: publicKey.export({ type: "spki", format: "der" }).toString("base64url"),
+    } });
+    const { tokens } = await answer.json() as { tokens: { deviceId: string; accessToken: string } };
+    assert.equal(answer.status, 200);
+    const proof = (itemId: string, decision: string, detail = "-") => ({
+      keyId: "key-1", signature: sign("sha256", Buffer.from(`lumenbox-step-up/1\n${tokens.deviceId}\n${itemId}\n${decision}\n${detail}`), { key: privateKey, dsaEncoding: "der" }).toString("base64url"),
+    });
+    return { token: tokens.accessToken, deviceId: tokens.deviceId, proof };
+  };
+  /** The `seq` of the change record saying `itemId` came to wait on somebody, as the caller is told of it. */
+  const inboxSeq = async (token: string, itemId: string): Promise<number> => {
+    const changes = await (await call(op("getChanges"), { token, query: "?since=0&limit=1000" })).json() as { items: { seq: number; type: string; id: string; op: string }[] };
+    const line = changes.items.find(item => item.type === "inbox" && item.id === itemId && item.op === "upsert");
+    assert.ok(line !== undefined, `an inbox change for ${itemId}: ${JSON.stringify(changes.items.filter(item => item.type === "inbox"))}`);
+    return line.seq;
+  };
+  return { base, home, logs, expired, staleRefresh, reused, questionId, keyedPhone, inboxSeq, roster, mint, fresh, call, op, operator, Principals, ids, restart, url: () => base, session, doorCode, phone, pairingCode };
 }
 
 /** A body each operation that takes one accepts as well-formed (what it then finds in it is another matter). */
@@ -175,6 +212,9 @@ const WELL_FORMED: Record<string, Record<string, unknown>> = {
   exchangeOAuthCode: { code: "no-such-code", codeVerifier: VERIFIER, redirectUri: "lumenbox://oauth/callback", deviceName: "Phone", platform: "ios" },
   pairDevice: { code: "no-such-code", deviceName: "Phone", platform: "ios" },
   refreshDeviceToken: { refreshToken: `lbxr_${"0".repeat(64)}` },
+  decideApproval: { decision: "deny", reason: "no" },
+  answerInboxItem: { action: "reject", reason: "no" },
+  decideWork: { decision: "keep-open", note: "no" },
 };
 
 type Box = Awaited<ReturnType<typeof server>>;
@@ -189,6 +229,9 @@ const SUCCEED: Record<string, (box: Box, token: string) => Promise<Response>> = 
   refreshDeviceToken: async box => box.call(box.op("refreshDeviceToken"), { body: { refreshToken: (await box.phone()).tokens.refreshToken } }),
   signOutDevice: async box => box.call(box.op("signOutDevice"), { token: (await box.phone()).tokens.accessToken }),
   deleteDevice: async (box, token) => box.call(box.op("deleteDevice"), { token, id: (await box.phone()).tokens.deviceId }),
+  decideApproval: (box, token) => box.call(box.op("decideApproval"), { token, id: "ap-self", body: { decision: "deny", reason: "not now" } }),
+  answerInboxItem: (box, token) => box.call(box.op("answerInboxItem"), { token, id: `question:${box.questionId}`, body: { action: "answer", text: "The blue one." } }),
+  decideWork: (box, token) => box.call(box.op("decideWork"), { token, body: { decision: "keep-open", note: "Not yet: the photographs are missing." } }),
 };
 
 /** An error answer is the documented shape, with the code asked for and the request id of its header. */
@@ -230,14 +273,16 @@ test("every operation in the document answers its resource — every field docum
       continue;
     }
     const required = operation.operationId === "getChanges" ? "?since=0" : "";
-    const answer = await box.call(operation, { ...(token === undefined ? {} : { token }), query: required });
+    // A notification names the change record of something waiting on the caller.
+    const seq = operation.operationId === "getNotification" ? { id: String(await box.inboxSeq(all.token, "outbox:dr-1")) } : {};
+    const answer = await box.call(operation, { ...(token === undefined ? {} : { token }), query: required, ...seq });
     const body = await answer.json();
     assert.equal(answer.status, 200, `${operation.operationId}: ${JSON.stringify(body)}`);
     assert.deepEqual(problemsOf(body, SCHEMAS[operation.response] as Schema), [], `${operation.operationId} answers exactly its documented ${operation.response}`);
     assert.match(answer.headers.get("x-request-id") ?? "", /^[0-9a-f-]{36}$/);
     const etag = answer.headers.get("etag");
     assert.match(etag ?? "", /^"[A-Za-z0-9_-]{32}"$/, `${operation.operationId} carries a validator`);
-    let again = await box.call(operation, { ...(token === undefined ? {} : { token }), query: required, headers: { "if-none-match": etag! } });
+    let again = await box.call(operation, { ...(token === undefined ? {} : { token }), query: required, ...seq, headers: { "if-none-match": etag! } });
     // `me` names the minute of its last use: across a minute's turn the body did change, and once more settles it.
     if (again.status === 200 && operation.operationId === "getMe") { const turned = again.headers.get("etag")!; await again.body?.cancel(); again = await box.call(operation, { token: token!, headers: { "if-none-match": turned } }); }
     assert.equal(again.status, 304, `${operation.operationId}: unchanged is 304`);
@@ -292,13 +337,16 @@ test("every error the document lists for an operation is provoked on it, and an 
   new box.Principals().save(staying);
   const bogus = `lbxp_${"0".repeat(48)}`;
   const dee = (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token;
+  const viewer = (await box.mint({ principalId: "vic", label: "v", scopes: SCOPE_NAMES })).token;
+  let keyedDevice: Awaited<ReturnType<typeof box.keyedPhone>> | undefined;
+  const keyed = async () => (keyedDevice ??= await box.keyedPhone());
   /** Ivy is let in, then removed before her phone finishes signing in: it is told her access is gone. */
   const ivyLeavesBefore = async (finish: () => Promise<Response>) => {
     new box.Principals().save(staying.filter(person => person.id !== "ivy"));
     try { return await finish(); } finally { new box.Principals().save(staying); }
   };
   const bodyOf = (operation: Operation) => (operation.requestBody !== undefined ? { body: WELL_FORMED[operation.operationId] } : {});
-  const CONFLICT_FIELD: Record<string, string> = { startOAuth: "state", exchangeOAuthCode: "code", pairDevice: "code", refreshDeviceToken: "refreshToken" };
+  const CONFLICT_FIELD: Record<string, string> = { startOAuth: "state", exchangeOAuthCode: "code", pairDevice: "code", refreshDeviceToken: "refreshToken", decideApproval: "reason", answerInboxItem: "reason", decideWork: "note" };
   /** Where an operation is made to answer a code its own way: a credential in the body, not in `Authorization`. */
   const special: Record<string, Partial<Record<ApiErrorCode, () => Promise<Response>>>> = {
     refreshDeviceToken: {
@@ -315,6 +363,30 @@ test("every error the document lists for an operation is provoked on it, and an 
         const { code, verifier } = await box.doorCode("union-ivy");
         return ivyLeavesBefore(() => box.call(box.op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, redirectUri: REDIRECT, deviceName: "Ivy's phone", platform: "ios" } }));
       },
+    },
+    decideApproval: {
+      "api-role-needed": async () => box.call(box.op("decideApproval"), { token: viewer, id: "ap-self", body: { decision: "allow", scope: "once" } }),
+      "approval-always-refused": () => box.call(box.op("decideApproval"), { token: dee, id: "ap-self", body: { decision: "allow", scope: "always" } }),
+      "step-up-required": () => box.call(box.op("decideApproval"), { token: dee, id: "ap-reach", body: { decision: "allow", scope: "once" } }),
+      "step-up-invalid": async () => box.call(box.op("decideApproval"), { token: (await keyed()).token, id: "ap-reach", body: { decision: "allow", scope: "once", stepUp: { keyId: "key-1", signature: randomBytes(64).toString("base64url") } } }),
+      "inbox-answer-invalid": () => box.call(box.op("decideApproval"), { token: dee, id: "ap-self", body: { decision: "allow", scope: "forever" } }),
+    },
+    answerInboxItem: {
+      "api-not-found": () => box.call(box.op("answerInboxItem"), { token: dee, id: "outbox:no-such-draft", body: { action: "reject", reason: "no" } }),
+      "api-role-needed": () => box.call(box.op("answerInboxItem"), { token: viewer, id: "outbox:dr-1", body: { action: "reject", reason: "no" } }),
+      "step-up-required": () => box.call(box.op("answerInboxItem"), { token: dee, id: "outbox:dr-1", body: { action: "approve" } }),
+      "step-up-invalid": async () => box.call(box.op("answerInboxItem"), { token: (await keyed()).token, id: "outbox:dr-1", body: { action: "approve", stepUp: { keyId: "key-1", signature: randomBytes(70).toString("base64url") } } }),
+      "inbox-answer-invalid": () => box.call(box.op("answerInboxItem"), { token: dee, id: "outbox:dr-1", body: { action: "answer", text: "hello" } }),
+    },
+    decideWork: {
+      "api-role-needed": () => box.call(box.op("decideWork"), { token: viewer, id: box.ids.t2, body: { decision: "done" } }),
+      "decision-refused": () => box.call(box.op("decideWork"), { token: dee, id: box.ids.t2, body: { decision: "keep-open" } }),
+      "inbox-answer-invalid": () => box.call(box.op("decideWork"), { token: dee, id: box.ids.t2, body: { decision: "put-off" } }),
+    },
+    getNotification: {
+      "api-not-found": () => box.call(box.op("getNotification"), { token: dee, id: "999999999" }),
+      "api-param-invalid": () => box.call(box.op("getNotification"), { token: dee, id: "zero" }),
+      "api-param-unknown": () => box.call(box.op("getNotification"), { token: dee, id: "1", query: "?nope=1" }),
     },
     pairDevice: {
       "access-removed": async () => {
@@ -358,12 +430,12 @@ test("every error the document lists for an operation is provoked on it, and an 
     "api-param-invalid": async operation => {
       const token = (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token;
       // A body's string field given as a number.
-      if (operation.requestBody !== undefined) return box.call(operation, { body: { ...WELL_FORMED[operation.operationId], [CONFLICT_FIELD[operation.operationId]!]: 12345 } });
+      if (operation.requestBody !== undefined) return box.call(operation, { token, body: { ...WELL_FORMED[operation.operationId], [CONFLICT_FIELD[operation.operationId]!]: 12345 } });
       // A POST that takes no body still reads one: a JSON array is not one.
       if (operation.method === "POST") return box.call(operation, { token, body: [] });
       return (operation.query ?? []).some(param => param.name === "limit") ? box.call(operation, { token, query: "?limit=0" }) : box.call(operation, { token, id: "x".repeat(201) });
     },
-    "api-not-found": async operation => box.call(operation, { token: (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token, id: "no-such-thing" }),
+    "api-not-found": async operation => box.call(operation, { token: (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token, id: "no-such-thing", ...bodyOf(operation) }),
     "api-cursor-invalid": async operation => box.call(operation, { token: (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token, query: "?cursor=bm90LW91cnM" }),
     "api-operation-unknown": undefined,
     "api-method-not-allowed": undefined,
@@ -384,6 +456,8 @@ test("every error the document lists for an operation is provoked on it, and an 
       return box.call(box.op("refreshDeviceToken"), { body: { refreshToken } });
     },
     "device-credential-needed": () => box.call(box.op("signOutDevice"), { token: dee }),
+    // Each answered on the operation it belongs to (`special`, above).
+    "api-role-needed": undefined, "approval-always-refused": undefined, "step-up-required": undefined, "step-up-invalid": undefined, "inbox-answer-invalid": undefined, "decision-refused": undefined,
   };
 
   for (const operation of OPERATIONS as readonly Operation[]) {
@@ -459,6 +533,8 @@ test("the generation check's fixtures stand for a newer server: each fits its sc
     ["meta.json", "Meta"], ["me.json", "Me"], ["error.json", "Error"], ["work-page.json", "WorkPage"], ["changes.json", "Changes"],
     // A device's sign-in (INV-2214): a provider type, a sign-in status, a token type, a platform and a sign-in method added later.
     ["auth-providers.json", "AuthProviderList"], ["device-sign-in.json", "DeviceSignIn"], ["device-sign-in-other.json", "DeviceSignIn"], ["device-page.json", "DevicePage"],
+    // Decisions (INV-2214): an inbox kind, an action, a tier, a draft kind and an outcome added later.
+    ["inbox-page.json", "InboxPage"], ["decision-ack.json", "DecisionAck"],
   ];
   for (const [file, name] of fixtures) {
     const body = JSON.parse(readFileSync(new URL(`../../../clients/codegen/fixtures/${file}`, import.meta.url), "utf8")) as unknown;
@@ -843,4 +919,71 @@ test("minting a token or showing a pairing code needs a sign-in in the last ten 
   assert.ok(minted.every(line => line.signedInAt !== undefined && Date.now() - Date.parse(line.signedInAt) < 60_000), "each names the sign-in it relied on");
   // The installation's own credential is not asked: the operator is the token holder, not a cookie somebody copied.
   assert.equal((await fetch(`${box.base}/api/client-tokens`, { method: "POST", headers: box.operator, body: JSON.stringify({ principalId: "dee", scopes: ["work:read"] }) })).status, 200);
+});
+
+
+test("decisions from a phone: the page's own inbox, an outside action allowed only with the device's step-up proof and never `always`, a draft edited and sent, a question answered, a close kept open, each recorded with the person and the device, and a wake-only push's words while the item still waits (INV-2214)", async t => {
+  const box = await server(t, { door: true });
+  const { op } = box;
+  const read = async <T>(answer: Promise<Response>, status = 200): Promise<T> => { const response = await answer, body = await response.json() as T; assert.equal(response.status, status, JSON.stringify(body)); return body; };
+  type Item = { id: string; kind: string; actions: string[]; stepUpRequired: boolean; approval?: { scopes: string[]; tier?: string }; question?: { conversation: string } };
+  const inbox = async (token: string) => (await read<{ items: Item[] }>(box.call(op("listInbox"), { token }))).items;
+  const phone = await box.keyedPhone();
+  const script = (await box.mint({ principalId: "dee", label: "script", scopes: SCOPE_NAMES })).token;
+  const viewer = (await box.mint({ principalId: "vic", label: "v", scopes: SCOPE_NAMES })).token;
+
+  // What waits on Dee, as the page lists it: Pat's approval is in a box she may not enter, and the draft's consent is the draft.
+  const items = await inbox(phone.token);
+  assert.deepEqual(items.map(item => item.id).sort(), ["approval:ap-reach", "approval:ap-self", "close-proposal:t1", "outbox:dr-1", `question:${box.questionId}`].sort());
+  const reach = items.find(item => item.id === "approval:ap-reach")!, self = items.find(item => item.id === "approval:ap-self")!;
+  assert.deepEqual([reach.stepUpRequired, reach.approval?.tier, self.stepUpRequired, self.approval?.tier], [true, "reach", false, "self"], "the gate's own tiers decide the step-up");
+  assert.deepEqual(items.find(item => item.kind === "outbox")!.stepUpRequired, true, "a draft goes outside the box");
+  // Paging: a cursor names the item it stopped at; answered meanwhile, the cursor is refused rather than the list restarting.
+  const first = await read<{ items: Item[]; nextCursor?: string }>(box.call(op("listInbox"), { token: phone.token, query: "?limit=1" }));
+  assert.equal(first.items[0]!.id, "outbox:dr-1", "what stops work comes first");
+  // A viewer sees what waits in the boxes they are in, and answers none of it.
+  assert.ok((await inbox(viewer)).every(item => item.actions.length === 0 || item.actions.join() === "open-on-page"));
+
+  // An outside action: a script cannot allow it, `always` is never granted, a wrong proof is refused, the right one allows it.
+  const allow = (token: string, body: Record<string, unknown>) => box.call(op("decideApproval"), { token, id: "ap-reach", body: { decision: "allow", ...body } });
+  await assertRefusal(await allow(script, { scope: "once" }), "step-up-required", "a token with no step-up key");
+  await assertRefusal(await allow(phone.token, { scope: "always", stepUp: phone.proof("ap-reach", "allow:always") }), "approval-always-refused", "always, even with a proof");
+  await assertRefusal(await allow(phone.token, { scope: "session", stepUp: phone.proof("ap-reach", "allow:once") }), "step-up-invalid", "a proof for another decision");
+  await assertRefusal(await allow(phone.token, { scope: "once", stepUp: { keyId: "key-2", signature: phone.proof("ap-reach", "allow:once").signature } }), "step-up-invalid", "another key's name");
+  assert.deepEqual((await read<{ outcome: string }>(allow(phone.token, { scope: "session", stepUp: phone.proof("ap-reach", "allow:session") }))).outcome, "allowed");
+  await assertRefusal(await allow(phone.token, { scope: "session", stepUp: phone.proof("ap-reach", "allow:session") }), "api-not-found", "answered once: the same proof again is nothing");
+  // An action that stays in the box needs no proof; refusing never does.
+  assert.equal((await read<{ outcome: string }>(box.call(op("decideApproval"), { token: script, id: "ap-self", body: { decision: "deny", reason: "wrong file" } }))).outcome, "denied");
+  await assertRefusal(await box.call(op("decideApproval"), { token: phone.token, id: "ap-pat", body: { decision: "deny" } }), "api-not-found", "Pat's approval is not Dee's to know of");
+
+  // The draft, edited: the proof covers the words that will go.
+  const words = "The December issue is out — with the blue cover.";
+  const digest = createHash("sha256").update(words).digest("base64url");
+  await assertRefusal(await box.call(op("answerInboxItem"), { token: phone.token, id: "outbox:dr-1", body: { action: "edit", body: words, stepUp: phone.proof("outbox:dr-1", "edit", createHash("sha256").update("other words").digest("base64url")) } }), "step-up-invalid", "a proof for other words");
+  // A wake-only push for the draft, while it waits: its words come from here, for Dee.
+  const seq = await box.inboxSeq(phone.token, "outbox:dr-1");
+  const pushed = await read<{ itemId: string; kind: string; title: string }>(box.call(op("getNotification"), { token: phone.token, id: String(seq) }));
+  assert.deepEqual([pushed.itemId, pushed.kind], ["outbox:dr-1", "outbox"]);
+  // Pat's approval, in Pat's own box: Dee is not told of its change, and its seq gives Dee no words.
+  const patSeq = await box.inboxSeq((await box.mint({ principalId: "pat", label: "pat", scopes: SCOPE_NAMES })).token, "approval:ap-pat");
+  const deeChanges = await read<{ items: { type: string; id: string }[] }>(box.call(op("getChanges"), { token: phone.token, query: "?since=0&limit=1000" }));
+  assert.ok(!deeChanges.items.some(item => item.id === "approval:ap-pat"), "not in Dee's changes");
+  await assertRefusal(await box.call(op("getNotification"), { token: phone.token, id: String(patSeq) }), "api-not-found", "a seq for what does not wait on Dee: no words");
+  assert.equal((await read<{ outcome: string }>(box.call(op("answerInboxItem"), { token: phone.token, id: "outbox:dr-1", body: { action: "edit", body: words, stepUp: phone.proof("outbox:dr-1", "edit", digest) } }))).outcome, "edited");
+  await assertRefusal(await box.call(op("getNotification"), { token: phone.token, id: String(seq) }), "api-not-found", "answered: the push says nothing more");
+  await assertRefusal(await box.call(op("listInbox"), { token: phone.token, query: `?limit=1&cursor=${first.nextCursor}` }), "api-cursor-invalid", "the cursor's item was answered");
+
+  // The question, answered in words: it no longer waits on Dee.
+  assert.equal((await read<{ outcome: string }>(box.call(op("answerInboxItem"), { token: phone.token, id: `question:${box.questionId}`, body: { action: "answer", text: "The blue one." } }))).outcome, "answered");
+  // The close proposal, refused.
+  assert.equal((await read<{ outcome: string }>(box.call(op("decideWork"), { token: phone.token, id: box.ids.t1, body: { decision: "keep-open", note: "The photographs are missing." } }))).outcome, "kept-open");
+  assert.deepEqual((await inbox(phone.token)).map(item => item.id), [], "nothing waits on Dee now");
+
+  // On the record: who answered, with which device; the edited words on the draft.
+  const policy = readFileSync(join(box.home, "policy.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
+  const granted = policy.find(line => line.kind === "approval-granted-session" && line.id === "ap-reach")!;
+  assert.equal(granted.by, `user:dee device:${phone.deviceId}`, "for this session, by Dee, from this device");
+  assert.match(String(policy.find(line => line.kind === "approval-denied" && line.id === "ap-self")?.by), /^user:dee token:tok_/);
+  assert.match(String(policy.find(line => line.kind === "approval-granted" && line.id === "ap-draft")?.by), new RegExp(`^user:dee device:${phone.deviceId}$`));
+  assert.match(readFileSync(join(box.home, "outbox-drafts.jsonl"), "utf8"), /"decision":"approved"[^\n]*"body":"The December issue is out — with the blue cover."/);
 });

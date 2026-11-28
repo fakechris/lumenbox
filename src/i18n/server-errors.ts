@@ -320,7 +320,7 @@ export const SERVER_ERRORS = {
   "err.api-cursor-invalid": ["这个游标不是这个列表给出的，或属于别的筛选条件。请不带游标重新开始。", "This cursor is not one this list gave, or it was given for other filters. Start the list again without it."],
   "err.api-not-found": ["没有找到。", "Not found."],
   "err.api-idempotency-key-invalid": ["Idempotency-Key 应为 8 到 128 个字母、数字或 _ . : - 字符。", "Idempotency-Key must be 8 to 128 letters, digits or _ . : - characters."],
-  "err.api-idempotency-conflict": ["这个 Idempotency-Key 在 24 小时内已用于另一个请求。请换一个。", "This Idempotency-Key was used for a different request within 24 hours. Use a new one."],
+  "err.api-idempotency-conflict": ["这个 Idempotency-Key 已用于另一个请求。请换一个。", "This Idempotency-Key was used for a different request. Use a new one."],
   "err.api-rate-limited": ["请求太多。请{seconds}秒后再试。", "Too many requests. Try again in {seconds}s."],
   "err.client-token-invalid": ["令牌未签发：{why}。", "Token not minted: {why}."],
   "err.api-internal": ["服务器出错了。请求编号：{requestId}。", "The server failed. Request id: {requestId}."],
@@ -333,6 +333,12 @@ export const SERVER_ERRORS = {
   "err.device-credential-needed": ["只有设备凭据能这样退出登录；个人令牌和服务令牌请在页面上吊销。", "Only a device credential signs itself out this way; revoke a personal or service token on the page."],
   "err.sign-in-again": ["为了安全，请先重新登录：签发令牌或连接手机需要在{minutes}分钟内登录过。", "For safety, sign in again first: minting a token or connecting a phone needs a sign-in in the last {minutes} minutes."],
   "err.public-url-too-long": ["这个公开地址太长，连接手机的二维码放不下（最多{bytes}字节）。请换一个更短的地址。", "The public address is too long for the QR code that connects a phone (at most {bytes} bytes with the code). Use a shorter one."],
+  "err.api-role-needed": ["你的角色不能这样回答：替智能体做决定需要“可以交代工作”的角色，保存密钥需要管理员。", "Your role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin."],
+  "err.approval-always-refused": ["这里不能授予“始终允许”。请在页面上设置长期授权；这里只能回答“仅此一次”或“本轮会话”。", "\"Always\" is not granted here. Make a standing grant on the page; answer once or for this session."],
+  "err.step-up-required": ["允许这一步需要在设备上用生物识别确认（stepUp）。没有登记确认密钥的令牌不能允许它。", "Allowing this needs a biometric step-up on the device (stepUp). A token without a registered step-up key cannot allow it."],
+  "err.step-up-invalid": ["这个确认签名不是本设备登记的密钥对这个决定的签名。", "This step-up proof is not this device's registered key's signature over this decision."],
+  "err.inbox-answer-invalid": ["这个回答不适合这一项：{why}。", "This answer does not fit this item: {why}."],
+  "err.decision-refused": ["看板拒绝了这个决定：{why}。", "The board refused this decision: {why}."],
   "err.device-unknown": ["没有这台设备，或它不是你的。", "No such device, or it is not yours."],
 } as const satisfies Record<string, readonly [zh: string, en: string]>;
 

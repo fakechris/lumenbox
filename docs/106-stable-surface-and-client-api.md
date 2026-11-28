@@ -276,7 +276,7 @@ first delivery; the client API is needed only when they show the board on a scre
 | 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
 | 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 parts 1–3): the declared level and its start-up check, R1, R2, R4, R5 (except a strict `script-src`), R6, R7, R8, and S-2 closed for private. Not done: the kind pass through a TLS Ingress. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
 | 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Built (INV-2213, three parts): `/meta`, `/me`, `/agents`, `/work` (with history), `/board`, `/changes`, `/events`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. The page has no form for the tokens yet (INV-2316); minting asks for a sign-in in the last ten minutes (INV-2318, §8.1) |
-| 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Part built (INV-2214 part 1): auth and device credentials, §8.1. Decisions, conversations, uploads, deliverables and desktop tickets, R9–R10: not built |
+| 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Part built (INV-2214 parts 1–2): auth and device credentials; decisions, the inbox and step-up, §8.1. Conversations, uploads, deliverables and desktop tickets, R9–R10: not built |
 | 6. Shared storage for an organisation; mobile apps | Shared storage: a design of its own. Native iOS and Android clients, encrypted relay and wake-only push: docs/110 | Decided in docs/110; not built |
 
 ### 8.1 The client API as built (INV-2213)
@@ -452,6 +452,56 @@ the local level, the installation's own credential (the operator), and a person 
 on each request. Each mint's record names the sign-in it relied on (`signedInAt`); invites and connection
 codes are recorded in `tokens.jsonl` too (`kind: invite`, `connect-code`), never the code. Taking one
 sign-in from a person ends the devices made from it and closes their open streams at once.
+
+**Decisions (INV-2214, part 2).** `client-api/inbox.ts` (the operations), `client-api/step-up.ts`
+(the proof); the page and the API now share one home for each: `web/decisions.ts` (what waits on a
+person — the page's own `attentionFor` over approvals, Outbox drafts, questions, the board's proposals
+and requests, paused chains and routines, failures handed over), `web/approval-answer.ts`,
+`web/outbox-answer.ts`, `web/secret-requests.ts`, `web/person-actions.ts`. Operations: `GET /inbox`,
+`POST /approvals/{id}`, `POST /inbox/{id}/answer`, `POST /work/{id}/decisions`, `GET /notifications/{seq}`,
+all `work:decide`. What was decided here:
+
+- **One item, discriminated by `kind`**, with the payload of its kind in a field of that name
+  (`approval`, `draft`, `question`, `secret`, `closeProposal`) rather than `oneOf`: every generator
+  decodes it, and an unknown kind is shown by `title` and `detail` and opened on the page. `actions`
+  says what may be done here; a viewer's items carry none they cannot take.
+- **What is answered here**: approvals (allow `once`/`session`, deny), Outbox drafts (approve, edit,
+  reject), questions (the person's words, which settle the question and reach the agent as their
+  message), secrets (save to the vault, dismiss; Admins), and work (done, keep open against a close
+  proposal, put off, stop — stop cancels what runs, and is refused rather than dropping work that runs and
+  cannot be cancelled from here). Listed and answered on
+  the page: a paused chain (answered by a message, which arrives with conversations), a held routine,
+  a failure handed to a person, an undelivered message, a verification, organisation knowledge.
+- **The step-up rule** is the gate's own tiers (`host/side-effects.ts`): allowing an approval of
+  `reach`, `spend`, `credential`, `irreversible` or `run-later` needs a proof, and so does one whose tier
+  is unknown (an extension's confirmation, an approval from before the tier was kept: `policy.jsonl`'s
+  `approval-requested` now carries `tier`). Approving or editing an Outbox draft always does — it goes
+  outside. Saving a secret does too, and its proof covers the value: a stolen fifteen-minute token must
+  not plant a key or an endpoint of its own choosing for an agent to use. Denying, rejecting, dismissing
+  and answering a question never do — a question's answer is the person's message to the agent, and
+  messages (conversations, part 3) are not stepped up either.
+- **The proof**: ECDSA P-256 / SHA-256 by the key the device registered at sign-in, over
+  `lumenbox-step-up/1\n<deviceId>\n<item id>\n<decision>\n<detail>` — for an approval the decision
+  `allow:once` or `allow:session` and the detail `-`, the item id the approval's; for a draft `approve`
+  with `-`, or `edit` with BASE64URL(SHA-256(UTF-8 words)) without padding; for a secret `save` with the
+  same digest of the value; the item id the inbox item's —
+  DER or raw `r||s`. Only a device has one: a personal
+  token cannot allow an outside action. Platform attestation (App Attest, Key Attestation) is not checked
+  in v1: the server proves possession of the registered key, and the apps create it to need biometrics
+  for every use (docs/110 §4).
+- **`always` is refused for every v1 credential**, not only devices: a standing grant is the page's.
+- **Who answered**: `user:<person> device:<id>` (or `token:<id>`) in `policy.jsonl`, and the person's
+  name on the draft.
+- **A secret's value** goes to the vault and nowhere else: `POST /inbox/{id}/answer` is a `secret`
+  operation, so its `Idempotency-Key` replay is memory-only and the replay file keeps no digest of it.
+- **The inbox in the change record**: type `inbox`, routed by the item's agent or the person who asked
+  (never its words); `GET /notifications/{seq}` answers the words for an `upsert` only while the item
+  still waits on the caller. The push itself is INV-2215's.
+- A question its person answered no longer waits, on the page or here, before the sweep settles it; it is
+  settled once the answer is in the agent's queue, so an answer refused on the way leaves it waiting.
+- A paused chain is shown to whoever reaches either of its agents (the page too); a secret is saved only
+  for the agent the person was shown; an `Idempotency-Key` reused for another target is a conflict; a
+  cursor whose item was answered meanwhile answers `api-cursor-invalid` rather than restarting the list.
 
 Step 4 is what a company needs to show the work board to its customers. Steps 5 and 6 can follow
 without changing anything a step-4 client relies on — which is the test of whether the design

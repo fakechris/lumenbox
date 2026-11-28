@@ -83,6 +83,23 @@ final class ForwardCompatibilityTests: XCTestCase {
         XCTAssertEqual(page.items.first?.current, true)
     }
 
+    // Decisions (INV-2214): an inbox item of a kind this client does not know is shown by its words; a new action, tier or outcome arrives as itself.
+    func testAnInboxWithKindsThisClientDoesNotKnow() async throws {
+        let page = try await client(.ok, "inbox-page.json").listInbox().ok.body.json
+        XCTAssertEqual(page.items.map(\.kind), ["approval", "meeting-invite", "outbox"])
+        XCTAssertEqual(page.items[1].title, "Writer invites you to a review at 15:00", "an unknown kind still has its words")
+        XCTAssertEqual(page.items[1].actions, ["open-on-page"])
+        XCTAssertEqual(page.items[0].approval?.tier, "teleport")
+        XCTAssertEqual(page.items[0].actions, ["allow", "deny", "delegate"])
+        XCTAssertEqual(page.items[2].draft?.kind, "fax")
+    }
+
+    func testADecisionWithAnOutcomeThisClientDoesNotKnow() async throws {
+        let body = Components.Schemas.ApprovalDecision(decision: "deny")
+        let ack = try await client(.ok, "decision-ack.json").decideApproval(path: .init(id: "ap-1"), body: .json(body)).ok.body.json
+        XCTAssertEqual(ack.outcome, "escalated")
+    }
+
     func testAnErrorWithAnUnknownCode() async throws {
         let answer = try await client(.unauthorized, "error.json").getMe()
         guard case .unauthorized(let refusal) = answer else { return XCTFail("401 is the documented refusal: \(answer)") }
