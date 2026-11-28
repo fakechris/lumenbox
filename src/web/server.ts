@@ -235,7 +235,7 @@ import {
   handleMcpRequest,
   type McpServerTool,
 } from "./mcp-server.ts";
-import { McpTokenStore } from "./mcp-tokens.ts";
+import { McpTokenStore } from "./mcp-tokens.ts"; import { mountClientApi } from "./client-api/mount.ts"; import { clientTokenRoute } from "./client-token-routes.ts"; // docs/106 §4
 import { Vault, type Grant } from "../host/vault.ts";
 import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
@@ -2982,6 +2982,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
+  const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log }); // /api/v1
 
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
@@ -3107,6 +3108,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       ) {
         return;
       }
+      if (await v1.handle(req, res, url)) return; // the client API (docs/106 §4): its own tokens and route table, before the page's gate
       // The MCP face (docs/33): a delegated engine in the box calling the host's MCP tools
       // through its per-job route. Before the UI gate, like the side door, and with one 401 for
       // every way to be wrong — unknown key, lapsed lease, wrong bearer.
@@ -4455,6 +4457,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // use them. The roster is the access-control list now, not a flat allow list.
         // The bridges to other people's tools: what is running, and how much of every
         // agent's prompt each one is spending.
+        const clientTokens = await clientTokenRoute(route, { readJson: () => readJson(req), userId: caller.userId, role: callerRole, principals, tokens: mcpTokens });
+        if (clientTokens !== undefined) { send(res, clientTokens.status, clientTokens.body); return; } // personal and service tokens for /api/v1
         if (route === "POST /api/mcp/tokens") {
           if (refusedRole("driver")) return;
           const body = await readJson(req);

@@ -1,0 +1,55 @@
+# The client API, as the phone apps will build it (docs/110 §1, INV-2213).
+#
+# `npm run arch` holds the OpenAPI document to additions only, and the contract tests hold the server
+# to the document. Neither proves the document generates: that swift-openapi-generator (lumenbox-ios)
+# and openapi-generator's Kotlin generator with kotlinx.serialization (lumenbox-android) accept it,
+# that what they make compiles, and that it decodes an answer from a newer server — a field it does
+# not know, a value of an open enumeration it does not list — instead of failing. That is this job.
+#
+# Not in `npm run check`: Swift and a JVM are not on every machine that runs the suite, and both
+# fetch their generators from the network. The runner image carries Swift and Java 17; Gradle is pinned below.
+# Runs when the document, the schema it comes from or this check changes, and by hand.
+name: client-codegen
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/api/**
+      - src/web/client-api/**
+      - clients/codegen/**
+      - .github/workflows/client-codegen.yml
+  pull_request:
+    paths:
+      - docs/api/**
+      - src/web/client-api/**
+      - clients/codegen/**
+      - .github/workflows/client-codegen.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  swift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: swift --version
+      - name: generate with swift-openapi-generator, compile, decode a newer server's answers
+        run: swift test --package-path clients/codegen/swift
+
+  kotlin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # The image's own Gradle moves (9.x broke Kotlin 2.0's compiler here): this one is pinned, by checksum, on JDK 17.
+      - name: Gradle 8.10.2
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          echo "31c55713e40233a8303827ceb42ca48a47267a0ad4bab9177123121e71524c26  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+      - name: generate with openapi-generator (kotlin, kotlinx.serialization), compile, decode a newer server's answers
+        run: JAVA_HOME="$JAVA_HOME_17_X64" "$RUNNER_TEMP/gradle-8.10.2/bin/gradle" -p clients/codegen/kotlin test --console=plain

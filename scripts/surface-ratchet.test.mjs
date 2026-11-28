@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { BASELINE_FILE, cliSurface, interfaceKeys, listedEnv, surfaceItems, verify, written } from "./surface-ratchet.mjs";
+import { BASELINE_FILE, apiItems, cliSurface, interfaceKeys, listedEnv, surfaceItems, verify, written } from "./surface-ratchet.mjs";
 
 const cliSource = readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8");
 const configSource = readFileSync(new URL("../src/config.ts", import.meta.url), "utf8");
@@ -83,4 +83,36 @@ test("a removal passes only when the deprecation list has the item and its line 
   assert.equal(next["cli/box up"], "command");
   // The neighbour that is not listed is still held.
   assert.equal(verify(before, surface({ cli: {} }), deprecations, "0.6.0").problems.some(problem => problem.startsWith("cli/box up ")), true);
+});
+
+test("the client API's document is on the surface: a field, a known value or an operation taken out fails; an addition needs the revision raised; the revision only rises", async () => {
+  const { openApiDocument } = await import("../src/web/client-api/openapi.ts");
+  const document = openApiDocument();
+  const held = surfaceItems({ openapi: document });
+  assert.equal(held["api/op/GET /api/v1/me"], "operation getMe, scope any");
+  assert.equal(held["api/schema/Me/role"], "string, required");
+  assert.equal(held["api/schema/Me/role=admin"], "known value");
+  assert.equal(held["api/op/GET /api/v1/me/error/access-removed"], "401");
+  assert.deepEqual(verify(held, surfaceItems({ openapi: openApiDocument() })), { problems: [], due: [] }, "the same schema, the same items");
+
+  const copy = () => JSON.parse(JSON.stringify(document));
+  const noRole = copy(); delete noRole.components.schemas.Me.properties.role;
+  const noAdmin = copy(); noAdmin.components.schemas.Me.properties.role["x-extensible-enum"] = ["viewer", "driver"];
+  const noMe = copy(); delete noMe.paths["/api/v1/me"];
+  for (const [item, changed] of [["api/schema/Me/role", noRole], ["api/schema/Me/role=admin", noAdmin], ["api/op/GET /api/v1/me", noMe]]) {
+    assert.ok(verify(held, apiItems(changed)).problems.some(problem => problem.startsWith(`${item} `) && problem.includes("is gone from the stable surface")), item);
+  }
+  const optional = copy(); optional.components.schemas.Me.required = ["id", "name", "credential"];
+  assert.match(verify(held, apiItems(optional)).problems.join("\n"), /api\/schema\/Me\/role changed from "string, required" to "string"/, "always present, then not: a change a client breaks on");
+
+  const added = copy(); added.components.schemas.Me.properties.team = { type: "string" };
+  assert.match(verify(held, apiItems(added)).problems.join("\n"), /gained items and its revision is still 1\.0: raise API_REVISION/);
+  added.info.version = "1.1";
+  const next = written(held, apiItems(added));
+  assert.equal(next["api/revision"], "1.1", "--write-baseline records the higher revision");
+  assert.deepEqual(verify(next, apiItems(added)), { problems: [], due: [] });
+  assert.match(verify(next, apiItems(document)).problems.join("\n"), /api\/revision went down from 1\.1 to 1\.0/);
+
+  const preview = copy(); preview.paths["/api/v1/me"].get["x-tier"] = "preview";
+  assert.equal(apiItems(preview)["api/op/GET /api/v1/me"], undefined, "a preview operation is no promise");
 });

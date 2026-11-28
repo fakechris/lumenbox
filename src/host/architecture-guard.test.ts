@@ -306,3 +306,16 @@ test("an activity is never work: nothing new creates a card marked internal (doc
     .map(file => file.path);
   assert.deepEqual(offenders, [], "record an activity on the work it belongs to instead of creating a card for it");
 });
+
+test("the client API builds documented resources: client-api/ imports no internal route, page or server, and only schema.ts declares a resource (docs/106 §7, INV-2213)", () => {
+  // A handler that imported a route's body type, or the server's, would be returning an internal object under a
+  // v1 name, and the inside could no longer change without breaking a phone. What it reads comes through
+  // ClientApiDeps (frame.ts), wired in mount.ts; what it answers is declared once, in schema.ts.
+  const apiFiles = sources().filter(file => file.path.startsWith("web/client-api/"));
+  assert.ok(apiFiles.length > 0, "the client API is where this rule says");
+  const internal = /from\s+"\.\.\/(?:[^"]*\/)?(?:[\w-]+-routes|[\w-]+-ui|server|app-html|[\w-]+-html)\.ts"/;
+  assert.deepEqual(apiFiles.filter(file => internal.test(file.text)).map(file => file.path), [], "client-api/ imports an internal route, page or the server: read it through ClientApiDeps instead");
+  const declares = /\btype:\s*"object"/;
+  assert.deepEqual(apiFiles.filter(file => file.path !== "web/client-api/schema.ts" && declares.test(file.text)).map(file => file.path), [], "a resource declared outside schema.ts: declare it there once");
+  assert.deepEqual(sources().filter(file => !file.path.startsWith("web/client-api/") && /x-extensible-enum/.test(file.text)).map(file => file.path), [], "a second schema of the client API outside client-api/");
+});

@@ -93,3 +93,38 @@ test("a token from a sign-in is whoever holds the sign-in now, never the roster 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a client API token is kept apart from the side door's: hashed, prefixed, expiring, its use noted once a minute, and ended with its person (INV-2213)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-tokens-"));
+  try {
+    const path = join(dir, "mcp-tokens.json");
+    const records: Record<string, unknown>[] = [];
+    const store = new McpTokenStore(path, () => {}, record => records.push(record as unknown as Record<string, unknown>));
+    const now = new Date("2026-11-28T10:00:30Z");
+    const personal = store.mintClient({ kind: "personal", principalId: "dee", label: "script", scopes: ["work:read", "work:read"], expiresAt: new Date("2026-12-28T10:00:00Z"), by: "dee", now });
+    const side = store.mint("dee", "ide");
+    assert.match(personal.token, /^lbxp_[0-9a-f]{48}$/);
+    assert.deepEqual(personal.credential.scopes, ["work:read"], "a scope once");
+    assert.equal(store.principalFor(personal.token), undefined, "the side door does not take a client token");
+    assert.deepEqual(store.clientFor(side.token), { refused: "invalid" }, "and the client API does not take the side door's");
+    assert.deepEqual(store.list().map(entry => entry.label), ["ide"], "the side door lists only its own");
+    // A restart keeps it, as a hash; the moment its time is over it is refused as expired, not as unknown.
+    const after = new McpTokenStore(path, () => {}, record => records.push(record as unknown as Record<string, unknown>));
+    assert.ok(!readFileSync(path, "utf8").includes(personal.token));
+    assert.equal("credential" in after.clientFor(personal.token, now) ? "ok" : "refused", "ok");
+    assert.deepEqual(after.clientFor(personal.token, new Date("2026-12-28T10:00:00Z")), { refused: "expired" });
+    // Last use to the minute: a second use in the same minute writes nothing.
+    assert.equal(after.touch(personal.credential.id, now), "2026-11-28T10:00:00.000Z");
+    const written = readFileSync(path, "utf8");
+    after.touch(personal.credential.id, new Date("2026-11-28T10:00:59Z"));
+    assert.equal(readFileSync(path, "utf8"), written, "not rewritten within the minute");
+    assert.equal(after.listClient()[0]?.lastUsedAt, "2026-11-28T10:00:00.000Z");
+    // A person who left takes their client tokens with them, each on the record as what it was.
+    assert.equal(after.revokeFor(["dee"]), 2);
+    assert.deepEqual(after.clientFor(personal.token, now), { refused: "invalid" });
+    assert.deepEqual(records.filter(record => record.event === "revoked").map(record => [record.kind, record.reason]).sort(), [["personal", "access-ended"], ["side-door", "access-ended"]]);
+    assert.ok(records.every(record => !JSON.stringify(record).includes(personal.token) && !JSON.stringify(record).includes(side.token)), "never a secret on the record");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

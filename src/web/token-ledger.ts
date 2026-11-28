@@ -3,7 +3,8 @@
  *
  * `<home>/tokens.jsonl`, one line per event, appended and never rewritten: a side-door token minted
  * for a person (the watchdog's, the supervisor's, `agentbox mcp`'s, one made in Settings) or revoked
- * — by its holder, by an Admin, by a directory sync or a removal that took the person's access — and
+ * — by its holder, by an Admin, by a directory sync or a removal that took the person's access —, a
+ * client API token (personal or service, docs/106 §4.3) minted or revoked the same ways, and
  * a box's token rotated. Who did it and for whom, never the token or its hash. `audit export`
  * includes the file.
  *
@@ -11,12 +12,16 @@
  * `desktop-sessions.jsonl` (desktop-streams.ts), decisions on approvals in `policy.jsonl`.
  */
 import { appendLine } from "../host/jsonl.ts";
+import type { ClientTokenKind, Scope, ServiceView } from "./client-api/schema.ts";
 
 export const TOKENS_LEDGER = "tokens.jsonl";
 
 export type TokenRecord =
   | { at: string; event: "minted"; kind: "side-door"; for: string; label: string; via: "sign-in" | "person"; by: string }
   | { at: string; event: "revoked"; kind: "side-door"; for: string; label: string; by: string; reason: "revoked" | "access-ended" }
+  // A client API token (INV-2213): personal or service, named by its public id; a service token's view as minted.
+  | { at: string; event: "minted"; kind: ClientTokenKind; id: string; for: string; label: string; scopes: Scope[]; expiresAt: string; view?: ServiceView; by: string }
+  | { at: string; event: "revoked"; kind: ClientTokenKind; id: string; for: string; label: string; by: string; reason: "revoked" | "access-ended" }
   | { at: string; event: "rotated"; kind: "box"; box: string; boxName: string; by: string; confirmed: boolean; overlapUntil?: string }
   | { at: string; event: "rotation-refused"; kind: "box"; box: string; boxName: string; by: string; reason: string };
 

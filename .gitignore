@@ -52,3 +52,10 @@ src/xwatchdog/xwatchdog
 # HTTPS has a terminator in front of it, whose certificate the host checks or pins —
 # src/box/box-tls.ts. A self-signed pair for trying that may be staged under .runtime/tls/.)
 /.runtime/
+
+# The client API's generation check (clients/codegen, docs/110 §1): what Gradle and SwiftPM build there.
+clients/codegen/kotlin/build/
+clients/codegen/kotlin/.gradle/
+clients/codegen/kotlin/.kotlin/
+clients/codegen/swift/.build/
+clients/codegen/swift/.swiftpm/
