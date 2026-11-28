@@ -4773,7 +4773,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           currentSessionIdentity: "sessionIdentity" in decision && gatewayCaller.userId === undefined ? decision.sessionIdentity : undefined,
           usableSignIns, retiredSignIn, planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, residentRules, { identity: caller.userId, record: adminRecord }),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
-          doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: configuredPublicUrl(), callerId: () => caller.userId, log });
+          doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: configuredPublicUrl(), callerId: () => caller.userId, log,
+          freshSignIn, signInEnded: identity => v1.endAccess([identity], true, caller.userId ?? "operator"), // an invite is a credential; a sign-in taken ends its devices (INV-2214)
+          recordInvite: invite => recordToken({ at: new Date().toISOString(), event: "minted", kind: "invite", ...invite, by: caller.userId ?? "operator" }) });
         if (peopleReply !== undefined) { if (peopleReply.status !== 0) send(res, peopleReply.status, peopleReply.body); return; }
         const activationReply = await activationRoute(route, url.searchParams, { ...admissionDeps, admission: orgAdmission, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req),
           callerId: () => caller.userId, doors: () => channelRecords, onboarding, boxesHeld: id => personalBoxesOf(registry.listBoxes(), id).length });
@@ -5954,9 +5956,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // Connection codes (INV-434): minted by an admin, one-time, fifteen minutes; the list
         // shows expiry and who, never a code. Revocation cuts a registered box off.
         if (route === "POST /api/boxes/connect-codes") {
-          if (refusedRole("admin")) return; if (boxRegistrationModeAt(principalsPath(), options.desktop === true) === "organisation") { send(res, 409, apiError("box-code-organisation")); return; } // an organisation's boxes come from its nodes and its Admins (INV-1697)
+          if (refusedRole("admin")) return; const fresh = freshSignIn(); if (!fresh.ok) { send(res, 403, fresh.error); return; } // a stale session mints no credential (INV-2214)
+          if (boxRegistrationModeAt(principalsPath(), options.desktop === true) === "organisation") { send(res, 409, apiError("box-code-organisation")); return; } // an organisation's boxes come from its nodes and its Admins (INV-1697)
           const body = await readJson(req);
           const minted = connectCodes.mint({ by: caller.userId ?? "operator", ...(typeof body.name === "string" && body.name.trim() !== "" ? { name: body.name.trim() } : {}) });
+          recordToken({ at: new Date().toISOString(), event: "minted", kind: "connect-code", expiresAt: String(minted.expiresAt), by: caller.userId ?? "operator", ...(fresh.signedInAt !== undefined ? { signedInAt: fresh.signedInAt } : {}) });
           log(`boxes: a connection code was minted by ${caller.userId ?? "operator"}, expires ${minted.expiresAt}`);
           send(res, 200, minted);
           return;

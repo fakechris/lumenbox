@@ -64,7 +64,7 @@ final class ForwardCompatibilityTests: XCTestCase {
     }
 
     func testASignInWithUnknownFieldsAndValues() async throws {
-        let body = Components.Schemas.OAuthExchange(code: "c", codeVerifier: String(repeating: "v", count: 43), deviceName: "phone", platform: "ios")
+        let body = Components.Schemas.OAuthExchange(code: "c", codeVerifier: String(repeating: "v", count: 43), redirectUri: "lumenbox://oauth/callback", deviceName: "phone", platform: "ios")
         let signedIn = try await client(.ok, "device-sign-in.json").exchangeOAuthCode(body: .json(body)).ok.body.json
         XCTAssertEqual(signedIn.status, "authenticated")
         XCTAssertEqual(signedIn.tokens?.tokenType, "DPoP", "a token type added later arrives as itself")

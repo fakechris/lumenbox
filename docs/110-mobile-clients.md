@@ -229,6 +229,11 @@ below.
      last thirty days from issue and never past a year from the sign-in. The step-up key is registered
      at the exchange or the pairing (`stepUpKeyId`, `stepUpPublicKey`: P-256 SPKI). Organisation pairing
      is `lumenbox://pair#server=<origin>&code=<code>`, shown after a sign-in in the last ten minutes.
+   - *A requirement on both apps before general availability:* receive the sign-in's `redirectUri` on a
+     verified https app link (iOS Universal Links, Android App Links with `autoVerify`), not only the
+     `lumenbox:` scheme. A custom scheme can be registered by any other app on the phone; with a sign-in
+     an attacker started (so holding its PKCE verifier), such an app would receive the victim's code.
+     The server accepts the `lumenbox:` scheme until then and checks the exact `redirectUri` on exchange.
 5. **Encrypted local cache and automatic remote wipe.** Each organisation connection on the phone
    stores its offline SQLite cache under a distinct 256-bit key held in the hardware keychain.
    Whenever any call or background refresh receives `401` with `code: "access-removed"`, the app

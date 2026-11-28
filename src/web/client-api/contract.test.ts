@@ -46,9 +46,9 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
     writeFileSync(join(home, "config.json"), JSON.stringify({ env: { DING_CLIENT_ID: "ding-app", DING_CLIENT_SECRET: "secret" } }));
   }
   const roster: { id: string; name: string; role: "admin" | "driver" | "viewer"; identities: string[] }[] = [
-    { id: "ann", name: "Ann", role: "admin" as const, identities: [] },
+    { id: "ann", name: "Ann", role: "admin" as const, identities: ["ding:ann-staff"] },
     { id: "ada", name: "Ada", role: "admin" as const, identities: [] },
-    { id: "dee", name: "Dee", role: "driver" as const, identities: ["ding:dee-staff"] },
+    { id: "dee", name: "Dee", role: "driver" as const, identities: ["ding:dee-staff", "feishu:ou_dee"] },
     { id: "ivy", name: "Ivy", role: "driver" as const, identities: ["ding:ivy-staff"] },
     { id: "vic", name: "Vic", role: "viewer" as const, identities: [] },
     { id: "gus", name: "Gus", role: "driver" as const, identities: [] },
@@ -151,7 +151,7 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
   /** A phone signed in for Dee (or `unionId`) through the door: the exchange's answer. */
   const phone = async (unionId = "union-dee"): Promise<SignIn> => {
     const { code, verifier } = await doorCode(unionId);
-    const answer = await call(op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, deviceName: "Dee's phone", platform: "ios" } });
+    const answer = await call(op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, redirectUri: REDIRECT, deviceName: "Dee's phone", platform: "ios" } });
     const body = await answer.json() as SignIn;
     assert.equal(answer.status, 200, JSON.stringify(body));
     return body;
@@ -168,9 +168,11 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
 
 /** A body each operation that takes one accepts as well-formed (what it then finds in it is another matter). */
 const VERIFIER = "v".repeat(43);
+/** The app's own address every sign-in in these tests starts with, and so must finish with (RFC 6749 §4.1.3). */
+const REDIRECT = "lumenbox://oauth/callback";
 const WELL_FORMED: Record<string, Record<string, unknown>> = {
   startOAuth: { provider: "ding", codeChallenge: createHash("sha256").update(VERIFIER).digest("base64url"), codeChallengeMethod: "S256", redirectUri: "lumenbox://oauth/callback", state: "s" },
-  exchangeOAuthCode: { code: "no-such-code", codeVerifier: VERIFIER, deviceName: "Phone", platform: "ios" },
+  exchangeOAuthCode: { code: "no-such-code", codeVerifier: VERIFIER, redirectUri: "lumenbox://oauth/callback", deviceName: "Phone", platform: "ios" },
   pairDevice: { code: "no-such-code", deviceName: "Phone", platform: "ios" },
   refreshDeviceToken: { refreshToken: `lbxr_${"0".repeat(64)}` },
 };
@@ -181,7 +183,7 @@ const SUCCEED: Record<string, (box: Box, token: string) => Promise<Response>> = 
   startOAuth: box => box.call(box.op("startOAuth"), { body: WELL_FORMED.startOAuth }),
   exchangeOAuthCode: async box => {
     const { code, verifier } = await box.doorCode("union-dee");
-    return box.call(box.op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, deviceName: "Dee's phone", platform: "android" } });
+    return box.call(box.op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, redirectUri: REDIRECT, deviceName: "Dee's phone", platform: "android" } });
   },
   pairDevice: async box => box.call(box.op("pairDevice"), { body: { code: (await box.pairingCode()).code, deviceName: "Dee's tablet", platform: "ios" } }),
   refreshDeviceToken: async box => box.call(box.op("refreshDeviceToken"), { body: { refreshToken: (await box.phone()).tokens.refreshToken } }),
@@ -311,7 +313,7 @@ test("every error the document lists for an operation is provoked on it, and an 
     exchangeOAuthCode: {
       "access-removed": async () => {
         const { code, verifier } = await box.doorCode("union-ivy");
-        return ivyLeavesBefore(() => box.call(box.op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, deviceName: "Ivy's phone", platform: "ios" } }));
+        return ivyLeavesBefore(() => box.call(box.op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, redirectUri: REDIRECT, deviceName: "Ivy's phone", platform: "ios" } }));
       },
     },
     pairDevice: {
@@ -679,7 +681,12 @@ test("a phone signs in through the organisation's door with PKCE or a page's pai
   const first = await box.doorCode("union-dee");
   assert.equal(new URL(first.authorizationUrl).origin, "https://box.example.test");
   assert.deepEqual([first.location.protocol, first.location.searchParams.get("state")], ["lumenbox:", "app-state"]);
-  const exchange = (code: string | undefined, codeVerifier: string) => post("exchangeOAuthCode", { code, codeVerifier, deviceName: "Dee's phone", platform: "ios" });
+  const exchange = (code: string | undefined, codeVerifier: string, redirectUri: string | "omit" = REDIRECT) =>
+    post("exchangeOAuthCode", { code, codeVerifier, ...(redirectUri !== "omit" ? { redirectUri } : {}), deviceName: "Dee's phone", platform: "ios" });
+  // The redirectUri the sign-in started with must come back, exactly (RFC 6749 §4.1.3): absent is refused before the code is looked at.
+  await assertRefusal(await exchange(first.code, first.verifier, "omit"), "api-param-invalid", "no redirectUri");
+  const other = await box.doorCode("union-dee");
+  await assertRefusal(await exchange(other.code, other.verifier, "lumenbox://oauth/elsewhere"), "auth-code-invalid", "another redirectUri spends the code and gets nothing");
   await assertRefusal(await exchange(first.code, randomBytes(32).toString("base64url")), "auth-code-invalid", "a verifier that is not the challenge's");
   await assertRefusal(await exchange(first.code, first.verifier), "auth-code-invalid", "and the code is spent by the wrong try: it works once");
   const opened = await fetch(`${box.base}${new URL(first.authorizationUrl).pathname}${new URL(first.authorizationUrl).search}`, { redirect: "manual" });
@@ -741,12 +748,22 @@ test("a phone signs in through the organisation's door with PKCE or a page's pai
   await assertRefusal(await refresh(rotated.refreshToken), "access-removed", "and its refresh token");
   await assertRefusal(await box.call(op("deleteDevice"), { token: dee, id: signedIn.tokens.deviceId }), "api-not-found", "deleted once");
 
-  // A device signs itself out; then an Admin removes Dee, and her last device ends with her.
+  // A device signs itself out.
   const third = await box.phone();
   await json(box.call(op("signOutDevice"), { token: third.tokens.accessToken }));
   await assertRefusal(await box.call(op("getMe"), { token: third.tokens.accessToken }), "access-removed", "signed out");
+  // An Admin takes the DingTalk sign-in from Dee: the device paired from it ends, and its open stream closes at once.
+  const pairedStream = (await box.call(op("streamEvents"), { token: paired.tokens.accessToken })).body!.getReader();
+  for (let seen = ""; !/event: ready\n/.test(seen);) seen += new TextDecoder().decode((await pairedStream.read()).value);
+  const revoked = Date.now();
+  assert.equal((await fetch(`${box.base}/api/principals/revoke-sign-in`, { method: "POST", headers: box.operator, body: JSON.stringify({ principalId: "dee", identity: "ding:dee-staff" }) })).status, 200);
+  for (;;) { const { done } = await pairedStream.read(); if (done) break; }
+  assert.ok(Date.now() - revoked < 5_000, "the stream closed when the sign-in was taken");
+  await assertRefusal(await box.call(op("getMe"), { token: paired.tokens.accessToken }), "access-removed", "a device of a sign-in taken away");
+  // Then an Admin removes Dee, and her last device — paired from her other sign-in — ends with her.
+  const fourth = await json<{ tokens: Tokens }>(post("pairDevice", { code: (await box.pairingCode("feishu:ou_dee")).code, deviceName: "Dee's laptop", platform: "macos" }));
   assert.equal((await fetch(`${box.base}/api/principals/remove`, { method: "POST", headers: box.operator, body: JSON.stringify({ principalId: "dee" }) })).status, 200);
-  await assertRefusal(await box.call(op("getMe"), { token: paired.tokens.accessToken }), "access-removed", "a removed person's device");
+  await assertRefusal(await box.call(op("getMe"), { token: fourth.tokens.accessToken }), "access-removed", "a removed person's device");
 
   // On the record: who signed in which device, each rotation, each end and why — and no token anywhere.
   const ledger = readFileSync(join(box.home, "tokens.jsonl"), "utf8"), lines = ledger.trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
@@ -755,6 +772,7 @@ test("a phone signs in through the organisation's door with PKCE or a page's pai
   assert.deepEqual(of(box.reused.deviceId), [["revoked", "refresh-reuse", "refresh-reuse"]], "the family ended for a reuse");
   assert.deepEqual(of(third.tokens.deviceId).at(-1), ["revoked", "signed-out", "dee"]);
   assert.deepEqual(of(paired.tokens.deviceId), [["minted", "pairing", "dee"], ["revoked", "access-ended", "operator"]]);
+  assert.deepEqual(of(fourth.tokens.deviceId), [["minted", "pairing", "dee"], ["revoked", "access-ended", "operator"]]);
   assert.ok(lines.some(line => line.event === "pairing-shown" && line.for === "dee" && line.by === "ding:dee-staff" && typeof line.signedInAt === "string"));
   const stored = readFileSync(join(box.home, "devices.json"), "utf8");
   for (const token of [signedIn.tokens.accessToken, signedIn.tokens.refreshToken, rotated.refreshToken, paired.tokens.accessToken, shown.code]) {
@@ -781,6 +799,24 @@ test("minting a token or showing a pairing code needs a sign-in in the last ten 
       assert.match(answer.error, /10/, "and says how recent");
     }
   }
+  // An Admin whose sign-in is stale cannot launder it through an invite: an invite is a credential too, so making one
+  // needs the same recent sign-in — for themselves, and for a new Admin — and so does a box's connection code.
+  const staleAnn = box.session("ding:ann-staff", 11 * 60_000);
+  assert.equal((await post("/api/client-tokens", staleAnn, { scopes: ["work:read"] })).status, 403);
+  for (const body of [{ principalId: "ann" }, { role: "admin" }]) {
+    const invite = await post("/api/channels/invite", staleAnn, body);
+    const answer = await invite.json() as { code: string };
+    assert.deepEqual([invite.status, answer.code], [403, "sign-in-again"], `an invite ${JSON.stringify(body)} from a stale sign-in`);
+  }
+  const connect = await post("/api/boxes/connect-codes", staleAnn, {});
+  assert.deepEqual([connect.status, ((await connect.json()) as { code: string }).code], [403, "sign-in-again"], "a box's connection code from a stale sign-in");
+  // Fresh, the invite works, and redeeming it is a sign-in of its own; what it was made with is on the record.
+  const freshInvite = await post("/api/channels/invite", box.session("ding:ann-staff"), { principalId: "ann" });
+  assert.equal(freshInvite.status, 200);
+  const inviteLine = readFileSync(join(box.home, "tokens.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>).find(line => line.kind === "invite")!;
+  assert.deepEqual([inviteLine.for, inviteLine.by, typeof inviteLine.signedInAt], ["ann", "ding:ann-staff", "string"], "the invite on the record, with the sign-in it relied on");
+  assert.ok(!JSON.stringify(inviteLine).includes(((await freshInvite.json()) as { code: string }).code), "never the code");
+
   // Signed in again through the door: the new cookie carries the time, and the mint names it on the record.
   const entry = await fetch(`${box.base}/auth/ding`, { redirect: "manual" });
   const state = new URL(entry.headers.get("location")!).searchParams.get("state")!;

@@ -38,6 +38,19 @@ test("a refresh token is spent by its use; within 30 seconds it ends nothing, af
   assert.deepEqual(store.clientFor(second.tokens.accessToken, holds), { refused: "removed" }, "and its access token, at once");
   assert.deepEqual(records.map(record => [record.event, "reason" in record ? record.reason : undefined]), [["minted", undefined], ["rotated", undefined], ["revoked", "refresh-reuse"]]);
 
+  // Reuse is known for thirty days, however often the device refreshed: a phone refreshing every fifteen minutes spends
+  // ~2,900 tokens in that time, and the first of them, replayed at the end, still ends the device.
+  const busy = store.signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "busy phone", platform: "ios", scopes: ["work:read"], by: "dee" });
+  let held = busy.tokens.refreshToken;
+  for (let rotation = 0; rotation < 29 * 96; rotation += 1) {
+    clock.ms += ACCESS_TTL_MS;
+    const next = store.refresh(held, holds);
+    assert.ok("tokens" in next, `rotation ${rotation}`);
+    held = next.tokens.refreshToken;
+  }
+  assert.deepEqual(store.refresh(busy.tokens.refreshToken, holds), { refused: "reused" }, "the first token, 29 days and 2,784 rotations later");
+  assert.deepEqual(store.refresh(held, holds), { refused: "removed" });
+
   // A refresh token nobody used for thirty days is over; one this store never issued is unknown.
   const idle = store.signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "tablet", platform: "android", scopes: ["work:read"], by: "dee" });
   clock.ms += REFRESH_TTL_MS;
@@ -46,7 +59,7 @@ test("a refresh token is spent by its use; within 30 seconds it ends nothing, af
   // The file holds hashes, never a token; a store read from it knows an ended device as ended.
   const text = readFileSync(join(home, "devices.json"), "utf8");
   for (const token of [made.tokens.accessToken, made.tokens.refreshToken, second.tokens.refreshToken, idle.tokens.refreshToken]) assert.ok(!text.includes(token));
-  assert.ok(text.includes(createHash("sha256").update(made.tokens.refreshToken).digest("hex")), "the SHA-256 of each");
+  assert.ok(text.includes(createHash("sha256").update(made.tokens.refreshToken).digest("hex").slice(0, 32)), "a spent one as the start of its SHA-256, to know it again");
 });
 
 test("a person's access ending ends their devices — only those of one sign-in when they keep another — and a sign-in taken from them ends the devices made from it", () => {
@@ -77,16 +90,16 @@ test("a sign-in through a door: the start is taken once, its code works once, wi
   const location = sign.finish(started.id, { kind: "person", principalId: "dee", identity: "ding:dee" })!;
   assert.match(location, /^lumenbox:\/\/oauth\/callback\?keep=1&code=[A-Za-z0-9_-]{43}&state=s1$/);
   assert.equal(sign.finish(started.id, { kind: "person", principalId: "dee", identity: "ding:dee" }), undefined, "finished once");
-  assert.equal(sign.exchange(codeOf(location), verifier, { providerId: "feishu" }), undefined, "for the channel it started with");
+  assert.equal(sign.exchange(codeOf(location), verifier, { providerId: "feishu", redirectUri: "lumenbox://oauth/callback?keep=1" }), undefined, "for the channel it started with");
   const again = begin(); sign.take(again.id);
   const code = codeOf(sign.finish(again.id, { kind: "person", principalId: "dee", identity: "ding:dee" }));
   assert.deepEqual(sign.exchange(code, verifier, { redirectUri: "lumenbox://oauth/callback?keep=1" }), { kind: "person", principalId: "dee", identity: "ding:dee", providerId: "ding" });
-  assert.equal(sign.exchange(code, verifier, {}), undefined, "once");
+  assert.equal(sign.exchange(code, verifier, { redirectUri: "lumenbox://oauth/callback?keep=1" }), undefined, "once");
 
   const late = begin(); sign.take(late.id);
   const lateCode = codeOf(sign.finish(late.id, { kind: "asked", name: "Bob" }));
   clock.ms += CODE_TTL_MS + 1;
-  assert.equal(sign.exchange(lateCode, verifier, {}), undefined, "a minute");
+  assert.equal(sign.exchange(lateCode, verifier, { redirectUri: "lumenbox://oauth/callback?keep=1" }), undefined, "a minute");
   const slow = begin();
   clock.ms += START_TTL_MS + 1;
   assert.equal(sign.take(slow.id), undefined, "a start lasts ten minutes");

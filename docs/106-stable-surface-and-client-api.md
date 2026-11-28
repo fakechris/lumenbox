@@ -393,11 +393,14 @@ that §4 and docs/110 left open:
   its own `redirectUri`; it opens `/auth/<door>?device=<id>` on this server — the page's own door
   (door-sign-in.ts), with the same state, browser binding and admission rule — and the vendor sends the
   person back to this server, which holds the vendor's secret. The app is then sent a code of ours:
-  one use, one minute, only with the verifier. The vendor's own code never reaches the phone.
+  one use, one minute, only with the verifier and the exact `redirectUri` the sign-in started with
+  (RFC 6749 §4.1.3). The vendor's own code never reaches the phone.
 - **Only an app's own address is sent a code**: a `lumenbox:` address, or `http://127.0.0.1:<port>`
   / `[::1]` for a desktop client (RFC 8252). A web address would let somebody start a sign-in, send its
   link to a colleague, and collect the colleague's code — PKCE does not stop the one who made the
-  challenge. A white-label app's own scheme needs a config key, which is not added here.
+  challenge. A white-label app's own scheme needs a config key, which is not added here. A custom
+  scheme can be claimed by another app on the same phone; docs/110 §4 asks the apps to move to
+  verified https app links before general availability.
 - **Not let in is an answer, not an error**: `200 { status: "asked_to_join", message }` (docs/110's
   word), with no credential; their request is with the Admins as on the page. Outside the
   organisation, not linked, or the vendor failing: the browser goes back to the app with
@@ -440,12 +443,15 @@ that §4 and docs/110 left open:
   (INV-2203). `PUT`/`DELETE /devices/self/push` are INV-2215's.
 
 **A recent sign-in to mint (INV-2318).** The session cookie now signs `identity|epoch|signedAt`.
-Minting a personal, service or side-door token, and showing a pairing code, need a sign-in in the last
-ten minutes (`src/web/recent-sign-in.ts`); otherwise `403 sign-in-again`, and the page offers to sign
+Minting a personal, service or side-door token, showing a pairing code, making an invite (redeemed, an
+invite is a fresh sign-in, so a stale session could otherwise launder itself through one — for itself or
+a new Admin) and making a box's connection code need a sign-in in the last ten minutes (`src/web/recent-sign-in.ts`); otherwise `403 sign-in-again`, and the page offers to sign
 in again. A cookie from before the field still reads the page and mints nothing — kept valid rather
 than signing every organisation out at an upgrade, since only minting depends on the time. Not asked:
 the local level, the installation's own credential (the operator), and a person a gateway vouches for
-on each request. Each mint's record names the sign-in it relied on (`signedInAt`).
+on each request. Each mint's record names the sign-in it relied on (`signedInAt`); invites and connection
+codes are recorded in `tokens.jsonl` too (`kind: invite`, `connect-code`), never the code. Taking one
+sign-in from a person ends the devices made from it and closes their open streams at once.
 
 Step 4 is what a company needs to show the work board to its customers. Steps 5 and 6 can follow
 without changing anything a step-4 client relies on — which is the test of whether the design

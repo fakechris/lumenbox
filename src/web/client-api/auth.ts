@@ -25,7 +25,7 @@ export interface DeviceAuth {
   providers(locale: Locale): { id: string; type: string; displayName: string }[];
   /** A sign-in begins: the address the app opens, or undefined when `providerId` does not sign a device in here. */
   start(input: { providerId: string; codeChallenge: string; redirectUri: string; state?: string }): { authorizationUrl: string; expiresAt: number } | undefined;
-  exchange(code: string, verifier: string, check: { providerId?: string; redirectUri?: string }): (DoorOutcome & { providerId: string }) | undefined;
+  exchange(code: string, verifier: string, check: { providerId?: string; redirectUri: string }): (DoorOutcome & { providerId: string }) | undefined;
   pair(code: string): PairingFor | undefined;
   /** Whether a device's sign-in is still its person's: they are on the roster, and the sign-in it came from is still one of theirs. */
   holds(holder: Holder): boolean;
@@ -97,9 +97,9 @@ function signedIn(call: Call, holder: Holder & { signedInAt?: string }, method: 
 }
 
 export function exchangeOAuthCode(call: Call) {
-  const body = call.body as { code: string; codeVerifier: string; provider?: string; redirectUri?: string };
+  const body = call.body as { code: string; codeVerifier: string; provider?: string; redirectUri: string };
   deviceOf(call.body); // a malformed device description is refused before the code is spent
-  const outcome = call.deps.devices.exchange(body.code, body.codeVerifier, { ...(body.provider !== undefined ? { providerId: body.provider } : {}), ...(body.redirectUri !== undefined ? { redirectUri: body.redirectUri } : {}) });
+  const outcome = call.deps.devices.exchange(body.code, body.codeVerifier, { ...(body.provider !== undefined ? { providerId: body.provider } : {}), redirectUri: body.redirectUri });
   if (outcome === undefined || outcome.kind === "refused") { call.signInFailed("auth-code"); return refuse("auth-code-invalid"); }
   if (outcome.kind === "asked") return { status: "asked_to_join", message: call.deps.devices.askedWords(call.locale) };
   return signedIn(call, { principalId: outcome.principalId, identity: outcome.identity, via: "sign-in" }, "oauth", outcome.providerId);

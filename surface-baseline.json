@@ -539,7 +539,7 @@
   "api/schema/OAuthExchange/platform=macos": "known value",
   "api/schema/OAuthExchange/platform=windows": "known value",
   "api/schema/OAuthExchange/provider": "string",
-  "api/schema/OAuthExchange/redirectUri": "string",
+  "api/schema/OAuthExchange/redirectUri": "string, required",
   "api/schema/OAuthExchange/stepUpKeyId": "string",
   "api/schema/OAuthExchange/stepUpPublicKey": "string",
   "api/schema/OAuthStart": "object",

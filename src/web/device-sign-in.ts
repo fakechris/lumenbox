@@ -111,7 +111,7 @@ export class DeviceSignIns {
   }
 
   /** A code and its verifier: who the sign-in let in, once; undefined for anything else (and the code is spent all the same). */
-  exchange(code: string, verifier: string, check: { providerId?: string; redirectUri?: string }): (DoorOutcome & { providerId: string }) | undefined {
+  exchange(code: string, verifier: string, check: { providerId?: string; redirectUri: string }): (DoorOutcome & { providerId: string }) | undefined {
     this.sweep();
     const key = hashOf(code), found = this.codes.get(key);
     if (found === undefined) return undefined;
@@ -119,7 +119,8 @@ export class DeviceSignIns {
     const challenge = Buffer.from(createHash("sha256").update(verifier, "ascii").digest("base64url")), expected = Buffer.from(found.start.challenge);
     if (challenge.length !== expected.length || !timingSafeEqual(challenge, expected)) return undefined;
     if (check.providerId !== undefined && check.providerId !== found.start.providerId) return undefined;
-    if (check.redirectUri !== undefined && check.redirectUri !== found.start.redirectUri) return undefined;
+    // The address the code was sent to, exactly, as RFC 6749 §4.1.3 asks: a code taken from another app's address is refused.
+    if (check.redirectUri !== found.start.redirectUri) return undefined;
     return { ...found.outcome, providerId: found.start.providerId };
   }
 

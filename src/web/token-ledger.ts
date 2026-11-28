@@ -30,6 +30,9 @@ export type TokenRecord =
   | { at: string; event: "rotated"; kind: "device"; id: string; for: string; family: string; by: string }
   | { at: string; event: "revoked"; kind: "device"; id: string; for: string; label: string; family: string; by: string; reason: "removed" | "signed-out" | "access-ended" | "refresh-reuse" }
   | { at: string; event: "pairing-shown"; kind: "device"; for: string; by: string; expiresAt: string; signedInAt?: string }
+  // An invite (redeemed, a sign-in) and a box's connection code: credentials too, made only after a recent sign-in (INV-2214). Never the code.
+  | { at: string; event: "minted"; kind: "invite"; for?: string; role: string; expiresAt: string; by: string; signedInAt?: string }
+  | { at: string; event: "minted"; kind: "connect-code"; expiresAt: string; by: string; signedInAt?: string }
   | { at: string; event: "rotated"; kind: "box"; box: string; boxName: string; by: string; confirmed: boolean; overlapUntil?: string }
   | { at: string; event: "rotation-refused"; kind: "box"; box: string; boxName: string; by: string; reason: string };
 

@@ -21,9 +21,9 @@
  *
  * Kept: `<home>/devices.json`, 0600, replaced whole on every change, holding for each device who it
  * acts for, the sign-in it came from, its name and platform, its scopes, and the SHA-256 of every
- * token it holds — never a token. Spent refresh tokens are kept as hashes for 30 days (at most 200
- * per device) so a reuse is recognised; a removed device is kept until its last token's time is
- * over, so a phone that calls later is told `access-removed` (wipe what you cached) rather than
+ * token it holds — never a token. A spent refresh token is kept as the first 128 bits of its hash and
+ * when, for 30 days — the longest an unspent one lives — so a reuse is recognised however often the
+ * device refreshed; a removed device is kept until its last token's time is over, so a phone that calls later is told `access-removed` (wipe what you cached) rather than
  * "unknown token". Every sign-in, rotation, family revoke and removal is a line of `tokens.jsonl`
  * with who did it (token-ledger.ts).
  */
@@ -41,8 +41,14 @@ export const REFRESH_TTL_MS = 30 * 24 * 60 * 60_000;
 export const FAMILY_TTL_MS = 365 * 24 * 60 * 60_000;
 /** How long a spent refresh token may come back without ending the device: one process of the device lost the race to another. */
 export const REFRESH_OVERLAP_MS = 30_000;
-const SPENT_KEPT_MS = 30 * 24 * 60 * 60_000;
-const SPENT_KEPT = 200;
+/** A spent refresh token is known again for as long as an unspent one could live: thirty days. */
+const SPENT_KEPT_MS = REFRESH_TTL_MS;
+/**
+ * And at most this many per device: thirty days of a refresh every fifteen minutes (2,880), with room. Kept as the
+ * first 128 bits of the hash and the time, about 50 bytes each, so a device refreshing all month costs ~150 KB.
+ */
+const SPENT_KEPT = 3_200;
+const SPENT_HASH = 32;
 
 export const ACCESS_PREFIX = "lbxd_";
 export const REFRESH_PREFIX = "lbxr_";
@@ -71,7 +77,10 @@ interface StoredDevice {
   /** The device's own signing key for step-up proofs (docs/110 §4): an id it names and a P-256 public key (SPKI, base64url). */
   stepUpKey?: { id: string; publicKey: string };
   access: { hash: string; expiresAt: string }[];
-  refresh: { hash: string; issuedAt: string; expiresAt: string; spentAt?: string }[];
+  /** Refresh tokens not yet spent. */
+  refresh: { hash: string; issuedAt: string; expiresAt: string }[];
+  /** Refresh tokens spent: the first 128 bits of each hash, and when (ms), oldest first. */
+  spent?: [string, number][];
   endedAt?: string;
   endedBy?: string;
   endedWhy?: DeviceEnd;
@@ -215,22 +224,23 @@ export class DeviceStore {
   refresh(presented: string, holds: (device: DeviceHolder) => boolean): Refreshed {
     if (!presented.startsWith(REFRESH_PREFIX) || this.readOnly) return { refused: "invalid" };
     const hash = hashOf(presented), now = this.now().getTime();
-    const device = this.devices.find(entry => entry.refresh.some(token => same(token.hash, hash)));
+    const short = hash.slice(0, SPENT_HASH);
+    const spentOf = (device: StoredDevice) => device.spent?.find(([prefix]) => same(prefix, short));
+    const device = this.devices.find(entry => entry.refresh.some(token => same(token.hash, hash)) || spentOf(entry) !== undefined);
     if (device === undefined) return { refused: "invalid" };
     if (device.endedAt !== undefined || !holds(device)) return { refused: "removed" };
-    const token = device.refresh.find(entry => same(entry.hash, hash))!;
-    if (token.spentAt !== undefined) {
-      if (now - Date.parse(token.spentAt) <= REFRESH_OVERLAP_MS) return { refused: "superseded" };
+    const token = device.refresh.find(entry => same(entry.hash, hash));
+    if (token === undefined) {
+      if (now - spentOf(device)![1] <= REFRESH_OVERLAP_MS) return { refused: "superseded" };
       this.end(device, "refresh-reuse", "refresh-reuse");
       return { refused: "reused" };
     }
     if (Date.parse(token.expiresAt) <= now) return { refused: "expired" };
-    token.spentAt = at(now);
     device.lastUsedAt = `${at(now).slice(0, 16)}:00.000Z`;
+    // Spent: kept as a short hash for thirty days, to know it again; the unspent ones that are still in time stay.
+    device.refresh = device.refresh.filter(entry => entry !== token && Date.parse(entry.expiresAt) > now);
+    device.spent = [...(device.spent ?? []).filter(([, when]) => now - when < SPENT_KEPT_MS), [short, now] as [string, number]].slice(-SPENT_KEPT);
     const tokens = this.mintPair(device, now);
-    // What is spent is kept as a hash for a while, to know it again; the newest first.
-    const spent = device.refresh.filter(entry => entry.spentAt !== undefined && now - Date.parse(entry.spentAt) < SPENT_KEPT_MS).slice(-SPENT_KEPT);
-    device.refresh = [...spent, ...device.refresh.filter(entry => entry.spentAt === undefined && Date.parse(entry.expiresAt) > now)];
     this.save();
     this.record({ at: at(now), event: "rotated", kind: "device", id: device.id, for: device.principalId, family: device.familyId, by: device.principalId });
     return { tokens, device: viewOf(device) };
