@@ -33,7 +33,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statfsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statfsSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -129,10 +129,48 @@ export function cleanEnv(base, extra) {
   return { ...env, ...extra };
 }
 
+/**
+ * What an app the run starts is given: the clean environment, its own home, box container and
+ * port, and its own logs directory — the shell otherwise writes server.log, supervision.log and
+ * memguard.log into ~/Library/Logs/LumenBox, the owner's, and can rotate the owner's server.log.1
+ * away (INV-2307). `where`: `{ home, logs, container, port }` (no port for a server given --port).
+ */
+export function appEnv(base, where, extra = {}) {
+  return cleanEnv(base, { AGENTBOX_HOME: where.home, LUMENBOX_LOGS_DIR: where.logs, AGENTBOX_CONTAINER: where.container, ...(where.port !== undefined ? { LUMENBOX_PORT: String(where.port) } : {}), ...extra });
+}
+
 /** What changed among containers that existed before the run: anything removed or restarted. */
 export function disturbed(before, after) {
   const now = new Map(after.map(c => [c.name, c]));
   return before.filter(c => now.get(c.name)?.id !== c.id || now.get(c.name)?.startedAt !== c.startedAt).map(c => c.name);
+}
+
+/** The apps a run installs, which only it starts: the candidate in the run directory, the previous release (an upgrade run) in `previous/`. */
+export function runBundles(dir) {
+  return [join(dir, "LumenBox.app"), join(dir, "previous", "LumenBox.app")];
+}
+
+/**
+ * Whether a process the manifest recorded may be stopped (INV-2306). The run stopped its apps
+ * itself, so by the time a person runs --cleanup the number may belong to anything they run — the
+ * real LumenBox included. Only a process that is provably the run's own is signalled: its
+ * executable inside one of the run's own bundles, and, when the run recorded when it started the
+ * process and the start time can be read, started no later than that (a later start is the number
+ * reused). The executable is the proof; the time only ever refuses.
+ * `entry`: `{ pid, startedAt }` as the run records it, or a bare PID (a manifest written before INV-2306).
+ * `now`: `{ executable, startedAt }` (ms) of whatever holds that PID now; undefined when nothing does.
+ */
+export function ownProcess(entry, now, bundles) {
+  const pid = typeof entry === "number" ? entry : entry?.pid;
+  const recordedAt = typeof entry === "object" && entry?.startedAt !== undefined ? Date.parse(entry.startedAt) : undefined;
+  if (now === undefined) return { pid, stop: false, why: "no longer running" };
+  if (now.executable === undefined) return { pid, stop: false, why: "not ours, left alone: what it runs could not be read" };
+  if (!bundles.some(bundle => now.executable.startsWith(`${bundle}/`))) return { pid, stop: false, why: `not ours, left alone: it runs ${now.executable}, outside this run's apps` };
+  if (recordedAt !== undefined && now.startedAt !== undefined && now.startedAt > recordedAt) {
+    return { pid, stop: false, why: `not ours, left alone: it started ${new Date(now.startedAt).toISOString()}, after the run recorded it` };
+  }
+  const unknown = recordedAt === undefined ? "; the manifest has no start time, so the executable alone decides" : now.startedAt === undefined ? "; its start time could not be read, so the executable alone decides" : "";
+  return { pid, stop: true, why: `this run's app (${now.executable})${unknown}; stopped with --yes` };
 }
 
 /** One line per step for the report; a step passes or says why not. */
@@ -178,6 +216,25 @@ function processesOf(bundle) {
   }
 }
 
+/** What holds a PID now: the executable the kernel ran (not argv[0], which a process sets itself) and when it started; undefined when nothing does. */
+function processNow(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (error.code !== "EPERM") return undefined;
+  }
+  // ps is setuid on macOS, and a sandbox (the test suite's) refuses to run it: then the start time is unknown.
+  let startedAt;
+  try {
+    startedAt = Date.parse(sh("ps", ["-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C" } }));
+  } catch {}
+  let executable;
+  try {
+    executable = process.platform === "linux" ? readlinkSync(`/proc/${pid}/exe`) : sh("lsof", ["-a", "-p", String(pid), "-d", "txt", "-Fn"]).split("\n").find(line => line.startsWith("n"))?.slice(1);
+  } catch {}
+  return { executable, startedAt: Number.isNaN(startedAt) ? undefined : startedAt };
+}
+
 function portInUse(port) {
   return new Promise(done => {
     const socket = createConnection({ host: "127.0.0.1", port });
@@ -194,7 +251,7 @@ class Run {
     this.dir = resolve(options.runDir ?? join(homedir(), "lumenbox-onboarding", `${options.upgradeFrom !== undefined ? `${options.upgradeFrom}-to-` : ""}${options.version}-${stamp}`));
     this.container = `lumenbox-onboard-${stamp.slice(5, 16).replace(/[-T]/g, "").toLowerCase()}`;
     this.steps = [];
-    this.manifest = { createdAt: new Date().toISOString(), version: options.version, runDir: this.dir, box: boxResources(this.container), image: `${IMAGE_REPO}:${options.version}`, imageWasCached: undefined, appProcesses: [], ...(options.upgradeFrom !== undefined ? { upgradeFrom: options.upgradeFrom, previousImage: `${IMAGE_REPO}:${options.upgradeFrom}`, previousImageWasCached: undefined } : {}) };
+    this.manifest = { createdAt: new Date().toISOString(), version: options.version, runDir: this.dir, box: boxResources(this.container), image: `${IMAGE_REPO}:${options.version}`, imageWasCached: undefined, appProcesses: [], logs: [], ...(options.upgradeFrom !== undefined ? { upgradeFrom: options.upgradeFrom, previousImage: `${IMAGE_REPO}:${options.upgradeFrom}`, previousImageWasCached: undefined } : {}) };
   }
 
   async step(name, fn) {
@@ -213,6 +270,16 @@ class Run {
     }
   }
 
+  /** A logs directory an app of the run was given, for the report. */
+  recordLogs(dir) {
+    if (!this.manifest.logs.includes(dir)) this.manifest.logs.push(dir);
+  }
+
+  /** A process the run started, with when, so --cleanup can tell it from a later holder of the number. */
+  recordProcess(pid) {
+    if (pid !== undefined) this.manifest.appProcesses.push({ pid, startedAt: new Date().toISOString() });
+  }
+
   note(name, detail) {
     this.steps.push({ name, status: "note", ms: 0, detail });
     process.stdout.write(`• ${name}: ${detail}\n`);
@@ -221,7 +288,7 @@ class Run {
   save() {
     writeFileSync(join(this.dir, "manifest.json"), JSON.stringify(this.manifest, null, 2));
     const summary = summarize(this.steps);
-    writeFileSync(join(this.dir, "report.json"), JSON.stringify({ ...summary, version: this.options.version, steps: this.steps }, null, 2));
+    writeFileSync(join(this.dir, "report.json"), JSON.stringify({ ...summary, version: this.options.version, logs: this.manifest.logs, steps: this.steps }, null, 2));
     const md = [
       `# ${this.options.upgradeFrom !== undefined ? `Upgrade acceptance — LumenBox ${this.options.upgradeFrom} → ${this.options.version}` : `Onboarding acceptance — LumenBox ${this.options.version}`}`,
       "",
@@ -237,6 +304,8 @@ class Run {
       `- image ${this.manifest.image} (${this.manifest.imageWasCached ? "was already on this machine" : "pulled by this run"})`,
       ...(this.manifest.previousImage !== undefined && this.manifest.previousImage !== this.manifest.image ? [`- image ${this.manifest.previousImage} (${this.manifest.previousImageWasCached ? "was already on this machine" : "pulled by this run"})`] : []),
       `- run directory ${this.dir}`,
+      "",
+      `Logs of the apps it started (server.log, supervision.log, memguard.log): ${this.manifest.logs.length === 0 ? "none started" : this.manifest.logs.join(", ")}`,
     ].join("\n");
     writeFileSync(join(this.dir, "report.md"), `${md}\n`);
     return summary;
@@ -253,6 +322,7 @@ class App {
     this.appRoot = where.appRoot ?? run.dir;
     this.home = where.home ?? join(run.dir, phase, "home");
     this.userData = where.userData ?? join(run.dir, phase, "user-data");
+    this.logs = join(run.dir, phase, "logs");
     mkdirSync(this.home, { recursive: true });
     mkdirSync(this.userData, { recursive: true });
     mkdirSync(join(run.dir, phase), { recursive: true });
@@ -261,10 +331,11 @@ class App {
   start() {
     const { options } = this.run;
     const binary = join(this.appRoot, "LumenBox.app", "Contents", "MacOS", "LumenBox");
-    const env = cleanEnv(process.env, { AGENTBOX_HOME: this.home, LUMENBOX_PORT: String(options.port), AGENTBOX_CONTAINER: this.run.container, ...this.extraEnv });
+    const env = appEnv(process.env, { home: this.home, logs: this.logs, container: this.run.container, port: options.port }, this.extraEnv);
+    this.run.recordLogs(this.logs);
     const log = join(this.run.dir, this.phase, "app.log");
     this.child = spawn(binary, [`--user-data-dir=${this.userData}`, `--remote-debugging-port=${options.cdpPort}`], { env, stdio: ["ignore", "pipe", "pipe"], detached: false });
-    this.run.manifest.appProcesses.push(this.child.pid);
+    this.run.recordProcess(this.child.pid);
     const out = [];
     this.child.stdout.on("data", chunk => out.push(chunk));
     this.child.stderr.on("data", chunk => out.push(chunk));
@@ -576,32 +647,46 @@ async function firstUse(run, app, label) {
   return true;
 }
 
-async function cleanup(options) {
+/**
+ * Lists what a run created and, with `--yes`, removes it. `io` is the Docker side (`sh`, `shOk`)
+ * and where the list goes (`log`); the processes are always the machine's own.
+ */
+export async function cleanup(options, io = {}) {
+  const { sh: run = sh, shOk: ok = shOk, log = console.log } = io;
   const dir = resolve(options.cleanup);
   const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
   const { container, volumes, network } = manifest.box;
+  const bundles = runBundles(realpathSync(dir));
+  const judge = entry => ownProcess(entry, processNow(typeof entry === "number" ? entry : entry.pid), bundles);
+  const processes = () => (manifest.appProcesses ?? []).map(judge);
   const list = [
-    `container ${container}${shOk("docker", ["inspect", container]) ? "" : " (absent)"}`,
-    ...volumes.map(v => `volume    ${v}${shOk("docker", ["volume", "inspect", v]) ? "" : " (absent)"}`),
-    `network   ${network}${shOk("docker", ["network", "inspect", network]) ? "" : " (absent)"}`,
+    `container ${container}${ok("docker", ["inspect", container]) ? "" : " (absent)"}`,
+    ...volumes.map(v => `volume    ${v}${ok("docker", ["volume", "inspect", v]) ? "" : " (absent)"}`),
+    `network   ${network}${ok("docker", ["network", "inspect", network]) ? "" : " (absent)"}`,
     ...(options.removeImage ? [`image     ${manifest.image}${manifest.imageWasCached ? " — WAS ALREADY ON THIS MACHINE before the run; it is not this run's to remove" : ""}`] : []),
     ...(options.removeImage && manifest.previousImage !== undefined && manifest.previousImage !== manifest.image ? [`image     ${manifest.previousImage}${manifest.previousImageWasCached ? " — WAS ALREADY ON THIS MACHINE before the run; it is not this run's to remove" : ""}`] : []),
+    ...processes().map(entry => `process   ${entry.pid} — ${entry.why}`),
     `directory ${dir}`,
   ];
-  console.log(`This run created:\n  ${list.join("\n  ")}`);
+  log(`This run created:\n  ${list.join("\n  ")}`);
   if (!options.yes) {
-    console.log("\nNothing removed. A person reads the list above; then run again with --yes.");
+    log("\nNothing removed. A person reads the list above; then run again with --yes.");
     return 0;
   }
   if (!container.startsWith("lumenbox-onboard-")) throw new Error(`refusing: ${container} is not a name this script makes`);
-  for (const pid of manifest.appProcesses ?? []) { try { process.kill(pid, "SIGTERM"); } catch {} }
-  if (shOk("docker", ["container", "inspect", container])) sh("docker", ["stop", container]);
-  if (shOk("docker", ["container", "inspect", container])) sh("docker", ["container", "rm", container]);
-  for (const volume of volumes) if (shOk("docker", ["volume", "inspect", volume])) sh("docker", ["volume", "rm", volume]);
-  if (shOk("docker", ["network", "inspect", network])) sh("docker", ["network", "rm", network]);
-  if (options.removeImage && !manifest.imageWasCached) sh("docker", ["image", "rm", manifest.image]);
-  if (options.removeImage && manifest.previousImage !== undefined && manifest.previousImage !== manifest.image && !manifest.previousImageWasCached && shOk("docker", ["image", "inspect", manifest.previousImage])) sh("docker", ["image", "rm", manifest.previousImage]);
-  console.log("Removed the run's box resources. The run directory is kept; delete it yourself once the report is filed.");
+  // Each one read again just before its own signal: the list may have been read hours ago.
+  for (const recorded of manifest.appProcesses ?? []) {
+    const entry = judge(recorded);
+    if (!entry.stop) continue;
+    try { process.kill(entry.pid, "SIGTERM"); log(`Stopped process ${entry.pid}.`); } catch {}
+  }
+  if (ok("docker", ["container", "inspect", container])) run("docker", ["stop", container]);
+  if (ok("docker", ["container", "inspect", container])) run("docker", ["container", "rm", container]);
+  for (const volume of volumes) if (ok("docker", ["volume", "inspect", volume])) run("docker", ["volume", "rm", volume]);
+  if (ok("docker", ["network", "inspect", network])) run("docker", ["network", "rm", network]);
+  if (options.removeImage && !manifest.imageWasCached) run("docker", ["image", "rm", manifest.image]);
+  if (options.removeImage && manifest.previousImage !== undefined && manifest.previousImage !== manifest.image && !manifest.previousImageWasCached && ok("docker", ["image", "inspect", manifest.previousImage])) run("docker", ["image", "rm", manifest.previousImage]);
+  log("Removed the run's box resources. The run directory is kept; delete it yourself once the report is filed.");
   return 0;
 }
 
@@ -621,7 +706,7 @@ async function main() {
     if (previousReady && (await fetchArtifacts(run))) {
       if (options.phases.includes("nodocker")) await phaseNoDocker(run);
       if (options.phases.includes("full")) await phaseFull(run);
-      if (options.phases.includes("upgrade")) await phaseUpgrade({ run, App, firstUse, sh, cleanEnv });
+      if (options.phases.includes("upgrade")) await phaseUpgrade({ run, App, firstUse, sh, appEnv });
     }
   } finally {
     await run.step("nothing else touched", async () => {

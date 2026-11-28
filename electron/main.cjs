@@ -48,6 +48,7 @@ const { installationViews } = require("./installation-views.cjs");
 const { MachineUseRefused, machineUseCalls, machineUseStore, runsPersonalInstallation, startupUse } = require("./machine-use.cjs");
 const { JoinRefused, NODE_KEYCHAIN_SERVICE, NODE_REVOKED_EXIT, NodeRefused, organisationNode } = require("./organisation-node.cjs");
 const { createMobileSleepGuard } = require("./mobile-sleep.cjs");
+const { logsDir, serverLog } = require("./shell-logs.cjs");
 /**
  * The UI credential of the personal installation, made the first time it is needed — when the
  * personal installation starts — and not when the shell loads: desktopAuth writes
@@ -130,40 +131,9 @@ function withToolPath(env) {
   return { ...env, PATH: merged.join(":") };
 }
 
-/**
- * The server's output, on disk. A Finder-launched app has no terminal, so until this existed
- * the server's log went nowhere — and the first real incident ("the box is unavailable", "my
- * message got no reply") had nothing to read. ~/Library/Logs/LumenBox/server.log, rotated at
- * 5 MB to one .1 copy; Console.app finds it, and so does `tail -f`.
- */
-const LOG_DIR = path.join(os.homedir(), "Library", "Logs", "LumenBox");
-const LOG_FILE = path.join(LOG_DIR, "server.log");
-// Each line stamped when it is written: the first real read of this log (2026-09-13)
-// had "socket lost" and "heard nothing for 2h" with no way to tell whether that was
-// ten minutes or a day ago. A chunk may end mid-line, so the stamp goes on the next
-// line start, not on every chunk.
-let logAtLineStart = true;
-function appendServerLog(text) {
-  try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-    try {
-      if (fs.statSync(LOG_FILE).size > 5 * 1024 * 1024) fs.renameSync(LOG_FILE, `${LOG_FILE}.1`);
-    } catch {}
-    const stamp = `${new Date().toISOString()} `;
-    let out = "";
-    for (const piece of text.split(/(\n)/)) {
-      if (piece === "") continue;
-      if (piece === "\n") {
-        out += piece;
-        logAtLineStart = true;
-        continue;
-      }
-      out += (logAtLineStart ? stamp : "") + piece;
-      logAtLineStart = false;
-    }
-    fs.appendFileSync(LOG_FILE, out);
-  } catch {}
-}
+/** The shell's logs directory (electron/shell-logs.cjs: ~/Library/Logs/LumenBox unless LUMENBOX_LOGS_DIR names another). */
+const LOG_DIR = logsDir(process.env, os.homedir());
+const appendServerLog = serverLog(LOG_DIR);
 
 function startServer() {
   const cli = path.join(REPO, "src", "cli.ts");
@@ -297,7 +267,7 @@ function startSupervision() {
       setTimeout(startSupervision, 2000 * supervisionRestarts);
       return;
     }
-    notify("LumenBox supervision stopped", "It exited five times in a row. See ~/Library/Logs/LumenBox/supervision.log.");
+    notify("LumenBox supervision stopped", `It exited five times in a row. See ${SUPERVISION_LOG}.`);
   });
 }
 
