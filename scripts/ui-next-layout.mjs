@@ -41,8 +41,8 @@ try {
     await membership.locator("summary").click();
     const description = membership.locator("div");
     await description.waitFor();
-    assert.match(await description.textContent(), lang === "en" ? /^Shared box: .* or the web UI\.$/ : /^共享 box：.*访问它。$/);
-    assert.equal(await description.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, `${where}: the shared box description is clipped`);
+    assert.match(await description.textContent(), lang === "en" ? /^Team sandbox: .* or the web page\.$/ : /^团队沙盒：.*访问它。$/);
+    assert.equal(await description.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, `${where}: the team sandbox description is clipped`);
     await membership.locator("summary").click();
     await page.locator(".agent").first().click();
     await page.waitForSelector("[data-result]"); await fits("the conversation");
@@ -125,7 +125,7 @@ try {
     await page.locator('[data-nav="boxes"]').click();
     await page.evaluate(() => refresh());
     await checkMembershipRedraw("Boxes");
-    await page.getByRole("button", { name: lang === "en" ? "Open computer settings" : "打开电脑设置", exact: true }).click();
+    await page.getByRole("button", { name: lang === "en" ? "Open sandbox settings" : "打开沙盒设置", exact: true }).click();
     await checkMembershipRedraw("Settings → Boxes");
     // The way to the other language and the other page: on screen, side by side.
     if (width < 1000) { await page.goto(`${meta.base}/?ui=next&lang=${lang}`); await page.waitForSelector(".agent"); }
