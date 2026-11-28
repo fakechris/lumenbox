@@ -46,7 +46,7 @@ const MAX_KEYS = 20_000;
 interface Count { failures: number; lockedUntil: number; last: number; told: boolean }
 
 /** Which way in was tried: the limiter's namespace and the audit line's `door`. */
-export type SignInDoor = "invite-code" | "bootstrap" | "door" | "side-door" | "installation-token" | "gateway";
+export type SignInDoor = "invite-code" | "bootstrap" | "door" | "side-door" | "installation-token" | "gateway" | "client-api";
 
 export interface Attempt {
   door: SignInDoor;

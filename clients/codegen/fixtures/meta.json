@@ -1,0 +1,8 @@
+{
+  "api": "1.7",
+  "server": "0.9.0",
+  "installation": { "mode": "federation", "region": "eu" },
+  "capabilities": ["getMeta", "getMe", "listGalaxies"],
+  "preview": ["streamEverything"],
+  "motd": "a field this client was built without"
+}

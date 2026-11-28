@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: compatibility
-     updated: 2026-11-27
+     updated: 2026-11-28
 -->
 # What stays stable: release lines, the stable list, remote access, and the client API
 
@@ -257,9 +257,63 @@ first delivery; the client API is needed only when they show the board on a scre
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
 | 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
 | 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 parts 1–3): the declared level and its start-up check, R1, R2, R4, R5 (except a strict `script-src`), R6, R7, R8, and S-2 closed for private. Not done: the kind pass through a TLS Ingress. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
-| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Not built. Paged work list, resumable event stream and stable error codes exist internally |
+| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Part built (INV-2213 part 1, the frame): `/meta`, `/me`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. Not yet: `/agents`, `/work`, `/board` (part 2), `/events`, `/changes` (part 3) |
 | 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Not built |
 | 6. Shared storage for an organisation; mobile apps | Shared storage: a design of its own. Native iOS and Android clients, encrypted relay and wake-only push: docs/110 | Decided in docs/110; not built |
+
+### 8.1 The client API as built (INV-2213)
+
+**Where it is.** `src/web/client-api/`: `schema.ts` declares every operation, resource, scope and
+error once; `openapi.ts` builds `docs/api/v1.openapi.json` from it; `routes.ts` is the pure route
+table and the parameter check; `frame.ts` runs every request in one order — route, credential, limits,
+scope, parameters, handler — and answers in one shape; `handlers.ts` builds each resource field by
+field; `mount.ts` wires it to the server, which mounts it in two lines before the page's gate. A
+`POST`'s first answer is kept 24 hours for its `Idempotency-Key`, per credential and operation, in
+`<home>/client-api-idempotency.jsonl` (no `POST` exists in the read slice; the frame's test proves it). The
+architecture guard refuses an import of an internal route, a page or the server into `client-api/`,
+and a resource declared outside `schema.ts`.
+
+**What was decided here that §4 left open:**
+
+- **Open enumerations are strings.** A field with a fixed set of values is `type: string` with the
+  known values in `x-extensible-enum`, never `enum`: a generated decoder then keeps an unknown value
+  as itself instead of failing, and the app's own `.other(raw)` takes it. The known values are still
+  on the surface ratchet, so removing one is a break.
+- **No nulls.** A field with no value is absent; `nextCursor` is absent on the last page.
+- **Times to the second**: `2026-11-28T10:00:00Z`. The Swift generator's default decoder refuses a
+  fraction (measured: `.000Z` fails `getMe` in `clients/codegen/swift`).
+- **`/meta` needs no credential**: a phone reads it before it signs in (docs/110 §4). It names the
+  server's version; that is the price of a client seeing what the server can do.
+- **v1 takes v1 credentials only.** The page's cookie and the installation token are refused on
+  `/api/v1` (`api-credential-invalid`), at every level; the page keeps its internal routes until a
+  feature moves (§4).
+- **A service token reads for the Admin who minted it**, while they are one: demoted or removed, it
+  answers `access-removed`. Its scopes are read scopes (`agents:read`, `work:read`, `chat:read`,
+  `files:read`). Its view names nothing until the Admin names it: agents (`allAgents` or
+  `agentIds`), work (`allWork` or `workIds`), and `conversationText`, false by default.
+- **A personal token** may be minted by any person, viewers included — the role still bounds it —
+  for at most 365 days (90 unless chosen); a service token likewise.
+- **Unknown query parameters are refused** (`api-param-unknown`), so a typo or a filter this server
+  does not have is said, not silently ignored. A newer client reads `meta.capabilities` first.
+- **Limits**: 600 requests a minute per credential, 120 per address for what needs none, answered
+  with `api-rate-limited` and `Retry-After`. A token that does not work is a sign-in try (R4, door
+  `client-api`), limited and recorded in `sign-ins.jsonl` like the side door's.
+- **The revision rises with every addition**, and `npm run arch` holds it to that: an `api/…` item
+  added without raising `API_REVISION` fails, and the revision never falls.
+
+**Tokens.** Minted, listed and revoked through the page's internal routes
+`GET /api/client-tokens`, `POST /api/client-tokens` (`kind`, `label`, `scopes`, `expiresInDays`,
+and for a service token `view`), `POST /api/client-tokens/revoke` (`id`); the operator may name the
+person with `principalId`. Kept in the side door's hashed store (`mcp-tokens.json`): id, kind,
+scopes, expiry, last use to the minute, view; `lbxp_` and `lbxs_` prefixes. Minting and revoking —
+by the holder, an Admin or a directory sync — are in `tokens.jsonl` with who. The page has no form
+for them yet.
+
+**Generation.** `clients/codegen/` holds a Swift package (swift-openapi-generator) and a Kotlin
+project (openapi-generator, `kotlinx.serialization`, as lumenbox-android uses) that generate from
+the document and decode answers from a newer server (`clients/codegen/fixtures`: an unknown field
+and an unknown value in each). CI's `client-codegen` workflow runs both when the document, the
+schema or the check changes; the contract test holds the fixtures to the schema.
 
 Step 4 is what a company needs to show the work board to its customers. Steps 5 and 6 can follow
 without changing anything a step-4 client relies on — which is the test of whether the design

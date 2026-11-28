@@ -49,7 +49,7 @@ export type RouteAnswer = { status: number; body: unknown } | undefined;
 
 /** Secrets that could only have got into a transcript by mistake, blanked before anyone reads it. */
 export function redact(text: string): string {
-  return text.replace(/lmbx_[0-9a-f]{16,}/g, "lmbx_…").replace(/\b(sk|ts)-[A-Za-z0-9_-]{16,}/g, "$1-…").replace(/Bearer [A-Za-z0-9._-]{16,}/g, "Bearer …");
+  return text.replace(/\b(lmbx|lbx[ps])_[0-9a-f]{16,}/g, "$1_…").replace(/\b(sk|ts)-[A-Za-z0-9_-]{16,}/g, "$1-…").replace(/Bearer [A-Za-z0-9._-]{16,}/g, "Bearer …");
 }
 
 function lastFlag(logFile: string | undefined): string | undefined {

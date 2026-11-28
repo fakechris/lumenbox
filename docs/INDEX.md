@@ -26,7 +26,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [05-data](05-data.md) | Data | current | 2026-11-28 |
 | [08-control-plane](08-control-plane.md) | Control plane | current | 2026-11-06 |
 | [101-speaking-unprompted](101-speaking-unprompted.md) | Speaking unprompted: what a member says to a person nobody asked it to say | current | 2026-11-20 |
-| [106-stable-surface-and-client-api](106-stable-surface-and-client-api.md) | What stays stable: release lines, the stable list, remote access, and the client API | current | 2026-11-27 |
+| [106-stable-surface-and-client-api](106-stable-surface-and-client-api.md) | What stays stable: release lines, the stable list, remote access, and the client API | current | 2026-11-28 |
 | [109-organisation-onboarding](109-organisation-onboarding.md) | Joining an organisation: activation, a box and an agent each, the first chat, and what boxes share | current | 2026-11-28 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
 | [111-organisation-administration](111-organisation-administration.md) | Administering an organisation: who may do what, what is recorded, and the Admin's console | current | 2026-11-29 |

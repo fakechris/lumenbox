@@ -1,0 +1,565 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LumenBox client API",
+    "version": "1.0",
+    "description": "LumenBox client API, v1 (docs/106 §4). Additions only inside v1: a new operation, a new optional field, a new known value — each raises the revision `GET /api/v1/meta` reports.\n\nConventions, the same for every operation:\n- JSON, camelCase. Ids are opaque strings: compare them, never parse them. Times are RFC 3339 in UTC, to the second (`2026-11-28T10:00:00Z`).\n- A field with no value is absent, never null.\n- A client ignores fields it does not know.\n- A string listed with `x-extensible-enum` is an open enumeration: a client treats a value it does not know as \"other\", shows the item's plain words, and offers to open it on the page or the desktop app when it cannot act on it.\n- Lists take `?limit=` (1–100) and `?cursor=` and answer `{ items, nextCursor }`; `nextCursor` is absent on the last page.\n- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.\n- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.\n- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.\n- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer.\n- 429 carries `Retry-After` in seconds.\n- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.\n\nCredentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view.\nWhat a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.\nCross-origin browser calls are not answered with CORS headers.",
+    "license": {
+      "name": "GPL-3.0-only",
+      "identifier": "GPL-3.0-only"
+    }
+  },
+  "tags": [
+    {
+      "name": "stable",
+      "description": "Changes by addition only inside v1 (docs/106 §1)."
+    },
+    {
+      "name": "preview",
+      "description": "May change in any release; listed in `meta.preview`."
+    }
+  ],
+  "paths": {
+    "/api/v1/meta": {
+      "get": {
+        "operationId": "getMeta",
+        "summary": "What this server is and can do",
+        "description": "Answered without a credential: a client reads it before signing in. `capabilities` lists every stable operation this server answers.\n\nNo credential needed.",
+        "tags": [
+          "stable"
+        ],
+        "security": [],
+        "x-scope": "none",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What this server is and can do. Read before signing in, and to see what the server answers instead of guessing from a version.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meta"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "getMe",
+        "summary": "Who the credential acts for",
+        "description": "The person the credential acts for — for a service token, the Admin who minted it — and the credential itself, never the token.\n\nAny credential.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "any",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The person the credential acts for, and the credential.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A personal token (`lbxp_…`) or a service token (`lbxs_…`). Scopes:\n- `agents:read`: Read the agents the person may reach.\n- `work:read`: Read work, its history and the board.\n- `work:decide`: Answer what waits on the person: count work as done, put it off, stop it, approve or deny.\n- `chat:read`: Read conversations the person may read.\n- `chat:write`: Send messages and card actions in conversations the person may drive.\n- `files:read`: Read deliverables.\n- `devices:manage`: List and remove the person's own devices.\n- `desktop:view`: Watch an agent's desktop.\n- `desktop:control`: Drive an agent's desktop."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "description": "A refusal. A program reads `code`; `error` is a sentence for a person, in the request's language (`Accept-Language`).",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable: what a program matches on. A code it does not know is handled by the HTTP status.",
+            "x-extensible-enum": [
+              "api-operation-unknown",
+              "api-method-not-allowed",
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed",
+              "api-scope-needed",
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid",
+              "api-idempotency-conflict",
+              "api-rate-limited",
+              "sign-in-limited",
+              "api-internal"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "description": "What happened and what to do, for a person. Never matched on: the words change."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Names this request in the server's log."
+          }
+        },
+        "required": [
+          "code",
+          "error",
+          "requestId"
+        ]
+      },
+      "Meta": {
+        "type": "object",
+        "description": "What this server is and can do. Read before signing in, and to see what the server answers instead of guessing from a version.",
+        "properties": {
+          "api": {
+            "type": "string",
+            "description": "\"1.<revision>\": the revision rises with every addition to v1."
+          },
+          "server": {
+            "type": "string",
+            "description": "The LumenBox version of the server."
+          },
+          "installation": {
+            "$ref": "#/components/schemas/Installation"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "An `operationId`."
+            },
+            "description": "Every stable operation this server answers."
+          },
+          "preview": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "An `operationId`."
+            },
+            "description": "Operations this server answers that may change in any release (docs/106 §1)."
+          }
+        },
+        "required": [
+          "api",
+          "server",
+          "installation",
+          "capabilities",
+          "preview"
+        ]
+      },
+      "Installation": {
+        "type": "object",
+        "description": "The kind of installation.",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "A personal installation (one Owner, the desktop app) or an organisation's server.",
+            "x-extensible-enum": [
+              "single-machine",
+              "organisation"
+            ]
+          }
+        },
+        "required": [
+          "mode"
+        ]
+      },
+      "Me": {
+        "type": "object",
+        "description": "The person the credential acts for, and the credential.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The person's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The person's name as the installation shows it."
+          },
+          "role": {
+            "type": "string",
+            "description": "What the person may do: `viewer` watches, `driver` instructs agents, `admin` runs the installation.",
+            "x-extensible-enum": [
+              "viewer",
+              "driver",
+              "admin"
+            ]
+          },
+          "homeAgentId": {
+            "type": "string",
+            "description": "The agent a direct message from this person reaches, when there is one the credential may read."
+          },
+          "credential": {
+            "$ref": "#/components/schemas/Credential"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "credential"
+        ]
+      },
+      "Credential": {
+        "type": "object",
+        "description": "The credential this request was made with. Never the token.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The credential's id: what revoking it names."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`personal`: a person's script. `service`: an integration an Admin named, reading through its view. `device`: a phone or desktop client.",
+            "x-extensible-enum": [
+              "personal",
+              "service",
+              "device"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "The name it was given when it was minted."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A scope.",
+              "x-extensible-enum": [
+                "agents:read",
+                "work:read",
+                "work:decide",
+                "chat:read",
+                "chat:write",
+                "files:read",
+                "devices:manage",
+                "desktop:view",
+                "desktop:control"
+              ]
+            },
+            "description": "What it may be used for."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was minted."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it stops working."
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was last used, to the minute; absent before its first use."
+          },
+          "view": {
+            "$ref": "#/components/schemas/ServiceView"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "label",
+          "scopes",
+          "createdAt",
+          "expiresAt"
+        ]
+      },
+      "ServiceView": {
+        "type": "object",
+        "description": "What a service token may read (present on service credentials only). Nothing is visible unless named here, and a view never reaches past what its Admin may see.",
+        "properties": {
+          "allAgents": {
+            "type": "boolean",
+            "description": "Every agent the Admin may reach."
+          },
+          "agentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "An agent id."
+            },
+            "description": "These agents, when `allAgents` is false."
+          },
+          "allWork": {
+            "type": "boolean",
+            "description": "All work the readable agents hold."
+          },
+          "workIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A work id."
+            },
+            "description": "This work and the work made for it, when `allWork` is false."
+          },
+          "conversationText": {
+            "type": "boolean",
+            "description": "Whether conversation text and work descriptions are included. False: titles, states and results only."
+          }
+        },
+        "required": [
+          "allAgents",
+          "agentIds",
+          "allWork",
+          "workIds",
+          "conversationText"
+        ]
+      }
+    }
+  }
+}
