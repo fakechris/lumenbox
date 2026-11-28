@@ -12,7 +12,8 @@ var settings = { long: null, routines: null, setup: null, pane: "", me: null };
 function canOperateInstallation() { return !!settings.me && settings.me.role === "admin"; }
 function canDriveAgents() { return canOperateInstallation() || (!!settings.me && settings.me.role === "driver"); }
 function settingsPanes() {
-  return canOperateInstallation() ? SETTING_PANES.concat(shellPanes()) : canDriveAgents() ? ["mine", "memory"] : [];
+  // Settings → Organisation leads an Admin's list on an organisation (INV-2311).
+  return canOperateInstallation() ? (isOrganisation() ? ["organisation"] : []).concat(SETTING_PANES, shellPanes()) : canDriveAgents() ? ["mine", "memory"] : [];
 }
 
 function numberField(labelText, value, min, max) {
@@ -94,68 +95,6 @@ function renderLongWork(view) {
 var SETTING_PANES = ["model", "boxes", "doors", "team", "mine", "memory", "supervision", "guests"];
 var NATIVE_PANES = {
   mine: renderMinePane, model: renderModelPane, doors: renderDoorsPane, team: renderTeamPane, boxes: renderBoxesPane,
-  memory: renderMemoryPane, supervision: renderSupervisionPane, guests: renderGuestsPane, machine: renderMachinePane, organisations: renderOrganisationsPane,
+  memory: renderMemoryPane, supervision: renderSupervisionPane, guests: renderGuestsPane, machine: renderMachinePane, organisations: renderOrganisationsPane, organisation: renderOrganisationPane,
 };
-
-/**
- * Getting started, for an installation that has not yet done a piece of work: the few things an agent
- * needs before it can, each with the button that opens the place to do it. Gone once the first work
- * has been done and looked at, or when the person closes it.
- */
-function createSetupBox() {
-  if (settings.creatingBox) return;
-  settings.boxRequest = settings.boxRequest || crypto.randomUUID();
-  settings.creatingBox = true; render();
-  postJson("/api/personal-boxes/create", { requestId: settings.boxRequest }).then(function (got) {
-    var box = (got.boxes || []).find(function (row) { return row.id === got.boxId; });
-    if (!box || box.status !== "ready") throw new Error(box && box.error || t("ui.next.box.off"));
-    settings.boxRequest = ""; chat.box = box.id; chat.agentId = "";
-    chat.entries = []; chat.live = null; chat.liveSurfaces = {}; chat.plan = null;
-    chat.conversation = "main"; chat.loading = ""; chat.loadedFor = ""; chat.request++;
-    chat.find = ""; chat.focus = "";
-  }).catch(failed).finally(function () { settings.creatingBox = false; refresh(); });
-}
-
-function setupCard() {
-  var state = settings.setup;
-  if (!state || !canDriveAgents()) return null;
-  var admin = canOperateInstallation(), here = state.byBox ? state.byBox[chat.box] || {} : state;
-  var bootstrap = admin && state.bootstrapPending, card = el("div", "card-plain");
-  if (bootstrap) {
-    var link = el("a", "act", t("ui.channels.bootstrap-pending"));
-    link.href = "/bootstrap"; card.appendChild(link);
-  }
-  // On an organisation (hasPersonalBox said) an Admin is a member like the others: their own box is the step, not the installation's (INV-2310).
-  var organisation = state.hasPersonalBox !== undefined;
-  if (!chat.box && state.hasPersonalBox !== false) return bootstrap ? card : null;
-  var who = settings.me.identity || "operator";
-  var storageKey = "lumen-setup-closed:" + state.installationId + ":" + who + ":" + chat.box;
-  if ((admin && here.established) || localStorage.getItem(storageKey) === "1") return bootstrap ? card : null;
-  var agent = agentsHere().length > 0, steps = admin ? [
-    { key: "key", done: state.key, open: function () { openSettingsPane("model"); } },
-    { key: "box", done: here.box, open: function () { openSettingsPane("boxes"); } },
-    { key: "agent", done: agent, open: function () { openMember(""); } },
-    { key: "door", done: state.door, optional: true, open: function () { openSettingsPane("doors"); } },
-  ].filter(function (step) { return step.key !== "box" || !organisation; }) : chat.box ? [{ key: "agent", done: agent, open: function () { openMember(""); } }] : [];
-  // A box made at first sign-in (INV-2203): said while it is prepared, why it failed, or that the quota is used up.
-  if (organisation) steps.unshift({ key: "personalBox", done: state.hasPersonalBox, auto: state.autoBox,
-    open: !state.autoBox ? createSetupBox : state.autoBox.state === "failed" ? function () { navigateView("boxes"); } : null });
-  if (!admin && steps.every(function (step) { return step.done; })) return null;
-  var close = el("button", "act", t("ui.next.act.close"));
-  card.appendChild(el("div", "card-head", t("ui.next.setup.title")));
-  steps.forEach(function (step) {
-    var row = el("div", "setup-step"), go = el("button", "act", t("ui.next.setup.go"));
-    row.appendChild(el("span", step.done ? "setup-done" : "setup-todo", step.done ? "✓" : "○"));
-    var words = step.auto ? t("ui.next.setup.personalBox." + step.auto.state, { why: step.auto.reason || "" }) : t("ui.next.setup." + step.key);
-    row.appendChild(el("span", "body", words + (step.optional ? " " + t("ui.next.setup.optional") : "")));
-    if (step.key === "box") row.appendChild(el("span", step.done ? "chip-run" : "chip", t(step.done ? "ui.next.box.on" : "ui.next.box.off")));
-    go.disabled = step.key === "personalBox" && !!settings.creatingBox;
-    go.addEventListener("click", step.open);
-    if (!step.done && step.open) row.appendChild(go);
-    card.appendChild(row);
-  });
-  close.addEventListener("click", function () { localStorage.setItem(storageKey, "1"); render(); });
-  card.appendChild(close);
-  return card;
-}
 `;

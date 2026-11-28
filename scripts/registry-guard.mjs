@@ -102,7 +102,8 @@ export function settingsProblems(files, panes) {
       if (anchor && !line.includes("settingsPane(") && !/\{\{ui\.pane\.[\w-]+\}\}/.test(line)) problems.push(`${file.path}: a Settings tab written by hand — render it from src/web/settings-registry.ts (renderSettingsTabs, or the pane's title as {{ui.pane.<key>}})`);
     }
   }
-  for (const pane of panes) if (!used.has(pane.key)) problems.push(`settings pane ${pane.key} is listed but nothing in src/web carries data-settab="${pane.key}"`);
+  // A pane only the rebuilt page draws has no tab in the classic dialog to carry its key (INV-2311).
+  for (const pane of panes) if (!used.has(pane.key) && pane.mounted !== "rebuilt") problems.push(`settings pane ${pane.key} is listed but nothing in src/web carries data-settab="${pane.key}"`);
   return [...new Set(problems)];
 }
 

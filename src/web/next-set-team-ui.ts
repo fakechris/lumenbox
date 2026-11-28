@@ -309,11 +309,12 @@ function toolServersBlock() {
   return box;
 }
 
+/** Activating members from the directory is in Settings → Organisation (next-set-organisation-ui.ts, INV-2311). */
 function renderTeamPane(view) {
   if (team.people === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadTeam(); return; }
   if (Date.now() - team.loadedAt > 15000) loadPeople();
   if (team.error) { view.appendChild(el("p", "why", team.error)); return; }
   watchTeamInvite();
-  [mergeBlock(), peopleBlock(), directoryBlock(), orgSkillsBlock(), limitsBlock(), memoryReviewBlock(), scopesBlock(), secretsBlock(), toolServersBlock()].forEach(function (block) { if (block) view.appendChild(block); });
+  [mergeBlock(), peopleBlock(), orgSkillsBlock(), limitsBlock(), memoryReviewBlock(), scopesBlock(), secretsBlock(), toolServersBlock()].forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

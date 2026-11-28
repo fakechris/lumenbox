@@ -155,6 +155,9 @@ test("user-facing pages use the glossary's words, and the glossary names every c
   const glossary = parseGlossary(readFileSync(join(root, GLOSSARY), "utf8"));
   assert.ok(glossary.concepts.length >= 19, `${glossary.concepts.length} concepts; the audit named 19`);
   assert.ok(glossary.deprecated.some(rule => rule.term === "door" && rule.instead === "channel"));
+  // docs/112: an agent is 智能体 in Chinese and a box is 沙盒 to a person; 智能体 is the word, no longer refused.
+  assert.ok(glossary.deprecated.some(rule => rule.term === "机器人" && rule.instead === "智能体"));
+  assert.ok(!glossary.deprecated.some(rule => rule.term === "智能体"));
 });
 
 test("a deprecated synonym is reported by file and line, in the listed files and in audience: user pages; code, links, allowed names and specs are not checked", () => {
@@ -196,10 +199,10 @@ test("a deprecated synonym is reported by file and line, in the listed files and
     assert.deepEqual(problems, [
       'docs/manual.md:6: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
       'guide.md:4: "bot" is a deprecated synonym; write "agent" (docs/glossary.md).',
-      'guide.md:9: "箱子" is a deprecated synonym; write "box" (docs/glossary.md).',
-      'src/i18n/ui-page.ts:2: "机器人" is a deprecated synonym; write "agent" (docs/glossary.md).',
+      'guide.md:9: "箱子" is a deprecated synonym; write "沙盒" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:2: "机器人" is a deprecated synonym; write "智能体" (docs/glossary.md).',
       'src/i18n/ui-page.ts:4: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
-      'src/host/catalog-data/templates/x.lumenbox-template.json:6: "机器人" is a deprecated synonym; write "agent" (docs/glossary.md).',
+      'src/host/catalog-data/templates/x.lumenbox-template.json:6: "机器人" is a deprecated synonym; write "智能体" (docs/glossary.md).',
     ]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

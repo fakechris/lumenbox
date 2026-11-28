@@ -133,7 +133,8 @@ test("INV-2203: a start that fails says the platform's reason, and is not tried 
   await request("/api/me", "web:alice");
   await settled(request, "web:alice");
   const setup = await request("/api/setup", "web:alice");
-  assert.deepEqual(setup.data.autoBox, { state: "failed", reason: "ImagePullBackOff" });
+  assert.deepEqual(setup.data.autoBox, { state: "failed", reason: "ImagePullBackOff", id: setup.data.autoBox.id });
+  assert.ok(setup.data.autoBox.id, "and the box its owner's Try again starts again (INV-2311)");
   await request("/api/me", "web:alice");
   assert.equal(org.started.length, 1);
 });
@@ -267,7 +268,7 @@ test("INV-2220: a department of thirty is confirmed against its estimate, is on 
   assert.equal(org.started.length, 30);
   const failed = boxes.filter(box => box.status !== "ready");
   assert.deepEqual(failed.map(box => [box.owner, box.status, box.stateReason]), [["ding:p07", "failed", "ImagePullBackOff"]], "the platform's reason, on the one that failed");
-  assert.deepEqual((await request("/api/setup", "ding:p07")).data.autoBox, { state: "failed", reason: "ImagePullBackOff" });
+  assert.deepEqual((await request("/api/setup", "ding:p07")).data.autoBox, { state: "failed", reason: "ImagePullBackOff", id: failed[0]!.id });
   const done = (await request("/api/activations/progress?channelId=ding&state=failed", "web:operator")).data;
   assert.deepEqual(done.counts, { ready: 29, starting: 0, queued: 0, failed: 1, quota: 0 });
   assert.deepEqual(done.people.map((row: { subject: string; reason: string }) => [row.subject, row.reason]), [["p07", "ImagePullBackOff"]]);

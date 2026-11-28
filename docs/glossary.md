@@ -121,8 +121,8 @@ its spelling.
 | `front agent` | the default agent | |
 | `room`, `rooms` | box, or group chat | docs/22 used *room* for a box. |
 | `team room` | team chat | |
-| `机器人`, `智能体` | agent | |
-| `箱子`, `工作机` | box | |
+| `机器人` | 智能体 | docs/112: 智能体 is the Chinese word for an agent. |
+| `箱子`, `工作机` | 沙盒 | docs/112: a person reads 沙盒 for a box. |
 | `一道门`, `这道门` | 渠道 | |
 | `box host`, `box hosts` | machine | The specs keep *box host* (docs/96). |
 | `host box`, `host boxes` | native environment | The code keeps `kind: "host"`. |
@@ -135,7 +135,6 @@ pages are done, so the check then refuses it. Until then a new page does not use
 
 | Old word | New word | Note |
 |---|---|---|
-| `机器人`, `箱子`, `工作机` (already refused above) | 智能体, 沙盒 | The table above still names *agent* and *box* as their replacement; it changes with the first converted page, together with its test. |
 | `box`, `boxes`, `Box`, `shared box`, `personal box` (a person reads) | sandbox, your sandbox, team sandbox | Code, specs and CLI keep *box*. |
 | `盒子`, `电脑` and `机器` when they mean a box, `个人 Box`, `共享 box` | 沙盒, 你的沙盒, 团队沙盒 | 机器 stays for where a sandbox runs (decision 5). |
 | `成员` meaning an agent | 智能体 | 成员 stays for a person in an organisation. |

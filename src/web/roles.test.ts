@@ -96,7 +96,8 @@ test("installation and organisation are an admin's; a person's own access is the
       assert.deepEqual(Object.keys(config), ["presets"], "the agent editor still gets a provider catalogue");
       assert.ok(config.presets.length > 0);
       const setup = await get("/api/setup", headers);
-      assert.deepEqual(Object.keys(setup), role === "driver" ? ["installationId", "hasPersonalBox"] : ["installationId"]);
+      // What getting started is computed from (INV-2311): a driver learns whether a model is set and how their own boxes stand, never the installation's controls.
+      assert.deepEqual(Object.keys(setup), role === "driver" ? ["installationId", "edition", "byBox", "key", "hasPersonalBox"] : ["installationId", "edition"]);
       if (role === "driver") assert.equal(setup.hasPersonalBox, false);
     }
     assert.equal(await status("/api/scopes", dana, { scopes: [] }), 403, "scopes");

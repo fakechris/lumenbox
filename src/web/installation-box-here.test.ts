@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import vm from "node:vm";
 import { startWebServer } from "./server.ts";
-import { NEXT_PAGE } from "./page-locale.ts";
+import { type Fake, drawFirstScreen, fakeEl as el, pageFunctions, texts } from "./testing/first-screen-page.ts";
 import { Principals } from "../host/principals.ts";
 import { AgentRegistry } from "../agents/registry.ts";
 import { STARTER_TEAM, seedStarterTeam } from "../host/orchestrator.ts";
@@ -80,38 +79,12 @@ async function arrived(request: Request, identity: string) {
   assert.fail(`${identity}'s box and agent were never made`);
 }
 
-/** One function of the rebuilt page, run with the globals given. */
-function pageFunction(name: string, globals: Record<string, unknown>): (...args: unknown[]) => unknown {
-  const script = [...NEXT_PAGE("en").matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!).sort((a, b) => b.length - a.length)[0]!;
-  const start = script.indexOf(`function ${name}(`);
-  assert.ok(start >= 0, `the page has ${name}`);
-  let depth = 0, end = start;
-  for (let i = script.indexOf("{", start); i < script.length; i++) {
-    if (script[i] === "{") depth++;
-    if (script[i] === "}" && --depth === 0) { end = i + 1; break; }
-  }
-  return vm.runInNewContext(`(${script.slice(start, end)})`, globals) as (...args: unknown[]) => unknown;
-}
+const pageFunction = (name: string, globals: Record<string, unknown>) => pageFunctions([name], globals)[name]!;
 
-interface Fake { text: string; kids: Fake[]; hidden?: boolean; title?: string; appendChild(kid: Fake): void; addEventListener(): void; setAttribute(): void; replaceChildren(): void; replaceWith(): void }
-const el = (_tag: string, _cls = "", text = ""): Fake => {
-  const node: Fake = { text: String(text), kids: [], appendChild(kid) { node.kids.push(kid); }, addEventListener() {}, setAttribute() {}, replaceChildren() { node.kids = []; }, replaceWith() {} };
-  return node;
-};
-const texts = (node: Fake | null): string[] => node === null ? [] : [node.text, ...node.kids.flatMap(texts)].filter(Boolean);
-
-/** The first screen as this person sees it: the sidebar's box heading and agents, and the getting-started card. */
+/** The first screen as this person sees it: the sidebar's sandbox headings and agents, and the getting-started card (first-screen-ui.ts). */
 function firstScreen(state: any, computers: any, setup: any, admin: boolean) {
-  const nodes: Record<string, Fake> = {}, $ = (id: string) => (nodes[id] ??= el("div"));
-  const boxes = { list: computers.boxes, own: computers.own }, next = { agents: Object.fromEntries(state.agents.map((agent: any) => [agent.id, agent])), view: "chat", mine: [] };
-  const chat = { box: "", agentId: "" }, t = (key: string) => key;
-  const boxesKnown = pageFunction("boxesKnown", { boxes, next });
-  const agentsHere = pageFunction("agentsHere", { next, chat });
-  pageFunction("renderSide", { $, el, t, chat, next, boxesKnown, agentsHere, inTeam: (list: unknown) => list, teams: {}, renderTeams() {}, settings: {}, member: { paused: {} },
-    lineNode: () => el("span"), memberLine: () => "", initial: String, agentOwes: () => false, openChat() {}, boxNotice() {}, render() {} })();
-  const card = pageFunction("setupCard", { settings: { setup, me: { identity: admin ? "ding:boss" : "ding:alice" } }, chat, agentsHere, canOperateInstallation: () => admin, canDriveAgents: () => true,
-    localStorage: { getItem: () => null, setItem() {} }, t, el, openSettingsPane() {}, openMember() {}, navigateView() {}, createSetupBox() {}, render() {} })() as Fake | null;
-  return { heading: nodes.boxes!, agents: texts(nodes.agents!), card: texts(card) };
+  const screen = drawFirstScreen({ state, computers, setup, me: { role: admin ? "admin" : "driver", identity: admin ? "ding:boss" : "ding:alice" } });
+  return { headings: screen.side.filter(node => node.cls === "sandbox-head").map(texts), agents: screen.agents, card: texts(screen.card) };
 }
 
 test("INV-2310: a Kubernetes organisation's first Admin gets their own box and agent, and never meets the box that cannot run", async (t) => {
@@ -133,11 +106,11 @@ test("INV-2310: a Kubernetes organisation's first Admin gets their own box and a
   assert.equal((await org.request("/api/boxes/stranded", "ding:boss")).data.agents.length, 0);
 
   const screen = firstScreen(state, computers, setup, true);
-  assert.equal(screen.heading.hidden, false, "their one box is their heading");
-  assert.deepEqual(texts(screen.heading), [computers.boxes[0].name]);
+  assert.equal(screen.headings.length, 1, "their one sandbox is their heading");
+  assert.equal(screen.headings[0]![0], "ui.first.yours ·");
   assert.ok(screen.agents.includes(state.agents[0].name), "and their agent under it");
-  assert.ok(!screen.card.includes("ui.next.setup.box"), "no step to give the agents the installation's computer");
-  assert.ok(screen.card.includes("ui.next.setup.key"), "the Admin's own steps stay");
+  assert.ok(!screen.card.includes("ui.first.startIt"), "no step to start the installation's own box");
+  assert.ok(screen.card.includes("ui.first.connectChannel"), "the Admin's own steps stay");
   const words = JSON.stringify([state, computers, setup, screen]);
   assert.doesNotMatch(words, /Kubernetes backend|shared-box-kubernetes|Shared box/, "no refusal about it anywhere");
 
@@ -148,8 +121,8 @@ test("INV-2310: a Kubernetes organisation's first Admin gets their own box and a
   assert.deepEqual(alice.agents.map((agent: any) => agent.boxId), [alice.boxes[0].id]);
   const aliceSetup = (await org.request("/api/setup", "ding:alice")).data;
   const aliceScreen = firstScreen(alice, (await org.request("/api/boxes?lang=en", "ding:alice")).data, aliceSetup, false);
-  assert.equal(aliceScreen.heading.hidden, false);
-  assert.ok(!aliceScreen.card.includes("ui.next.setup.box"));
+  assert.deepEqual(aliceScreen.headings.map(heading => heading[0]), ["ui.first.yours ·"]);
+  assert.ok(!aliceScreen.card.includes("ui.first.startIt"));
 });
 
 test("INV-2310: an installation 0.4.10–0.4.12 opened keeps its starter team's records, shows them nowhere, and an Admin may delete them", async (t) => {
@@ -185,7 +158,7 @@ test("INV-2310: an installation 0.4.10–0.4.12 opened keeps its starter team's 
   assert.equal((await org.request("/api/boxes/stranded", "ding:boss")).data.agents.length, 0);
 });
 
-test("INV-2310: the desktop is unchanged — its own box, the starter team, the box step, no heading for one box", async (t) => {
+test("INV-2310: the desktop keeps its own box, the starter team and the step that starts it; its one sandbox is the Owner's heading (INV-2311)", async (t) => {
   const dir = home(t, {});
   writeFileSync(join(dir, "principals.json"), JSON.stringify({ principals: [{ id: "local:owner", name: "Owner", role: "admin", identities: [] }], installation: { mode: "single-machine", ownerId: "local:owner" } }));
   const seeded = seedStarterTeam(new AgentRegistry(join(dir, "agents")), startsWithStarterTeam(boxBackendFromEnvironment()));
@@ -199,8 +172,8 @@ test("INV-2310: the desktop is unchanged — its own box, the starter team, the 
   assert.ok(setup.byBox[state.box.own]);
   assert.equal((await request("/api/boxes/stranded")).data.agents.length, 0);
   const screen = firstScreen(state, computers, setup, true);
-  assert.equal(screen.heading.hidden, true, "one box and nobody else's: no switch, as before");
-  assert.ok(screen.card.includes("ui.next.setup.box"), "the step that starts this computer's box stays");
+  assert.deepEqual(screen.headings.map(heading => heading[0]), ["ui.first.yours ·"], "the desktop's one sandbox is the Owner's: Your sandbox, as in an organisation (docs/112 §2)");
+  assert.ok(["ui.first.startIt", "ui.first.tryAgain", "ui.first.getDocker"].some(words => screen.card.includes(words)), "the step that starts this computer's sandbox stays");
   const route = new ChatRoute({ registry: runnableAgents(new AgentRegistry(join(dir, "agents")), () => undefined), principals: new Principals(), log: () => {}, preparing: () => false,
     firstAgent: () => undefined, door: () => undefined });
   assert.equal(route.coordinatorFor("local:owner")?.profile.name, STARTERS[0], "a side-door call naming nobody reaches the first agent, as before");
