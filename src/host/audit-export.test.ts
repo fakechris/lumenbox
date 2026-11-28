@@ -62,12 +62,19 @@ test("an export is one box's ledgers inside the window, secrets redacted, and re
   const { root, registry, ada, grokId } = home();
   try {
     const out = join(root, "export");
+    // Credentials minted, revoked and rotated (INV-2204): side-door tokens by time alone, a box's rotation with its box.
+    writeFileSync(join(root, "tokens.jsonl"), [
+      { at: "2026-09-10T00:00:00Z", event: "minted", kind: "side-door", for: "ann", label: "watchdog", via: "person", by: "operator" },
+      { at: "2026-09-10T00:01:00Z", event: "rotated", kind: "box", box: registry.box.id, boxName: "own", by: "ann", confirmed: true },
+      { at: "2026-09-10T00:02:00Z", event: "rotated", kind: "box", box: grokId, boxName: "grok", by: "ann", confirmed: true },
+    ].map(line => JSON.stringify(line)).join("\n") + "\n");
     const held = heldValues(root);
     assert.deepEqual([...held.keys()].sort(), ["config.channels.feishu.appSecret", "vault:SHOP_PASSWORD", "vault:short"]);
     const manifest = exportAudit({ home: root, registry, box: registry.box.name, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out, held, now: () => new Date("2026-09-11T00:00:00Z") });
     assert.equal(manifest.box.id, registry.box.id);
     assert.deepEqual(manifest.agents, [{ id: ada, name: "Ada" }]);
     assert.equal(manifest.files["usage.jsonl"], 1, "Bob's, August's and the undated line are out");
+    assert.equal(manifest.files["tokens.jsonl"], 2, "the side-door token and this box's rotation; the other box's rotation is its own");
     assert.equal(manifest.undated, 1);
     assert.equal(manifest.files["auto-review.jsonl"], 1);
     assert.equal(manifest.files["answer-review.jsonl"], 1);

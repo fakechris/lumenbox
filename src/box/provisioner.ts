@@ -21,6 +21,7 @@ import { assertCompatible, BoxClient } from "./client.ts";
 import { ensureCpuLimit } from "./box-cpus.ts";
 import { chosenBoxCpus } from "../config.ts";
 import {
+  boxTokenPath,
   BoxManager,
   defaultBoxConfig,
   type BoxConfig,
@@ -118,6 +119,16 @@ export class DockerBoxProvisioner implements BoxProvisioner {
     this.manager = new BoxManager(config);
     this.label = `docker (${config.containerName})`;
     this.boxName = config.containerName;
+  }
+
+  /** The file this box's token lives in, or undefined when the environment supplies it (`AGENTBOX_TOKEN`) and a rotation could not last. */
+  tokenFile(): string | undefined {
+    return process.env.AGENTBOX_TOKEN ? undefined : boxTokenPath(this.manager.config.containerName);
+  }
+
+  /** After a rotation: the address handed out from now on carries the new token, and so does a re-created container. */
+  useToken(next: string): void {
+    this.manager.config.token = next;
   }
 
   async endpoint(): Promise<BoxEndpoint | undefined> {

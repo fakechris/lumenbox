@@ -196,6 +196,26 @@ holder's access ends is closed at once. At every level each stream's opening and
 each sign-in that worked, is recorded and exported by `audit export`. Of R8, tokens minted and
 revoked and decisions made through the API are not recorded yet. R7 is not built.
 
+**Part 4: R7, and the rest of R8** (`src/box/box-tls.ts`, `src/box/token-rotation.ts`,
+`src/boxd/token-store.ts`, `src/web/token-ledger.ts`; docs/06 "The host and its boxes"). The box
+daemon speaks plain HTTP; what identifies the box is decided per kind:
+
+| Box | How the host reaches it | What identifies the box |
+|---|---|---|
+| This machine's Docker box | HTTP to a port published on loopback | loopback: nothing else can answer there. No TLS |
+| A personal box (Docker) | the same | the same |
+| A tenant's or a personal box on Kubernetes | HTTP to the pod's ClusterIP; the gateway → tenant hop likewise | the NetworkPolicy that admits only the control plane's pods. No TLS |
+| An attached box over a tailnet or an SSH forward (docs/30) | HTTP | WireGuard's peer keys, or SSH's host key. No TLS: docs/30 stands |
+| An attached box behind a TLS terminator | HTTPS | its certificate: verified when an authority vouches for it for that name; otherwise its public key is pinned on first use (`box-pins.json`) and a different one is refused, before anything is written to the connection, with what to do (`box attach … --replace`) |
+
+Before this, the desktop page and socket accepted any certificate while the box client accepted
+only authority-vouched ones. A box's token can be rotated from Settings → Computers or
+`agentbox box rotate-token <name>`: the box accepts the new token from the moment it is named and
+the old one until five minutes after the host confirms the switch, across a restart of either
+side; nothing is re-attached and no agent stops. Tokens minted, revoked and rotated are in
+`tokens.jsonl`, approvals answered through the API name who answered them in `policy.jsonl`, and
+`audit export` carries both.
+
 ## 6. Upgrades that can be promised
 
 - **One home format number.** `home/FORMAT` holds an integer. Changes to stored data are numbered
@@ -236,7 +256,7 @@ first delivery; the client API is needed only when they show the board on a scre
 |---|---|---|
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
 | 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
-| 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 parts 1–3): the declared level and its start-up check, R1, R2, R4, R5 (except a strict `script-src`), R6, R8 for sign-ins and desktop sessions, and S-2 closed for private. R7, and R8 for tokens and API decisions, not built. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
+| 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 parts 1–3): the declared level and its start-up check, R1, R2, R4, R5 (except a strict `script-src`), R6, R7, R8, and S-2 closed for private. Not done: the kind pass through a TLS Ingress. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
 | 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Not built. Paged work list, resumable event stream and stable error codes exist internally |
 | 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Not built |
 | 6. Shared storage for an organisation; mobile apps | Shared storage: a design of its own. Native iOS and Android clients, encrypted relay and wake-only push: docs/110 | Decided in docs/110; not built |
