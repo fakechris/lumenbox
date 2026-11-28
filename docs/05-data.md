@@ -528,12 +528,13 @@ not apply to another.
 | `type` | what it records |
 |---|---|
 | `activate-person` | an Admin (`by`) activated `subject` at `role`; `listed` says whether the directory listed them then |
-| `activate-department` | an Admin activated everybody a department listed at that moment: `department` (`vendorId`, `name`), `includeSub`, `role`, `count`, `alreadyActive`, and the `people` it covered. One line for the bulk act, never one per person |
+| `activate-department` | an Admin activated everybody a department listed at that moment: `department` (`vendorId`, `name`), `includeSub`, `role`, `count`, `alreadyActive`, and the `people` it covered. One line for the bulk act, never one per person. `estimate`, when boxes are made at activation: what the Admin confirmed before the press — `people`, `boxes` it starts, `outOfQuota`, one box's `memoryRequest` as the allocator places it and `memoryBytes` for all of them |
 | `request` | `subject` signed in through the door without an activation: asked to join. One per person until it is answered, however often they scan |
 | `dismiss` | an Admin put a request away |
 | `enrolled` | the roster people an activation made: `people` (`subject`, `principalId`), one line for the act however many. `migrated: true` when they were made after the fact — by home format 2 from an activation older than INV-2220 (§2.0), or by a server start finishing an activation that had made nobody: no box is asked for on their behalf, and they get theirs at their first use |
 | `admitted` | the activated subject's first sign-in through the door, as `principalId`. In a ledger written before INV-2220 it is also when the roster gained them |
 | `boxes` | personal boxes were asked for on behalf of the roster people in `people` (`count` of them): `by` the Admin whose activation it followed, or `start` for people a stopped server had left queued. What became of each is the box's own record |
+| `told` | the person was told their assistant is ready, by their agent through the door (`delivered: true`), or the door would not carry it (`delivered: false`, `why`): `by` `activation` for the first try, else the Admin who asked again. Only for people an activation asked a box for |
 | `listed` | a sync listed people who had been activated before the directory showed them |
 | `left` | a sync no longer listed an activated person: the sign-in this source gave them was ended (`principalId` when they had signed in). Nothing else was changed |
 | `hold` | a sync was not believed and changed nothing: `reason` (`empty`: it listed nobody; `halved`: fewer than half the people of the one before; `many`: more than 5 people and more than 10% of the source's `standing` activations would leave) and the `people` it would have ended |

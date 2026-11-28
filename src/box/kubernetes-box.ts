@@ -80,6 +80,8 @@ export class KubernetesBoxDriver implements PersonalBoxDriver {
   constructor(private readonly options: KubernetesBoxDriverOptions) {}
 
   get image(): string { return this.options.image; }
+  /** The memory each box is placed with: the allocator's decision, the one number an estimate multiplies (INV-2220). */
+  get memoryRequest(): string { return this.options.decision.resources.memoryRequest; }
 
   /** One box record, one placement. The pod's name is the record's name — the container's under Docker. */
   placement(record: PersonalBoxRecord, token = readFileSync(record.tokenFile, "utf8").trim()): KubeBoxPlacement {

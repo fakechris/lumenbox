@@ -79,7 +79,7 @@ import { RELAY_PATH } from "../host/model-relay.ts";
 import { IdempotencyStore } from "./idempotency.ts";
 import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
-import { ALL_TOOLS, Orchestrator, STARTER_TEAM } from "../host/orchestrator.ts";
+import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
 import { describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
 import { modelConfigured } from "../host/model-readiness.ts";
 import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
@@ -248,7 +248,7 @@ import { Directories } from "../host/directory.ts"; import { Activations, activa
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
-import { personalBoxRoute, planBoxDispositions } from "./personal-box-routes.ts"; import { AUTO_REQUEST, AutoPersonalBoxes, personalBoxAt } from "../host/auto-personal-box.ts"; import { ensureHomeAgent } from "../host/member-agent.ts";
+import { personalBoxRoute, planBoxDispositions } from "./personal-box-routes.ts"; import { AutoPersonalBoxes, personalBoxAt } from "../host/auto-personal-box.ts";
 import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
@@ -271,7 +271,7 @@ import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
 import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts"; import { chatBoxFor, chatFiles } from "./chat-files.ts"; import { PersonReach } from "../host/reach-person.ts";
-import { attachedBox, tokenOf } from "../box/boxes.ts";
+import { attachedBox, tokenOf } from "../box/boxes.ts"; import { MemberOnboarding } from "./member-onboarding.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
 import { type BoxPlace, skillsDir, workDir } from "../host/box-paths.ts";
@@ -337,7 +337,7 @@ type OutboundEvent =
   /** An agent handed its desktop to the person; the page shows the instruction and a hand-back. */
   | { type: "handover_pending"; agentId: string; agentName: string; instruction: string; reason: string }
   /** An imported bot's setup turn ended; `summary` says what landed (docs/29 §5.4). */
-  | { type: "template_import"; agentId: string; agentName: string; summary: string; complete: boolean }
+  | { type: "template_import"; agentId: string; agentName: string; summary: string; complete: boolean } | { type: "activation_progress" } // INV-2220: re-read the boxes' progress
   /** A bot staged a version of its template; the chat shows a card with what it carries. */
   | { type: "template_staged"; agentId: string; agentName: string; id: string; version: number; name: string; description: string; counts: string };
 
@@ -831,18 +831,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
   /** The language a person is written to before they have opened anything: their door's. */
   const localeOfPerson = (id: string) => resolveLocale({ channelType: channelRecords.find(record => record.id === (principals.byId(id)?.identities[0] ?? "").split(":")[0])?.type });
-  // A personal box that came up is reconnected; in the one the installation made for a member, their one agent is made if they have none (INV-2220, member-agent.ts).
-  const reconnectPersonalBox = async (id: string): Promise<void> => {
-    try { const entry = registry.boxById(id); if (entry) await orchestrator.reconnectBox(entry); }
-    finally {
-      try {
-        if (personalBoxes.requestOf(id) === AUTO_REQUEST) ensureHomeAgent(id, { registry, principals, log, templatePath: () => loadConfig().memberTemplate,
-          assistant: owner => ({ ...STARTER_TEAM[0]!, name: tr("ui.personal.assistant", localeOfPerson(owner)) }),
-          importTemplate: (template, boxId, owner) => orchestrator.importTemplate(template, { caller: { userId: owner }, boxId, connected: ["browser", ...channelRecords.map(record => record.type)], log }).agent });
-      } catch (error) { log(`home agent in ${id}: not made (${error instanceof Error ? error.message : String(error)})`); }
-    }
-  };
-  const autoBoxes = new AutoPersonalBoxes({ home: join(agentboxHome(), "personal-boxes"), boxes: personalBoxes, quota: personalQuota, eligible: mayProvision, ready: reconnectPersonalBox, log,
+  // A box made for a member came up: reconnected, their agent made, and told if an activation asked for it (INV-2220, member-onboarding.ts).
+  const members = new MemberOnboarding({ registry, principals, boxes: personalBoxes, log, locale: localeOfPerson, memberTemplate: () => loadConfig().memberTemplate,
+    changed: () => broadcast({ type: "activation_progress" }), reconnectBox: entry => orchestrator.reconnectBox(entry),
+    importTemplate: (template, boxId, owner) => orchestrator.importTemplate(template, { caller: { userId: owner }, boxId, connected: ["browser", ...channelRecords.map(record => record.type)], log }).agent });
+  const reconnectPersonalBox = (id: string) => members.reconnect(id);
+  const autoBoxes = new AutoPersonalBoxes({ home: join(agentboxHome(), "personal-boxes"), boxes: personalBoxes, quota: personalQuota, eligible: mayProvision, log,
+    ready: (id, atActivation) => members.boxReady(id, atActivation), changed: () => broadcast({ type: "activation_progress" }),
     // At activation or at the first page load (INV-2220, INV-2203); by default where the boxes are the cluster's (or a given driver's), not this machine's Docker.
     when: () => principals.installation().mode === "organisation" ? personalBoxAt(loadConfig(), kubernetes || options.personalBoxDriver !== undefined) : "never" });
 
@@ -2987,6 +2982,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
     signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log,
     boxes: (people: readonly { id: string; name: string }[]) => autoBoxes.activated(people, person => tr("ui.personal.defaultName", localeOfPerson(person.id), { name: person.name })) };
+  const onboarding = members.attach({ activations: admissionDeps.activations, reach, autoBoxes, publicUrl: () => process.env.AGENTBOX_PUBLIC_URL, sourceOf: door => directoryCredentials(door)?.source,
+    quotaOf: id => personalQuotaFor(id, loadConfig(), directories.membership([id], directorySources())) }); // estimate, progress, telling people (INV-2220)
   const orgAdmission = admission(admissionDeps); chatDesk = orgAdmission;
   orgAdmission.catchUp(channelRecords.map(record => record.id)); // an activation a crash interrupted is finished, and boxes owed from before are queued (INV-2220)
   const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
@@ -4764,7 +4761,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: configuredPublicUrl(), callerId: () => caller.userId, log });
         if (peopleReply !== undefined) { if (peopleReply.status !== 0) send(res, peopleReply.status, peopleReply.body); return; }
         const activationReply = await activationRoute(route, url.searchParams, { ...admissionDeps, admission: orgAdmission, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req),
-          callerId: () => caller.userId, doors: () => channelRecords, boxesHeld: id => personalBoxesOf(registry.listBoxes(), id).length });
+          callerId: () => caller.userId, doors: () => channelRecords, onboarding, boxesHeld: id => personalBoxesOf(registry.listBoxes(), id).length });
         if (activationReply !== undefined) { if (activationReply.status !== 0) send(res, activationReply.status, activationReply.body); return; }
 
         // One click on a knock. The person is told on the channel they knocked from,

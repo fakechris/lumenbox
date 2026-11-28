@@ -53,6 +53,7 @@ async function organisation(t: { after(fn: () => void): void }, options: { confi
   const driver: PersonalBoxDriver = {
     start: async record => { const name = record.displayName ?? record.name; started.push(name); return (options.start ?? (async () => "http://127.0.0.1:1"))(name); },
     remove: async () => {},
+    memoryRequest: "2Gi", // what the allocator would place each box with: what an estimate multiplies
   };
   const dial = async () => { throw new Error("unexpected Docker lookup"); };
   async function boot() {
@@ -218,28 +219,47 @@ test("INV-2220: activating a person makes their box and one agent in it, written
   const people = (await request("/api/personal-boxes/panel", "web:operator")).data.inventory.people as Array<{ id: string; waitingForQuota?: boolean }>;
   assert.deepEqual(["ding:v01", "ding:p03"].map(id => people.find(person => person.id === id)?.waitingForQuota), [undefined, true]);
   assert.deepEqual((await request("/api/setup", "ding:p03")).data.autoBox, { state: "quota" }, "and her own page says so");
+  const quota = (await request("/api/activations/progress?channelId=ding&state=quota", "web:operator")).data;
+  assert.deepEqual([quota.counts.quota, quota.people.map((row: { subject: string }) => row.subject)], [1, ["p03"]], "the activations page counts and names who needs a raise; the viewer is not counted");
   // The ledger says who asked for a box on whose behalf.
   const acts = (await request("/api/activations/audit", "web:operator")).data.acts as Array<{ type: string; by?: string; people?: unknown }>;
   assert.deepEqual(acts.filter(act => act.type === "boxes").map(act => [act.by, act.people]), [["web:operator", ["ding:p01"]]]);
 });
 
-test("INV-2220: a department of thirty is on the roster at once; their boxes start a few at a time, and one that fails says why and stops nobody", async (t) => {
-  let inFlight = 0, most = 0, open: () => void = () => {};
+test("INV-2220: a department of thirty is confirmed against its estimate, is on the roster at once; their boxes start a few at a time, progress is counted, one that fails says why, stops nobody and is retried on request", async (t) => {
+  let inFlight = 0, most = 0, open: () => void = () => {}, pulled = false;
   const gate = new Promise<void>(resolve => { open = resolve; });
   const org = await organisation(t, { withDoor: true, start: async name => {
     inFlight += 1; most = Math.max(most, inFlight);
     await gate; await new Promise(resolve => setTimeout(resolve, 5));
     inFlight -= 1;
-    if (name.startsWith("P07")) throw new PersonalBoxStartError("pull failed", "ImagePullBackOff", "Check the image.");
+    if (name.startsWith("P07") && !pulled) { pulled = true; throw new PersonalBoxStartError("pull failed", "ImagePullBackOff", "Check the image."); } // fixed before the retry
     return "http://127.0.0.1:1";
   } });
   const request = await org.boot();
-  assert.deepEqual((await request("/api/activations/department", "web:operator", { channelId: "ding", department: "10", includeSub: false, role: "driver" })).data, { activated: 30, alreadyActive: 0 });
+  const press = { channelId: "ding", department: "10", includeSub: false, role: "driver" };
+  // Before the press: what it asks of the cluster, from the allocator's own request per box.
+  const estimate = (await request("/api/activations/estimate?channelId=ding&department=10&includeSub=false&role=driver", "web:operator")).data;
+  assert.deepEqual(estimate, { people: 30, boxes: 30, outOfQuota: 0, memoryRequest: "2Gi", memoryBytes: 30 * 2 * 2 ** 30, alreadyActive: 0 });
+  assert.equal((await request("/api/activations/estimate?channelId=ding&department=10&includeSub=false&role=viewer", "web:operator")).data.boxes, 0, "viewers get no box");
+  // Not confirmed (the Admin cancelled, or confirmed another number): nothing happens at all.
+  for (const unconfirmed of [press, { ...press, confirm: { boxes: 29 } }]) {
+    const refused = await request("/api/activations/department", "web:operator", unconfirmed);
+    assert.deepEqual([refused.status, refused.data.code, refused.data.estimate?.boxes], [409, "activation-confirm-needed", 30]);
+  }
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.deepEqual([org.started.length, new Principals().isKnown("ding:p01")], [0, false], "cancelling starts nothing and makes nobody");
+  assert.deepEqual((await request("/api/activations/department", "web:operator", { ...press, confirm: { boxes: 30 } })).data, { activated: 30, alreadyActive: 0 });
+  const acts = (await request("/api/activations/audit", "web:operator")).data.acts as Array<{ type: string; estimate?: unknown }>;
+  assert.deepEqual(acts.filter(act => act.type === "activate-department").map(act => act.estimate), [{ people: 30, boxes: 30, outOfQuota: 0, memoryRequest: "2Gi", memoryBytes: 30 * 2 * 2 ** 30 }], "the press is audited with what it was confirmed against");
   const roster = new Principals();
   assert.equal(staff.filter(subject => roster.isKnown(`ding:${subject}`) && roster.roleOf(`ding:${subject}`) === "driver").length, 30, "thirty people, before one box is up");
   for (let i = 0; i < 200 && org.started.length < STARTING_AT_ONCE; i++) await new Promise(resolve => setTimeout(resolve, 10));
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(org.started.length, STARTING_AT_ONCE, "the rest wait their turn");
+  const midway = (await request("/api/activations/progress?channelId=ding", "web:operator")).data;
+  assert.deepEqual(midway.counts, { ready: 0, starting: STARTING_AT_ONCE, queued: 30 - STARTING_AT_ONCE, failed: 0, quota: 0 }, "counted, not listed");
+  assert.equal(midway.people, undefined, "nobody's row until a state is opened");
   assert.deepEqual((await request("/api/setup", "ding:p30")).data.autoBox, { state: "preparing" }, "and somebody still in the queue is told theirs is being prepared — what the chat tells them too (INV-2221)");
   open();
   const boxes = await allSettled(request, 30);
@@ -248,6 +268,13 @@ test("INV-2220: a department of thirty is on the roster at once; their boxes sta
   const failed = boxes.filter(box => box.status !== "ready");
   assert.deepEqual(failed.map(box => [box.owner, box.status, box.stateReason]), [["ding:p07", "failed", "ImagePullBackOff"]], "the platform's reason, on the one that failed");
   assert.deepEqual((await request("/api/setup", "ding:p07")).data.autoBox, { state: "failed", reason: "ImagePullBackOff" });
+  const done = (await request("/api/activations/progress?channelId=ding&state=failed", "web:operator")).data;
+  assert.deepEqual(done.counts, { ready: 29, starting: 0, queued: 0, failed: 1, quota: 0 });
+  assert.deepEqual(done.people.map((row: { subject: string; reason: string }) => [row.subject, row.reason]), [["p07", "ImagePullBackOff"]]);
+  // Nobody holds a door here whose bot can write to them, so the 29 whose box came up are listed as not told, with why.
+  const notTold = (await request("/api/activations/progress?channelId=ding&state=not-told", "web:operator")).data;
+  assert.equal(notTold.notTold, 29);
+  assert.match(notTold.people[0].told.why, /holds no identity on a channel whose bot can write to them/);
   assert.equal(new Principals().isKnown("ding:p07"), true, "and that person still exists and can sign in");
   // Nothing is tried again: not by a page load, not by a restart.
   await request("/api/me", "ding:p07");
@@ -256,6 +283,17 @@ test("INV-2220: a department of thirty is on the roster at once; their boxes sta
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(org.started.length, 30);
   assert.equal((await again("/api/personal-boxes/admin", "web:operator")).data.boxes.length, 30);
+  // An Admin asks for the failed one again: started once more, through the same queue, and it comes up.
+  assert.deepEqual((await again("/api/activations/retry-boxes", "web:operator", { channelId: "ding" })).data, { retried: 1 });
+  for (let i = 0; i < 200 && (await again("/api/activations/progress?channelId=ding", "web:operator")).data.counts.ready < 30; i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(org.started.length, 31);
+  assert.deepEqual((await again("/api/activations/progress?channelId=ding", "web:operator")).data.counts, { ready: 30, starting: 0, queued: 0, failed: 0, quota: 0 });
+  assert.equal((await again("/api/activations/retry-boxes", "web:operator", { channelId: "ding", subject: ["p07"] })).data.code, "activation-subject-invalid", "a malformed selector is refused, never read as everybody");
+  // A driver is refused every one of these routes.
+  for (const [path, body] of [["/api/activations/estimate?channelId=ding&department=10&role=driver", undefined], ["/api/activations/progress?channelId=ding", undefined],
+    ["/api/activations/tell", { channelId: "ding" }], ["/api/activations/retry-boxes", { channelId: "ding" }]] as const) {
+    assert.equal((await again(path, "ding:p01", body)).status, 403, path);
+  }
 });
 
 test("INV-2220: with boxes at first use, activation makes the person and no box; their first page load makes the box and the agent", async (t) => {
@@ -293,6 +331,8 @@ test("INV-2220: somebody activated before the upgrade keeps a box at their first
   assert.deepEqual((await allSettled(request, 2)).map(box => box.owner).sort(), ["ding:p05", "ding:p06"]);
   for (let i = 0; i < 100 && new Principals().byId("ding:p05")?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(new Principals().byId("ding:p05")?.homeAgentId, "with her agent in it");
+  const told = (await request("/api/activations/audit", "web:operator")).data.acts.filter((act: { type: string }) => act.type === "told").map((act: { principalId: string }) => act.principalId);
+  assert.deepEqual(told, ["ding:p06"], "the upgrade's person is not written to; only the one activated after it was (and not reached: no door here)");
 });
 
 test("INV-2221: a person chooses which agent answers their direct messages, among agents they may reach; a request that came from a chat is approved by activating them", async (t) => {

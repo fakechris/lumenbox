@@ -52,6 +52,8 @@ function home(): { root: string; registry: AgentRegistry; ada: string; bob: stri
   // What an organisation skill was allowed to run, per box (INV-2222): each box's own answers travel with that box only.
   writeFileSync(join(root, "org-skill-setup.jsonl"), line({ kind: "consent", at: "2026-09-10T10:04:00Z", box: registry.box.id, slug: "hello", digest: "d1", version: 1, agreed: true, by: "p-ann", via: "chat" }) + line({ kind: "consent", at: "2026-09-10T10:04:00Z", box: grok.id, slug: "hello", digest: "d1", version: 1, agreed: false, by: "p-bo", via: "page" }));
   writeFileSync(join(root, "org-skills.jsonl"), line({ at: "2026-09-10T09:00:00Z", act: "publish", slug: "hello", by: "p-admin", version: 1 }) + line({ at: "2026-09-10T09:30:00Z", act: "offer", slug: "x", by: "p-ann" }));
+  writeFileSync(join(root, "activations.jsonl"), line({ type: "told", at: "2026-09-10T10:04:00Z", by: "activation", subject: "p01", principalId: "ding:p01", delivered: false, why: "never opened a chat" })
+    + line({ type: "told", at: "2026-08-01T10:04:00Z", by: "activation", subject: "p02", principalId: "ding:p02", delivered: true }));
   writeFileSync(join(root, "vault.json"), JSON.stringify({ secrets: [{ id: "SHOP_PASSWORD", value: PASSWORD, grants: [] }, { id: "short", value: "abc", grants: [] }] }));
   writeFileSync(join(root, "config.json"), JSON.stringify({ channels: { feishu: { appSecret: "feishu-app-secret-value-1" } } }));
   registry.appendTranscript(ada, { role: "user", text: `the password is ${PASSWORD}`, at: "2026-09-10T10:00:00Z" });
@@ -92,6 +94,7 @@ test("an export is one box's ledgers inside the window, secrets redacted, and re
     assert.equal(manifest.files["org-skill-setup.jsonl"], 1, "this box's consent, not the other's");
     assert.equal(manifest.files["org-skills.jsonl"], 1, "who published which version; a member's offer is not this box's record");
     assert.deepEqual(readFileSync(join(out, "administration.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line).act), ["personal-box.transfer"], "this box's hand-over, not the other's keep");
+    assert.equal(manifest.files["activations.jsonl"], 1, "who was let in and told is the installation's, placed by time alone");
     assert.equal(manifest.files[join("transcripts", ada, "main.jsonl")], 2);
     assert.equal(manifest.files[join("transcripts", ada, "side-1.jsonl")], 1);
     assert.deepEqual(manifest.redactions, { exact: 1, pattern: 1 });
