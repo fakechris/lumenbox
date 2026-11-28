@@ -7,12 +7,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACCESS_TTL_MS, DeviceStore, REFRESH_OVERLAP_MS, REFRESH_TTL_MS } from "./device-credentials.ts";
 import { DeviceSignIns, CODE_TTL_MS, PAIRING_TTL_MS, START_TTL_MS, isAppRedirect } from "./device-sign-in.ts";
-import { chmodSync } from "node:fs";
 import { deviceRoute } from "./device-routes.ts";
 import type { TokenRecord } from "./token-ledger.ts";
 
@@ -64,11 +63,15 @@ test("a refresh token is spent by its use; within 30 seconds it ends nothing, af
   assert.ok(text.includes(createHash("sha256").update(made.tokens.refreshToken).digest("hex").slice(0, 32)), "a spent one as the start of its SHA-256, to know it again");
 
   // A rotation that cannot be written is not made: the token presented still works once the disk does.
-  const careful = store.signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "careful phone", platform: "ios", scopes: ["work:read"], by: "dee" });
-  chmodSync(home, 0o500);
-  assert.throws(() => store.refresh(careful.tokens.refreshToken, holds));
-  chmodSync(home, 0o700);
-  assert.ok("tokens" in store.refresh(careful.tokens.refreshToken, holds), "not superseded, not reused: as if nothing happened");
+  // (Its directory gone, which stops a write even for root, as CI runs.)
+  const shaky = join(home, "shaky");
+  mkdirSync(shaky);
+  const fragile = new DeviceStore(join(shaky, "devices.json"), () => {}, () => {}, () => new Date(clock.ms));
+  const careful = fragile.signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "careful phone", platform: "ios", scopes: ["work:read"], by: "dee" });
+  rmSync(shaky, { recursive: true, force: true });
+  assert.throws(() => fragile.refresh(careful.tokens.refreshToken, holds));
+  mkdirSync(shaky);
+  assert.ok("tokens" in fragile.refresh(careful.tokens.refreshToken, holds), "not superseded, not reused: as if nothing happened");
 
   // Neither token outlives the device's year: the last refresh before it gives what is left.
   const yearly = store.signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "old faithful", platform: "ios", scopes: ["work:read"], by: "dee" });
