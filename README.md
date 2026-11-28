@@ -35,20 +35,20 @@ LumenBox is built around four questions: on which machine an agent works, who sh
 of work, whether it may, and why anyone should believe it when it says "done". Each has one place
 where it is answered.
 
-LumenBox 围绕四个问题设计：agent 在哪台机器上做事，一件事该谁做，它能不能做，它说"做完了"时凭什么信。每个问题只在一处回答。
+LumenBox 围绕四个问题设计：智能体在哪台机器上做事，一件事该谁做，它能不能做，它说"做完了"时凭什么信。每个问题只在一处回答。
 
 - **Write the record before the capability.** What an agent actually did is kept as data, not as
   its summary of itself; a capability without a record gets claimed, never proven.
-  **先写记录，再写能力。** agent 真正做了什么存成数据，不是它对自己的总结；没有记录的能力只会被宣称，不会被证明。
+  **先写记录，再写能力。** 智能体真正做了什么存成数据，不是它对自己的总结；没有记录的能力只会被宣称，不会被证明。
 - **Unknown is never success.** Desktop actions carry evidence of their effect, and an action
   whose outcome is unknown is not counted as done and not retried on its own.
   **未知永远不算成功。** 桌面动作带效果证据；结果不明的动作不算完成，也不会被自动重试。
 - **Two gates, and no third.** The installation decides who you are; the sandbox decides what can be
   reached. Channels and agents carry no authority, and agents in one sandbox are equal in reach.
-  **两道门，没有第三层。** 安装决定你是谁，sandbox 决定能到哪。渠道和 agent 不带权限，同一台 sandbox 里的 agent 能到的地方一律平等。
+  **两道门，没有第三层。** 安装决定你是谁，沙盒决定能到哪。渠道和智能体不带权限，同一个沙盒里的智能体能到的地方一律平等。
 - **A person is never locked out.** You can watch any desktop and take it over; while you hold
   it the agent waits, and what you do there can become a skill.
-  **人不会被锁在外面。** 任何桌面都能看、能接管；你接管时 agent 必须等，你做的一遍可以学成技能。
+  **人不会被锁在外面。** 任何桌面都能看、能接管；你接管时智能体必须等，你做的一遍可以学成技能。
 - **Boundaries in code, wording for the team.** Gates, budgets and refusals live in code; tone and
   "what counts as done" live in text your team can change.
   **边界用代码画，措辞让团队改。** 门、预算、拒绝在代码里；语气和"怎么算做完"在团队能改的文本里。

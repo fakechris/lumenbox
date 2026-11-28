@@ -105,7 +105,7 @@ Then run `agentbox usage --task tN` on the task.
 
 ### In the app
 
-1. Press `+` beside *Agents*. Under *From catalog*, press `研发小队`.
+1. Press `+` on the first sandbox heading in the sidebar. Under *From catalog*, press `研发小队`.
 2. Read the three agents in the preview and press *Create these 3 in <sandbox>*. They arrive on
    the `ship` team, and the sidebar lists them under SHIP.
 3. Pick Mo and write the wish: who it is for, and what counts as done.

@@ -611,7 +611,19 @@ test("a member's checklist is their own sandbox and their agent; a viewer gets n
   const one = draw("driver", [{ id: "bob", name: "Bob", boxId: "mine" }]);
   assert.deepEqual(one.steps.slice(1), ["○ | ui.first.step.agent | ui.first.talkTo"]);
   assert.deepEqual(one.walk(), [{ chat: "bob" }]);
-  assert.equal(draw("viewer", []).card, null);
+  const viewer = draw("viewer", []);
+  assert.equal(viewer.card, null);
+  // A list that is not drawn does not hide the composer's model sentence (INV-2311 review): the flag is cleared first.
+  (viewer.globals.settings as { listShowsModel?: boolean }).listShowsModel = true;
+  viewer.page.setupCard!();
+  assert.equal((viewer.globals.settings as { listShowsModel?: boolean }).listShowsModel, false);
+  // And the footer is drawn after the thread, so it reads what the list decided on this render, not the last one.
+  const order: string[] = [];
+  const renderChat = pageFunction("renderChat", { next: { agents: {} }, chat: { agentId: "" }, rememberPlace() {}, t: String, roleOf: () => "",
+    $: () => ({ textContent: "", title: "", hidden: false, placeholder: "" }), renderWatchOnly() {}, syncChatComposer() {}, loadThread() {},
+    renderThread: () => order.push("thread"), renderModelNotice: () => order.push("footer") });
+  renderChat({});
+  assert.deepEqual(order, ["thread", "footer"]);
 });
 
 test("a driver with no sandbox can create one from the list, or sees the one made at first sign-in being prepared, out of quota, or failed", () => {

@@ -51,7 +51,7 @@ agentbox box shot out.webp # save a screenshot of the desktop
 
 ## Where to see the result
 
-- The sidebar footer: `box online` or `box unavailable`, and how many sandboxes are up.
+- The sidebar footer: `sandbox online` or `sandbox unavailable`, and how many sandboxes are up.
 - The sandbox bar: one tab per sandbox, with a green dot when it is connected.
 - Settings → Sandboxes: every machine, and the last error of an attached sandbox.
 
@@ -59,7 +59,7 @@ agentbox box shot out.webp # save a screenshot of the desktop
 
 - An agent's sandbox is chosen once. To work on another sandbox, make a new agent there.
 - The local sandbox needs Docker Desktop or OrbStack. The first start can take 10 to 40 minutes.
-- A shared sandbox is shared: everyone who can open it can see its screen and read its files. Do not
+- A team sandbox is shared: everyone who can open it can see its screen and read its files. Do not
   sign in to your own accounts on it.
 - If something outside LumenBox stops the local sandbox, LumenBox starts it again. A sandbox you stopped with
   `agentbox box down` stays stopped.

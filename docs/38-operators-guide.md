@@ -389,7 +389,7 @@ in that thread, posted by Iris — not by an unnamed app account, not by whoever
 of UUIDs in the config file, with no interface, and that is a placeholder rather than a design:
 
 - Being able to comment on a work item is not the same as being able to start a turn on this
-  machine. Without a check, Involute's comment sandbox would be a way around this installation's
+  machine. Without a check, Involute's comment field would be a way around this installation's
   roles and sandbox membership entirely (docs/54 §3.6).
 - The right answer is to resolve an Involute actor to a **Principal here**, and then ask the
   ordinary questions — role, and membership of the sandbox the agent lives in. That needs a link

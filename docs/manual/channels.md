@@ -40,7 +40,7 @@ Channels.
   people and where each stands: *Listed*, *Asked to join*, *Active* or *Left*. Choose a role and
   press *Activate* beside a person, or *Activate the N listed now* for a whole department, with
   its sub-departments if you tick that. The person is on the team at once: a message from them in
-  the channel is theirs, their own computer is made with one assistant in it if their limit allows one (a
+  the channel is theirs, their own sandbox is made with one assistant in it if their limit allows one (a
   few sandboxes start at a time when a department is activated), and they sign in through the
   channel whenever they come. When a sandbox made at their activation is ready, their assistant
   writes to them in the channel with the address to open; a sandbox made when they first open

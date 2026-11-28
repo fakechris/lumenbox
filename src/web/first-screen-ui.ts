@@ -116,6 +116,7 @@ function firstAgentOf(yours) {
  */
 function setupCard() {
   var state = settings.setup;
+  settings.listShowsModel = false; // set again below only while the list shows its model step
   if (!state || !canDriveAgents()) return null;
   var admin = canOperateInstallation(), card = el("div", "card-plain");
   if (admin && state.bootstrapPending) {

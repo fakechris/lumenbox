@@ -90,7 +90,7 @@ three files ([docs/75](../../75-cost-per-accepted-task.md)).
 
 ### In the app
 
-1. Press `+` beside *Agents*. Under *From catalog*, press `内容小队`, then *Create these 3 in
+1. Press `+` on the first sandbox heading in the sidebar. Under *From catalog*, press `内容小队`, then *Create these 3 in
    <sandbox>*. They arrive on the `media-desk` team, listed together in the sidebar.
 2. Pick Jian, paste the source and say who reads it.
 3. When the article is in the sandbox, ask He for a note and Jing for a script from it.

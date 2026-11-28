@@ -31,8 +31,8 @@ Code or Codex a skill that drives LumenBox through its MCP endpoint.
 
 ### In the app
 
-- **See the skills:** type `/` at the start of the chat sandbox. A menu lists the skills in this
-  agent's sandbox; picking one writes "Use the … skill." in the chat sandbox for you to send.
+- **See the skills:** type `/` at the start of the chat input. A menu lists the skills in this
+  agent's sandbox; picking one writes "Use the … skill." in the chat input for you to send.
 - **Review imported skills:** press *Teaching drafts* at the top of the app.
 - **Publish a skill to the whole organisation** (Admins): Settings → Team → *Organisation
   skills* → *Publish or update a skill*. Choose a skill folder on your computer, a skill of a
@@ -65,7 +65,7 @@ The app must be running.
 
 ## Where to see the result
 
-- The `/` menu in the chat sandbox.
+- The `/` menu in the chat input.
 - The agent's *Files* tab, under `skills/`.
 - Settings → Team → *Organisation skills*: each skill's version, who published it and when, how
   many sandboxes are up to date, and by name every sandbox that is behind, not connected, or where the

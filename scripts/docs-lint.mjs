@@ -487,6 +487,7 @@ function proseOf(line, allowed) {
     .replace(/\{\{?[\w.@-]+\}\}?/g, " ") // a placeholder ({box}, {{ui.key}}) is code: the word put there is checked where it is written
     .replace(/(^|[\s(（"“])~?\/[\w.\/-]+/g, "$1 ") // a path, typed as it is (/home/box/work)
     .replace(/\bagentbox(?:\s+[a-z][\w-]*){1,2}/g, " ") // a command, typed as it is (agentbox box up)
+    .replace(/\b[a-z]+:[\w<>*-]+/gi, " ") // an identifier with its prefix, typed as it is (agent:id, oauth:<provider>)
     .replace(/<!--.*?-->/g, " ")
     .replace(/\]\([^)]*\)/g, "] ")
     .replace(/[\w:-]+\s*=\s*"[^"]*"/g, " ")
@@ -582,11 +583,13 @@ export function bundleVocabularyProblems(file, text, glossary) {
   let section = "";
   text.split("\n").forEach((line, index) => {
     if (/^\s*(zh|en):\s*\{/.test(line)) section = /^\s*zh/.test(line) ? "zh" : "en";
-    if (!/^\s*"[\w.-]+": [["]/.test(line)) return;
+    // A key may hold a colon (`ui.next.cal.q.memory-judge:fromContent`): a narrower pattern once let such lines go unread.
+    if (!/^\s*"[\w.:-]+": [["]/.test(line)) return;
     const strings = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(match => JSON.parse(`"${match[1]}"`));
-    const pair = /^\s*"[\w.-]+": \[/.test(line);
+    const pair = /^\s*"[\w.:-]+": \[/.test(line), key = strings[0] ?? "";
     strings.slice(1).forEach((value, at) => {
-      const chinese = pair ? at === 0 : section === "zh";
+      // Chinese by position in a pair, by its block, or by its key (a shelf template's `descriptionZh`).
+      const chinese = pair ? at === 0 : section === "zh" || /Zh$/.test(key);
       const prose = proseOf(value, glossary.allowed);
       for (const rule of rules) {
         if (rule.chineseOnly && !chinese) continue;

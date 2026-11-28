@@ -205,6 +205,8 @@ test("a deprecated synonym is reported by file and line, in the listed files and
       '  "ui.page.box": ["box 已启动", "The box is up"],',
       // docs/112: an agent is 智能体 in Chinese and still *agent* in English.
       '  "ui.page.agent": ["交给 agent", "Hand it to the agent"],',
+      // A key with a colon is read too; an identifier typed as it is (agent:id) is not prose.
+      '  "ui.page.q:colon": ["问 agent", "Ask the agent"], "ui.page.id": ["* 或 agent:id", "* or agent:id"],',
       '  "ui.page.door": ["渠道", "Add a door"],',
       '  const bot = "bot";',
       "};",
@@ -213,7 +215,7 @@ test("a deprecated synonym is reported by file and line, in the listed files and
     mkdirSync(join(dir, "src", "host", "catalog-data", "templates"), { recursive: true });
     writeFileSync(join(dir, "src", "host", "catalog-data", "templates", "x.lumenbox-template.json"), JSON.stringify({
       format: "lumenbox-template/1",
-      profile: { name: "Haggle Bot", description: "A bot that haggles.", descriptionZh: "砍价机器人。" },
+      profile: { name: "Haggle Bot", description: "A bot that haggles.", descriptionZh: "砍价机器人，一个 agent。" },
       skills: [{ slug: "haggle", description: "the bot's own skill" }],
     }, null, 1));
     const problems = lintVocabulary(dir, ["gui*.md"], join(root, GLOSSARY));
@@ -227,8 +229,10 @@ test("a deprecated synonym is reported by file and line, in the listed files and
       'src/i18n/ui-page.ts:4: "box" is a deprecated synonym; write "sandbox, your sandbox, team sandbox" (docs/glossary.md).',
       'src/i18n/ui-page.ts:4: "box" is a deprecated synonym; write "sandbox, your sandbox, team sandbox" (docs/glossary.md).',
       'src/i18n/ui-page.ts:5: "agent" is a deprecated synonym; write "智能体" (docs/glossary.md).',
-      'src/i18n/ui-page.ts:6: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:6: "agent" is a deprecated synonym; write "智能体" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:7: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
       'src/host/catalog-data/templates/x.lumenbox-template.json:6: "机器人" is a deprecated synonym; write "智能体" (docs/glossary.md).',
+      'src/host/catalog-data/templates/x.lumenbox-template.json:6: "agent" is a deprecated synonym; write "智能体" (docs/glossary.md).',
     ]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

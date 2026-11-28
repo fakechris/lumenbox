@@ -88,7 +88,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **task** / 任务 | Task, the board | `tN`, e.g. `t12` | open · doing · blocked · review · done · dropped | Tasks tab · `/continue tN`, `/recover tN`, 停, 可以 · MCP `task_status` |
 | **goal** / 目标 | pursuit (goal-mode.ts); not `Task.goal`, which is a reminder of a person's aim (docs/74) | the task it lives on, `tN` | active · verifying · paused · complete · cleared | Settings → Supervision · `/goal <text>` · MCP `goal_start` |
 | **routine** / 例行任务 | routine: a skill with `schedule:` or `trigger:` (docs/44) | skill slug | off · observe · auto | Automations tab · reports to a group chat · `agentbox routines runs <slug>` |
-| **skill** / skill | Skill, `SKILL.md` | folder slug under `/home/box/work/skills/` | — (present or absent in a box) | `/` in the chat box lists them · — · `agentbox skills import/improve` |
+| **skill** / skill | Skill, `SKILL.md` | folder slug under `/home/box/work/skills/` | — (present or absent in a box) | `/` in the chat input lists them · — · `agentbox skills import/improve` |
 | **engine** / 引擎 | preset, `Delegate`, ACP session (docs/81, docs/84) | preset name, e.g. `claude`, `codex`, `self` | running · finished · failed | background run on a task · — · `Delegate` tool |
 | **background run** / 后台运行 | worker, `Delegate` preset `self` (docs/42) | the job id on the task | running · finished · failed | the task stays `doing` on the Tasks tab · — · — |
 | **extension** / 扩展 | extension module (docs/34) | file name in `~/.agentbox/extensions/` | loaded · failed | Settings → Team → Reload extensions · — · `agentbox extensions reload` |

@@ -52,7 +52,7 @@ inventing one.
 ### Skills
 
 The starter skills and the hub skills ship with every sandbox (see
-[skills that ship](../reference-skills.md)). Type `/` in the chat sandbox to see them. Rex reaches
+[skills that ship](../reference-skills.md)). Type `/` in the chat input to see them. Rex reaches
 for `deep-research`; Ops for `engine-check` when a coding engine is needed.
 
 ### Memory

@@ -52,7 +52,7 @@ chat. A dash means there is no entry there yet.
 | channel | Settings → Channels → Add channel | the chat itself; `bind <code>` | — | connected · not connected | [channels](channels.md) |
 | group chat | Settings → Channels, group rule | the group | — | only when addressed · answer all | [channels](channels.md) |
 | connector | Settings → Channels → Connectors | — | — | connected · not connected | [channels](channels.md) |
-| skill | type `/` in the chat sandbox | — | `agentbox skills import`, `skills improve` | present in a sandbox or not | [skills](skills.md) |
+| skill | type `/` in the chat input | — | `agentbox skills import`, `skills improve` | present in a sandbox or not | [skills](skills.md) |
 | LumenBox skill for Claude Code and Codex | Settings → Mine → Your MCP tokens | — | `agentbox skill install` | — | [skills](skills.md) |
 | memory | Settings → Memory | — | `agentbox backup` copies it | live · withdrawn | [memory](memory.md) |
 | team memory review | Settings → Team → Team memory | — | — | waiting · approved · rejected | [memory](memory.md) |
@@ -75,7 +75,7 @@ chat. A dash means there is no entry there yet.
 Each line is one thing that looks like another, and where to check which one you have.
 
 - **A running sandbox is not an agent at work:** the sandbox can be up while every agent is idle or
-  paused. Check the sidebar: the footer says `box online`, and each agent's row says Running,
+  paused. Check the sidebar: the footer says `sandbox online`, and each agent's row says Running,
   Waiting for you, or `paused`.
 - **A delivered result is not accepted work:** a request ends when its result is delivered,
   and the record says that no person accepted it. It waits for you instead when your word
