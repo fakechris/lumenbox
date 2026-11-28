@@ -77,6 +77,10 @@ Expect 10–40 minutes, most of it the first pull.
 Exit 0 is PASS, 1 is a failed step, 2 is a script error. The report is
 `<run-dir>/report.md` (default run dir `~/lumenbox-onboarding/<version>-<stamp>/`), beside
 `report.json`, `manifest.json`, the screenshots, each phase's `app.log` and `full/box-start.log`.
+Each app the run starts writes its shell logs (`server.log`, `supervision.log`, `memguard.log`)
+to `<run-dir>/<phase>/logs/`, set through `LUMENBOX_LOGS_DIR`, and the report's last line names
+them: the run keeps the real `HOME`, and without it every app it starts would append to the
+owner's `~/Library/Logs/LumenBox/server.log` and could rotate the owner's `server.log.1` away.
 
 ## Upgrade mode: the previous release, used, then the candidate on its data
 
@@ -109,6 +113,7 @@ the run's one box container and volumes, as one person's machine does across an 
 | previous: a file in each box volume | the code word written to `/home/box/work/` (the work volume) and to `/home/box/.config/box-chrome-0/` (the config volume, where the browser profiles live), inside the run's own container |
 | previous: what it shows, read through the API | the previous app itself shows all of it — so a miss later is the upgrade's |
 | upgrade: the candidate opens the previous home | the candidate's server answers on the same home and its window opens |
+| upgrade: the server answering is the candidate's build | `/api/state`'s `build` is the candidate's version and the commit stamped in its `package.json` — not a previous server still holding the port, which would make every later step test the old app; the walk stops here otherwise |
 | upgrade: FORMAT and format-migrations.jsonl say what the migrations did | `FORMAT` is the highest format the candidate ships; the ledger kept every line the previous app wrote and gained one per format, in order, by the candidate's version; a line with a backup names a copy that exists, and no copy appears when no migration had work (`needed`) |
 | upgrade: everything written before reads back | the agent, every message and reply, the memory, the routine and its schedule, the task, the saved key and the provider, through the candidate's API |
 | upgrade: the box comes up with its volumes kept | the box connects (Start the box is pressed if it does not by itself); both volumes are the ones from before (same creation time) and both files still hold the code word. The report says whether the container was recreated |
@@ -135,7 +140,14 @@ Nothing is deleted by a run. To see what a run created:
 node scripts/onboarding-e2e.mjs --cleanup ~/lumenbox-onboarding/<run>
 ```
 
-That prints the container, volumes and network and removes nothing. After a person has read
+That prints the container, volumes, network and the app processes the run recorded, and removes
+nothing. A recorded process is stopped only if what holds that number now runs from one of the
+run's own installed apps; when the manifest has the time the run recorded it and the process's
+start time can be read, it must also have started no later than that. A bare number (a manifest
+from before INV-2306) or an unreadable start time leaves the executable alone to decide, and the
+list says so. Anything else is listed as
+"not ours, left alone" and never signalled — the run stopped its apps itself, so by cleanup time
+a number may belong to anything on the machine. After a person has read
 the list and said yes, run it again with `--yes`. The image is removed only with
 `--remove-image`, and never if it was on the machine before the run. The run directory is
 kept until the report is filed; delete it by hand afterwards.
