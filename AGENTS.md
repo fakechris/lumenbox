@@ -200,5 +200,11 @@ Every file in `docs/` opens with a header block naming what it is:
   message or a code comment, and says what we do and why without naming anyone.
 - **Never print or store a token, key or secret** — not in a message, not in a commit, not in a
   transcript. Name it and say where it lives.
+- **Merge only what you opened, and only when you were asked to.** A pull request belongs to the
+  session that opened it; another session's green pull request is not yours to merge, however
+  ready it looks — its author may be waiting on a review, a person's decision or a second pull
+  request that must land first. Green CI is not approval. If you were not told to merge it, leave
+  it open. (2026-11-28: one tool merged eight other sessions' pull requests within minutes of their
+  checks passing, including two still under review.)
 - **Another agent may be working in this checkout.** Check the branch, commit only your own
   files, and never `git add -A` across somebody else's work in progress.
