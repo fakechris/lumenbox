@@ -220,7 +220,7 @@ function serverExit(kit, appRoot, home, timeoutMs) {
   const env = kit.cleanEnv(process.env, { AGENTBOX_HOME: home, AGENTBOX_CONTAINER: kit.run.container, ELECTRON_RUN_AS_NODE: "1" });
   return new Promise(done => {
     const child = spawn(binary, ["--experimental-transform-types", join(resources, "src", "cli.ts"), "web", "--port", String(kit.run.options.port), "--desktop"], { cwd: resources, env, stdio: ["ignore", "pipe", "pipe"] });
-    kit.run.manifest.appProcesses.push(child.pid);
+    kit.run.recordProcess(child.pid);
     const out = [];
     child.stdout.on("data", chunk => out.push(chunk));
     child.stderr.on("data", chunk => out.push(chunk));
