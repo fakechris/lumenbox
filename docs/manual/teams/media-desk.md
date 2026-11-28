@@ -39,7 +39,7 @@ reach.
 
 ### Tools and permissions
 
-- Jian and He have the desk tools plus the web: the box browser, `WebFetch`, `WebSearch` and
+- Jian and He have the desk tools plus the web: the sandbox browser, `WebFetch`, `WebSearch` and
   `ReadFeishuDoc`.
 - Jing has the desk tools only; a script is written from the article, not from the web.
 - Nothing in the crew posts anywhere. Posting to an outside service goes through a connector,
@@ -49,7 +49,7 @@ reach.
 
 Jian reads `khazix-writer`, `humanizer` and `wechat-longform`. He reads `xiaohongshu-note`,
 `marketing-skills`, `humanizer` and `content-repurposer`. Jing reads `short-video-script`,
-`content-repurposer` and `humanizer`. All of them ship with every box.
+`content-repurposer` and `humanizer`. All of them ship with every sandbox.
 
 ### Memory
 
@@ -59,7 +59,7 @@ Each agent keeps its own memory of your style and your readers. The drafts are f
 ### Credentials
 
 None to start. `WebSearch` needs one search key (Keenable, Brave or Tavily) in Settings → Model;
-without it, the agents search through the box browser. A site that needs an account must be
+without it, the agents search through the sandbox browser. A site that needs an account must be
 signed in on that agent's desktop: take it over and sign in yourself.
 
 ## Configuration: minimal and daily
@@ -68,10 +68,10 @@ signed in on that agent's desktop: take it over and sign in yourself.
 |---|---|---|
 | Agents | Jian, He and Jing, on the `media-desk` team the crew puts them on | The same three |
 | Input | One link or file per request | A routine that collects sources each morning (Automations → *+ New*) |
-| Search | The box browser | A search key in Settings → Model |
+| Search | The sandbox browser | A search key in Settings → Model |
 | Hand-off | You ask He and Jing after Jian finishes | Jian is told to hand the article on; the division of work shows the chain |
 | Channel | The app only | A Feishu group with Jian as the default agent |
-| Publishing | You copy the files out | Still you; see *Outside the box* |
+| Publishing | You copy the files out | Still you; see *Outside the sandbox* |
 
 ## Running cost
 
@@ -80,7 +80,7 @@ signed in on that agent's desktop: take it over and sign in yourself.
 usage rows were compacted after 48 hours, so no token count survives. No run of the crew on one
 source is on record, so this page gives no figure.
 
-To measure it: install the crew on a box with a model key, set `AGENTBOX_USAGE_RETAIN_HOURS`
+To measure it: install the crew on a sandbox with a model key, set `AGENTBOX_USAGE_RETAIN_HOURS`
 longer than the run, and give Jian one source with "article, then note and script". Record
 `agentbox usage --task tN` for the task, the wall-clock time from its history, and the model and
 rates in effect that day. A cost per *accepted* piece also needs your verdict on each of the
@@ -90,10 +90,10 @@ three files ([docs/75](../../75-cost-per-accepted-task.md)).
 
 ### In the app
 
-1. Press `+` beside *Agents*. Under *From catalog*, press `内容小队`, then *Create these 3 in
-   <box>*. They arrive on the `media-desk` team, listed together in the sidebar.
+1. Press `+` on the first sandbox heading in the sidebar. Under *From catalog*, press `内容小队`, then *Create these 3 in
+   <sandbox>*. They arrive on the `media-desk` team, listed together in the sidebar.
 2. Pick Jian, paste the source and say who reads it.
-3. When the article is in the box, ask He for a note and Jing for a script from it.
+3. When the article is in the sandbox, ask He for a note and Jing for a script from it.
 4. Open the task: *Deliverables* lists each file with *Download*.
 
 ### In a chat
@@ -121,7 +121,7 @@ agentbox usage --task t12                    # what the piece cost, once it has 
 - **The task card:** *Deliverables* (a `.pdf` that is not a PDF is refused and must be made
   again), the *Gate* line, and *Division of work* if Jian splits the job.
 
-## Outside the box
+## Outside the sandbox
 
 - Publishing: the WeChat official account, the Xiaohongshu account and the video account are
   yours. The crew writes; a person posts.
@@ -134,7 +134,7 @@ agentbox usage --task t12                    # what the piece cost, once it has 
 - Add a morning routine that collects sources for Jian, and keep it in observe for a week first.
 - Add `xi` (分析师) when a piece rests on numbers.
 - Stamp a ready-made template from the shelf for a channel the crew does not cover.
-- Save a tuned Jian as a template so another box starts with your style.
+- Save a tuned Jian as a template so another sandbox starts with your style.
 
 ## The run this page is based on
 

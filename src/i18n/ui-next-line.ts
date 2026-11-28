@@ -29,4 +29,9 @@ export const UI_NEXT_LINE: Record<string, readonly [string, string]> = {
   "ui.next.line.blocker.empty_output": ["本轮已结束。请再问一次。", "This turn ended. Ask again."],
   "ui.next.line.blocker.failed": ["出错停下了，打开看是哪一步", "Stopped on an error; open it to see where"],
   "ui.next.line.blocker.model_auth_rejected": ["模型供应商拒绝了凭据", "The model provider rejected the credentials"],
+  // The starter team's roles (orchestrator.ts STARTER_TEAM), as a person reads them; a role a person wrote is shown as written.
+  "ui.role.coordinator": ["协调员", "coordinator"],
+  "ui.role.researcher": ["研究员", "researcher"],
+  "ui.role.operator": ["操作员", "operator"],
+  "ui.role.reviewer": ["审核员", "reviewer"],
 };

@@ -27,7 +27,11 @@ function organisationAppBlock(data, connected) {
   var section = el("section", "setting"), apps = organisationApps(data), open = el("button", "act", t("ui.org.openChannels"));
   organisationHead(section, t("ui.org.channelApp"), t(connected ? "ui.org.state.connected" : "ui.org.state.notConnected"), connected ? "done" : "need");
   section.appendChild(el("p", "why", t(apps.length ? "ui.org.channelApp.why" : "ui.org.channelApp.none")));
-  apps.forEach(function (record) { section.appendChild(el("div", "why", (record.name || record.id) + " · " + t("ui.next.doors." + record.type))); });
+  // Each app by the name a person gave it and its state; the id and the vendor are Settings → Channels' detail.
+  apps.forEach(function (record) {
+    var name = record.name && record.name !== record.id ? record.name : t("ui.next.doors." + record.type);
+    section.appendChild(el("div", "why", name + " · " + t(appConnected(data, record) ? "ui.org.state.connected" : "ui.org.state.notConnected")));
+  });
   open.addEventListener("click", function () { openSettingsPane("doors"); });
   section.appendChild(open);
   return section;
@@ -51,12 +55,15 @@ function organisationActivateBlock() {
   return section;
 }
 
+/** A channel app is connected when it has its credentials and its channel is running. */
+function appConnected(data, record) {
+  return !!record.credentialsSet && (data.channels || []).some(function (channel) { return channel.running && (channel.name === record.id || channel.name === record.name); });
+}
+
 function renderOrganisationPane(view) {
   if (!doors.data) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadDoors(); return; }
   if (doors.error) view.appendChild(el("p", "why", doors.error));
-  var data = doors.data, running = {};
-  (data.channels || []).forEach(function (channel) { if (channel.running) running[channel.name] = true; });
-  var connected = organisationApps(data).some(function (record) { return record.credentialsSet && (running[record.id] || running[record.name]); });
+  var data = doors.data, connected = organisationApps(data).some(function (record) { return appConnected(data, record); });
   [organisationAppBlock(data, connected), organisationAddressBlock(data), organisationActivateBlock()].forEach(function (block) { view.appendChild(block); });
 }
 `;

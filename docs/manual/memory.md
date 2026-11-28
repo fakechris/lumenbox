@@ -13,7 +13,7 @@ What an agent keeps between conversations, and how you read, correct or remove i
 ## What it is
 
 **Memory** is the facts an agent keeps: one line each, with where it came from. Each agent has
-its own memory, and a team has a shared memory every agent in the box can read. An agent saves
+its own memory, and a team has a shared memory every agent in the sandbox can read. An agent saves
 a fact with its `RememberFact` tool, finds facts with `Recall`, and removes one with `Forget`.
 `Recall` finds a fact by its words and by what it is about, so "deploy" also finds a line about
 a release.
@@ -26,7 +26,7 @@ under Team memory.
 
 ### In the app
 
-- **Read it:** Settings → Memory lists the agents by box, with how many lines each keeps. Open
+- **Read it:** Settings → Memory lists the agents by sandbox, with how many lines each keeps. Open
   an agent to read its lines; team lines are marked `· team`.
 - **Correct a line:** press *Edit* on the line. **Remove one:** press *Withdraw*. To remove
   everything learned from one source, press *Withdraw <source>*.
@@ -49,7 +49,7 @@ There is no memory command. `agentbox backup` copies the memory with the rest of
 
 - Settings → Memory: every line, its source, and the withdrawn ones.
 - The next turn: a change is in the agent's next turn.
-- In the box, `memory/<agent id>/profile.md` under the *Files* tab: a read-only copy of the same
+- In the sandbox, `memory/<agent id>/profile.md` under the *Files* tab: a read-only copy of the same
   memory.
 
 ## Limits

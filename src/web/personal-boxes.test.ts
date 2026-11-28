@@ -136,11 +136,11 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
   assert.ok(!otherComputers.data.boxes.some((row: { id: string }) => row.id === personal.data.boxId));
   // The sidebar: their own sandbox, not answering, says so under its heading with the one button that tries again (INV-2311).
   const first = drawFirstScreen({ state: state.data, computers: computers.data, setup: (await request("/api/setup", "web:alice")).data, me: { role: "driver", identity: "web:alice" } });
-  const own = first.side.findIndex(row => row.cls === "sandbox-head" && texts(row)[0] === "ui.first.yours ·");
+  const own = first.side.findIndex(row => row.cls === "sandbox-line" && texts(row)[0] === "ui.first.yours ·");
   assert.ok(own >= 0, "their own sandbox is their heading");
-  assert.deepEqual(texts(first.side[own]), ["ui.first.yours ·", "ui.first.state.failed"]);
-  assert.deepEqual(texts(first.side[own + 1]), ["ui.first.why.noAnswer", "ui.first.tryAgain"]);
-  first.side[own + 1]!.kids[1]!.press!();
+  assert.deepEqual(texts(first.side[own]), ["ui.first.yours ·", "ui.first.state.failed", "ui.first.tryAgain"], "its one button on the heading line");
+  assert.deepEqual(texts(first.side[own + 1]), ["ui.first.why.noAnswer"]);
+  first.side[own]!.kids[1]!.press!();
   assert.deepEqual(first.pressed, [{ retry: personal.data.boxId }]);
   assert.ok(!first.why.some(line => /podUnreachable|Kubernetes|pod/.test(line)), "a driver reads no internal word in the sidebar");
   const retried = await request("/api/personal-boxes/retry", "web:alice", { id: personal.data.boxId });

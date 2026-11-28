@@ -25,12 +25,13 @@ function renderModelNotice() {
     $("composer").prepend(notice);
   }
   if (modelReadiness.agent !== chat.agentId) refreshModelReadiness();
-  notice.replaceChildren(); notice.hidden = modelReadiness.configured !== false;
+  // One place for the sentence (INV-2311): while Getting started shows its model step, the footer says nothing; the words are the list's.
+  notice.replaceChildren(); notice.hidden = modelReadiness.configured !== false || !!settings.listShowsModel;
   if (notice.hidden) return;
   var admin = canOperateInstallation();
-  notice.appendChild(el("span", "why", t(admin ? "ui.next.composer.modelMissing" : "ui.next.composer.modelMissingMember")));
+  notice.appendChild(el("span", "why", t(admin ? "ui.first.model.none" : "ui.first.model.member")));
   if (!admin) return;
-  var button = el("button", "act", t("ui.next.composer.modelSettings"));
+  var button = el("button", "act", t("ui.first.model.choose"));
   button.type = "button";
   button.addEventListener("click", function () { openSettingsPane("model"); });
   notice.appendChild(button);
@@ -80,7 +81,7 @@ function composerPick(value, caret, kind, name, skillLine) {
 function composerRows(asked) {
   if (asked.kind === "mention") {
     return agentsHere().filter(function (agent) { return agent.id !== chat.agentId && agent.name.toLowerCase().indexOf(asked.query) >= 0; }).slice(0, 8)
-      .map(function (agent) { return { name: agent.name, note: agent.title || agent.description || "" }; });
+      .map(function (agent) { return { name: agent.name, note: roleOf(agent) }; });
   }
   return (composer.skills || []).filter(function (skill) { return skill.name.toLowerCase().indexOf(asked.query) >= 0 || String(skill.slug || "").indexOf(asked.query) >= 0; }).slice(0, 8)
     .map(function (skill) { return { name: skill.name, note: skill.description || "" }; });

@@ -39,6 +39,14 @@ test("a message is filled, and an unknown key is not a blank screen", () => {
   // what stops it ever shipping.
   assert.equal(tr("nothing.like.this", "en"), "nothing.like.this");
   assert.equal(tr("card.done"), "已完成", "the default locale is what every chat string here already was");
+
+  // INV-2311: a Chinese name sits in a Chinese sentence with no space; a Latin name or a number keeps one.
+  assert.equal(tr("ui.first.talkTo", "zh", { name: "助手" }), "和助手对话");
+  assert.equal(tr("ui.first.talkTo", "zh", { name: "Ada" }), "和 Ada 对话");
+  assert.equal(tr("ui.first.talkTo", "en", { name: "助手" }), "Talk to 助手");
+  // No Chinese template keeps a space beside a blank: the space is the filler's to decide. The desktop shell fills its own words (shell-words.ts).
+  const spaced = Object.entries(MESSAGES.zh).filter(([key, text]) => !key.startsWith("shell.") && /[㐀-鿿] +\{\w+\}|\{\w+\} +[㐀-鿿]/.test(text)).map(([key]) => key);
+  assert.deepEqual(spaced, []);
 });
 
 test("every word the page names is in both languages, and a word inside a script cannot break out of its string (INV-1684)", async () => {

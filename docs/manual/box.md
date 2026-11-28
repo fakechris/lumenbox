@@ -1,34 +1,34 @@
 <!-- doc: box
-     title: Box
+     title: Sandbox
      family: manual
      status: current
      covers: box
      audience: user
      updated: 2026-11-06
 -->
-# Box
+# Sandbox
 
-The computer your agents work on: how to get one, watch it, and take it over.
+The sandbox your agents work in: how to get one, watch it, and take it over.
 
 ## What it is
 
-A **box** is a Linux computer with a desktop for each agent, a browser, a file manager and a
-shell. The default box runs in Docker on your own machine; you can also attach a box that runs
-somewhere else. An agent lives in one box, and its memory, files and logins stay there.
+A **sandbox** is a Linux environment with a desktop for each agent, a browser, a file manager and a
+shell. The default sandbox runs in Docker on your own machine; you can also attach a sandbox that runs
+somewhere else. An agent lives in one sandbox, and its memory, files and logins stay there.
 
-A running box is not an agent at work: the box can be up while every agent is idle. Check it in
-the sidebar, where the footer shows the box and each agent's row shows what that agent is doing.
+A running sandbox is not an agent at work: the sandbox can be up while every agent is idle. Check it in
+the sidebar, where the footer shows the sandbox and each agent's row shows what that agent is doing.
 
 ## How to do it
 
 ### In the app
 
-- **Start the box:** Settings → Boxes → *Start the box*. The first start pulls the image, which
+- **Start the sandbox:** Settings → Sandboxes → *Start the sandbox*. The first start pulls the image, which
   is hundreds of megabytes.
-- **Update the box:** Settings → Boxes shows an available image update at the top. Choose
+- **Update the sandbox:** Settings → Sandboxes shows an available image update at the top. Choose
   *Apply update* to wait for the agents to finish their work before updating.
-- **Add a box:** press `+ box` in the box bar at the top, or Settings → Boxes → *Attach* to
-  drive a box on another machine.
+- **Add a sandbox:** press `+ box` in the sandbox bar at the top, or Settings → Sandboxes → *Attach* to
+  drive a sandbox on another machine.
 - **Watch an agent:** pick the agent, then open the *Desktop* tab on the right.
 - **Take over:** press *Take over* on the Desktop tab to use the mouse and keyboard yourself.
   Press *Hand back* when you are done.
@@ -51,21 +51,21 @@ agentbox box shot out.webp # save a screenshot of the desktop
 
 ## Where to see the result
 
-- The sidebar footer: `box online` or `box unavailable`, and how many boxes are up.
-- The box bar: one tab per box, with a green dot when it is connected.
-- Settings → Boxes: every machine, and the last error of an attached box.
+- The sidebar footer: `sandbox online` or `sandbox unavailable`, and how many sandboxes are up.
+- The sandbox bar: one tab per sandbox, with a green dot when it is connected.
+- Settings → Sandboxes: every machine, and the last error of an attached sandbox.
 
 ## Limits
 
-- An agent's box is chosen once. To work on another box, make a new agent there.
-- The local box needs Docker Desktop or OrbStack. The first start can take 10 to 40 minutes.
-- A shared box is shared: everyone who can open it can see its screen and read its files. Do not
+- An agent's sandbox is chosen once. To work on another sandbox, make a new agent there.
+- The local sandbox needs Docker Desktop or OrbStack. The first start can take 10 to 40 minutes.
+- A team sandbox is shared: everyone who can open it can see its screen and read its files. Do not
   sign in to your own accounts on it.
-- If something outside LumenBox stops the local box, LumenBox starts it again. A box you stopped with
+- If something outside LumenBox stops the local sandbox, LumenBox starts it again. A sandbox you stopped with
   `agentbox box down` stays stopped.
 
 ## Next
 
-- [Agent](agent.md): who works in the box.
+- [Agent](agent.md): who works in the sandbox.
 - [Channels](channels.md): how people reach the agents.
-- [docs/37](../37-onboarding.md) §3: three ways to get a box.
+- [docs/37](../37-onboarding.md) §3: three ways to get a sandbox.

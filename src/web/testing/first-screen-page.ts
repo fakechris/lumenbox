@@ -84,7 +84,9 @@ export function drawFirstScreen(input: FirstScreenInput) {
   return {
     /** Where every press so far led. */
     pressed, page, globals, side, card, panes: page.settingsPanes!() as string[],
-    headings: side.filter(node => node.cls === "sandbox-head").map(node => texts(node).join(" ")),
+    headings: side.filter(node => node.cls === "sandbox-line").map(node => texts(node.kids[0]).join(" ")),
+    /** The one button on each heading line, where there is one. */
+    headingActs: side.filter(node => node.cls === "sandbox-line").map(node => node.kids[1]?.text ?? ""),
     why: side.filter(node => node.cls === "sandbox-why").map(node => texts(node).join(" | ")),
     agents: side.filter(node => node.cls === "agent").map(node => texts(node.kids[1])[0]!),
     steps: steps.map(row => texts(row).join(" | ")),

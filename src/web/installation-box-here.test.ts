@@ -84,7 +84,7 @@ const pageFunction = (name: string, globals: Record<string, unknown>) => pageFun
 /** The first screen as this person sees it: the sidebar's sandbox headings and agents, and the getting-started card (first-screen-ui.ts). */
 function firstScreen(state: any, computers: any, setup: any, admin: boolean) {
   const screen = drawFirstScreen({ state, computers, setup, me: { role: admin ? "admin" : "driver", identity: admin ? "ding:boss" : "ding:alice" } });
-  return { headings: screen.side.filter(node => node.cls === "sandbox-head").map(texts), agents: screen.agents, card: texts(screen.card) };
+  return { headings: screen.side.filter(node => node.cls === "sandbox-line").map(node => texts(node.kids[0])), agents: screen.agents, card: texts(screen.card) };
 }
 
 test("INV-2310: a Kubernetes organisation's first Admin gets their own box and agent, and never meets the box that cannot run", async (t) => {

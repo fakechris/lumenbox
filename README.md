@@ -20,7 +20,7 @@
 ---
 
 LumenBox gives you a small team of agents — each with a name, a memory, its own desktop and a
-shell — on a Linux "box" you can watch and take over at any moment. You talk to them in the app
+shell — on a Linux "sandbox" you can watch and take over at any moment. You talk to them in the app
 or from Feishu, DingTalk and Telegram; they read documents, browse, write code, run it, and keep
 a list of what they owe you. How that differs from a coding-agent CLI or a hosted agent platform
 is one table in [the product spec](docs/02-product.md#11-how-it-differs).
@@ -35,20 +35,20 @@ LumenBox is built around four questions: on which machine an agent works, who sh
 of work, whether it may, and why anyone should believe it when it says "done". Each has one place
 where it is answered.
 
-LumenBox 围绕四个问题设计：agent 在哪台机器上做事，一件事该谁做，它能不能做，它说"做完了"时凭什么信。每个问题只在一处回答。
+LumenBox 围绕四个问题设计：智能体在哪台机器上做事，一件事该谁做，它能不能做，它说"做完了"时凭什么信。每个问题只在一处回答。
 
 - **Write the record before the capability.** What an agent actually did is kept as data, not as
   its summary of itself; a capability without a record gets claimed, never proven.
-  **先写记录，再写能力。** agent 真正做了什么存成数据，不是它对自己的总结；没有记录的能力只会被宣称，不会被证明。
+  **先写记录，再写能力。** 智能体真正做了什么存成数据，不是它对自己的总结；没有记录的能力只会被宣称，不会被证明。
 - **Unknown is never success.** Desktop actions carry evidence of their effect, and an action
   whose outcome is unknown is not counted as done and not retried on its own.
   **未知永远不算成功。** 桌面动作带效果证据；结果不明的动作不算完成，也不会被自动重试。
-- **Two gates, and no third.** The installation decides who you are; the box decides what can be
-  reached. Channels and agents carry no authority, and agents in one box are equal in reach.
-  **两道门，没有第三层。** 安装决定你是谁，box 决定能到哪。渠道和 agent 不带权限，同一台 box 里的 agent 能到的地方一律平等。
+- **Two gates, and no third.** The installation decides who you are; the sandbox decides what can be
+  reached. Channels and agents carry no authority, and agents in one sandbox are equal in reach.
+  **两道门，没有第三层。** 安装决定你是谁，沙盒决定能到哪。渠道和智能体不带权限，同一个沙盒里的智能体能到的地方一律平等。
 - **A person is never locked out.** You can watch any desktop and take it over; while you hold
   it the agent waits, and what you do there can become a skill.
-  **人不会被锁在外面。** 任何桌面都能看、能接管；你接管时 agent 必须等，你做的一遍可以学成技能。
+  **人不会被锁在外面。** 任何桌面都能看、能接管；你接管时智能体必须等，你做的一遍可以学成技能。
 - **Boundaries in code, wording for the team.** Gates, budgets and refusals live in code; tone and
   "what counts as done" live in text your team can change.
   **边界用代码画，措辞让团队改。** 门、预算、拒绝在代码里；语气和"怎么算做完"在团队能改的文本里。
@@ -104,38 +104,38 @@ The whole argument, with the layers, the decisions and the paths refused:
    first. Then Settings opens by itself: pick a model provider and paste a key (Anthropic,
    MiniMax, DeepSeek, Kimi, GLM, OpenAI, OpenRouter, SiliconFlow, or any OpenAI-compatible
    endpoint).
-3. **Give it a computer.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-   or [OrbStack](https://orbstack.dev/), then press *Start the box* in Settings. The first time,
+3. **Give it a sandbox.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+   or [OrbStack](https://orbstack.dev/), then press *Start the sandbox* in Settings. The first time,
    that pulls `fakechris/lumenbox` at this app's version from Docker Hub (linux/arm64 and
    linux/amd64). Later, Settings offers *Apply update* when the app moves on. From a checkout,
-   `npm run build:image` builds it locally instead. No Docker? A box can live on another
-   machine of yours, or be a Grok Bot's box — see
+   `npm run build:image` builds it locally instead. No Docker? A sandbox can live on another
+   machine of yours, or be a Grok Bot's sandbox — see
    [Getting started](docs/37-onboarding.md) for every path.
 4. **Say hello.** Ada answers. Ask for something real.
 
 The whole walkthrough, including chat-app setup and what to do when something is wrong:
 [docs/37-onboarding.md](docs/37-onboarding.md).
 
-## Bring your own box
+## Bring your own sandbox
 
-The box does not have to be on your Mac.
+The sandbox does not have to be on your Mac.
 
 - **Docker elsewhere.** Point the app at a remote engine the way you point `docker` at one
   (`DOCKER_HOST` or a docker context).
-- **A Grok Bot's box.** Add the [LumenBox Bridge](https://x.ai/bot/U8xEPyVxQHL_JznVhVotB)
-  template to Grok Bot; the Grok Bot it creates prepares its own box over your Tailscale network and
+- **A Grok Bot's sandbox.** Add the [LumenBox Bridge](https://x.ai/bot/U8xEPyVxQHL_JznVhVotB)
+  template to Grok Bot; the Grok Bot it creates prepares its own sandbox over your Tailscale network and
   tells you what to paste. Nothing of the Grok bot's is touched.
 - **Any Linux machine.** One script, `lumen-bridge.sh`, from the releases page.
-- **This machine itself.** `agentbox host up <name>` runs the box daemon straight on the machine,
+- **This machine itself.** `agentbox host up <name>` runs the sandbox daemon straight on the machine,
   with no container and no desktop: its *native environment*, for shell and file work.
 
-Agents are created into a box and stay there; each box keeps its own desktops, skills and memory.
+Agents are created into a sandbox and stay there; each sandbox keeps its own desktops, skills and memory.
 Desktops start on demand, and a new desktop nobody has used yet gives back its processes after
-15 idle minutes; files and browser profiles are never deleted by that. Settings → Boxes shows
+15 idle minutes; files and browser profiles are never deleted by that. Settings → Sandboxes shows
 each desktop's state and why it is kept, and *Keep desktop* pins one. Operators can set
-`BOXD_DESKTOP_IDLE_MS` in the box environment; `0` turns the cleanup off. A desktop whose stop
+`BOXD_DESKTOP_IDLE_MS` in the sandbox environment; `0` turns the cleanup off. A desktop whose stop
 failed shows an unknown process state and is inspected before it is used again. More in
-[the manual's box page](docs/manual/box.md).
+[the manual's sandbox page](docs/manual/box.md).
 
 ## Where you find things
 
@@ -147,7 +147,7 @@ topics in place, and what it owes you pinned where you asked for it. Around it:
 - **Work** — what you asked for, one row each, searchable.
 - **Files** — the agents' work folders, to browse and download.
 - **Automation** — routines and reminders: what starts by itself, and when next.
-- **Settings** — model, boxes, channels, team and people, memory, supervision.
+- **Settings** — model, sandboxes, channels, team and people, memory, supervision.
 
 Raw steps, usage and identifiers are in the work panel's *Diagnostics* tab. The earlier page is still
 there: *Back to the classic view* at the foot of the side column.
@@ -158,7 +158,7 @@ The desktop app is a *personal installation*: you are its Owner, and it never ta
 person. To work with others, join an organisation from the app (Settings → Organisations), or
 run LumenBox as an *organisation installation* on a server (`agentbox web`), where Admins invite people, agents can answer guests from a knowledge set you
 make public, and machines join as organisation nodes. It runs on Kubernetes too, either as one
-server or with a control plane that gives each tenant its own box: see
+server or with a control plane that gives each tenant its own sandbox: see
 [deploy/kubernetes](deploy/kubernetes/README.md) and the [operator's guide](docs/38-operators-guide.md).
 
 ## How it is different
@@ -171,7 +171,7 @@ makes sure a promise is followed by an action.
 
 ## Documentation
 
-- [Getting started](docs/37-onboarding.md) — install, first run, every way to get a box.
+- [Getting started](docs/37-onboarding.md) — install, first run, every way to get a sandbox.
 - [Manual](docs/manual/README.md) — how to use each thing, one page per concept.
 - [Operator's guide](docs/38-operators-guide.md) — every command, every setting, providers, testing.
 - [The design of LumenBox](docs/89-thesis.md) ([中文](docs/89-thesis.zh.md)) — the layers, principles and decisions in one argument.
@@ -183,7 +183,7 @@ makes sure a promise is followed by an action.
 
 Early, used daily by its author, English and Chinese. The current release is
 [0.4.8](docs/releases/v0.4.8.md); every release's notes are in [docs/releases](docs/releases/).
-The app is built for macOS only so far (Apple Silicon and Intel); the box image runs on
+The app is built for macOS only so far (Apple Silicon and Intel); the sandbox image runs on
 linux/arm64 and linux/amd64. Issues and pull requests are welcome; the design docs say what each part is for, and a change that contradicts
 one should say so.
 
@@ -191,5 +191,5 @@ one should say so.
 
 GPL-3.0. The CLI and internal names still say `agentbox`, the working name.
 
-Bundled into the page and the box image, under their own licences: markdown-it (MIT), and for
+Bundled into the page and the sandbox image, under their own licences: markdown-it (MIT), and for
 ShowUI cards (docs/79) @a2ui/web_core and @a2ui/lit (Apache-2.0) with lit (BSD-3-Clause).

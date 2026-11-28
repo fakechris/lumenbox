@@ -7,21 +7,21 @@
 # 38 — The operator's guide (what the README used to be)
 
 The technical reference: how the pieces fit, every command, every environment variable, the
-provider matrix, where the orchestrator and the box can each run, testing. Moved here on
+provider matrix, where the orchestrator and the sandbox can each run, testing. Moved here on
 2026-09-04 when the README became the product's front page; nothing was cut. The CLI and
 internal names still use the working name `agentbox`.
 
-> Your own team of AI agents, each with a real computer to work on — reached from your desktop and your chat apps, taken over at any moment, and believed on the record, not on its word.
+> Your own team of AI agents, each with a real sandbox to work in — reached from your desktop and your chat apps, taken over at any moment, and believed on the record, not on its word.
 
 That is the product, defined in [02-product](02-product.md) §1. In engineering terms: a
-multi-agent orchestrator with a Docker "box" — local or remote — and Linux computer-use.
+multi-agent orchestrator with a Docker "sandbox" — local or remote — and Linux computer-use.
 
 This is an independent implementation of an architecture described in local research
 notes, built around the three parts that make it interesting:
 
 - **Multiple agents** that message each other asynchronously and decide among
   themselves who does what.
-- **A remote Docker box**: the agents' computer is a container, which can live on
+- **A remote Docker sandbox**: the agents' sandbox is a container, which can live on
   another machine.
 - **Linux computer-use**: a real X11 desktop driven by `xdotool`, captured with
   `ffmpeg`, and watchable over noVNC — **one desktop per agent**, so they never
@@ -57,7 +57,7 @@ notes, built around the three parts that make it interesting:
 └─────────────────────────────────────────────────────────┘
 ```
 
-The host never runs `xdotool` or `ffmpeg` itself. It decides; the box acts.
+The host never runs `xdotool` or `ffmpeg` itself. It decides; the sandbox acts.
 
 Only boxd's port is published. It proxies each desktop's noVNC, so the number of
 desktops is not capped by port mappings fixed at container-create time — and the
@@ -77,7 +77,7 @@ npm run agentbox -- box up
 `box up` prints the daemon's URL (`daemon: http://127.0.0.1:…`), which is the API the
 orchestrator drives, not a page to open. To watch the agents work, run `npm run agentbox -- web`
 and open the address it prints: each agent's desktop is on its page. (`box up --with-host`
-prints a `web UI:` address instead, served from inside the box.)
+prints a `web UI:` address instead, served from inside the sandbox.)
 
 Credentials come from `ANTHROPIC_API_KEY`, or from an `ant auth login` profile.
 
@@ -122,7 +122,7 @@ describe one, instead of handing it screenshots it would narrate from imaginatio
 `bash` and the file tools do not need sight and stay available, which is enough for
 real work.
 
-Verified end to end on M3: an agent wrote and ran a Python script in the box, read
+Verified end to end on M3: an agent wrote and ran a Python script in the sandbox, read
 a word off the desktop through the `computer` tool, and handed a task to a teammate
 that the teammate completed on its own turn.
 
@@ -164,7 +164,7 @@ while a wrong "no" only costs a feature and says so. Opt in once you have checke
   row (Settings → Team → Routines; 0 never pauses) is paused by the host with the last failure
   as the reason, shows on the attention list, and stays paused until someone resumes it — which
   also restarts its count. The pause is host state, not a line in the skill file.
-- **Memory files.** Each agent's memory is mirrored read-only into the box at
+- **Memory files.** Each agent's memory is mirrored read-only into the sandbox at
   `~/work/memory/<agent-id>/profile.md` and `log/YYYY-MM.md`, so `grep` works on it. The prompt
   tells each agent its own path; the id is on the agent's settings page.
 - **Hooks.** `~/.agentbox/hooks.json` in Claude Code's format (a `settings.json` or its bare
@@ -177,12 +177,12 @@ while a wrong "no" only costs a feature and says so. Opt in once you have checke
 
 Two topologies, one image.
 
-**Driven from outside** (`agentbox box up`) is the developer's shape: the box runs the
+**Driven from outside** (`agentbox box up`) is the developer's shape: the sandbox runs the
 desktop and the daemon, and the orchestrator runs wherever your editor is. The turn loop
-reaches the box over its published port.
+reaches the sandbox over its published port.
 
 **Self-contained** (`agentbox box up --with-host`) is the production shape: the
-orchestrator runs inside the box too, reaching the daemon over loopback, and the only thing
+orchestrator runs inside the sandbox too, reaching the daemon over loopback, and the only thing
 outside the container is a browser. The web UI is published to `127.0.0.1:7777`, the
 orchestrator's own state lives on its own volume, and nothing on the host machine runs any
 of this code. Verified with no orchestrator process on the host at all: the UI answers, the
@@ -199,20 +199,20 @@ Be exact about what the split buys: `box` has passwordless sudo, so an agent tha
 to read hostd's files can, and this was checked rather than assumed — a direct read gets
 `Permission denied`, and `sudo cat` gets the file. What it removes is the accidental case,
 and it puts the seam where it needs to be for the day the model credential moves behind a
-relay and the boundary becomes real. Until then, running the orchestrator in the box means
-the credential is in the box.
+relay and the boundary becomes real. Until then, running the orchestrator in the sandbox means
+the credential is in the sandbox.
 
 One consequence worth knowing: with the orchestrator inside, the owner tokens are inside
 too, so `box shot` and the smoke test — which run out here — can no longer present a claim
-for an agent's desktop. That is the right way round (the box holds its own secrets), and it
+for an agent's desktop. That is the right way round (the sandbox holds its own secrets), and it
 means the CLI is a tool for the developer topology.
 
-## Where the box's traffic comes from
+## Where the sandbox's traffic comes from
 
-A box browses from its own address, which in a cluster is a datacentre one. Real sites treat
+A sandbox browses from its own address, which in a cluster is a datacentre one. Real sites treat
 those differently — blocked, geofenced, or served a different page — and anything on the
-user's own network is unreachable from a box entirely. `agentbox egress` runs a relay on this
-machine, the box's browser goes through it, and the agent then appears on the network the user
+user's own network is unreachable from a sandbox entirely. `agentbox egress` runs a relay on this
+machine, the sandbox's browser goes through it, and the agent then appears on the network the user
 actually has.
 
 ```
@@ -225,19 +225,19 @@ whatever network it can reach. `--allow` is not decoration either: reaching the 
 is the feature, and the user's network is exactly what an agent should not be able to sweep,
 so a deployment says what it means. Empty means anywhere.
 
-The obvious design is a WebSocket the client opens into the box, with streams multiplexed
-inside it. This goes the other way — the box dials the relay, one
+The obvious design is a WebSocket the client opens into the sandbox, with streams multiplexed
+inside it. This goes the other way — the sandbox dials the relay, one
 connection per stream — so there is no multiplexer, which is where this kind of code goes
 wrong. The cost is a TCP setup per stream, which is what a proxy does anyway.
 
 Two things worth knowing. Box-local addresses bypass the proxy on purpose, so boxd, noVNC and
 anything an agent serves locally are not sent out to the relay and back. And there is no
 fallback: with the proxy configured and the relay down, the browser gets
-`ERR_INTERNET_DISCONNECTED` rather than quietly browsing from the box's own address — checked
+`ERR_INTERNET_DISCONNECTED` rather than quietly browsing from the sandbox's own address — checked
 with a fresh profile, because the first attempt at that check was reading Chromium's disk
 cache.
 
-A third, since INV-816: a box started this way is confined to the relay, not only pointed at
+A third, since INV-816: a sandbox started this way is confined to the relay, not only pointed at
 it. Its network has no route out and a small gate container forwards the relay's port and the
 web port, so a command that drops the proxy variables — with `sudo` or without — gets nowhere
 instead of leaving unrecorded. `box up` prints `outbound: confined — …`, or says why not.
@@ -246,10 +246,10 @@ instead of leaving unrecorded. `box up` prints `outbound: confined — …`, or 
 ### Delegated engines: Claude Code, pi, opencode
 
 An agent can hand deep repository work to an engine with the `Delegate` tool. An engine is
-either baked into the box image when a version is named at build time
+either baked into the sandbox image when a version is named at build time
 (`CLAUDE_CODE_VERSION=… PI_VERSION=… OPENCODE_VERSION=… npm run build:image`) or installed
 on demand: when it is missing, the tool tells the agent to ask the person, and `install:
-true` installs the preset's pinned version on the work volume, where a rebuilt box keeps
+true` installs the preset's pinned version on the work volume, where a rebuilt sandbox keeps
 it. Pinned either way, never latest. Claude Code runs with its permission prompts routed to
 this host: a call the policy allows proceeds, one on the approval list is put to the person
 as "[delegated engine job-…] …" and waited for, a refusal is a refusal. Its thread is
@@ -265,13 +265,13 @@ If `AGENTBOX_RELAY_URL` and `AGENTBOX_RELAY_TOKEN` are both set, that relay is u
 — including the degenerate case where they name the vendor itself
 (`https://api.minimaxi.com/anthropic` and the MiniMax key), which hands Claude Code the same
 `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` a person would export in
-a shell, at the cost of the key being in the box. With the built-in relay the box sees a
+a shell, at the cost of the key being in the sandbox. With the built-in relay the sandbox sees a
 per-job token and the host attaches the MiniMax key from `config.json`'s `env` (the app is
-started from Finder and reads no `.zshrc`). The `engine-check` skill, seeded into every box,
+started from Finder and reads no `.zshrc`). The `engine-check` skill, seeded into every sandbox,
 walks an agent through installing an engine and proving the install, a real task, the
 consent card and a resumed thread.
-A box attached over the network cannot reach the host's relay and runs the engine on
-whatever credential the box itself has.
+A sandbox attached over the network cannot reach the host's relay and runs the engine on
+whatever credential the sandbox itself has.
 
 ### Groups: answer everything, or only when addressed
 
@@ -288,12 +288,12 @@ Use `addressed` for a busy group chat where the agent is one participant among m
 
 The UI used to have no authentication, justified by binding loopback: anything able to reach
 it can already drive the agents. That held while the orchestrator ran on someone's own
-machine. It stopped holding when it moved into the box, where it binds 0.0.0.0 and only
+machine. It stopped holding when it moved into the sandbox, where it binds 0.0.0.0 and only
 Docker's publish address keeps it local — one flag, or a Kubernetes Service, and it is open.
 
 So: a configured token is required, no token is allowed only on a loopback bind, and a
 non-loopback bind with no token gets one generated and announced rather than being served
-openly. `box up --with-host` generates one, persists it next to the box token so a recreate
+openly. `box up --with-host` generates one, persists it next to the sandbox token so a recreate
 does not invalidate an open tab, and prints the URL with it.
 
 The mechanism is a cookie rather than a header, because of what the page loads. The desktop is
@@ -304,10 +304,10 @@ is checked the same way. `AGENTBOX_UI_TOKEN` or `web --token` set it for the top
 does not start.
 
 **Two tokens, not one** (INV-572, 2026-09-16). `~/.agentbox/ui-token` is *this machine's*
-web — the desktop app's child host and the CLI. `~/.agentbox/box-ui-token` is the **box's
+web — the desktop app's child host and the CLI. `~/.agentbox/box-ui-token` is the **sandbox's
 own** orchestrator, the one `box up --with-host` runs inside the container. They used to be
 one file, so a leak opened both and rotating either kicked the other out — which is a
-good way to ensure neither is ever rotated. The box's is minted fresh rather than derived,
+good way to ensure neither is ever rotated. The sandbox's is minted fresh rather than derived,
 because the point is that they are not related; nothing is forced to change, since a
 container already running keeps the value it started with and takes the new one the next
 time it starts. Rotating either is deleting its file and restarting what reads it.
@@ -317,7 +317,7 @@ Feishu channel or an invite code — issues a *session* for that person and neve
 installation token; the session is signed with a key derived from it, so rotating the token
 still ends every session, and a person removed from the roster stops being served on their
 next request. What they may then do is their roster role (`viewer` / `driver` / `admin`) and
-the `members` set of the box they are reaching into: a box lists only for its members, a
+the `members` set of the sandbox they are reaching into: a sandbox lists only for its members, a
 non-member is refused by name, and stopping or steering somebody's running turn asks the same
 question. The token remains what it always was for the CLI, for scripts, and for a
 single-person installation with an empty roster.
@@ -389,10 +389,10 @@ in that thread, posted by Iris — not by an unnamed app account, not by whoever
 of UUIDs in the config file, with no interface, and that is a placeholder rather than a design:
 
 - Being able to comment on a work item is not the same as being able to start a turn on this
-  machine. Without a check, Involute's comment box would be a way around this installation's
-  roles and box membership entirely (docs/54 §3.6).
+  machine. Without a check, Involute's comment field would be a way around this installation's
+  roles and sandbox membership entirely (docs/54 §3.6).
 - The right answer is to resolve an Involute actor to a **Principal here**, and then ask the
-  ordinary questions — role, and membership of the box the agent lives in. That needs a link
+  ordinary questions — role, and membership of the sandbox the agent lives in. That needs a link
   between the two directories, which does not exist yet.
 
 So until it does: an id on the list is taken, anything else is **refused out loud** — the person
@@ -420,38 +420,38 @@ simultaneous turns); no webhook receiver (this machine usually has no inbound po
 ledger is the same either way); no agent-to-agent questions in the first version (an agent
 mentioning an agent is the echo risk, and a human stays at the head of every chain).
 
-## Where the box comes from
+## Where the sandbox comes from
 
-The orchestrator needs two things about a box: a URL and a token. It does not need to know
-the box is a Docker container — but that assumption had spread anyway, because the only way
+The orchestrator needs two things about a sandbox: a URL and a token. It does not need to know
+the sandbox is a Docker container — but that assumption had spread anyway, because the only way
 to learn the URL was to ask the Docker CLI for a published port, so the turn loop and the
 web UI both imported the Docker manager to answer a question that has nothing to do with
 Docker.
 
-A `BoxProvisioner` answers that question, and optionally owns the box's lifecycle:
+A `BoxProvisioner` answers that question, and optionally owns the sandbox's lifecycle:
 
 | Kind | Selected by | Lifecycle |
 | --- | --- | --- |
 | `docker` | the default | creates, starts and stops the container |
-| `attached` | `AGENTBOX_BOXD_URL` | none — the box is someone else's to run |
+| `attached` | `AGENTBOX_BOXD_URL` | none — the sandbox is someone else's to run |
 | `kubernetes` | not written yet | a pod from a broker, reached through a Service |
 
-`attached` is what makes the core runnable with no Docker at all: point it at a box and the
+`attached` is what makes the core runnable with no Docker at all: point it at a sandbox and the
 turn loop, the tools and the web UI work unchanged. That is verified rather than assumed —
 the whole smoke suite passes in a process with no `docker` on its `PATH`.
 
 The reason to draw this line before there is a cluster to test against: in a centralised
-deployment the boxes are pods created by a control plane, not containers created by a
+deployment the sandboxes are pods created by a control plane, not containers created by a
 laptop, and everything else in here — per-agent desktops, desktop ownership, recording,
 supervision — is already independent of which of those it is. The Kubernetes provisioner is
 a third file in `src/box/`, and nothing outside that directory has to change for it.
 
 `box build`, `box up` and `box down` stay Docker-only, because they are Docker lifecycle.
-With `AGENTBOX_BOXD_URL` set, starting and stopping the box is whoever runs it's job.
+With `AGENTBOX_BOXD_URL` set, starting and stopping the sandbox is whoever runs it's job.
 
-## Putting the box on another machine
+## Putting the sandbox on another machine
 
-The box lifecycle goes through the `docker` CLI, so anything Docker can target
+The sandbox lifecycle goes through the `docker` CLI, so anything Docker can target
 works with no extra configuration:
 
 ```bash
@@ -467,7 +467,7 @@ endpoint (a tunnel, say).
 
 Two things to know before pointing this at a shared machine: the daemon's port is
 published on the engine host, so anything that can route there can reach it, and the
-bearer token is the only thing in the way. And the box gives its agent a shell with
+bearer token is the only thing in the way. And the sandbox gives its agent a shell with
 `sudo`. The container is the security boundary — put nothing in it you would not hand
 to the model.
 
@@ -497,7 +497,7 @@ where                     Print state directories
 ### Settings
 
 Anything that changes per run is an environment variable — which provider, which model,
-where the box is. Settings someone decides once live in a file instead, because
+where the sandbox is. Settings someone decides once live in a file instead, because
 re-exporting a variable in every shell to hold a preference is the wrong shape for it.
 
 `~/.agentbox/config.json`, written with its defaults the first time `web` starts:
@@ -521,10 +521,10 @@ the page. Delete the file to clear the feed.
 ### When something dies unwatched
 
 PID 1 is `box-init` rather than tini, for one reason: only PID 1 sees an orphan die, and
-tini reaped every one of them and discarded the status. Everything unsupervised in the box
+tini reaped every one of them and discarded the status. Everything unsupervised in the sandbox
 dies as an orphan — a browser the agent started and abandoned, a binary it installed and ran,
 a helper that setsid'd away from its parent — so a process crash-looping in here was
-invisible. No log line, no counter, nothing to point at when the box "felt broken".
+invisible. No log line, no counter, nothing to point at when the sandbox "felt broken".
 
 `box-init` does tini's job and keeps the answer: reap, name the process from a cache sampled
 just before it died, and record one entry per (process, signal) per minute, so a crash loop
@@ -541,7 +541,7 @@ seconds and exits 0.
 
 ### Who gets the CPU
 
-A box shares one CPU allowance between two workloads that want different things: the
+A sandbox shares one CPU allowance between two workloads that want different things: the
 desktop, whose latency a person feels directly as "computer use is slow", and whatever the
 agent is running, which is throughput work. They used to compete as equals, and the
 difference is measurable — on twelve cores, with the agent saturating all of them, a
@@ -549,8 +549,8 @@ screenshot went from 185ms to 489ms.
 
 So the agent's shell runs at `nice 19`, and everything it starts inherits that. The desktop
 stack, the capture path and anything launched from the dock or a desktop icon stay at 0.
-With the agent saturating the box, a screenshot is back to 189ms — nice costs the agent
-nothing while the box is idle, because Linux hands spare time to whoever wants it, and hands
+With the agent saturating the sandbox, a screenshot is back to 189ms — nice costs the agent
+nothing while the sandbox is idle, because Linux hands spare time to whoever wants it, and hands
 the desktop the CPU when it does not.
 
 A browser the agent launches is behind the desktop too, which is the right way round: the
@@ -561,12 +561,12 @@ dock icon gets normal priority. Promoting an agent-launched browser would need
 scheduling, which a runaway process could use to starve the host. Not worth it for a browser
 that is slower while the agent compiles.
 
-`AGENTBOX_CPUS` sets a container ceiling if a box shares a machine. Unset by default: the
-split inside the box is what matters, and a wrong ceiling just makes the agent slow.
+`AGENTBOX_CPUS` sets a container ceiling if a sandbox shares a machine. Unset by default: the
+split inside the sandbox is what matters, and a wrong ceiling just makes the agent slow.
 
 ### Keeping it running
 
-Both services in the box are supervised in place, with exponential backoff and a cap. The
+Both services in the sandbox are supervised in place, with exponential backoff and a cap. The
 container is not the unit worth recycling: the desktops, the browser sessions and whatever
 an agent is in the middle of all live in it, so taking it down to recover one crashed
 service destroys all of that. Measured before this existed — killing the orchestrator
@@ -581,7 +581,7 @@ nothing is serving the display.
 Desktop components get the same treatment, one level down. boxd counts restarts per
 component in a sliding window, backs off between attempts, and past a cap stops restarting
 that component and says so in `/health` rather than hammering it. Old restarts age out, so
-a box that was briefly broken heals itself.
+a sandbox that was briefly broken heals itself.
 
 The compositor is deliberately different: after repeated crashloop episodes it is disabled
 for the life of the process, because a picom that keeps restarting redirects and repaints
@@ -611,10 +611,10 @@ all look healthy. Polling the whole framebuffer avoids that; measured with a vie
 attached, it costs the same 2% of a core either way. `vnc-probe` speaks enough RFB to
 prove frames are still arriving, and the smoke test runs it.
 
-The clipboard bar under the desktop reads and writes the box's clipboard from outside it:
+The clipboard bar under the desktop reads and writes the sandbox's clipboard from outside it:
 type something and press `→ box` to have it ready for a Ctrl+V in the desktop, or press
-`← box` to pull out whatever is on the box's clipboard (and onto the host's, where the
-browser permits it). Inside the box, agents use `box-clip copy` and `box-clip paste`.
+`← box` to pull out whatever is on the sandbox's clipboard (and onto the host's, where the
+browser permits it). Inside the sandbox, agents use `box-clip copy` and `box-clip paste`.
 
 `autocutsel` keeps X's two selections — PRIMARY, which middle-click pastes, and CLIPBOARD,
 which Ctrl-V pastes — in step, so a copy in one application pastes into another and the
@@ -627,7 +627,7 @@ security boundary, and giving Chromium's own sandbox what it needs would mean ha
 container `SYS_ADMIN` or an unconfined seccomp profile. The bar itself covers page content
 and returns on every launch, so it is a thing an agent must notice and dismiss forever.
 
-Two settings exist because of how the box is looked at rather than how it works. The
+Two settings exist because of how the sandbox is looked at rather than how it works. The
 GTK3 file chooser is pre-seeded to 1100x680: unset, it opens at roughly 1124x822 on an
 800px-high screen, putting Open and Cancel below the bottom edge where computer-use
 cannot reach them, and GTK3 ignores `max-height` on a toplevel so there is no other
@@ -653,14 +653,14 @@ clamped, because clamping turns "the model read the wrong image" into a mystery 
 
 ### Whose desktop is whose
 
-Each desktop is bound to the agent that owns it, and the box refuses computer or exec
+Each desktop is bound to the agent that owns it, and the sandbox refuses computer or exec
 requests for it that do not carry the matching token. This is not theoretical: an agent
 with a shell could read `BOXD_TOKEN` from its own environment, name any display, and type
 into another agent's screen — which it was demonstrated doing before this existed.
 
 The tokens live on the host, in each agent's directory, and never enter the container.
 That asymmetry is the design: host-side callers — the CLI, the web UI, the smoke test —
-can always present the right claim, so a person is never locked out of their own box,
+can always present the right claim, so a person is never locked out of their own sandbox,
 while an agent inside cannot produce a claim it was not given. `BOXD_TOKEN` is also
 scrubbed from the environment the shell tool hands to commands.
 
@@ -680,19 +680,19 @@ Files land in `/home/box/work/recordings/` on the work volume, so they outlive t
 container. 12fps and CRF 30 by default: this shares a CPU with the agents' browser, and
 the point is reviewing what happened rather than producing video. Plan on about 25 KB per
 second, 1.4–1.6 MB a minute, for a desktop being worked on (measured by running the recorder's
-own ffmpeg arguments locally, not on a real box); a mostly still screen is less (13.7 KB/s,
+own ffmpeg arguments locally, not on a real sandbox); a mostly still screen is less (13.7 KB/s,
 0.8 MB a minute, for a terminal running `top` in a test container) and a busy one more. Fragmented MP4,
 flushed per packet, with a fragment closed every second — a recorder that gets killed then
 leaves a file that still plays up to near where it stopped, instead of an unplayable stub.
 
 Recordings are evidence, not work product, and they expire (INV-1949). A finished recording
-is deleted once it is 14 days old (`BOXD_RECORDINGS_KEEP_DAYS`), and while a box holds more
+is deleted once it is 14 days old (`BOXD_RECORDINGS_KEEP_DAYS`), and while a sandbox holds more
 than 2 GB of them (`BOXD_RECORDINGS_KEEP_MB`) the oldest go first; the one being written is
 never touched. A recording is refused, with the reason, when the work volume has less than
 512 MB free (`BOXD_RECORDINGS_MIN_FREE_MB`). They are left out of `backup` archives like the
-exec spool, so restoring a box brings its files back but not its recordings. A recording is
+exec spool, so restoring a sandbox brings its files back but not its recordings. A recording is
 fetched through the member whose desktop it is (`/recording?agent=…`), from that member's
-box, and only by someone who may enter that box.
+sandbox, and only by someone who may enter that sandbox.
 
 ### What survives, and what does not
 
@@ -706,15 +706,15 @@ live on named volumes instead:
 | `agentbox-box-config` | `/home/box/.config` | What they logged into: browser profiles, cookies, CLI auth |
 
 Everything else in the container is ephemeral on purpose, so a rebuilt image really
-does deliver a fresh box. The config files the image ships — desktop launchers, the
+does deliver a fresh sandbox. The config files the image ships — desktop launchers, the
 libfm and pcmanfm settings — are re-seeded into the config volume on every start, or a
-box created months ago would keep its own copies and never see a fix.
+sandbox created months ago would keep its own copies and never see a fix.
 
 `box down --rm` removes the container but not the volumes. To discard the agents' work
 as well: `docker volume rm agentbox-box-work agentbox-box-config`.
 
 On the host, `~/.agentbox/` holds what the container never sees: each agent's
-`profile.json`, `conversation.jsonl`, and `memory.md`, plus the box token, `config.json`
+`profile.json`, `conversation.jsonl`, and `memory.md`, plus the sandbox token, `config.json`
 and `activity.jsonl`. Those are files on your disk and are unaffected by anything done
 to the container.
 
@@ -736,14 +736,14 @@ reply. A reply arrives later as its own message that wakes the sender on a fresh
 turn. Because nothing blocks on a response, two agents cannot deadlock waiting for
 each other, and the prompt tells them not to trade acknowledgements.
 
-Each agent also gets its own desktop in the box — display `:1`, `:2`, and so on,
+Each agent also gets its own desktop in the sandbox — display `:1`, `:2`, and so on,
 assigned at creation and recorded in `profile.json`. This is not tidiness: X
 delivers synthetic input to whichever window holds focus, so agents sharing a
 display type into each other's windows and screenshot each other's work, and a
 human trying to use the screen competes with both. Separate displays make that
 impossible rather than merely discouraged, and they are what lets you drive one
 agent's desktop while the others keep working. Desktops start on an agent's first
-turn, so a box with one active agent does not pay for the rest.
+turn, so a sandbox with one active agent does not pay for the rest.
 
 Turns are serialized per agent, so an agent's transcript and profile have exactly one
 writer. A `priority` message aborts a running *background* turn so the agent can deal
@@ -769,7 +769,7 @@ Most of these are the non-obvious parts — the places where the first try turne
 wrong:
 
 - **Coordinate spaces.** Screenshots are scaled to a fixed 1280px width and the model
-  works in that space; the box scales every coordinate up to the real framebuffer.
+  works in that space; the sandbox scales every coordinate up to the real framebuffer.
   Resolution is *detected* via `xrandr` at startup, never assumed — a wrong guess
   makes every click silently miss, so detection failure throws instead of falling
   back.
@@ -820,7 +820,7 @@ otherwise only fail against the live API — that a `tool_use` block reaches
 dispatch, that a screenshot returns as an image block, and that `SendToAgent`
 really wakes the other agent.
 
-### 2. Smoke test — disposable box, still no API key
+### 2. Smoke test — disposable sandbox, still no API key
 
 ```bash
 npm run build
@@ -831,8 +831,8 @@ npm run smoke
 The suite creates a `lumenbox-eval-smoke-<id>` container and a temporary
 `AGENTBOX_HOME`, then removes the container, volumes, network and scratch home.
 It does not use the installation's registry or token. `--box use <name>`,
-`AGENTBOX_CONTAINER`, or `AGENTBOX_BOXD_URL` can select an existing test box
-(supply its `AGENTBOX_TOKEN`); that box is not removed. The default container
+`AGENTBOX_CONTAINER`, or `AGENTBOX_BOXD_URL` can select an existing test sandbox
+(supply its `AGENTBOX_TOKEN`); that sandbox is not removed. The default container
 `agentbox-box` requires `npm run smoke -- --live-box`, which reads the real owner
 token and runs destructive checks on the live desktop. Never use it while agents
 are working. Registry writes still go to the temporary home.
@@ -845,7 +845,7 @@ xdotool subcommand in a key name is refused, that `cd` and `export` persist per
 agent and do not leak between agents, and that `Aprenderás café 日本語 ÁÉÍ`
 arrives byte-perfect in a real application.
 
-Run this after any change to the box image, the daemon, or the CUA layer — those
+Run this after any change to the sandbox image, the daemon, or the CUA layer — those
 are the paths that fail quietly.
 
 ### 3. The web UI — for hand acceptance testing
@@ -864,7 +864,7 @@ changing under them.
 - **middle** — the selected agent's conversation, streaming, with each tool call
   and its result inline. A screenshot appears as an image, so you can compare what
   the agent says it saw against what it actually saw.
-- **right** — the live box desktop over noVNC, plus an activity feed covering *all*
+- **right** — the live sandbox desktop over noVNC, plus an activity feed covering *all*
   agents. `✉ Ada → Bob` lines are how you see delegation happen. Click the desktop
   to give it keyboard focus, or use *open full size* for a whole-window screen.
 
@@ -891,7 +891,7 @@ can already drive the agents, so keeping it off the network is the control.
 #### An acceptance pass that exercises the real paths
 
 Each of these fails in a different place, so a pass on all five is meaningful.
-Verify the effects in the box (`box exec`), not just the agent's account of them —
+Verify the effects in the sandbox (`box exec`), not just the agent's account of them —
 an agent claiming success is exactly the failure mode worth testing for.
 
 1. **Shell and files.** *"Create ~/work/primes.py that prints the first 10 primes,
@@ -962,7 +962,7 @@ The code is the reference; these are the arguments behind it.
 | [01–06](docs/) | requirements, product, architecture, design, data, deployment |
 | [07-review](docs/07-review.md) · [10-security-backlog](docs/10-security-backlog.md) | what was reviewed, and what is knowingly outstanding |
 | [11-roadmap](docs/11-roadmap.md) | everything deferred on purpose, ranked, with the measurement that put it there |
-| [12-upgrades](docs/12-upgrades.md) | how a running box is upgraded without losing anything |
+| [12-upgrades](docs/12-upgrades.md) | how a running sandbox is upgraded without losing anything |
 | [13-design-review](docs/13-design-review.md) | which decisions go to hostile review before they are built, and why |
 | [14-from-outside-reading](docs/14-from-outside-reading.md) | ideas taken from elsewhere, each with what it changed here |
 | [15-secrets-in-the-record](docs/15-secrets-in-the-record.md) | why redaction is at-rest hygiene and not containment |
@@ -976,10 +976,10 @@ reasonable.
 
 ## What this does not do
 
-Documented rather than discovered later: no WebAuthn bridging into the box, no
+Documented rather than discovered later: no WebAuthn bridging into the sandbox, no
 per-step checkpointing of a turn's side effects (an interrupted turn is resumed with
 its last action marked *outcome unknown*, never replayed). A local Docker installation
-runs boxes on one host. In a Kubernetes multi-tenant deployment, the control plane
+runs sandboxes on one host. In a Kubernetes multi-tenant deployment, the control plane
 allocates a pod per tenant and the Kubernetes scheduler places pods on cluster nodes.
 See the [deployment guide](../deploy/kubernetes/README.md) and
 [onboarding walkthrough](../deploy/kubernetes/ONBOARDING.md) for that setup. The full

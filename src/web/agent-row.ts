@@ -38,8 +38,8 @@ function oneAgentRow(a, index) {
   // Marker precedence is unchanged: waiting on the person, then unread, then working (INV-1625).
   var f = a.facts || {}, marker = f.awaiting ? "blocked" : f.unreadCount > 0 ? "unread" : busy.has(a.id) ? "busy" : "";
   var line = f.awaiting ? "{{ui.app.waiting-for-you}} " + f.awaiting.reason : busy.has(a.id) ? "{{ui.app.running}}" : String(a.title || a.description || "{{ui.app.idle}}").slice(0, 40);
-  var unread = "{{ui.app.agent-unread-count}}".replace("{count}", String(f.unreadCount));
-  var desktop = "{{ui.app.agent-desktop-number}}".replace("{display}", String(a.displayIndex));
+  var unread = fillWords("{{ui.app.agent-unread-count}}", { count: f.unreadCount });
+  var desktop = fillWords("{{ui.app.agent-desktop-number}}", { display: a.displayIndex });
   return '<div class="agent ' + (a.id === current ? "on" : "") + (marker ? " " + marker : "") + '" data-id="' + esc(a.id) + '" title="' + esc(f.awaiting ? f.awaiting.reason : "") + '">' +
     '<div class="dot identity-' + ((index % 8) + 1) + ' ' + marker + '"></div>' +
     '<div class="cols"><div class="nm" title="' + esc(a.name) + '">' + esc(a.name) + '</div><div class="ttl">' + esc(line) + '</div></div>' +

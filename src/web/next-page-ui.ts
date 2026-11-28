@@ -51,7 +51,7 @@ import { NEXT_NEED_JS } from "./next-need-ui.ts";
 import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
 import { NEXT_LINE_JS } from "./next-line-ui.ts";
 import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
-import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts";
+import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts"; import { FILL_WORDS_JS } from "../i18n/fill.ts";
 
 const STYLE = `
 :root {
@@ -465,8 +465,9 @@ export const NEXT_HTML = `<!doctype html>
 var MSG = {{@messages}};
 function t(key, vars) {
   var text = MSG[key] === undefined ? key : MSG[key];
-  return text.replace(/\\{(\\w+)\\}/g, function (whole, name) { return vars && vars[name] !== undefined ? String(vars[name]) : whole; });
+  return fillWords(text, vars);
 }
+${FILL_WORDS_JS}
 function $(id) { return document.getElementById(id); }
 function el(tag, className, text) {
   var node = document.createElement(tag);

@@ -12,7 +12,7 @@ The one you talk to: how to make an agent, configure it, and see which version i
 
 ## What it is
 
-An **agent** is a named AI that works in one box, with its own desktop, memory, skills and
+An **agent** is a named AI that works in one sandbox, with its own desktop, memory, skills and
 tools. Several agents make your team: they message each other and hand work to each other. A
 **team** is a label that lists agents together; an agent can be on up to 5 teams.
 
@@ -24,10 +24,10 @@ Configure.
 
 ### In the app
 
-- **Make an agent:** press `+` beside *Agents* in the sidebar. Write one, or pick one *From
+- **Make an agent:** press `+` on the first sandbox heading in the sidebar. Write one, or pick one *From
   catalog*. To make one from a saved agent, use the sidebar *Templates* button.
 - **Configure it:** pick the agent and press *Configure*. The *Settings* tab has its name, role
-  label, Teams (comma separated), box, persona, tools and standing files.
+  label, Teams (comma separated), sandbox, persona, tools and standing files.
 - **See its versions:** Configure → *History*. Tick two versions and press *Compare ticked*, or
   press *Go back to this version*.
 - **Pause it:** Settings → Team → Agents → *Pause*. *Resume* lets it work again.
@@ -56,7 +56,7 @@ agentbox chat <agent> "<message>"    # talk to one agent from the terminal
 ## Limits
 
 - Teams: at most 5 per agent, each at most 24 characters, lowercase.
-- An agent stays in the box it was made in.
+- An agent stays in the sandbox it was made in.
 - To stop a turn that is running, use Stop; saving a new version does not stop it.
 
 ## Next
