@@ -12,6 +12,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Role } from "../../host/principals.ts";
+import type { Task } from "../../host/tasks.ts";
+import type { Locale } from "../../i18n/locale.ts";
+import type { BoardItem } from "../board-order.ts";
+import { requestLocaleOf } from "../page-locale.ts";
+import type { Reach } from "../reach.ts";
 import { apiError, localizedBody } from "../api-error.ts";
 import { type IdempotencyStore, KEY_PATTERN } from "../idempotency.ts";
 import type { ClientCredential, McpTokenStore } from "../mcp-tokens.ts";
@@ -31,7 +36,35 @@ export interface Caller {
   person: ClientPerson;
 }
 
+/** An agent as the registry and the bus know it now: what `Agent` is built from. */
+export interface AgentFact {
+  id: string;
+  name: string;
+  title?: string;
+  description: string;
+  boxId: string;
+  boxName: string;
+  teams: readonly string[];
+  /** Kept out of listings by its profile. */
+  hidden: boolean;
+  /** In a turn now. */
+  working: boolean;
+}
+
+/** What the read operations read, as the server has it at the moment of the call (mount.ts wires it). */
+export interface ClientWorld {
+  /** What this person may read: the page's own answer (reach.ts). */
+  reachOf(person: ClientPerson): Reach;
+  agents(): readonly AgentFact[];
+  tasks(): readonly Task[];
+  /** What the person owes and what others wait on, among these tasks, as the page's attention lists it (attention.ts). */
+  attention(person: ClientPerson, tasks: readonly Task[]): { mine: readonly BoardItem[]; theirs: readonly BoardItem[] };
+  /** Who an id in a task's history is: a person or an agent; undefined for the installation's own bookkeepers. */
+  actor(id: string): { kind: "person" | "agent"; name: string } | undefined;
+}
+
 export interface ClientApiDeps {
+  world: ClientWorld;
   tokens: Pick<McpTokenStore, "clientFor" | "touch">;
   /** The roster person with this id, now; undefined once they are gone. */
   person(id: string): ClientPerson | undefined;
@@ -58,6 +91,8 @@ export interface Call {
   caller?: Caller;
   deps: ClientApiDeps;
   requestId: string;
+  /** The request's language, for the few words a resource carries for a person (a board column's title). */
+  locale: Locale;
 }
 
 export type Handler = (call: Call) => unknown;
@@ -175,7 +210,7 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
       if (caller !== undefined) caller = { ...caller, credential: { ...caller.credential, lastUsedAt: deps.tokens.touch(caller.credential.id, now()) } };
       const handler = table.handlers[operation.operationId];
       if (handler === undefined) throw new Error(`no handler for ${operation.operationId}`);
-      const call: Call = { operation, params: read.values, ...(caller !== undefined ? { caller } : {}), deps, requestId };
+      const call: Call = { operation, params: read.values, ...(caller !== undefined ? { caller } : {}), deps, requestId, locale: requestLocaleOf(req) };
 
       if (operation.method === "POST") {
         // A repeat of a POST within 24 hours answers the first answer; the key is the credential's own.

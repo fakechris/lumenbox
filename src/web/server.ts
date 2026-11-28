@@ -235,7 +235,7 @@ import {
   handleMcpRequest,
   type McpServerTool,
 } from "./mcp-server.ts";
-import { McpTokenStore } from "./mcp-tokens.ts"; import { mountClientApi } from "./client-api/mount.ts"; import { clientTokenRoute } from "./client-token-routes.ts"; // docs/106 §4
+import { McpTokenStore } from "./mcp-tokens.ts"; import { mountClientApi } from "./client-api/mount.ts"; import { reachOf } from "./reach.ts"; import { clientTokenRoute } from "./client-token-routes.ts"; // docs/106 §4
 import { Vault, type Grant } from "../host/vault.ts";
 import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
@@ -2982,7 +2982,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
-  const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log }); // /api/v1
+  const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log, // /api/v1
+    registry, tasks: () => orchestrator.tasks?.list() ?? [], working: id => orchestrator.bus.isActive(id), unavailable: unavailableHere, taskActive, checkPending });
 
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
@@ -3314,16 +3315,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
       let unavailableBoxes: Set<string> | undefined;
       const agentBoxes = new Map<string, string>();
-      const mayReadBox = (boxId: string): boolean => {
-        unavailableBoxes ??= unavailableHere();
-        const box = registry.boxById(boxId);
-        return box !== undefined && !unavailableBoxes.has(boxId) && (caller.userId === undefined || ((box.members === "everyone" || principals.isKnown(caller.userId)) && mayEnterBox(box, principals.resolve(caller.userId).id)));
-      };
-      const mayReadAgent = (id: string): boolean => {
-        let boxId = agentBoxes.get(id);
-        if (!boxId && registry.has(id)) { boxId = registry.boxOf(id).id; agentBoxes.set(id, boxId); }
-        return boxId !== undefined && mayReadBox(boxId);
-      };
+      // What this caller may read: reach.ts, the same answer the client API gives (docs/106 §4.3).
+      const readable = reachOf(() => (caller.userId === undefined ? undefined : { personId: principals.resolve(caller.userId).id, known: principals.isKnown(caller.userId) }), {
+        boxById: id => registry.boxById(id), unavailable: () => (unavailableBoxes ??= unavailableHere()),
+        boxIdOf: id => { let boxId = agentBoxes.get(id); if (!boxId && registry.has(id)) { boxId = registry.boxOf(id).id; agentBoxes.set(id, boxId); } return boxId; },
+      });
+      const mayReadBox = readable.box, mayReadAgent = readable.agent;
       const seesAgent = (id: string): boolean => callerRole === "admin" || mayReadAgent(id); // an agent's approvals and grants: its box's members, any box for an admin (INV-2083)
       const fileRevision = (path: string): string => {
         try { const stat = statSync(path, { bigint: true }); return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`; }
@@ -3838,7 +3835,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        const mayReadTask = (task: Task) => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
+        const mayReadTask = (task: Task) => readable.task(task); if (deliverableRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, send })) return; if (taskGateRoute(route, url, res, { tasks: orchestrator.tasks, mayReadTask, readTranscript: (agentId, conversation) => registry.readTranscript(agentId, conversation), roster: () => registry.list().map(record => ({ id: record.id, name: record.profile.name })), verdictOf: callId => orchestrator.policy.verdicts.get(callId), send })) return; // the gate's verdicts on its steps, the chat's own join (INV-1672) // a task's deliverable, to whoever sees the task (INV-1663)
         if (await taskExportRoute(route, url, req, res, { exports: taskExports, access: () => { principals.reload(); unavailableBoxes = undefined; agentBoxes.clear(); const allowed = admit({ authorization: req.headers.authorization, cookie: req.headers.cookie, query: url.searchParams.get("token"), direct: isDirectLocal(req) }).allow; return { task: id => { const task = orchestrator.tasks?.get(id); return allowed && !!task && mayReadTask(task); }, agent: id => allowed && mayReadAgent(id), box: id => allowed && mayReadBox(id) }; }, send })) return;
         if (taskCostRoute(route, url, res, { executions: taskExecutions, refused: () => refusedRole("admin"), access: { task: id => { const task = orchestrator.tasks?.get(id); return task !== undefined && mayReadTask(task); }, agent: mayReadAgent, box: mayReadBox }, records: () => orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), rates: configuredRates, compacted: () => orchestrator.usage.compacted(), send })) return;
         let readingBuilt = false; let readingWorld: Parameters<typeof stageWorldOf<Task>>[1] | undefined; const childReferences = new Map<string, string[]>(), readingCache = new Map<string, ReturnType<typeof workReading>>();

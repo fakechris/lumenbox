@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LumenBox client API",
-    "version": "1.0",
+    "version": "1.1",
     "description": "LumenBox client API, v1 (docs/106 §4). Additions only inside v1: a new operation, a new optional field, a new known value — each raises the revision `GET /api/v1/meta` reports.\n\nConventions, the same for every operation:\n- JSON, camelCase. Ids are opaque strings: compare them, never parse them. Times are RFC 3339 in UTC, to the second (`2026-11-28T10:00:00Z`).\n- A field with no value is absent, never null.\n- A client ignores fields it does not know.\n- A string listed with `x-extensible-enum` is an open enumeration: a client treats a value it does not know as \"other\", shows the item's plain words, and offers to open it on the page or the desktop app when it cannot act on it.\n- Lists take `?limit=` (1–100) and `?cursor=` and answer `{ items, nextCursor }`; `nextCursor` is absent on the last page.\n- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.\n- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.\n- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.\n- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer.\n- 429 carries `Retry-After` in seconds.\n- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.\n\nCredentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view.\nWhat a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.\nCross-origin browser calls are not answered with CORS headers.",
     "license": {
       "name": "GPL-3.0-only",
@@ -308,6 +308,1308 @@
           }
         }
       }
+    },
+    "/api/v1/agents": {
+      "get": {
+        "operationId": "listAgents",
+        "summary": "The agents the caller may reach",
+        "description": "Every agent in a box the person is a member of, by name; for a service token, those its view names. An agent hidden from listings is not listed, and still answers `GET /agents/{id}`.\n\nScope `agents:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "agents:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many agents. 1 to 100; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "`nextCursor` from the page before.",
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of agents, by name.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPage"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-cursor-invalid`: The cursor is not one this list gave, or was given for other filters. Start the list again without it.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-cursor-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agents/{id}": {
+      "get": {
+        "operationId": "getAgent",
+        "summary": "One agent",
+        "description": "An agent the caller may not reach answers 404, as one that does not exist.\n\nScope `agents:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "agents:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The agent's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An agent the caller may reach: one in a box the person is a member of (and, for a service token, one its view names).",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Agent"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/work": {
+      "get": {
+        "operationId": "listWork",
+        "summary": "All work the caller may read",
+        "description": "The page's All work: every piece of work the person may read — work an agent in their boxes holds, and work they asked for that nobody holds — most recently changed first. A question answered in a chat is not listed, as on the page. For a service token, only what its view names.\n\nScope `work:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "description": "Only work in this state.",
+            "schema": {
+              "type": "string",
+              "x-extensible-enum": [
+                "open",
+                "doing",
+                "blocked",
+                "review",
+                "done",
+                "dropped"
+              ]
+            }
+          },
+          {
+            "name": "agentId",
+            "in": "query",
+            "required": false,
+            "description": "Only work this agent is doing.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "topLevelId",
+            "in": "query",
+            "required": false,
+            "description": "Only this top-level work and the work made for it.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "waitsOnMe",
+            "in": "query",
+            "required": false,
+            "description": "`true`: only work the person owes something on; `false`: only work they do not.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How much work. 1 to 100; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "`nextCursor` from the page before.",
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of work, most recently changed first. Work that changes while a client pages moves to the front; `/changes` says so.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkPage"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-cursor-invalid`: The cursor is not one this list gave, or was given for other filters. Start the list again without it.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-cursor-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/work/{id}": {
+      "get": {
+        "operationId": "getWork",
+        "summary": "One piece of work",
+        "description": "Work the caller may not read answers 404, as work that does not exist.\n\nScope `work:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The work's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A piece of work, as the page's All work and board show it. Built from the task; never the task itself.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Work"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/work/{id}/history": {
+      "get": {
+        "operationId": "listWorkHistory",
+        "summary": "What happened to a piece of work",
+        "description": "Every change, oldest first: who moved it, to which state, to which agent, and what they said.\n\nScope `work:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The work's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many changes. 1 to 100; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "`nextCursor` from the page before.",
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of a piece of work's history, oldest first.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkChangePage"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-cursor-invalid`: The cursor is not one this list gave, or was given for other filters. Start the list again without it.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-cursor-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/board": {
+      "get": {
+        "operationId": "getBoard",
+        "summary": "The board",
+        "description": "The same work as `GET /work`, as the page's board: a column per state, what waits on the person first, then the most recently changed.\n\nScope `work:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many cards per column. 1 to 100; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The board: the work the caller may read, as columns by state, each in the order the page shows — what waits on the person first, then the most recently changed.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Board"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -336,6 +1638,8 @@
               "api-scope-needed",
               "api-param-invalid",
               "api-param-unknown",
+              "api-cursor-invalid",
+              "api-not-found",
               "api-idempotency-key-invalid",
               "api-idempotency-conflict",
               "api-rate-limited",
@@ -558,6 +1862,335 @@
           "allWork",
           "workIds",
           "conversationText"
+        ]
+      },
+      "Agent": {
+        "type": "object",
+        "description": "An agent the caller may reach: one in a box the person is a member of (and, for a service token, one its view names).",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The agent's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "The agent's name."
+          },
+          "title": {
+            "type": "string",
+            "description": "A short subtitle, e.g. \"release manager\"."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the agent is for, as its profile says."
+          },
+          "boxId": {
+            "type": "string",
+            "description": "The box the agent works in."
+          },
+          "boxName": {
+            "type": "string",
+            "description": "That box's name."
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A team: a label on agents in one box."
+            },
+            "description": "The teams the agent is on."
+          },
+          "status": {
+            "type": "string",
+            "description": "`working`: in a turn now. `idle`: not.",
+            "x-extensible-enum": [
+              "working",
+              "idle"
+            ]
+          },
+          "isHome": {
+            "type": "boolean",
+            "description": "Whether a direct message from the person reaches this agent."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "boxId",
+          "boxName",
+          "teams",
+          "status",
+          "isHome"
+        ]
+      },
+      "AgentPage": {
+        "type": "object",
+        "description": "A page of agents, by name.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent"
+            },
+            "description": "The agents on this page."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "The next page's cursor; absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "Work": {
+        "type": "object",
+        "description": "A piece of work, as the page's All work and board show it. Built from the task; never the task itself.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The work's id."
+          },
+          "title": {
+            "type": "string",
+            "description": "What it is, in a line."
+          },
+          "state": {
+            "type": "string",
+            "description": "The board's state: `open` — asked for, not started (a client's \"ready\"); `doing` — being worked on (\"in progress\"); `blocked` — waiting on something or somebody (\"blocked\"; when the person is that somebody, `waitsOnMe` is true); `review` — handed in, waiting for a reviewer (\"in review\"); `done` — accepted; `dropped` — given up, kept for the record. There is no \"needs you\" state: whether it waits on the person is `waitsOnMe`, which any state but `done` and `dropped` may have.",
+            "x-extensible-enum": [
+              "open",
+              "doing",
+              "blocked",
+              "review",
+              "done",
+              "dropped"
+            ]
+          },
+          "topLevelId": {
+            "type": "string",
+            "description": "The top-level work this belongs to: its own id when nothing made it, else the id of the work at the top of what it was made for."
+          },
+          "parentId": {
+            "type": "string",
+            "description": "The work this was made for, when it was made for another."
+          },
+          "agentId": {
+            "type": "string",
+            "description": "The agent doing it, when one is and the caller may read that agent."
+          },
+          "agentName": {
+            "type": "string",
+            "description": "That agent's name."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "The conversation it was asked in, when there is one."
+          },
+          "waitsOnMe": {
+            "type": "boolean",
+            "description": "Whether the person owes something on it now: an answer, a review, a decision. The same mark the page puts on its row."
+          },
+          "waitKind": {
+            "type": "string",
+            "description": "What the person owes, when `waitsOnMe`.",
+            "x-extensible-enum": [
+              "question",
+              "review",
+              "close-proposal",
+              "reauthorize",
+              "flagged",
+              "nudged",
+              "waiting"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "description": "The newest thing said about what was done (the result so far), cut to 700 characters."
+          },
+          "description": {
+            "type": "string",
+            "description": "The request in full. Absent for a service token whose view does not include conversation text."
+          },
+          "deliverableIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A deliverable id."
+            },
+            "description": "What it handed over."
+          },
+          "due": {
+            "type": "string",
+            "description": "When it is due: a date (`2026-12-01`) or a time, as given."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was asked for."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "state",
+          "topLevelId",
+          "waitsOnMe",
+          "deliverableIds",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "WorkPage": {
+        "type": "object",
+        "description": "A page of work, most recently changed first. Work that changes while a client pages moves to the front; `/changes` says so.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Work"
+            },
+            "description": "The work on this page."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "The next page's cursor; absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "WorkChange": {
+        "type": "object",
+        "description": "One change in a piece of work's history.",
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When."
+          },
+          "byKind": {
+            "type": "string",
+            "description": "Who: a person, an agent, or the installation itself (a reminder, a check, a restart).",
+            "x-extensible-enum": [
+              "person",
+              "agent",
+              "system"
+            ]
+          },
+          "byId": {
+            "type": "string",
+            "description": "Their id, for a person or an agent."
+          },
+          "byName": {
+            "type": "string",
+            "description": "Their name, for a person or an agent."
+          },
+          "state": {
+            "type": "string",
+            "description": "The state it moved to, when it moved.",
+            "x-extensible-enum": [
+              "open",
+              "doing",
+              "blocked",
+              "review",
+              "done",
+              "dropped"
+            ]
+          },
+          "agentId": {
+            "type": "string",
+            "description": "The agent it was handed to, when this change handed it on."
+          },
+          "note": {
+            "type": "string",
+            "description": "What was said with it. Absent for a service token whose view does not include conversation text."
+          }
+        },
+        "required": [
+          "at",
+          "byKind"
+        ]
+      },
+      "WorkChangePage": {
+        "type": "object",
+        "description": "A page of a piece of work's history, oldest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkChange"
+            },
+            "description": "The changes on this page."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "The next page's cursor; absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "Board": {
+        "type": "object",
+        "description": "The board: the work the caller may read, as columns by state, each in the order the page shows — what waits on the person first, then the most recently changed.",
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BoardColumn"
+            },
+            "description": "One per state, in board order: open, doing, blocked, review, done, dropped."
+          }
+        },
+        "required": [
+          "columns"
+        ]
+      },
+      "BoardColumn": {
+        "type": "object",
+        "description": "One column of the board.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The column's state.",
+            "x-extensible-enum": [
+              "open",
+              "doing",
+              "blocked",
+              "review",
+              "done",
+              "dropped"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "The column's name, in the request's language."
+          },
+          "total": {
+            "type": "integer",
+            "description": "How much work is in the column; `cards` holds the first `limit` of it. The rest: `GET /work?state=`."
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Work"
+            },
+            "description": "The column's work, in board order."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "total",
+          "cards"
         ]
       }
     }

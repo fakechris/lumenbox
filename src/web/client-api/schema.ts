@@ -19,7 +19,7 @@
 import type { ErrorCode } from "../../i18n/server-errors.ts";
 
 /** "1.<revision>": raised by every addition (docs/106 §4.1). The surface ratchet refuses an addition that leaves it. */
-export const API_REVISION = 0;
+export const API_REVISION = 1;
 export const API_VERSION = `1.${API_REVISION}`;
 export const API_PREFIX = "/api/v1";
 
@@ -90,6 +90,12 @@ export interface ServiceView {
 export const EMPTY_VIEW: ServiceView = { allAgents: false, agentIds: [], allWork: false, workIds: [], conversationText: false };
 export const ROLES = ["viewer", "driver", "admin"] as const;
 export const INSTALLATION_MODES = ["single-machine", "organisation"] as const;
+/** A piece of work's state: the board's own words (`TASK_STATUSES`, src/host/tasks.ts), not a translation of them. */
+export const WORK_STATES = ["open", "doing", "blocked", "review", "done", "dropped"] as const;
+/** Why work waits on the person: the kinds of what the page lists under "waiting on you" for a piece of work (src/host/attention.ts). */
+export const WAIT_KINDS = ["question", "review", "close-proposal", "reauthorize", "flagged", "nudged", "waiting"] as const;
+export const AGENT_STATUSES = ["working", "idle"] as const;
+export const ACTOR_KINDS = ["person", "agent", "system"] as const;
 
 // --- errors -----------------------------------------------------------------------------------
 
@@ -104,6 +110,8 @@ export const ERRORS = {
   "api-scope-needed": { status: 403, meaning: "The token does not carry the scope the operation needs." },
   "api-param-invalid": { status: 400, meaning: "A parameter has a value the operation does not take." },
   "api-param-unknown": { status: 400, meaning: "The operation takes no parameter of this name." },
+  "api-cursor-invalid": { status: 400, meaning: "The cursor is not one this list gave, or was given for other filters. Start the list again without it." },
+  "api-not-found": { status: 404, meaning: "No such resource, or none the credential may read: the two are one answer." },
   "api-idempotency-key-invalid": { status: 400, meaning: "`Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`." },
   "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used within 24 hours for a different request." },
   "api-rate-limited": { status: 429, meaning: "Too many requests; wait the seconds `Retry-After` names." },
@@ -154,8 +162,80 @@ export const SCHEMAS = {
     workIds: list(text("A work id."), "This work and the work made for it, when `allWork` is false."),
     conversationText: flag("Whether conversation text and work descriptions are included. False: titles, states and results only."),
   }, ["allAgents", "agentIds", "allWork", "workIds", "conversationText"]),
+  Agent: object("An agent the caller may reach: one in a box the person is a member of (and, for a service token, one its view names).", {
+    id: text("The agent's id."),
+    name: text("The agent's name."),
+    title: text("A short subtitle, e.g. \"release manager\"."),
+    description: text("What the agent is for, as its profile says."),
+    boxId: text("The box the agent works in."),
+    boxName: text("That box's name."),
+    teams: list(text("A team: a label on agents in one box."), "The teams the agent is on."),
+    status: known("`working`: in a turn now. `idle`: not.", AGENT_STATUSES),
+    isHome: flag("Whether a direct message from the person reaches this agent."),
+  }, ["id", "name", "boxId", "boxName", "teams", "status", "isHome"]),
+  AgentPage: object("A page of agents, by name.", {
+    items: list(ref("Agent"), "The agents on this page."),
+    nextCursor: text("The next page's cursor; absent on the last page."),
+  }, ["items"]),
+  Work: object("A piece of work, as the page's All work and board show it. Built from the task; never the task itself.", {
+    id: text("The work's id."),
+    title: text("What it is, in a line."),
+    state: known([
+      "The board's state:",
+      "`open` — asked for, not started (a client's \"ready\");",
+      "`doing` — being worked on (\"in progress\");",
+      "`blocked` — waiting on something or somebody (\"blocked\"; when the person is that somebody, `waitsOnMe` is true);",
+      "`review` — handed in, waiting for a reviewer (\"in review\");",
+      "`done` — accepted;",
+      "`dropped` — given up, kept for the record.",
+      "There is no \"needs you\" state: whether it waits on the person is `waitsOnMe`, which any state but `done` and `dropped` may have.",
+    ].join(" "), WORK_STATES),
+    topLevelId: text("The top-level work this belongs to: its own id when nothing made it, else the id of the work at the top of what it was made for."),
+    parentId: text("The work this was made for, when it was made for another."),
+    agentId: text("The agent doing it, when one is and the caller may read that agent."),
+    agentName: text("That agent's name."),
+    conversationId: text("The conversation it was asked in, when there is one."),
+    waitsOnMe: flag("Whether the person owes something on it now: an answer, a review, a decision. The same mark the page puts on its row."),
+    waitKind: known("What the person owes, when `waitsOnMe`.", WAIT_KINDS),
+    summary: text("The newest thing said about what was done (the result so far), cut to 700 characters."),
+    description: text("The request in full. Absent for a service token whose view does not include conversation text."),
+    deliverableIds: list(text("A deliverable id."), "What it handed over."),
+    due: text("When it is due: a date (`2026-12-01`) or a time, as given."),
+    createdAt: time("When it was asked for."),
+    updatedAt: time("When it last changed."),
+  }, ["id", "title", "state", "topLevelId", "waitsOnMe", "deliverableIds", "createdAt", "updatedAt"]),
+  WorkPage: object("A page of work, most recently changed first. Work that changes while a client pages moves to the front; `/changes` says so.", {
+    items: list(ref("Work"), "The work on this page."),
+    nextCursor: text("The next page's cursor; absent on the last page."),
+  }, ["items"]),
+  WorkChange: object("One change in a piece of work's history.", {
+    at: time("When."),
+    byKind: known("Who: a person, an agent, or the installation itself (a reminder, a check, a restart).", ACTOR_KINDS),
+    byId: text("Their id, for a person or an agent."),
+    byName: text("Their name, for a person or an agent."),
+    state: known("The state it moved to, when it moved.", WORK_STATES),
+    agentId: text("The agent it was handed to, when this change handed it on."),
+    note: text("What was said with it. Absent for a service token whose view does not include conversation text."),
+  }, ["at", "byKind"]),
+  WorkChangePage: object("A page of a piece of work's history, oldest first.", {
+    items: list(ref("WorkChange"), "The changes on this page."),
+    nextCursor: text("The next page's cursor; absent on the last page."),
+  }, ["items"]),
+  Board: object("The board: the work the caller may read, as columns by state, each in the order the page shows — what waits on the person first, then the most recently changed.", {
+    columns: list(ref("BoardColumn"), "One per state, in board order: open, doing, blocked, review, done, dropped."),
+  }, ["columns"]),
+  BoardColumn: object("One column of the board.", {
+    id: known("The column's state.", WORK_STATES),
+    title: text("The column's name, in the request's language."),
+    total: { type: "integer", description: "How much work is in the column; `cards` holds the first `limit` of it. The rest: `GET /work?state=`." },
+    cards: list(ref("Work"), "The column's work, in board order."),
+  }, ["id", "title", "total", "cards"]),
 } as const satisfies Record<string, Schema>;
 export type SchemaName = keyof typeof SCHEMAS;
+
+const limit = (description: string, fallback: number): Param => ({ name: "limit", description: `${description} 1 to 100; ${fallback} when absent.`, schema: { type: "integer", minimum: 1, maximum: 100 } });
+const cursor: Param = { name: "cursor", description: "`nextCursor` from the page before.", schema: { type: "string", maxLength: 512 } };
+const idParam = (what: string): Param => ({ name: "id", description: `The ${what}'s id.`, schema: { type: "string", maxLength: 200 } });
 
 // --- operations -------------------------------------------------------------------------------
 
@@ -196,6 +276,52 @@ export const OPERATIONS = [
     operationId: "getMe", method: "GET", path: "/me", auth: "credential", tier: "stable", response: "Me",
     summary: "Who the credential acts for",
     description: "The person the credential acts for — for a service token, the Admin who minted it — and the credential itself, never the token.",
+  },
+  {
+    operationId: "listAgents", method: "GET", path: "/agents", auth: "credential", scope: "agents:read", tier: "stable", response: "AgentPage",
+    query: [limit("How many agents.", 50), cursor], errors: ["api-cursor-invalid"],
+    summary: "The agents the caller may reach",
+    description: "Every agent in a box the person is a member of, by name; for a service token, those its view names. An agent hidden from listings is not listed, and still answers `GET /agents/{id}`.",
+  },
+  {
+    operationId: "getAgent", method: "GET", path: "/agents/{id}", auth: "credential", scope: "agents:read", tier: "stable", response: "Agent",
+    pathParams: [idParam("agent")], errors: ["api-not-found"],
+    summary: "One agent",
+    description: "An agent the caller may not reach answers 404, as one that does not exist.",
+  },
+  {
+    operationId: "listWork", method: "GET", path: "/work", auth: "credential", scope: "work:read", tier: "stable", response: "WorkPage",
+    query: [
+      { name: "state", description: "Only work in this state.", schema: { type: "string", "x-extensible-enum": [...WORK_STATES] } },
+      { name: "agentId", description: "Only work this agent is doing.", schema: { type: "string", maxLength: 200 } },
+      { name: "topLevelId", description: "Only this top-level work and the work made for it.", schema: { type: "string", maxLength: 200 } },
+      { name: "waitsOnMe", description: "`true`: only work the person owes something on; `false`: only work they do not.", schema: { type: "boolean" } },
+      limit("How much work.", 50), cursor,
+    ],
+    errors: ["api-cursor-invalid"],
+    summary: "All work the caller may read",
+    description: [
+      "The page's All work: every piece of work the person may read — work an agent in their boxes holds, and work they asked for that nobody holds —",
+      "most recently changed first. A question answered in a chat is not listed, as on the page. For a service token, only what its view names.",
+    ].join(" "),
+  },
+  {
+    operationId: "getWork", method: "GET", path: "/work/{id}", auth: "credential", scope: "work:read", tier: "stable", response: "Work",
+    pathParams: [idParam("work")], errors: ["api-not-found"],
+    summary: "One piece of work",
+    description: "Work the caller may not read answers 404, as work that does not exist.",
+  },
+  {
+    operationId: "listWorkHistory", method: "GET", path: "/work/{id}/history", auth: "credential", scope: "work:read", tier: "stable", response: "WorkChangePage",
+    pathParams: [idParam("work")], query: [limit("How many changes.", 50), cursor], errors: ["api-not-found", "api-cursor-invalid"],
+    summary: "What happened to a piece of work",
+    description: "Every change, oldest first: who moved it, to which state, to which agent, and what they said.",
+  },
+  {
+    operationId: "getBoard", method: "GET", path: "/board", auth: "credential", scope: "work:read", tier: "stable", response: "Board",
+    query: [limit("How many cards per column.", 50)],
+    summary: "The board",
+    description: "The same work as `GET /work`, as the page's board: a column per state, what waits on the person first, then the most recently changed.",
   },
 ] as const satisfies readonly Operation[];
 export type OperationId = (typeof OPERATIONS)[number]["operationId"];

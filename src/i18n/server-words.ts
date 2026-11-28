@@ -131,5 +131,12 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "page.desktop.reconnecting": ["正在重新连接桌面…", "Reconnecting to the desktop…"],
   "page.desktop.still-closed": ["桌面还没有响应。它可能仍在重启，请稍后再试。", "The desktop is still not answering. It may still be restarting; try again in a moment."],
   "page.desktop.reopen": ["重新打开", "Reopen"],
+  // The board's columns as the client API names them (GET /api/v1/board, docs/106 §4.2): the state's words for a person.
+  "api.board.open": ["待开始", "Open"],
+  "api.board.doing": ["进行中", "In progress"],
+  "api.board.blocked": ["卡住了", "Blocked"],
+  "api.board.review": ["待验收", "In review"],
+  "api.board.done": ["完成", "Done"],
+  "api.board.dropped": ["已放弃", "Dropped"],
   "page.desktop.box-down": ["沙盒暂时不可用。用 agentbox box up 启动它。", "The sandbox is not available. Start it with agentbox box up."],
 };

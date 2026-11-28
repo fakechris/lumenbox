@@ -257,7 +257,7 @@ first delivery; the client API is needed only when they show the board on a scre
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
 | 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
 | 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 parts 1–3): the declared level and its start-up check, R1, R2, R4, R5 (except a strict `script-src`), R6, R7, R8, and S-2 closed for private. Not done: the kind pass through a TLS Ingress. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
-| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Part built (INV-2213 part 1, the frame): `/meta`, `/me`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. Not yet: `/agents`, `/work`, `/board` (part 2), `/events`, `/changes` (part 3) |
+| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Part built (INV-2213 parts 1–2): `/meta`, `/me`, `/agents`, `/work` (with history), `/board`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. Not yet: `/events`, `/changes` (part 3) |
 | 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Not built |
 | 6. Shared storage for an organisation; mobile apps | Shared storage: a design of its own. Native iOS and Android clients, encrypted relay and wake-only push: docs/110 | Decided in docs/110; not built |
 
@@ -308,6 +308,33 @@ person with `principalId`. Kept in the side door's hashed store (`mcp-tokens.jso
 scopes, expiry, last use to the minute, view; `lbxp_` and `lbxs_` prefixes. Minting and revoking —
 by the holder, an Admin or a directory sync — are in `tokens.jsonl` with who. The page has no form
 for them yet.
+
+**Agents, work and the board (part 2).** `GET /agents`, `/agents/{id}` (`agents:read`); `GET /work`,
+`/work/{id}`, `/work/{id}/history`, `/board` (`work:read`). What a person may read is one function
+for the page and the API, `src/web/reach.ts`: an agent by its box's members, work by its agent or,
+when nobody holds it, by whether they asked for it — and the box is the boundary for Admins too.
+Outside it the answer is `api-not-found`, the same as for nothing at all.
+
+- **Work's `state` is the board's own word** (`open`, `doing`, `blocked`, `review`, `done`,
+  `dropped`), not a translation; the schema's description maps each to the words a client may
+  show (`open` is "ready", `doing` "in progress", `review` "in review"). There is no "needs you"
+  state: `waitsOnMe` (with `waitKind`) is the page's own mark — the attention it computes for the
+  person (`attentionFor`) — and any live state may carry it.
+- **Top-level work** is a task nothing made (no `origin.parentId`); `topLevelId` is the highest one
+  the caller may read, and `?topLevelId=` lists it with what was made for it.
+- **Order**: `/work` most recently changed first (a keyset cursor, exact across pages; work that
+  changes moves to the front, which `/changes` reports); `/agents` by name; history oldest first.
+  A cursor names its filters and is refused (`api-cursor-invalid`) under others.
+- **The board** is a column per state in the page's order — what waits on the person first, then
+  the board's own order (`boardOrder`) — with `total` and the first `limit` cards; the rest through
+  `/work?state=`. Titles are in the request's language. A question answered in a chat is neither
+  listed nor on the board, as on the page; it is still readable by id.
+- **A service token's view**: agents it names (or all its Admin may reach); work under the
+  top-level work it names, with what was made for it, or with `allWork` the work its agents hold.
+  Without `conversationText`, no work description and no history notes; titles, states and the
+  result line (`summary`) remain.
+- An agent hidden from listings is not in `/agents` and still answers by id. `hasDesktop` is not
+  there yet: it arrives with desktop tickets (INV-2214).
 
 **Generation.** `clients/codegen/` holds a Swift package (swift-openapi-generator) and a Kotlin
 project (openapi-generator, `kotlinx.serialization`, as lumenbox-android uses) that generate from

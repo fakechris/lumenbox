@@ -4,6 +4,7 @@
 import com.lumenopen.lumenbox.generated.infrastructure.Serializer
 import com.lumenopen.lumenbox.generated.models.Me
 import com.lumenopen.lumenbox.generated.models.Meta
+import com.lumenopen.lumenbox.generated.models.WorkPage
 import com.lumenopen.lumenbox.generated.models.Error as ApiError
 import java.io.File
 import kotlin.test.Test
@@ -27,6 +28,13 @@ class ForwardCompatibilityTest {
         assertEquals(listOf("work:read", "time:travel"), me.credential.scopes)
         assertEquals(listOf("a7"), me.credential.view?.agentIds)
         assertNotNull(me.credential.lastUsedAt)
+    }
+
+    @Test fun workWithAStateThisClientDoesNotKnow() {
+        val page = json.decodeFromString(WorkPage.serializer(), fixture("work-page.json"))
+        assertEquals("paused", page.items.first().state)
+        assertEquals("sign-off", page.items.first().waitKind)
+        assertEquals(true, page.items.first().waitsOnMe)
     }
 
     @Test fun anErrorWithAnUnknownCode() {

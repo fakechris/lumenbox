@@ -44,8 +44,28 @@ async function server(t: TestContext) {
     { id: "dee", name: "Dee", role: "driver" as const, identities: [] },
     { id: "vic", name: "Vic", role: "viewer" as const, identities: [] },
     { id: "gus", name: "Gus", role: "driver" as const, identities: [] },
+    { id: "pat", name: "Pat", role: "driver" as const, identities: [] },
   ];
   new Principals().save(roster);
+  // The world the read operations read: two agents in the installation's box (everyone's), one hidden from
+  // listings, and one in Pat's own box that nobody else may enter — Admins included (docs/111 §1).
+  const { AgentRegistry } = await import("../../agents/registry.ts");
+  const { TaskStore } = await import("../../host/tasks.ts");
+  const registry = new AgentRegistry(join(home, "agents"));
+  registry.attachBox({ id: "pat-box", name: "Pat's sandbox", kind: "attached", members: ["pat"], displayFloor: 1, workDir: "/work", createdAt: new Date().toISOString() });
+  const writer = registry.create({ name: "Writer", title: "editor", description: "Writes the newsletter.", tags: ["media"] });
+  const hidden = registry.create({ name: "Quiet", hidden: true });
+  const patBot = registry.create({ name: "PatBot", boxId: "pat-box" });
+  const board = new TaskStore(join(home, "tasks.jsonl"));
+  // Asked for three days ago: a close may be proposed only once the requester has had time to look.
+  const t1 = board.create({ title: "Plan the issue", description: "Draft the plan for the December issue.", requester: "dee", assigneeId: writer.id, now: new Date(Date.now() - 3 * 24 * 3_600_000) })!;
+  const t2 = board.create({ title: "Write the lead story", requester: "dee", assigneeId: writer.id, origin: { kind: "internal", parentId: t1.id } })!;
+  board.update(t2.id, { status: "blocked", note: "Halfway through the draft.", waitingOn: "the photographs" }, writer.id); // a start puts "doing" back to "open"
+  const t3 = board.create({ title: "Pat's private errand", requester: "pat", assigneeId: patBot.id })!;
+  const t4 = board.create({ title: "Find a photographer", requester: "dee" })!;
+  const t5 = board.create({ title: "Vic's own note", requester: "vic" })!;
+  assert.ok("task" in board.proposeClose(t1.id, writer.id, "the plan is in the shared folder"), "the close proposal Dee is asked to answer");
+  const ids = { writer: writer.id, hidden: hidden.id, patBot: patBot.id, t1: t1.id, t2: t2.id, t3: t3.id, t4: t4.id, t5: t5.id };
   // One token whose time is over, minted before the server reads the store.
   const expired = new McpTokenStore(join(home, "mcp-tokens.json")).mintClient({ kind: "personal", principalId: "dee", label: "old", scopes: SCOPE_NAMES, expiresAt: new Date(Date.now() - 60_000), by: "test" }).token;
   let base = "";
@@ -67,11 +87,12 @@ async function server(t: TestContext) {
   let address = 0;
   /** An address nobody else in this file uses: a limit tripped from it trips nothing else. */
   const fresh = () => { address += 1; return `203.0.113.${address}`; };
-  const call = (operation: Operation, init: { token?: string; query?: string; headers?: Record<string, string>; from?: string } = {}) =>
-    fetch(`${base}/api/v1${operation.path}${init.query ?? ""}`, { method: operation.method, headers: {
+  /** A request for an operation; `{id}` is an agent the caller reaches, or work they may read, unless `id` says which. */
+  const call = (operation: Operation, init: { token?: string; query?: string; headers?: Record<string, string>; from?: string; id?: string } = {}) =>
+    fetch(`${base}/api/v1${operation.path.replace("{id}", encodeURIComponent(init.id ?? (operation.path.startsWith("/agents") ? writer.id : t1.id)))}${init.query ?? ""}`, { method: operation.method, headers: {
       "x-forwarded-for": init.from ?? fresh(), ...(init.token !== undefined ? { authorization: `Bearer ${init.token}` } : {}), ...init.headers,
     } });
-  return { base, home, logs, expired, roster, mint, fresh, call, operator, Principals };
+  return { base, home, logs, expired, roster, mint, fresh, call, operator, Principals, ids };
 }
 
 /** An error answer is the documented shape, with the code asked for and the request id of its header. */
@@ -183,7 +204,12 @@ test("every error the document lists for an operation is provoked on it, and an 
       }
       throw new Error("never limited");
     },
-    "api-param-invalid": undefined,
+    "api-param-invalid": async operation => {
+      const token = (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token;
+      return (operation.query ?? []).some(param => param.name === "limit") ? box.call(operation, { token, query: "?limit=0" }) : box.call(operation, { token, id: "x".repeat(201) });
+    },
+    "api-not-found": async operation => box.call(operation, { token: (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token, id: "no-such-thing" }),
+    "api-cursor-invalid": async operation => box.call(operation, { token: (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token, query: "?cursor=bm90LW91cnM" }),
     "api-operation-unknown": undefined,
     "api-method-not-allowed": undefined,
     "api-idempotency-key-invalid": undefined,
@@ -260,7 +286,7 @@ test("tokens: a viewer mints their own, only an Admin mints a service token and 
 
 test("the generation check's fixtures stand for a newer server: each fits its schema once unknowns are allowed, and each has an unknown field and an unknown value", () => {
   // clients/codegen decodes these with the Swift and Kotlin code generated from the document (CI's client-codegen job).
-  const fixtures: [string, keyof typeof SCHEMAS][] = [["meta.json", "Meta"], ["me.json", "Me"], ["error.json", "Error"]];
+  const fixtures: [string, keyof typeof SCHEMAS][] = [["meta.json", "Meta"], ["me.json", "Me"], ["error.json", "Error"], ["work-page.json", "WorkPage"]];
   for (const [file, name] of fixtures) {
     const body = JSON.parse(readFileSync(new URL(`../../../clients/codegen/fixtures/${file}`, import.meta.url), "utf8")) as unknown;
     assert.deepEqual(problemsOf(body, SCHEMAS[name] as Schema, false), [], `${file} is a ${name}, as a newer server would send it`);
@@ -268,4 +294,85 @@ test("the generation check's fixtures stand for a newer server: each fits its sc
     assert.ok(strict.some(problem => problem.endsWith("not in the schema")), `${file} has a field this schema does not`);
     assert.ok(strict.some(problem => problem.endsWith("is not a known value")), `${file} has a value this schema does not list`);
   }
+});
+
+test("agents, work and the board show what the page shows this person: their boxes' agents and work, 404 for the rest, the page's waiting mark and order, and a service token only its view", async t => {
+  const box = await server(t);
+  const { ids } = box;
+  const op = (id: string) => OPERATIONS.find(operation => operation.operationId === id) as Operation;
+  const read = async <T>(operationId: string, token: string, init: { query?: string; id?: string; headers?: Record<string, string> } = {}): Promise<T> => {
+    const answer = await box.call(op(operationId), { token, ...init });
+    const body = await answer.json() as T;
+    assert.equal(answer.status, 200, `${operationId}: ${JSON.stringify(body)}`);
+    assert.deepEqual(problemsOf(body, SCHEMAS[op(operationId).response] as Schema), [], `${operationId} answers its documented shape`);
+    return body;
+  };
+  type Page<T> = { items: T[]; nextCursor?: string };
+  type Work = { id: string; state: string; topLevelId: string; parentId?: string; agentId?: string; waitsOnMe: boolean; waitKind?: string; description?: string; summary?: string };
+  const dee = (await box.mint({ principalId: "dee", label: "dee", scopes: SCOPE_NAMES })).token;
+
+  // Agents: the boxes Dee is in; the hidden one is not listed and still readable; Pat's is not there at all.
+  const agents = await read<Page<{ id: string; name: string; teams: string[]; status: string }>>("listAgents", dee);
+  assert.deepEqual(agents.items.map(agent => agent.name), ["Writer"]);
+  assert.deepEqual(agents.items[0]!.teams, ["media"]);
+  assert.equal(agents.items[0]!.status, "idle");
+  assert.equal((await read<{ name: string }>("getAgent", dee, { id: ids.hidden })).name, "Quiet");
+  await assertRefusal(await box.call(op("getAgent"), { token: dee, id: ids.patBot }), "api-not-found", "an agent in a box Dee is not in");
+  await assertRefusal(await box.call(op("getAgent"), { token: dee, id: "nobody" }), "api-not-found", "and one that does not exist: the same answer");
+
+  // Work: what Dee's boxes hold and what Dee asked for; Pat's errand and Vic's note are not there.
+  const work = await read<Page<Work>>("listWork", dee);
+  assert.deepEqual(work.items.map(item => item.id).sort(), [ids.t1, ids.t2, ids.t4].sort());
+  for (const hiddenWork of [ids.t3, ids.t5]) await assertRefusal(await box.call(op("getWork"), { token: dee, id: hiddenWork }), "api-not-found", `work ${hiddenWork} Dee may not read`);
+  const child = work.items.find(item => item.id === ids.t2)!;
+  assert.deepEqual([child.state, child.topLevelId, child.parentId, child.agentId, child.summary], ["blocked", ids.t1, ids.t1, ids.writer, "Halfway through the draft."]);
+  const planned = work.items.find(item => item.id === ids.t1)!;
+  assert.deepEqual([planned.waitsOnMe, planned.waitKind], [true, "close-proposal"], "the writer proposes closing what Dee asked for: it waits on Dee");
+  assert.equal(planned.description, "Draft the plan for the December issue.");
+  // Filters, each against what it names.
+  const only = async (query: string) => (await read<Page<Work>>("listWork", dee, { query })).items.map(item => item.id).sort();
+  assert.deepEqual(await only("?state=blocked"), [ids.t2]);
+  assert.deepEqual(await only(`?agentId=${ids.writer}`), [ids.t1, ids.t2].sort());
+  assert.deepEqual(await only(`?topLevelId=${ids.t1}`), [ids.t1, ids.t2].sort());
+  assert.deepEqual(await only("?waitsOnMe=true"), [ids.t1]);
+  assert.deepEqual(await only(`?agentId=${ids.patBot}`), [], "an agent Dee cannot reach holds nothing Dee sees");
+  // Pages: one at a time, every item once, and a cursor is for the filters it was given with.
+  const seen: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page: Page<Work> = await read<Page<Work>>("listWork", dee, { query: `?limit=1${cursor !== undefined ? `&cursor=${cursor}` : ""}` });
+    seen.push(...page.items.map(item => item.id));
+    cursor = page.nextCursor;
+  } while (cursor !== undefined);
+  assert.deepEqual(seen.sort(), [ids.t1, ids.t2, ids.t4].sort());
+  const first = await read<Page<Work>>("listWork", dee, { query: "?limit=1" });
+  await assertRefusal(await box.call(op("listWork"), { token: dee, query: `?state=open&cursor=${first.nextCursor}` }), "api-cursor-invalid", "a cursor given for other filters");
+  // History, oldest first, with who and what.
+  const history = await read<Page<{ byKind: string; byName?: string; state?: string; note?: string }>>("listWorkHistory", dee, { id: ids.t2 });
+  assert.ok(history.items.some(change => change.byKind === "agent" && change.byName === "Writer" && change.state === "blocked" && change.note === "Halfway through the draft."), JSON.stringify(history.items));
+  // The board: a column per state, what waits on Dee first in its column; titles in the reader's language.
+  const board = await read<{ columns: { id: string; title: string; total: number; cards: Work[] }[] }>("getBoard", dee, { headers: { "accept-language": "zh-CN" } });
+  assert.deepEqual(board.columns.map(column => column.id), ["open", "doing", "blocked", "review", "done", "dropped"]);
+  const open = board.columns[0]!;
+  assert.equal(open.title, "待开始");
+  assert.deepEqual([open.total, open.cards[0]!.id], [2, ids.t1], "the card waiting on Dee is first");
+
+  // A service token: Ann's reach (Pat's box is closed to Admins too), and only what its view names.
+  const service = async (view: Record<string, unknown>) => (await box.mint({ kind: "service", principalId: "ann", label: "Acme", scopes: ["agents:read", "work:read"], view })).token;
+  const none = await service({});
+  assert.deepEqual((await read<Page<unknown>>("listAgents", none)).items, [], "a view that names nothing shows nothing");
+  assert.deepEqual((await read<Page<unknown>>("listWork", none)).items, []);
+  const everything = await service({ allAgents: true, allWork: true });
+  assert.deepEqual((await read<Page<{ name: string }>>("listAgents", everything)).items.map(agent => agent.name), ["Writer"], "every agent Ann may reach: not Pat's");
+  const held = await read<Page<Work>>("listWork", everything);
+  assert.deepEqual(held.items.map(item => item.id).sort(), [ids.t1, ids.t2].sort(), "all work the view's agents hold: none nobody holds, none in Pat's box");
+  assert.ok(held.items.every(item => item.description === undefined), "no conversation text unless the view says so");
+  assert.ok((await read<Page<{ note?: string }>>("listWorkHistory", everything, { id: ids.t2 })).items.every(change => change.note === undefined));
+  const named = await service({ workIds: [ids.t1] });
+  const namedWork = await read<Page<Work>>("listWork", named);
+  assert.deepEqual(namedWork.items.map(item => item.id).sort(), [ids.t1, ids.t2].sort(), "named work comes with the work made for it");
+  assert.ok(namedWork.items.every(item => item.agentId === undefined), "and without naming an agent its view does not");
+  await assertRefusal(await box.call(op("getWork"), { token: named, id: ids.t4 }), "api-not-found", "work outside the view");
+  const withText = await service({ allAgents: true, allWork: true, conversationText: true });
+  assert.equal((await read<Work>("getWork", withText, { id: ids.t1 })).description, "Draft the plan for the December issue.");
 });
