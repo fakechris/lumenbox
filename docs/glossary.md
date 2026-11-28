@@ -3,7 +3,7 @@
      family: spec
      status: current
      domain: vocabulary
-     updated: 2026-11-07
+     updated: 2026-11-29
 -->
 # Glossary and controlled vocabulary
 
@@ -23,10 +23,10 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
    the API (`/api/channels`), the source tree (`src/channels/`) and the user guides already
    used, and it is the word other agent products use for an IM connection. A conversation in
    an IM app is a **group chat** (群), never a channel and never a room.
-2. **Agent is the only word for an agent.** Not bot, buddy, worker, expert or specialist, and
-   in Chinese not 机器人 or 智能体; Chinese copy keeps the English word *agent*, as it keeps
-   *box* and *skill*. *Bot* survives only inside a product name (Grok Bot) and as the IM
-   platform's own object in a sentence about that platform's console.
+2. **Agent is the only word for an agent; in Chinese it is 智能体** (docs/112, 2026-11-29). Not
+   bot, buddy, worker, expert or specialist, and in Chinese not 机器人 or 成员. 成员 is a person in an
+   organisation and nothing else. *Bot* survives only inside a product name (Grok Bot) and as the
+   IM platform's own object in a sentence about that platform's console.
 3. **Team, crew and front are three different things.**
    - A **team** is a label a person or an agent puts on agents in one box, so they are listed
      together; an agent may be on up to five teams (docs/45).
@@ -55,12 +55,18 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
    (组织的节点). A machine's own environment, used as a box, is its **native environment**
    (原生环境).
 
+6. **Sandbox is the word for a box** (docs/112, 2026-11-29). A person reads *sandbox* (沙盒): *your
+   sandbox* (你的沙盒) is the one that is theirs, on the desktop and in an organisation alike; a
+   *team sandbox* (团队沙盒) is one several people use. The code, the specs and the CLI keep *box*.
+   Not computer (电脑), cloud host (云主机), Box, 盒子 or 机器 for a sandbox: 电脑 collides with this
+   computer, and 本机 is reserved for the native environment.
+
 ## Concepts
 
 | User-facing name (en / zh) | Internal name (code, specs) | Identifier | State words | Entry points (app · IM · CLI) |
 |---|---|---|---|---|
-| **box** / box | Box; "room" in docs/22 §1 | box name, e.g. `default`; Docker container `agentbox-box` | running · stopped · unavailable | Settings → Boxes, `+ box` · — · `agentbox box up/attach/list/down/status` |
-| **agent** / agent | Agent, AgentProfile; "worker" in docs/22 | agent id (lowercase name), e.g. `ada` | idle · working · paused | sidebar `+`, Configure, Settings → Team · `@name` · `agentbox agent new` |
+| **sandbox** / 沙盒 | box (Box); "room" in docs/22 §1 | box name, e.g. `default`; Docker container `agentbox-box` | running · stopped · unavailable | Settings → Boxes, `+ box` · — · `agentbox box up/attach/list/down/status` |
+| **agent** / 智能体 | Agent, AgentProfile; "worker" in docs/22 | agent id (lowercase name), e.g. `ada` | idle · working · paused | sidebar `+`, Configure, Settings → Team · `@name` · `agentbox agent new` |
 | **team** / 团队 | agent `tags` | lowercase name with hyphens, at most 24 characters | — (a label: on or off an agent) | Configure → Teams field · — · `CreateAgent`/`UpdateAgent` `tags` |
 | **crew** / 小队 | `CATALOG_CREWS` (catalog.ts) | crew slug, e.g. `media-desk` | in the catalog · added | New agent → catalog chips · — · `GET /api/catalog` |
 | **catalog** / 目录 | catalog.ts: experts, crews, connectors | entry slug | in the catalog · added | New agent → catalog chips · — · `GET /api/catalog` |
@@ -121,6 +127,19 @@ its spelling.
 | `box host`, `box hosts` | machine | The specs keep *box host* (docs/96). |
 | `host box`, `host boxes` | native environment | The code keeps `kind: "host"`. |
 | `宿主` | 机器 | Covers 宿主机. |
+
+## Being replaced (docs/112)
+
+These words are still on pages and are being converted; each moves into the table above when its
+pages are done, so the check then refuses it. Until then a new page does not use them.
+
+| Old word | New word | Note |
+|---|---|---|
+| `机器人`, `箱子`, `工作机` (already refused above) | 智能体, 沙盒 | The table above still names *agent* and *box* as their replacement; it changes with the first converted page, together with its test. |
+| `box`, `boxes`, `Box`, `shared box`, `personal box` (a person reads) | sandbox, your sandbox, team sandbox | Code, specs and CLI keep *box*. |
+| `盒子`, `电脑` and `机器` when they mean a box, `个人 Box`, `共享 box` | 沙盒, 你的沙盒, 团队沙盒 | 机器 stays for where a sandbox runs (decision 5). |
+| `成员` meaning an agent | 智能体 | 成员 stays for a person in an organisation. |
+| `agent` in Chinese copy | 智能体 | |
 
 ## Allowed names
 
