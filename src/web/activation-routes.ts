@@ -115,10 +115,17 @@ export function admission(deps: AdmissionDeps) {
     }
     return { state: "active", already };
   }
-  /** The same, for an identity `<door>:<subject>` that has a request waiting: what approving a chat request is. Undefined when it has none. */
-  function approveRequest(identity: string, role: Role, by: string): { state: "active"; already: boolean } | undefined {
+  /**
+   * Approving somebody who wrote to the bot, `<door>:<subject>`: an activation whenever this door's
+   * directory can make one — they have a request waiting, or they knocked (`knocked`) and the
+   * directory lists them. Undefined when it cannot, and the door's own knock decides instead.
+   */
+  function approveRequest(identity: string, role: Role, by: string, knocked = false): { state: "active"; already: boolean } | undefined {
     const at = identity.indexOf(":"), source = at <= 0 ? undefined : deps.credentials(identity.slice(0, at))?.source, subject = identity.slice(at + 1);
-    return source === undefined || !activations.requests(source).some(request => request.subject === subject) ? undefined : activatePerson(source, subject, role, by);
+    if (source === undefined || principals.installation().mode === "single-machine") return undefined;
+    const asked = activations.requests(source).some(request => request.subject === subject);
+    const listed = knocked && snapshotOf(source)?.people.some(person => person.vendorSubject === subject) === true;
+    return asked || listed ? activatePerson(source, subject, role, by) : undefined;
   }
 
   /**

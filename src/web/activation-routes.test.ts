@@ -417,7 +417,7 @@ test("a direct message from somebody the directory lists is one request that out
     const manager = new ChannelManager({
       log: () => {}, mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"), known: identity => principals.isKnown(identity),
       joinRequest: (adapterName, message) => joinRequestWords(door.knocked(adapterName, message.identity.slice(adapterName.length + 1), message.senderLabel), "en"),
-      knock: request => { if (door.knocked(request.channel, request.identity.slice(request.channel.length + 1), request.senderLabel) !== "no-directory") return; knocks.push(request.identity); },
+      knock: request => { if (request.privateChat === true && door.knocked(request.channel, request.identity.slice(request.channel.length + 1), request.senderLabel) !== "no-directory") return; knocks.push(request.identity); },
       ask: async (_agent, text, identity) => { turns.push(`${identity}: ${text}`); return "ok"; },
     });
     for (const name of ["ding", "telegram"]) manager.register({ name, start: async handler => { handlers.set(name, handler); }, stop() {}, send: async () => undefined } satisfies ChannelAdapter, true, "test");
@@ -434,12 +434,11 @@ test("a direct message from somebody the directory lists is one request that out
       for (const text of ["hello", "anyone?", "please"]) assert.equal(await write("ding", "bob", text), tr("access.asked", "en"));
       assert.deepEqual(new Activations(path).requests(source).map(request => [request.subject, request.name]), [["bob", "Bob Li"]]);
       assert.equal(readFileSync(path, "utf8").trim().split("\n").length, 1, "one line in the ledger");
-      // In a group he is a stranger as before, and it is still that one request, not a knock held in memory.
+      // In a group only a direct message asks: he knocks there as a stranger did, and makes no second request.
       await write("ding", "bob", "hello", false);
-      assert.deepEqual([knocks.length, new Activations(path).requests(source).length], [0, 1]);
-      // Somebody the directory does not list is told so and makes no request, direct or in a group.
+      assert.deepEqual([knocks.splice(0), new Activations(path).requests(source).length], [["ding:bob"], 1]);
+      // Somebody the directory does not list is told so and makes no request.
       assert.equal(await write("ding", "zed", "let me in"), tr("access.unlisted", "en"));
-      await write("ding", "zed", "let me in", false);
       assert.deepEqual([knocks.length, new Activations(path).requests(source).length], [0, 1]);
       // A door with no directory keeps its knock.
       assert.equal(await write("telegram", "77", "hello"), knockRefusal("telegram:77"));
@@ -450,6 +449,7 @@ test("a direct message from somebody the directory lists is one request that out
       door = desk();
       assert.equal(door.stateOf(source, "bob"), "asked");
       assert.equal(door.approveRequest("ding:zed", "driver", "p-ana"), undefined, "nobody who did not ask is approved this way");
+      assert.equal(door.approveRequest("ding:zed", "driver", "p-ana", true), undefined, "nor somebody who knocked whom the directory does not list");
       assert.equal(door.approveRequest("telegram:77", "driver", "p-ana"), undefined);
       assert.deepEqual(door.approveRequest("ding:bob", "driver", "p-ana"), { state: "active", already: false });
       assert.deepEqual([principals.roleOf("ding:bob"), principals.resolve("ding:bob").name], ["driver", "Bob Li"]);

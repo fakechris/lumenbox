@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentRegistry, conversationIdFor } from "../agents/registry.ts";
-import { DingTalkChannel } from "../channels/dingtalk.ts";
+import { DingTalkChannel, TOPIC } from "../channels/dingtalk.ts";
 import { FeishuChannel } from "../channels/feishu.ts";
 import { type ChannelAdapter, ChannelManager, type InboundMessage } from "../channels/manager.ts";
 import { OutboxSender } from "../channels/outbox-sender.ts";
@@ -26,7 +26,8 @@ const OTO = "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend";
 /** Two members with a box and an agent each, one on a DingTalk door and one on a Feishu door, and a shared box. */
 function organisation(t: { after(fn: () => void): void }, options: { dingStatus?: number; lastPersonAt?: (conversation: string) => number | undefined } = {}) {
   const home = mkdtempSync(join(tmpdir(), "inv2221-reach-"));
-  const registry = new AgentRegistry(join(home, "agents")), principals = new Principals(join(home, "principals.json"));
+  const door = { incarnation: 1 }; // the DingTalk door's, as the server's roster asks it
+  const registry = new AgentRegistry(join(home, "agents")), principals = new Principals(join(home, "principals.json"), { incarnationOf: identity => identity.startsWith("ding:") ? door.incarnation : 1 });
   principals.save([
     { id: "ana", name: "Ana", role: "driver", identities: ["web:ana", "ding:ana"] },
     { id: "bob", name: "Bob", role: "driver", identities: ["feishu:ou_bob"] },
@@ -82,7 +83,7 @@ function organisation(t: { after(fn: () => void): void }, options: { dingStatus?
   }
   manager.start();
   t.after(() => { manager.stop(); globalThis.fetch = realFetch; rmSync(home, { recursive: true, force: true }); });
-  return { registry, principals, reach, manager, outbox, budget, queue, dingSends, feishuSends, turns, handlers, logged, anas, bobs, cats, desk };
+  return { registry, principals, reach, manager, outbox, budget, queue, dingSends, feishuSends, turns, handlers, logged, anas, bobs, cats, desk, ding, door };
 }
 
 test("an agent nobody has written to tells its own person, through the door they hold, and nobody else", async t => {
@@ -106,11 +107,23 @@ test("an agent nobody has written to tells its own person, through the door they
   org.principals.setHomeAgent("bob", desk.id);
   assert.equal(reach.ownerOf(desk.id), undefined, "two people's is nobody's");
   assert.equal(reach.ownerOf(anas.id)?.id, "ana", "and a box that is one person's stays theirs whatever anybody chose");
+  // Once she has written to the bot, her agent writes into that direct conversation: its webhook gone stale, by her user id.
+  await org.ding.receive(JSON.stringify({ type: "CALLBACK", headers: { topic: TOPIC, messageId: "tr-1" }, data: JSON.stringify({
+    conversationId: "cid_ana", conversationType: "1", msgId: "m1", senderStaffId: "ana", senderNick: "Ana", msgtype: "text", text: { content: "hi" },
+    sessionWebhook: "https://hook.test/x", sessionWebhookExpiredTime: Date.now() - 1 }) }), { respond: () => {} }, async message => { reach.noteDirect(message.identity, message.chatKey); return undefined; });
+  assert.equal(reach.addressFor(anas.id)?.chatKey, "ding:cid_ana");
+  assert.deepEqual(await reach.tellOwner(anas.id, "Again.", { about: "report" }), { delivered: true });
+  assert.deepEqual(dingSends.at(-1), { robotCode: "ding-app", userIds: ["ana"], text: "Again." });
+  // A door replaced since she was linked: her link is not hers any more, and nothing goes through it.
+  org.door.incarnation = 2; org.principals.reload();
+  assert.equal(reach.addressFor(anas.id), undefined, "a link from a replaced door is nobody's");
+  assert.equal((await reach.tellOwner(anas.id, "Lost?", { about: "report" })).delivered, false);
+  assert.equal(dingSends.length, 2);
   // A person with no door that can write first is not reached, and it is said why.
   const unreachable = await reach.tellOwner(cats.id, "hello", { about: "x" });
   assert.equal(unreachable.delivered, false);
   assert.match(unreachable.why ?? "", /no identity on a channel whose bot can write/);
-  assert.deepEqual([dingSends.length, feishuSends.length], [1, 1]);
+  assert.deepEqual([dingSends.length, feishuSends.length], [2, 1]);
 });
 
 test("the agent's question goes to its person when no chat asked it, and their answer from the direct chat is taken", async t => {

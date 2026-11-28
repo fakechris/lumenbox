@@ -1110,10 +1110,10 @@ export class DingTalkChannel implements ChannelAdapter {
   async sendToChat(chatKey: string, text: string, options?: { replyTo?: string }): Promise<void> {
     void options; // see doc comment: anchoring is not expressible on this wire
     const { conversationId } = parseChatKey(chatKey);
-    if (conversationId === "") return;
-    const person = personOfChatKey(chatKey); // a person's key (INV-2221): the robot's one-to-one send by user id, which needs no conversation and lets the bot write first
+    if (conversationId === "") return; const person = personOfChatKey(chatKey); // a person's key (INV-2221): the robot's one-to-one send by user id, which needs no conversation and lets the bot write first
     if (person !== undefined) return writingFirst(async () => { for (const chunk of chunkText(text, CHUNK_CHARS)) await this.transmit({ route: "direct", conversationId: "", userId: person }, "text", chunk); });
-    const target: ChatTarget = { route: outboundRoute(this.conversations.get(conversationId)?.conversationType), conversationId };
+    const known = this.conversations.get(conversationId); // a direct one carries its user id, the road once its webhook has expired (INV-2221)
+    const target: ChatTarget = { route: outboundRoute(known?.conversationType), conversationId, ...(known?.userId !== undefined ? { userId: known.userId } : {}) };
     // Decided once for the whole message: per-chunk verdicts would render a long
     // message's plain halves with literal ** markers.
     const markdown = looksLikeMarkdown(text);

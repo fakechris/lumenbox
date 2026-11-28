@@ -1416,7 +1416,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     },
     knock: request => {
       // A door with a directory keeps no knock of its own (INV-2221): somebody it lists is asking to join, the durable request; somebody it does not list is nobody's to let in.
-      if ((chatDesk?.knocked(request.channel, request.identity.slice(request.channel.length + 1), request.senderLabel) ?? "no-directory") !== "no-directory") return;
+      // Only a direct message asks; in a group a listed person is a stranger who knocks, as before, and approving that knock is the same activation.
+      if (request.privateChat === true && (chatDesk?.knocked(request.channel, request.identity.slice(request.channel.length + 1), request.senderLabel) ?? "no-directory") !== "no-directory") return;
       // The incarnation is observed *now*, at the knock, and compared again at the
       // approval (docs/22 §4's CAS): a knock from a door that has since been
       // replaced must not stamp the old tenant's subject into the new one.
@@ -1512,7 +1513,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       const principal = principals.resolve(identity).id, theirBox = registry.boxOf(agent.id); // entered: `asked` above is the membership check (INV-538)
       // Only an explicitly bound answer can settle a question. New requests do not.
-      if (origin?.questionId !== undefined) questions.noteReply(agent.id, identity, origin.questionId, conversation);
+      // A question asked with no chat went to the agent's own person (INV-2221); the door already checked that this reply is theirs to it.
+      if (origin?.questionId !== undefined && questions.noteReply(agent.id, identity, origin.questionId, conversation).length === 0) questions.noteReply(agent.id, identity, origin.questionId, "main");
 
       // Made before the turn, because the prompt states the path as a fact — "its
       // directory on the box is X/" — while the directory was created lazily, on the first
@@ -1905,8 +1907,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (blockedAnnounced.has(task.id)) return;
       blockedAnnounced.add(task.id);
       const line = blockedAnnouncement(task);
-      if (line === undefined || task.conversation === undefined) return;
-      const chatKey = conversations.chatKeyFor(task.conversation);
+      if (line === undefined) return;
+      const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation);
       // No chat asked for this work: its agent's own person is told, in words (INV-2221).
       if (chatKey === undefined) { if (task.assigneeId !== undefined) void reach.tellOwner(task.assigneeId, line, { about: `board: ${task.id} ${task.status}`, exempt: true }); return; }
       // A blocker with answers to choose from is a question card, not a line: the person
@@ -4851,14 +4853,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const identity = String(body.identity ?? "");
           const knock = knocks.get(identity);
-          if (knock === undefined) {
-            // A request that came through a door with a directory is approved by activating them: the person, their box and their agent as any activation makes them (INV-2221, INV-2220).
-            const role = activationRole(body.role ?? "driver"), door = identity.split(":")[0] ?? "";
-            const done = role === undefined ? undefined : orgAdmission.approveRequest(identity, role, caller.userId ?? "operator");
-            if (done === undefined) { send(res, 404, apiError("knock-unknown")); return; }
-            void channels.push(door, identity, tr("access.activated", doorLocale(door)));
+          // Through a door whose directory covers them it is an activation: the person, their box and their agent as any activation makes them (INV-2221, INV-2220).
+          const role0 = activationRole(body.role ?? "driver"), door0 = identity.split(":")[0] ?? "";
+          const activated = role0 === undefined ? undefined : orgAdmission.approveRequest(identity, role0, caller.userId ?? "operator", knock !== undefined);
+          if (activated !== undefined) {
+            knocks.delete(identity); void channels.push(door0, identity, tr("access.activated", doorLocale(door0)));
             send(res, 200, { principals: principals.list(), knocks: [...knocks.values()] }); return;
           }
+          if (knock === undefined) { send(res, 404, apiError("knock-unknown")); return; }
           // The CAS half of the knock: commit only if the world the knock was
           // observed in is still the world now. A replaced door or an identity that
           // got linked some other way in the meantime makes this approval stale —

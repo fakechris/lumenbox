@@ -124,7 +124,8 @@ h2.group:first-child { margin-top: 0; }
 .chip { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; background: var(--rail); color: var(--soft); flex: none; }
 .chip.need, .chip-need { background: var(--warn-soft); color: var(--warn); }
 .chip-need { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 11px; flex: none; }
-.home-mark { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--soft); }
+.agent .title-row { display: flex; align-items: baseline; min-width: 0; }
+.home-mark { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--soft); flex: none; }
 .chip.run, .chip-run { background: var(--blue-soft); color: var(--blue); }
 .chip-run { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 12px; flex: none; }
 .chip.done { background: var(--ok-soft); color: var(--ok); }

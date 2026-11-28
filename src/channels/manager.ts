@@ -661,7 +661,7 @@ export interface ChannelManagerDeps {
    * refusal then says the owner was told, instead of handing the person an id to
    * copy around — the refusal is the registration page.
    */
-  knock?: (request: { identity: string; senderLabel: string; channel: string }) => void;
+  knock?: (request: { identity: string; senderLabel: string; channel: string; privateChat?: boolean }) => void;
   log: (line: string) => void;
   /**
    * Where every arrival and its fate is recorded. Absent means no ledger, which is what
@@ -1332,7 +1332,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       }
       const guest = message.chatKey !== undefined && message.privateChat !== true && message.addressed !== false ? await this.deps.guestTurn?.(adapter.name, message).catch(() => undefined) : undefined; if (guest !== undefined) return guest.reply; // a guest turn, not a knock (INV-1708, docs/97): returned before the command table, so nothing a guest writes is a verb
       if (this.deps.knock !== undefined) {
-        this.deps.knock({ identity: message.identity, senderLabel: message.senderLabel, channel: adapter.name });
+        this.deps.knock({ identity: message.identity, senderLabel: message.senderLabel, channel: adapter.name, privateChat: message.privateChat === true });
         return knockRefusal(message.identity);
       }
       return refusal(message.identity);

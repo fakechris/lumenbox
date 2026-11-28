@@ -551,8 +551,9 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
         ? { onSummarised: (agentId: string, conversationId: string, entries: readonly HistoryEntry[]) => { void rememberer.flush(agentId, conversationId, entries).catch(() => {}); } }
         : {}),
       askUser: async (input: { agentId: string; agentName: string; question: string }) => {
+        const where = options.askUser?.(input) ?? "in the app"; // counted once it was delivered, not before
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
-        return options.askUser?.(input) ?? "in the app";
+        return where;
       },
       // The host's own validation (docs/79), so a scenario proves what a box would accept.
       showUI: async (input: { agentId: string; agentName: string; conversation?: string; surface: string; components?: unknown; data?: unknown; title?: string; close?: boolean; work?: import("../agents/work-attention.ts").WorkStamp }) => {

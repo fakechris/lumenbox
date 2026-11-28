@@ -34,7 +34,7 @@ export interface Reached { delivered: boolean; why?: string }
 
 export interface PersonReachDeps {
   registry: Pick<AgentRegistry, "tryGet" | "boxOf">;
-  principals: Pick<Principals, "list" | "byId">;
+  principals: Pick<Principals, "list" | "byId" | "hasCurrentIdentity">;
   /** Whether this door's bot can write to a person who has not written to it: a connected DingTalk or Feishu door. */
   writesFirst(doorId: string): boolean;
   budget: Pick<PushBudget, "admit" | "perDayOf">;
@@ -71,6 +71,7 @@ export class PersonReach {
   /** Where this person is reached: the identity it goes through and the chat's key. Undefined when no door of theirs can write to them. */
   addressOf(principalId: string): { adapterName: string; identity: string; chatKey: string } | undefined {
     for (const identity of this.deps.principals.byId(principalId)?.identities ?? []) {
+      if (!this.deps.principals.hasCurrentIdentity(principalId, identity)) continue; // a link from a replaced door is nobody's now
       const adapterName = identity.split(":")[0] ?? "", chatKey = this.directChats.get(identity) ?? personChatKey(identity);
       if (chatKey !== undefined && this.deps.writesFirst(adapterName)) return { adapterName, identity, chatKey };
     }
