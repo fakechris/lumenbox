@@ -28,6 +28,7 @@ test("a saved model is in force without a restart; a file that cannot be applied
     model: process.env.AGENTBOX_MODEL,
     vision: process.env.AGENTBOX_VISION,
     summary: process.env.AGENTBOX_SUMMARY_MODEL,
+    userAgent: process.env.AGENTBOX_USER_AGENT,
     key: process.env.ANTHROPIC_API_KEY,
     minimax: process.env[MINIMAX_KEY],
     openai: process.env.OPENAI_API_KEY,
@@ -36,6 +37,7 @@ test("a saved model is in force without a restart; a file that cannot be applied
   delete process.env.AGENTBOX_MODEL;
   delete process.env.AGENTBOX_VISION;
   delete process.env.AGENTBOX_SUMMARY_MODEL;
+  delete process.env.AGENTBOX_USER_AGENT;
   delete process.env[MINIMAX_KEY];
   delete process.env.OPENAI_API_KEY;
   // A credential the client constructor accepts; nothing here makes a request.
@@ -154,7 +156,7 @@ test("a saved model is in force without a restart; a file that cannot be applied
     for (const [key, value] of [
       ["AGENTBOX_HOME", saved.home], ["AGENTBOX_MODEL", saved.model], ["AGENTBOX_VISION", saved.vision],
       ["AGENTBOX_SUMMARY_MODEL", saved.summary], ["ANTHROPIC_API_KEY", saved.key], [MINIMAX_KEY, saved.minimax],
-      ["OPENAI_API_KEY", saved.openai],
+      ["OPENAI_API_KEY", saved.openai], ["AGENTBOX_USER_AGENT", saved.userAgent],
     ] as const) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }

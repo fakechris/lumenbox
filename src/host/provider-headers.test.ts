@@ -108,7 +108,7 @@ test("a User-Agent saved in Settings is what the next request says, with no new 
   assert.equal(userAgentProblem("two\nlines"), "not-ascii");
   assert.equal(userAgentProblem("名字"), "not-ascii");
   assert.equal(userAgentProblem("x".repeat(201)), "too-long");
-  assert.equal(clientUserAgent(), defaultUserAgent());
+  await withKeys(async () => assert.equal(clientUserAgent(), defaultUserAgent()));
 });
 
 test("only Go is sent a session: the same for a conversation's every request and after a restart, another for another conversation, and naming nobody", async () => {

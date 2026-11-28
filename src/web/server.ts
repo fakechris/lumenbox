@@ -81,10 +81,10 @@ import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts"; import { installationBoxRuns, runnableAgents, startsWithStarterTeam, strandedAgentsRoute } from "./installation-box-here.ts";
 import { setupRoute, yoursOf } from "./first-screen-route.ts";
-import { defaultUserAgent, describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, userAgentProblem, type ProviderProfile } from "../host/provider.ts";
+import { describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
 import { modelConfigured } from "../host/model-readiness.ts";
 import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
-import { modelPresets, modelTestError } from "./model-settings.ts";
+import { modelPresets, modelSettingsEnv, modelTestError, userAgentSettings } from "./model-settings.ts";
 import { configuredProviders, SEARCH_PROVIDERS } from "../host/web.ts";
 import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, parsePublicUrlInput, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
@@ -5282,8 +5282,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             },
             settings: {
               vision: config.env?.AGENTBOX_VISION === "1" ? "on" : config.env?.AGENTBOX_VISION === "0" ? "off" : "auto",
-              summaryModel: config.env?.AGENTBOX_SUMMARY_MODEL ?? null,
-              userAgent: config.env?.AGENTBOX_USER_AGENT ?? null, userAgentDefault: defaultUserAgent(), // what every model request calls itself (INV-2325)
+              summaryModel: config.env?.AGENTBOX_SUMMARY_MODEL ?? null, ...userAgentSettings(config.env), // INV-2325
             },
             config: {
               provider: config.provider ?? null,
@@ -5365,18 +5364,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const value = typeof body.boxImage === "string" ? body.boxImage.trim() : "";
             boxImageChange = value !== "" ? value : null;
           }
-          // Vision and the summary model are variables the provider resolver reads; the page
-          // offers them as settings, stored in the file's env block under their own names only.
-          const envChange: Record<string, string | null> = {};
-          if (body.vision === "on") envChange.AGENTBOX_VISION = "1";
-          else if (body.vision === "off") envChange.AGENTBOX_VISION = "0";
-          else if (body.vision === "auto") envChange.AGENTBOX_VISION = null;
-          if (body.summaryModel !== undefined) envChange.AGENTBOX_SUMMARY_MODEL = field(body.summaryModel) ?? null;
-          if (body.userAgent !== undefined) { // INV-2325: one line of printable ASCII, or empty for LumenBox's own
-            const userAgent = field(body.userAgent), problem = userAgent ? userAgentProblem(userAgent) : undefined;
-            if (problem !== undefined) { send(res, 400, apiError(`user-agent-${problem}`)); return; }
-            envChange.AGENTBOX_USER_AGENT = userAgent ?? null;
-          }
+          const settingsEnv = modelSettingsEnv(body); // vision, the summary model and the User-Agent (model-settings.ts)
+          if ("refused" in settingsEnv) { send(res, 400, settingsEnv.refused); return; }
+          const envChange: Record<string, string | null> = { ...settingsEnv.env };
           if (key !== undefined && key !== null) {
             const name = typeof providerValue === "string" ? providerValue : loadConfig().provider;
             const profile = name ? providerForChoice(name, orchestrator.provider) : orchestrator.provider;
