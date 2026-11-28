@@ -10,9 +10,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type Anthropic from "@anthropic-ai/sdk";
 import { AgentRegistry } from "../agents/registry.ts";
 import { attachedBox } from "../box/boxes.ts";
@@ -20,10 +21,13 @@ import type { BoxClient } from "../box/client.ts";
 import { DOCKER_WORK, orgSkillsDir } from "./box-paths.ts";
 import type { InstallationMode } from "./installation.ts";
 import { Orchestrator } from "./orchestrator.ts";
-import { attachOrgSkills } from "./org-skill-sync.ts";
-import { ORG_SKILLS_LEDGER, OrgSkills } from "./org-skills.ts";
+import type { InboundMessage } from "../agents/admitted-message.ts";
+import type { BusEvent } from "../agents/bus.ts";
+import { ORG_SKILL_SETUP_LEDGER, setupWarnings } from "./org-skill-setup.ts";
+import { attachOrgSkills, OrgSkillSync } from "./org-skill-sync.ts";
+import { ORG_SKILLS_LEDGER, OrgSkills, publishRefusal } from "./org-skills.ts";
 import { skillWriteRefusal } from "./skill-contract.ts";
-import { loadSkills, renderSkills, type Skill, SKILL_INDEX_CHARS } from "./skills.ts";
+import { loadSkills, type OrgSkillRoot, parseSkillFile, renderSkills, type Skill, SKILL_INDEX_CHARS } from "./skills.ts";
 import { fakeModel } from "./testing/fake-model.ts";
 
 const ROOT = orgSkillsDir(undefined);
@@ -63,7 +67,7 @@ function diskBox(dir: string, state: { up: boolean } = { up: true }): BoxClient 
     downloadFile: async (path: string) => ({ path, size: 0, media_type: "text/plain", base64: readFileSync(at(path)).toString("base64") }),
     listDir: async (path: string) => ({
       path,
-      entries: readdirSync(at(path)).map(name => ({ name, type: statSync(join(at(path), name)).isDirectory() ? "directory" : "file", size: 0 })),
+      entries: readdirSync(at(path)).map(name => { const info = lstatSync(join(at(path), name)); return { name, type: info.isSymbolicLink() ? "symlink" : info.isDirectory() ? "directory" : "file", size: 0 }; }),
     }),
   };
   return new Proxy(box, { get: (target, property) => (property in target ? target[property as keyof typeof target] : async () => ({})) }) as unknown as BoxClient;
@@ -111,7 +115,7 @@ test("published once: two boxes' agents list it and read it; an update and a wit
     });
     const library = new OrgSkills(home, { mode: () => "organisation" });
     const logged: string[] = [];
-    const sync = attachOrgSkills(orchestrator, library, line => logged.push(line));
+    const { sync } = attachOrgSkills(orchestrator, library, line => logged.push(line));
     await sync.syncDue(); // nothing is connected yet: a pass with nobody to sync ends, and the next one still runs
     await orchestrator.connectBox();
     await sync.syncDue();
@@ -224,11 +228,12 @@ test("what is refused at publish: a credential, a routine, an agent's own scope,
     writeFileSync(join(dir, "skills", "own-notes", "SKILL.md"), skillText("Own notes", "Use when asked for this box's notes."));
     const box = diskBox(dir);
     const host = {
-      registry: { listBoxes: () => [{ id: "b1", name: "box" }], boxById: () => undefined },
+      registry: { listBoxes: () => [{ id: "b1", name: "box" }], boxById: () => undefined, tryGet: () => undefined, boxOf: () => ({ id: "b1" }), readTranscript: () => [] },
       boxClientById: () => box, skillsFor: () => ({ refresh: async () => undefined }),
-      orgSkillRoot: (_: string): { root: string; required: ReadonlySet<string> } | undefined => ({ root: "unset", required: new Set() }), boxConnected: (_: string): void => {},
+      orgSkillRoot: (_: string): { root: string; required: ReadonlySet<string> } | undefined => ({ root: "unset", required: new Set() }), boxConnected: (_: string): void => {}, busNoted: (): void => {},
+      turnOpening: async (): Promise<void> => {},
     };
-    const sync = attachOrgSkills(host, library, () => {});
+    const { sync } = attachOrgSkills(host, library, () => {});
     await sync.syncDue();
     assert.deepEqual(sync.status(), [], "a personal installation has no box to sync");
     assert.equal(host.orgSkillRoot("b1"), undefined, "and its loader has no second root");
@@ -292,4 +297,251 @@ test("the index budget: a required organisation skill keeps its description, and
   // And the other way round: one of the box's own is never what pays for an organisation skill that is not required.
   const described = (index: string) => index.split("\n").filter(line => line.startsWith("- **")).reduce((sum, line) => sum + line.length, 0);
   assert.ok(described(after) <= SKILL_INDEX_CHARS && described(after) > described(before), "the room that was left is used, and the budget holds");
+});
+
+/** The example skill in the fixtures: it installs a small real program into the work volume and declares a sign-in. */
+function helloSkill(): Record<string, string> {
+  const dir = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "org-skill-hello");
+  return Object.fromEntries(["SKILL.md", "scripts/install.sh", "scripts/hello"].map(path => [path, readFileSync(join(dir, path), "utf8")]));
+}
+
+test("a required skill's install and sign-in run only after the box's person agrees to those exact lines: asked once, a no remembered, a routine cannot agree, changed lines ask again; then owed until done, kept by an image update; engines read it through a link they cannot write", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-org-skills-"));
+  try {
+    const dir = join(home, "box");
+    mkdirSync(join(dir, "skills", "own-notes"), { recursive: true });
+    writeFileSync(join(dir, "skills", "own-notes", "SKILL.md"), skillText("Own notes", "Use when asked for this box's notes."));
+    // Every command that reached the box, so "nothing of the skill ran" is asserted on the box's side.
+    const ran: string[] = [];
+    const counted = (inner: BoxClient) => new Proxy(inner, { get: (target, property) => (property === "exec" ? async (command: string, options?: never) => { ran.push(command); return target.exec(command, options); } : target[property as keyof BoxClient]) }) as BoxClient;
+    let box = counted(diskBox(dir));
+    const setupRan = () => ran.filter(command => command.includes("export LUMENBOX_WORK="));
+    // The last thing said to the agent: a person's message, or the host's own.
+    let lastSaid: Record<string, unknown> = { role: "user", text: "[first run] …", host: true };
+    const host = {
+      registry: { listBoxes: () => [{ id: "b1", name: "ann" }], boxById: () => undefined, tryGet: () => ({}), boxOf: () => ({ id: "b1" }), readTranscript: () => [lastSaid, { role: "user", kind: "results", blocks: [] }] },
+      boxClientById: () => box, skillsFor: () => ({ refresh: async () => undefined }),
+      orgSkillRoot: (_: string): OrgSkillRoot | undefined => undefined, boxConnected: (_: string): void => {}, busNoted: (_: BusEvent): void => {},
+      turnOpening: async (_: string, __: readonly InboundMessage[]): Promise<void> => {},
+    };
+    const options = { setupLedger: join(home, ORG_SKILL_SETUP_LEDGER), mayConsent: (boxId: string, who: string) => boxId === "b1" && who === "p-ann", nameOf: (id: string) => (id === "p-admin" ? "Chris" : id) };
+    const library = new OrgSkills(home, { mode: () => "organisation" });
+    const { sync, setup } = attachOrgSkills(host, library, () => {}, options);
+    assert.equal(library.publish("hello-tool", helloSkill(), "p-admin", "upload").ok, true);
+    assert.deepEqual(setupWarnings(helloSkill()), [], "it installs into the work volume: nothing to warn of");
+    const index = async () => renderSkills((await loadSkills(box, [], `${DOCKER_WORK}/skills`, host.orgSkillRoot("b1"))).skills);
+    const say = (text: string, more: Partial<InboundMessage> = {}) => host.turnOpening("a1", [{ fromId: "user", text, principalId: "p-ann", ...more } as InboundMessage]);
+    const personTurn = () => { lastSaid = { role: "user", text: "hi", fromPerson: true }; host.busNoted({ type: "turn_finished", agentId: "a1" }); };
+
+    // Not required: placed and listed, and nothing is asked of the box.
+    await sync.syncDue();
+    assert.doesNotMatch(await index(), /Set-up the organisation asks for/);
+    assert.equal(library.require("hello-tool", true, "p-admin").ok, true);
+    await sync.syncDue();
+
+    // Required, not agreed: the index asks, showing the exact lines, who published which version; nothing of the skill has run in the box.
+    const asking = await index();
+    assert.match(asking, /\*\*Set-up the organisation asks for in this box\.\*\* Nothing a skill below declares runs here until the person has agreed to it\./);
+    assert.match(asking, /nothing of it runs here until the person agrees\. Show them exactly what it would run, in its directory: install `sh scripts\/install\.sh`; check `test -x "\$LUMENBOX_WORK\/\.tools\/bin\/hello"`; Hello sign-in `"\$LUMENBOX_WORK\/\.tools\/bin\/hello" login`; sign-in check `test -s "\$LUMENBOX_WORK\/\.tools\/hello\/session"` — version 1, published by Chris\./);
+    assert.match(asking, /`agree hello-tool` or `decline hello-tool`/);
+    assert.deepEqual(setupRan(), [], "no check line reached the box before a yes");
+
+    // Who cannot agree: a routine's message, a synthetic one, an agent, another person, an unknown skill.
+    await say("agree hello-tool", { toolScope: ["bash"] });
+    await say("agree hello-tool", { synthetic: true });
+    await say("agree hello-tool", { fromId: "agent-ada" });
+    await say("agree hello-tool", { principalId: "p-bob" });
+    await say("agree some-other-skill");
+    assert.equal(setup.consent("b1", "hello-tool", setup.forBox("b1")[0]!.digest), "waiting");
+    assert.deepEqual(setupRan(), []);
+
+    // Asked once: a turn nobody opened has asked nobody; a person's turn has. Then not asked again, and still nothing runs.
+    host.busNoted({ type: "turn_finished", agentId: "a1" });
+    assert.match(await index(), /nothing of it runs here until the person agrees/);
+    personTurn();
+    assert.doesNotMatch(await index(), /Set-up the organisation asks for/, "asked once per version, not in every turn");
+    await sync.syncBox("b1");
+    assert.deepEqual(setupRan(), []);
+
+    // A no, from the person: remembered, nothing runs, nothing asked.
+    await say("decline hello-tool");
+    assert.equal(setup.forBox("b1")[0]!.state, "declined");
+    await sync.syncBox("b1");
+    assert.doesNotMatch(await index(), /Set-up the organisation asks for/);
+    assert.deepEqual(setupRan(), []);
+
+    // They change their mind (the person, in their own message): the check lines run now, and the index says what is owed with the lines to run.
+    await say("同意 hello-tool");
+    assert.equal(setupRan().length, 2, "the two check lines ran, once each, after the yes");
+    const owed = await index();
+    const install = /install it with `([^`]+)`/.exec(owed)?.[1] ?? "";
+    assert.equal(install, `cd '${ROOT}/hello-tool' && export LUMENBOX_WORK='${DOCKER_WORK}' && sh scripts/install.sh`);
+    assert.match(owed, /then offer the Hello sign-in: `cd '[^']+' && export LUMENBOX_WORK='\/home\/box\/work' && "\$LUMENBOX_WORK\/\.tools\/bin\/hello" login` starts it/);
+    assert.match(owed, /Never ask for a password and never type one\./);
+
+    // The agent runs the install as written: a real program lands in the work volume.
+    assert.equal((await box.exec(install)).exit_code, 0);
+    assert.equal(statSync(join(dir, ".tools", "bin", "hello")).mode & 0o100, 0o100, "installed where an image update keeps it, and executable");
+    assert.match(execSync(`LUMENBOX_WORK='${dir}' '${join(dir, ".tools", "bin", "hello")}' login`).toString(), /enter the code HELLO-1234/, "its sign-in prints an address and a code for the person");
+    personTurn();
+    assert.doesNotMatch(await index(), /Set-up the organisation asks for/, "said once");
+
+    // A new version that changes only the text: the yes stands.
+    const textOnly = { ...helloSkill(), "SKILL.md": helloSkill()["SKILL.md"]!.replace("# Hello tool", "# Hello tool (v2)") };
+    assert.equal(library.publish("hello-tool", textOnly, "p-admin", "upload").ok, true);
+    await sync.syncDue();
+    assert.equal(setup.forBox("b1")[0]!.state, "agreed");
+    // A new version whose lines changed: waiting again, asked again, and its lines do not run.
+    const before = setupRan().length;
+    const newLines = { ...textOnly, "SKILL.md": textOnly["SKILL.md"]!.replace("install: sh scripts/install.sh", "install: sh scripts/install.sh --again") };
+    assert.equal(library.publish("hello-tool", newLines, "p-admin", "upload").ok, true);
+    await sync.syncDue();
+    assert.equal(setup.forBox("b1")[0]!.state, "waiting");
+    assert.match(await index(), /install `sh scripts\/install\.sh --again`.* — version 3, published by Chris/);
+    assert.equal(setupRan().length, before, "nothing of the new lines ran");
+    await say("agree hello-tool");
+    assert.equal(setup.forBox("b1")[0]!.state, "agreed");
+
+    // Every yes and no is on the ledger with who, which box, which version and digest; and a restarted host reads it.
+    const ledger = readFileSync(join(home, ORG_SKILL_SETUP_LEDGER), "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>).filter(line => line.kind === "consent");
+    assert.deepEqual(ledger.map(line => [line.by, line.box, line.slug, line.version, line.agreed, line.via]), [["p-ann", "b1", "hello-tool", 1, false, "chat"], ["p-ann", "b1", "hello-tool", 1, true, "chat"], ["p-ann", "b1", "hello-tool", 3, true, "chat"]]);
+    assert.notEqual(ledger[2]!.digest, ledger[1]!.digest);
+
+    // The person finishes signing in; then the image is updated: a new box over the same volume. Tool and sign-in are still there, and a restarted host says nothing again.
+    execSync(`LUMENBOX_WORK='${dir}' '${join(dir, ".tools", "bin", "hello")}' confirm`);
+    box = counted(diskBox(dir));
+    const again = attachOrgSkills(host, new OrgSkills(home, { mode: () => "organisation" }), () => {}, options);
+    await again.sync.syncDue();
+    assert.equal(again.setup.forBox("b1")[0]!.state, "agreed", "a yes outlives the host");
+    assert.equal((await box.exec(`cd '${ROOT}/hello-tool' && export LUMENBOX_WORK='${DOCKER_WORK}' && test -x "$LUMENBOX_WORK/.tools/bin/hello" && test -s "$LUMENBOX_WORK/.tools/hello/session"`)).exit_code, 0);
+
+    // Engines read the box's own skills directory: the organisation's skill is linked into it, and listed once by the host.
+    const link = join(dir, "skills", "hello-tool");
+    assert.equal(readlinkSync(link), "../.lumenbox/org-skills/hello-tool");
+    assert.match(readFileSync(join(link, "SKILL.md"), "utf8"), /^---\nname: Hello tool/);
+    if (process.getuid?.() !== 0) assert.throws(() => writeFileSync(join(link, "SKILL.md"), "changed through the link"), /EACCES|EPERM/, "and cannot be written through the link");
+    assert.equal((await loadSkills(box, [], `${DOCKER_WORK}/skills`, host.orgSkillRoot("b1"))).skills.filter(skill => skill.slug === "hello-tool").length, 1);
+    // A box's own skill of that name is never replaced by a link; withdrawing takes the link away and leaves the box's own.
+    const current = new OrgSkills(home, { mode: () => "organisation" });
+    const last = attachOrgSkills(host, current, () => {}, options);
+    assert.equal(current.publish("own-notes", { "SKILL.md": skillText("Own notes", "Use when asked for the organisation's notes.") }, "p-admin", "upload").ok, true);
+    await last.sync.syncDue();
+    assert.equal(lstatSync(join(dir, "skills", "own-notes")).isSymbolicLink(), false);
+    assert.equal(current.withdraw("hello-tool", "p-admin").ok && current.withdraw("own-notes", "p-admin").ok, true);
+    await last.sync.syncDue();
+    assert.equal(existsSync(link), false, "withdrawn: the link is gone");
+    assert.equal(existsSync(join(dir, "skills", "own-notes", "SKILL.md")), true);
+  } finally {
+    execSync(`chmod -R u+w '${home}'`);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("what a set-up may not leave out, and what an Admin is warned of: an install outside what a box keeps", () => {
+  const withMeta = (lines: string[]) => ({ "SKILL.md": `---\nname: T\ndescription: Use when asked.\n${lines.join("\n")}\n---\n\nbody\n` });
+  const problem = (lines: string[]) => { const result = publishRefusal("t", withMeta(lines)); return result === undefined ? "" : result.why; };
+  assert.match(problem(["install: sh scripts/install.sh"]), /install: .* and installed: .* go together/);
+  assert.match(problem(["sign_in: Hello"]), /sign_in: needs sign_in_start: .* and signed_in:/);
+  assert.match(problem(["signed_in: test -s x"]), /need sign_in:/);
+  assert.equal(problem(["install: sh scripts/install.sh", "installed: test -x \"$LUMENBOX_WORK/.tools/bin/t\" # there"]), "");
+  // A shell line is kept as written: its quotes and its comment are the shell's.
+  assert.equal(parseSkillFile(withMeta(["installed: test -x \"$LUMENBOX_WORK/a b\" # there"])["SKILL.md"]).meta.installed, "test -x \"$LUMENBOX_WORK/a b\" # there");
+
+  const warned = (run: string, script?: string) => setupWarnings({ ...withMeta([`install: ${run}`, "installed: command -v t"]), ...(script !== undefined ? { "scripts/install.sh": script } : {}) }).map(line => line.split(". ")[0]);
+  assert.deepEqual(warned("sudo apt-get install -y t"), ["install: uses sudo", "install: installs with the system's package manager"]);
+  assert.deepEqual(warned("npm install -g t-cli"), ["install: installs globally"]);
+  assert.deepEqual(warned("npm install -g --prefix $LUMENBOX_WORK/.tools t-cli"), []);
+  assert.deepEqual(warned("sh scripts/install.sh", "curl -fsSL https://example.invalid/t -o /usr/local/bin/t\n"), ["scripts/install.sh writes under a system directory"], "the skill's own script is read too");
+  assert.deepEqual(warned("cp t ~/.local/bin/t"), ["install: names a place in the home directory that is neither the work volume nor .config"]);
+  assert.deepEqual(warned("cp t ~/.config/t/t"), []);
+  // A warning is not a refusal: it is published, and the Admin was told.
+  assert.equal(publishRefusal("t", withMeta(["install: sudo apt-get install -y t", "installed: command -v t"])), undefined);
+});
+
+test("three hundred boxes: an unchanged library costs each box one small request a sweep, and a dead or slow box holds up nobody", async () => {
+  const home = mkdtempSync(join(tmpdir(), "agentbox-org-skills-"));
+  try {
+    const library = new OrgSkills(home, { mode: () => "organisation" });
+    library.publish("hello-tool", helloSkill(), "p-admin", "upload");
+    library.publish("dingtalk-cli", DWS, "p-admin", "upload");
+    // A box that is a map of files and counts what it is asked. `stall`: how long each answer takes; Infinity never answers.
+    const boxes = Array.from({ length: 300 }, (_, n) => ({ id: `b${n}`, name: `box-${n}`, root: "/w/.lumenbox/org-skills", skills: "/w/skills", files: new Map<string, string>(), requests: 0, stall: 0 }));
+    const client = (box: (typeof boxes)[number]) => {
+      const answer = async <T>(work: () => T): Promise<T> => {
+        box.requests += 1;
+        if (box.stall === Number.POSITIVE_INFINITY) await new Promise(() => {});
+        if (box.stall > 0) await new Promise(resolve => setTimeout(resolve, box.stall));
+        return work();
+      };
+      return {
+        listDir: (path: string) => answer(() => {
+          const names = new Map<string, string>();
+          for (const key of box.files.keys()) if (key.startsWith(`${path}/`)) names.set(key.slice(path.length + 1).split("/")[0]!, key.slice(path.length + 1).includes("/") ? "directory" : "file");
+          if (names.size === 0) throw new Error("no such directory");
+          return { entries: [...names].map(([name, type]) => ({ name, type })) };
+        }),
+        downloadFile: (path: string) => answer(() => {
+          if (!box.files.has(path)) throw new Error("no such file");
+          return { base64: Buffer.from(box.files.get(path)!).toString("base64") };
+        }),
+        writeFile: (path: string, content: string) => answer(() => { box.files.set(path, content); }),
+        exec: () => answer(() => ({ exit_code: 0, stderr: "" })),
+      };
+    };
+    const clients = new Map(boxes.map(box => [box.id, client(box)]));
+    const sync = new OrgSkillSync({ library, boxes: () => boxes, client: id => clients.get(id), log: () => {}, boxTimeoutMs: 1_000 });
+    const total = () => boxes.reduce((sum, box) => sum + box.requests, 0);
+
+    // The first pass writes everything everywhere.
+    let started = Date.now();
+    await sync.syncDue();
+    const first = { requests: total(), ms: Date.now() - started };
+    assert.deepEqual(sync.status().filter(status => status.state !== "current"), []);
+    assert.equal(boxes.every(box => box.files.get("/w/.lumenbox/org-skills/hello-tool/scripts/hello") === helloSkill()["scripts/hello"]), true);
+
+    // A sweep with nothing changed: one request a box, the record it keeps, and nothing written.
+    for (const box of boxes) box.requests = 0;
+    started = Date.now();
+    await sync.syncDue();
+    const sweep = { requests: total(), ms: Date.now() - started };
+    assert.equal(boxes.every(box => box.requests === 1), true, "exactly one request to each box");
+    assert.equal(sweep.requests, 300);
+
+    // One box wiped its directory between sweeps: the glance sees it, and only that box is written again.
+    for (const box of boxes) box.requests = 0;
+    for (const key of [...boxes[7]!.files.keys()]) boxes[7]!.files.delete(key);
+    await sync.syncDue();
+    assert.equal(boxes[7]!.files.has("/w/.lumenbox/org-skills/dingtalk-cli/SKILL.md"), true);
+    assert.equal(boxes.filter(box => box.requests > 1).length, 1);
+
+    // A new version, with one box that never answers and five that are slow: the pass ends, the rest are current, the dead one is behind with the reason.
+    boxes[3]!.stall = Number.POSITIVE_INFINITY;
+    for (const n of [10, 11, 12, 13, 14]) boxes[n]!.stall = 5;
+    library.publish("dingtalk-cli", { ...DWS, "SKILL.md": skillText("DingTalk CLI", "Use when the person asks for anything in DingTalk.", "Version two.") }, "p-admin", "upload");
+    sync.forget();
+    started = Date.now();
+    await sync.syncDue();
+    const update = Date.now() - started;
+    const behind = sync.status().filter(status => status.state !== "current");
+    assert.deepEqual(behind.map(status => [status.boxId, status.error]), [["b3", "it did not finish within 1 s"]]);
+    assert.ok(update < 5_000, `a pass with a dead box took ${update} ms`);
+    assert.match(boxes[299]!.files.get("/w/.lumenbox/org-skills/dingtalk-cli/SKILL.md")!, /Version two\./);
+    // The dead box is not started on again while its last attempt is still out, by the sweep or by a person's "check now".
+    const asked = boxes[3]!.requests;
+    await sync.syncDue();
+    assert.equal((await sync.syncBox("b3", "full", { waitForRunning: true })).state, "behind");
+    assert.equal(boxes[3]!.requests, asked);
+    // A slow box being swept when a person asks to check it now: the check waits for that attempt, then looks for itself.
+    boxes[20]!.stall = 50;
+    sync.forget();
+    const sweeping = sync.syncDue();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const before = boxes[20]!.requests;
+    await sync.syncBox("b20", "full", { waitForRunning: true });
+    assert.ok(boxes[20]!.requests > before + 1, "the check ran after the sweep's attempt, not instead of nothing");
+    await sweeping;
+    console.log(`# org-skill sync at 300 boxes (in-memory stand-ins): first pass ${first.requests} requests in ${first.ms} ms; unchanged sweep ${sweep.requests} requests in ${sweep.ms} ms; update with one dead box ${update} ms`);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

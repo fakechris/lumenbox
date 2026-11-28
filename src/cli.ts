@@ -17,6 +17,7 @@ import { AgentRegistry, defaultAgentsRoot } from "./agents/registry.ts";
 import { BundleStore, planMigration } from "./host/bundles.ts";
 import { ScopeStore } from "./host/scopes.ts";
 import { attachedBox, tokenOf } from "./box/boxes.ts";
+import { boxPins } from "./box/box-tls.ts";
 import { applyUpdate, dockerUpdateDeps } from "./box/box-update.ts"; import { holdBoxDown, releaseBoxDown } from "./box/held-down.ts";
 import {
   BOX_IMAGE_REPO,
@@ -530,10 +531,12 @@ async function cmdBoxAttach(argv: string[]): Promise<number> {
     }
     const registry = new AgentRegistry();
     if (replace) {
+      boxPins().forget(baseUrl); // replaced on purpose: its certificate, if it has one, is pinned afresh
       registry.updateBox(name, { endpoint: { baseUrl: record.endpoint!.baseUrl, tokenFile: record.endpoint!.tokenFile }, ...(typeof floor === "string" ? { displayFloor: Number(floor) } : {}) });
       out(`${bold(name)} moved to ${baseUrl}; the web server was not running, so it reconnects on the next start.`);
       return 0;
     }
+    boxPins().forget(baseUrl);
     registry.attachBox(record);
     out(`${bold(name)} attached (${record.id}); the web server was not running, so it connects on the next start.`);
     return 0;
@@ -1312,6 +1315,7 @@ Box:
                             Agents are created into a box and stay there; --replace
                             moves an attached box to a new address.
   box detach <name>         Forget an attached box (refused while agents live in it)
+  box rotate-token <name>   Give a box a new token; the old one stops working minutes later
   host up <name> [--work D] [--repo P[:ro]]... [--port N]
                             Run this machine as a desktop-less box (docs/50 G5): boxd
                             headless on loopback, files limited to the --repo roots,
@@ -1484,6 +1488,14 @@ async function main(): Promise<number> {
           return cmdBoxAttach(boxArgs);
         case "detach":
           return cmdBoxDetach(boxArgs);
+        case "rotate-token": { // by the running server, whose connections switch with it (docs/106 §5 R7)
+          if (!boxArgs[0]) { err("Usage: agentbox box rotate-token <name>"); return 1; }
+          const answer = await viaWeb("/api/boxes/rotate-token", { box: boxArgs[0] }).catch((error: Error) => { err(error.message); return null; });
+          if (answer === null) return 1;
+          if (answer === undefined) { err("No running LumenBox answered for that box. Start it (`agentbox web` or the app) and try again: the running server rotates, so its connections switch with it."); return 1; }
+          out(String(answer.note ?? "rotated"));
+          return 0;
+        }
         case "list":
           return cmdBoxList();
         case "build":

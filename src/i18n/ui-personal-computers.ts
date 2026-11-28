@@ -1,4 +1,8 @@
 export const UI_PERSONAL_COMPUTERS: Record<string, readonly [string, string]> = {
+  // Settings → Computers: a new token for a computer, without re-attaching it (docs/106 §5 R7).
+  "ui.next.boxset.rotate": ["更换令牌", "Rotate token"],
+  "ui.next.boxset.rotateSure": ["确认更换", "Rotate now"],
+  "ui.next.boxset.rotateNote": ["给这台电脑换一个新令牌。正在运行的工作不受影响；旧令牌几分钟后失效。", "Gives this computer a new token. Work keeps running; the old token stops working a few minutes later."],
   "ui.personal.mine": ["我的个人电脑", "My personal computers"],
   "ui.personal.team": ["团队的个人电脑", "Team personal computers"],
   "ui.personal.create": ["创建我的个人电脑", "Create my personal computer"],

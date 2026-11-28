@@ -48,6 +48,9 @@ function home(): { root: string; registry: AgentRegistry; ada: string; bob: stri
   writeFileSync(join(root, "vault-audit.jsonl"), line({ at: "2026-09-10T10:02:00Z", secretId: "SHOP_PASSWORD", agentId: ada, allowed: true }) + line({ at: "2026-09-10T10:02:00Z", secretId: "X", agentId: bob, allowed: false }));
   writeFileSync(join(root, "network-events.jsonl"), line({ at: "2026-09-10T10:03:00Z", box: registry.box.id, host: "api.github.com", port: 443, allowed: true }) + line({ at: "2026-09-10T10:03:00Z", box: grok.id, host: "x.test", port: 443, allowed: false }));
   writeFileSync(join(root, "turns.jsonl"), line({ id: "t1", event: "begin", agentId: ada, at: "2026-09-10T10:00:00Z", attempt: 1 }));
+  // What an organisation skill was allowed to run, per box (INV-2222): each box's own answers travel with that box only.
+  writeFileSync(join(root, "org-skill-setup.jsonl"), line({ kind: "consent", at: "2026-09-10T10:04:00Z", box: registry.box.id, slug: "hello", digest: "d1", version: 1, agreed: true, by: "p-ann", via: "chat" }) + line({ kind: "consent", at: "2026-09-10T10:04:00Z", box: grok.id, slug: "hello", digest: "d1", version: 1, agreed: false, by: "p-bo", via: "page" }));
+  writeFileSync(join(root, "org-skills.jsonl"), line({ at: "2026-09-10T09:00:00Z", act: "publish", slug: "hello", by: "p-admin", version: 1 }) + line({ at: "2026-09-10T09:30:00Z", act: "offer", slug: "x", by: "p-ann" }));
   writeFileSync(join(root, "vault.json"), JSON.stringify({ secrets: [{ id: "SHOP_PASSWORD", value: PASSWORD, grants: [] }, { id: "short", value: "abc", grants: [] }] }));
   writeFileSync(join(root, "config.json"), JSON.stringify({ channels: { feishu: { appSecret: "feishu-app-secret-value-1" } } }));
   registry.appendTranscript(ada, { role: "user", text: `the password is ${PASSWORD}`, at: "2026-09-10T10:00:00Z" });
@@ -62,18 +65,27 @@ test("an export is one box's ledgers inside the window, secrets redacted, and re
   const { root, registry, ada, grokId } = home();
   try {
     const out = join(root, "export");
+    // Credentials minted, revoked and rotated (INV-2204): side-door tokens by time alone, a box's rotation with its box.
+    writeFileSync(join(root, "tokens.jsonl"), [
+      { at: "2026-09-10T00:00:00Z", event: "minted", kind: "side-door", for: "ann", label: "watchdog", via: "person", by: "operator" },
+      { at: "2026-09-10T00:01:00Z", event: "rotated", kind: "box", box: registry.box.id, boxName: "own", by: "ann", confirmed: true },
+      { at: "2026-09-10T00:02:00Z", event: "rotated", kind: "box", box: grokId, boxName: "grok", by: "ann", confirmed: true },
+    ].map(line => JSON.stringify(line)).join("\n") + "\n");
     const held = heldValues(root);
     assert.deepEqual([...held.keys()].sort(), ["config.channels.feishu.appSecret", "vault:SHOP_PASSWORD", "vault:short"]);
     const manifest = exportAudit({ home: root, registry, box: registry.box.name, from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out, held, now: () => new Date("2026-09-11T00:00:00Z") });
     assert.equal(manifest.box.id, registry.box.id);
     assert.deepEqual(manifest.agents, [{ id: ada, name: "Ada" }]);
     assert.equal(manifest.files["usage.jsonl"], 1, "Bob's, August's and the undated line are out");
+    assert.equal(manifest.files["tokens.jsonl"], 2, "the side-door token and this box's rotation; the other box's rotation is its own");
     assert.equal(manifest.undated, 1);
     assert.equal(manifest.files["auto-review.jsonl"], 1);
     assert.equal(manifest.files["answer-review.jsonl"], 1);
     assert.equal(manifest.files["vault-audit.jsonl"], 1);
     assert.equal(manifest.files["network-events.jsonl"], 1);
     assert.equal(manifest.files["turns.jsonl"], 1);
+    assert.equal(manifest.files["org-skill-setup.jsonl"], 1, "this box's consent, not the other's");
+    assert.equal(manifest.files["org-skills.jsonl"], 1, "who published which version; a member's offer is not this box's record");
     assert.equal(manifest.files[join("transcripts", ada, "main.jsonl")], 2);
     assert.equal(manifest.files[join("transcripts", ada, "side-1.jsonl")], 1);
     assert.deepEqual(manifest.redactions, { exact: 1, pattern: 1 });
@@ -100,6 +112,7 @@ test("an export is one box's ledgers inside the window, secrets redacted, and re
     assert.equal(other.files["usage.jsonl"], 1);
     assert.equal(other.files["network-events.jsonl"], 1);
     assert.equal(other.files["vault-audit.jsonl"], 1);
+    assert.equal(other.files["org-skill-setup.jsonl"], 1);
     assert.throws(() => exportAudit({ home: root, registry, box: "nowhere", from: "2026-09-01T00:00:00Z", to: "2026-09-30T00:00:00Z", out: join(root, "x") }), /no box nowhere; known: /);
     assert.throws(() => exportAudit({ home: root, registry, box: grokId, from: "2026-09-30T00:00:00Z", to: "2026-09-01T00:00:00Z", out: join(root, "x") }), /not two instants in order/);
   } finally {

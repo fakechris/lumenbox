@@ -24,7 +24,8 @@ import { execFile } from "node:child_process";
 import { createReadStream, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRange } from "./range.ts";
-import { timingSafeEqual } from "node:crypto";
+import { homedir } from "node:os";
+import { BoxdTokens } from "./token-store.ts";
 import {
   computerOutcome,
   actionOutcome,
@@ -108,6 +109,8 @@ const startedAt = Date.now();
 
 const display = getDisplay();
 const token = process.env.BOXD_TOKEN ?? "";
+/** What opens the daemon: BOXD_TOKEN, or the token a rotation put in its place (token-store.ts, docs/106 §5 R7). */
+const tokens = new BoxdTokens(token, process.env.BOXD_TOKEN_STATE ?? join(homedir(), ".config", "lumenbox", "boxd-token.json"), undefined, line => log(line));
 /** A box with no desktop by design (INV-438): nothing that needs X is started or served. */
 const HEADLESS = process.env.BOXD_HEADLESS === "1"; /* an organisation node may open its own screen (INV-1707): */ const nativeScreen = nativeScreenFor({ headless: HEADLESS, enabled: process.env.BOXD_NATIVE_SCREEN === "1", helper: process.env.BOXD_NATIVE_SCREEN_HELPER, log: line => log(line) }); /* and on it every agent process runs under the OS sandbox, or not at all (INV-1700): */ const confinement = confinementFor({ headless: HEADLESS, screenOpen: nativeScreen !== undefined, roots: () => currentRoots(), workDir: process.env.AGENTBOX_WORK_DIR, ...(process.env.SSH_AUTH_SOCK !== undefined ? { sshAuthSock: process.env.SSH_AUTH_SOCK } : {}), egressPort: () => egressProxyPort, log: line => log(line) });
 
@@ -129,16 +132,9 @@ function log(message: string): void {
   process.stdout.write(`[boxd] ${message}\n`);
 }
 
-function authorized(req: IncomingMessage): boolean {
-  // An empty configured token means auth is disabled; refuse to run that way
-  // rather than silently serving a shell to the network (checked at startup).
-  const header = req.headers.authorization ?? "";
-  const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const expected = Buffer.from(token);
-  const actual = Buffer.from(presented);
-  // timingSafeEqual throws on length mismatch, so compare lengths first.
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
+// An empty configured token means auth is disabled; refused at startup rather than serving a shell to the network.
+const authorized = (req: IncomingMessage): boolean => tokens.accepts(presentedToken(req));
+const presentedToken = (req: IncomingMessage): string => (req.headers.authorization ?? "").startsWith("Bearer ") ? (req.headers.authorization ?? "").slice(7) : "";
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -1030,6 +1026,9 @@ const server = createServer((req, res) => {
         send(res, 401, { error: "Unauthorized" });
         return;
       }
+
+      const rotation = route === "POST /token/rotate" || route === "POST /token/confirm" ? tokens.answer(route, presentedToken(req), await readBody(req)) : undefined; // two steps (token-store.ts)
+      if (rotation !== undefined) { send(res, rotation.status, rotation.body); return; }
 
       // noVNC for a desktop, proxied so only this port has to be published. Both prefixes: the
       // driving stack at /vnc/ and the view-only stack at /vnc-ro/, which a viewer's page is served

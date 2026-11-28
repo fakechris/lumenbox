@@ -196,9 +196,16 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   // Who signed in, the tries that did not get in, and the waits they earned (web/sign-in-limits.ts,
   // docs/106 §5 R4, R8): the installation's, not a box's, so by time alone. Append-only, never compacted.
   write("sign-ins.jsonl", select(readLines(join(options.home, "sign-ins.jsonl")), () => true));
+  // Credentials minted, revoked and rotated (web/token-ledger.ts, R8): side-door tokens are the
+  // installation's, by time alone; a box's rotation names its box.
+  write("tokens.jsonl", select(readLines(join(options.home, "tokens.jsonl")), record => record.kind !== "box" || record.box === box.id));
   // Who watched or drove a desktop in this box, from when to when, and why it ended
   // (web/desktop-streams.ts, R6/R8). Each line names its box.
   write("desktop-sessions.jsonl", select(readLines(join(options.home, "desktop-sessions.jsonl")), record => record.box === box.id));
+  // What the organisation's skills were allowed to run in this box: each yes and no from the box's person, each time they were asked
+  // or told (org-skill-setup.ts); and who published which version of what (org-skills.ts), which every box holds (INV-2222).
+  write("org-skill-setup.jsonl", select(readLines(join(options.home, "org-skill-setup.jsonl")), record => record.box === box.id));
+  write("org-skills.jsonl", select(readLines(join(options.home, "org-skills.jsonl")), record => record.act !== "offer" && record.act !== "decide"));
   // Who asked for what and who decided it (policy.ts, INV-812), archives included. A request
   // names its agent; a grant, a denial or a use names only the approval's id, and a revocation
   // only its fingerprint — so those are the box's when the request they answer is. The rules in

@@ -14,7 +14,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWebServer } from "./server.ts";
@@ -276,6 +276,10 @@ test("approvals, grants, tokens and the restart answer to the boxes a person may
     assert.equal((await call("vic", "/api/policy/revoke", { fingerprint: ours.fingerprint })).status, 403, "a viewer revokes nothing");
     const waitingTwo = (await call("olga", "/api/policy")).data.pending as Item[];
     assert.equal((await call("ada", "/api/approve", { id: waitingTwo.find(item => item.agentId === two)!.id })).status, 403, "nor answers its approvals");
+    // An approval answered through the API names who answered it (R8, INV-2204), not only that a person did.
+    const bobs = waitingTwo.find(item => item.agentId === two)!.id;
+    assert.equal((await call("bob", "/api/deny", { id: bobs, reason: "not today" })).status, 200);
+    assert.ok(readFileSync(join(home, "policy.jsonl"), "utf8").split("\n").some(line => line.includes(`"id":"${bobs}"`) && line.includes('"by":"user:web:bob"') && line.includes("approval-denied")));
     assert.equal((await call("ada", "/api/policy/revoke", { fingerprint: ours.fingerprint })).status, 200, "her own box's grant is hers to end");
     assert.equal((await call("olga", "/api/policy/revoke", { fingerprint: theirs.fingerprint })).status, 200, "an admin's reach is the installation");
     assert.deepEqual((await policy("olga")).standing, [], "both ended, and only those two");
