@@ -9,12 +9,18 @@
  * What is kept is the sha256 of each token beside whose it is, its label and when it was made —
  * never the secret, which is still shown once, when it is issued. A presented token is hashed
  * and compared in constant time. The file is 0600 and replaced whole on every change.
+ *
+ * The client API's tokens live here too (docs/106 §4.3, INV-2213): a **personal** token (`lbxp_`)
+ * for a person's script and a **service** token (`lbxs_`) an Admin mints for a named integration,
+ * each with an id, scopes, an expiry, when it was last used and, for a service token, its view.
+ * The side door takes only its own (`lmbx_`, no `kind`), and `/api/v1` only these.
  */
 
 import type { TokenRecord } from "./token-ledger.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Principals } from "../host/principals.ts";
+import type { ClientTokenKind, Scope, ServiceView } from "./client-api/schema.ts";
 
 export interface StoredToken {
   hash: string;
@@ -23,7 +29,36 @@ export interface StoredToken {
   via?: "sign-in" | "person";
   label: string;
   createdAt: string;
+  /** A client API token; absent on a side-door token. The fields below are a client token's. */
+  kind?: ClientTokenKind;
+  /** What revoking it names; public, unlike the token. */
+  id?: string;
+  scopes?: Scope[];
+  expiresAt?: string;
+  /** To the minute: written at most once a minute per token. */
+  lastUsedAt?: string;
+  /** A service token's: what it may read. */
+  view?: ServiceView;
 }
+
+/** A client token as its holder and the page see it: never the secret, never the hash. */
+export interface ClientCredential {
+  id: string;
+  kind: ClientTokenKind;
+  principalId: string;
+  label: string;
+  scopes: Scope[];
+  createdAt: string;
+  expiresAt: string;
+  lastUsedAt?: string;
+  view?: ServiceView;
+}
+
+const CLIENT_PREFIX: Record<ClientTokenKind, string> = { personal: "lbxp_", service: "lbxs_" };
+const credentialOf = (entry: StoredToken): ClientCredential => ({
+  id: entry.id!, kind: entry.kind!, principalId: entry.principalId, label: entry.label, scopes: [...(entry.scopes ?? [])], createdAt: entry.createdAt, expiresAt: entry.expiresAt!,
+  ...(entry.lastUsedAt !== undefined ? { lastUsedAt: entry.lastUsedAt } : {}), ...(entry.view !== undefined ? { view: entry.view } : {}),
+});
 
 const hashOf = (token: string) => createHash("sha256").update(token, "utf8").digest("hex");
 
@@ -77,10 +112,65 @@ export class McpTokenStore {
     return this.entryFor(presented)?.principalId;
   }
 
-  private entryFor(presented: string | undefined): StoredToken | undefined {
+  private entryFor(presented: string | undefined, client = false): StoredToken | undefined {
     if (presented === undefined || presented === "" || this.readOnly) return undefined;
     const hash = hashOf(presented);
-    return this.tokens.find(entry => sameHash(entry.hash, hash));
+    return this.tokens.find(entry => (entry.kind !== undefined) === client && sameHash(entry.hash, hash));
+  }
+
+  /**
+   * A client API token for a person (INV-2213): shown once, kept as its hash. `principalId` is a roster
+   * id — for a service token, the Admin it reads for. On the record with who minted it, never the secret.
+   */
+  mintClient(input: { kind: ClientTokenKind; principalId: string; label: string; scopes: readonly Scope[]; expiresAt: Date; view?: ServiceView; by: string; now?: Date }): { token: string; credential: ClientCredential } {
+    const now = input.now ?? new Date();
+    const token = `${CLIENT_PREFIX[input.kind]}${randomBytes(24).toString("hex")}`;
+    const entry: StoredToken = {
+      hash: hashOf(token), principalId: input.principalId, via: "person", label: input.label.trim().slice(0, 60) || "unnamed", createdAt: now.toISOString(),
+      kind: input.kind, id: `tok_${randomBytes(8).toString("hex")}`, scopes: [...new Set(input.scopes)], expiresAt: input.expiresAt.toISOString(),
+      ...(input.kind === "service" && input.view !== undefined ? { view: input.view } : {}),
+    };
+    this.tokens.push(entry);
+    this.save();
+    this.record({
+      at: entry.createdAt, event: "minted", kind: input.kind, id: entry.id!, for: entry.principalId, label: entry.label, scopes: entry.scopes!, expiresAt: entry.expiresAt!,
+      ...(entry.view !== undefined ? { view: entry.view } : {}), by: input.by,
+    });
+    return { token, credential: credentialOf(entry) };
+  }
+
+  /** The client token presented, or why none: a token this store does not hold (or holds revoked), or one whose time is over. */
+  clientFor(presented: string | undefined, now: Date = new Date()): { credential: ClientCredential } | { refused: "invalid" | "expired" } {
+    if (presented === undefined || !Object.values(CLIENT_PREFIX).some(prefix => presented.startsWith(prefix))) return { refused: "invalid" };
+    const entry = this.entryFor(presented, true);
+    if (entry === undefined) return { refused: "invalid" };
+    if (Date.parse(entry.expiresAt ?? "") <= now.getTime()) return { refused: "expired" };
+    return { credential: credentialOf(entry) };
+  }
+
+  /** Notes a use, to the minute, and answers that minute: the file is written at most once a minute per token. */
+  touch(id: string, now: Date = new Date()): string {
+    const entry = this.tokens.find(token => token.id === id && token.kind !== undefined);
+    const minute = `${now.toISOString().slice(0, 16)}:00.000Z`;
+    if (entry === undefined || entry.lastUsedAt === minute) return minute;
+    entry.lastUsedAt = minute;
+    this.save();
+    return minute;
+  }
+
+  /** Every client token, as the page lists them. */
+  listClient(): ClientCredential[] {
+    return this.tokens.filter(entry => entry.kind !== undefined).map(credentialOf);
+  }
+
+  /** Revokes the client token `id` when `may` allows it; false when none matches. */
+  revokeClient(id: string, may: (credential: ClientCredential) => boolean, by: string): boolean {
+    const at = this.tokens.findIndex(entry => entry.kind !== undefined && entry.id === id && may(credentialOf(entry)));
+    if (at < 0) return false;
+    const [gone] = this.tokens.splice(at, 1);
+    this.save();
+    this.record({ at: new Date().toISOString(), event: "revoked", kind: gone!.kind!, id: gone!.id!, for: gone!.principalId, label: gone!.label, by, reason: "revoked" });
+    return true;
   }
 
   /**
@@ -100,7 +190,7 @@ export class McpTokenStore {
 
   /** Revoke the one made at `createdAt` that `may` allows; false when none matches. */
   revoke(createdAt: string, may: (entry: StoredToken) => boolean, by = "operator"): boolean {
-    const at = this.tokens.findIndex(entry => entry.createdAt === createdAt && may(entry));
+    const at = this.tokens.findIndex(entry => entry.kind === undefined && entry.createdAt === createdAt && may(entry));
     if (at < 0) return false;
     const [gone] = this.tokens.splice(at, 1);
     this.save();
@@ -118,12 +208,15 @@ export class McpTokenStore {
     const gone = this.tokens.filter(ends);
     this.tokens = this.tokens.filter(entry => !ends(entry));
     if (this.tokens.length !== before) this.save();
-    for (const entry of gone) this.record({ at, event: "revoked", kind: "side-door", for: entry.principalId, label: entry.label, by, reason: "access-ended" });
+    for (const entry of gone) {
+      if (entry.kind === undefined) this.record({ at, event: "revoked", kind: "side-door", for: entry.principalId, label: entry.label, by, reason: "access-ended" });
+      else this.record({ at, event: "revoked", kind: entry.kind, id: entry.id!, for: entry.principalId, label: entry.label, by, reason: "access-ended" });
+    }
     return before - this.tokens.length;
   }
 
-  /** Whose, what and when: never the secret, never the hash. */
+  /** The side door's tokens — whose, what and when: never the secret, never the hash. */
   list(): { principalId: string; label: string; createdAt: string }[] {
-    return this.tokens.map(({ principalId, label, createdAt }) => ({ principalId, label, createdAt }));
+    return this.tokens.filter(entry => entry.kind === undefined).map(({ principalId, label, createdAt }) => ({ principalId, label, createdAt }));
   }
 }

@@ -1,0 +1,18 @@
+{
+  "id": "dee",
+  "name": "Dee",
+  "role": "overseer",
+  "homeAgentId": "a7",
+  "pronouns": "she",
+  "credential": {
+    "id": "tok_0011223344556677",
+    "kind": "robot",
+    "label": "my script",
+    "scopes": ["work:read", "time:travel"],
+    "createdAt": "2026-11-28T10:00:00Z",
+    "expiresAt": "2027-02-26T10:00:00Z",
+    "lastUsedAt": "2026-11-28T10:05:00Z",
+    "view": { "allAgents": false, "agentIds": ["a7"], "allWork": true, "workIds": [], "conversationText": false, "allDeliverables": true },
+    "rotatesAt": "2026-12-28T10:00:00Z"
+  }
+}

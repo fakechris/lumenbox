@@ -8,7 +8,7 @@
  * so the two pages can be switched between at will. It is the page a person gets; the classic one
  * is a link away at the foot of the side column.
  */
-import { NEXT_LOGIC_JS } from "./next-logic-ui.ts";
+import { NEXT_LOGIC_JS } from "./next-logic-ui.ts"; import { FIRST_SCREEN_LOGIC_JS } from "./first-screen.ts"; import { FIRST_SCREEN_CSS, FIRST_SCREEN_JS } from "./first-screen-ui.ts";
 import { NEXT_VIEWS_JS } from "./next-views-ui.ts";
 import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
@@ -39,7 +39,7 @@ import { NEXT_SET_BOXES_JS } from "./next-set-boxes-ui.ts";
 import { NEXT_SET_BOXES_MORE_JS } from "./next-set-boxes-more-ui.ts";
 import { NEXT_SET_MEMORY_JS } from "./next-set-memory-ui.ts";
 import { NEXT_SET_SUPERVISION_JS } from "./next-set-supervision-ui.ts"; import { NEXT_CALIBRATION_JS } from "./next-calibration-ui.ts";
-import { NEXT_SET_GUESTS_JS } from "./next-set-guests-ui.ts";
+import { NEXT_SET_GUESTS_JS } from "./next-set-guests-ui.ts"; import { NEXT_SET_ORGANISATION_CSS, NEXT_SET_ORGANISATION_JS } from "./next-set-organisation-ui.ts";
 import { NEXT_SET_SHELL_JS } from "./next-set-shell-ui.ts";
 import { INSTALLATIONS_JS } from "./installations-ui.ts";
 import { NEXT_SPEND_JS } from "./next-spend-ui.ts";
@@ -51,7 +51,7 @@ import { NEXT_NEED_JS } from "./next-need-ui.ts";
 import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
 import { NEXT_LINE_JS } from "./next-line-ui.ts";
 import { NEXT_SYSTEM_JS } from "./next-system-ui.ts";
-import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts";
+import { SIGN_IN_AGAIN_JS, STRIP_TOKEN_JS } from "./token-url-ui.ts"; import { FILL_WORDS_JS } from "../i18n/fill.ts";
 
 const STYLE = `
 :root {
@@ -79,13 +79,7 @@ a { color: inherit; }
 .side { width: 248px; flex: none; background: var(--rail); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 14px 10px; gap: 6px; min-height: 0; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; padding: 0 6px 8px; }
 .brand .logo { width: 26px; height: 26px; border-radius: 7px; background: var(--text); color: var(--bg); display: grid; place-items: center; font-weight: 700; font-size: 13px; }
-.boxes { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 2px 6px; }
-.boxes button { padding: 3px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); border: 1px solid transparent; }
-.boxes button[aria-pressed="true"] { background: var(--surface); color: var(--text); border-color: var(--border); }
-.box-notice { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-size: 13px; }
-.boxes button.off::before { content: "●"; color: var(--bad); font-size: 8px; margin-right: 5px; vertical-align: middle; }
 .needs { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 13px; font-weight: 500; }
-.side h2.group { margin: 10px 8px 4px; }
 .agents { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .agent { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; text-align: left; width: 100%; }
 .agent:hover { background: rgba(31,26,23,.04); }
@@ -230,9 +224,8 @@ header.bar { position: relative; }
 .row .under textarea, .row .under input { flex: 1; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
 .row .under textarea { min-height: 90px; }
 .setting input { width: 140px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
-.side h2.group { display: flex; align-items: center; justify-content: space-between; }
-.side h2.group button { width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 16px; line-height: 1; }
-.side h2.group button:hover { background: var(--surface); color: var(--text); }
+.side-add button { width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 16px; line-height: 1; }
+.side-add button:hover { background: var(--surface); color: var(--text); }
 body[data-view="chat"] #view-title { cursor: pointer; }
 .setting label { width: 100%; }
 .setting label input:not([type]), .setting textarea { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: inherit; }
@@ -324,8 +317,7 @@ button.link { text-align: left; font-weight: 600; text-decoration: underline; te
 body.electron header.bar, body.electron .brand { -webkit-app-region: drag; }
 body.electron header.bar button, body.electron header.bar select, body.electron header.bar input, body.electron header.bar a { -webkit-app-region: no-drag; }
 body.electron-mac .side { padding-top: 40px; }
-.box-notice a { color: inherit; text-decoration: underline; margin-right: 8px; }
-.box-notice pre.raw { width: 100%; box-sizing: border-box; max-height: 120px; overflow: auto; font-size: 11px; margin: 0; }
+.sandbox-why a { color: inherit; text-decoration: underline; margin-right: 8px; }
 .shelf .fact { align-items: center; } .shelf h2.group { margin: 10px 0 2px; }
 .fold-body { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
 .fold-body textarea { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg); font: 12.5px/1.5 "IBM Plex Mono", ui-monospace, monospace; }
@@ -389,7 +381,7 @@ export const NEXT_HTML = `<!doctype html>
 <link rel="icon" href="data:,">
 <script>${STRIP_TOKEN_JS}${SIGN_IN_AGAIN_JS}</script>
 <script src="/vendor/markdown-it.js"></script>
-<style>${STYLE}${NEXT_SET_DIRECTORY_CSS}${NEXT_SET_ORG_SKILLS_CSS}</style>
+<style>${STYLE}${NEXT_SET_DIRECTORY_CSS}${NEXT_SET_ORG_SKILLS_CSS}${FIRST_SCREEN_CSS}${NEXT_SET_ORGANISATION_CSS}</style>
 </head>
 <body>
 <script>
@@ -402,11 +394,9 @@ export const NEXT_HTML = `<!doctype html>
 </script>
 <nav class="side" aria-label="{{ui.next.nav.label}}">
   <div class="brand"><span class="logo" aria-hidden="true">L</span>{{ui.next.title}}</div>
-  <div class="boxes" id="boxes" aria-label="{{ui.next.side.boxes}}"></div>
   <div id="box-members" hidden></div>
-  <div class="box-notice" id="box-notice" hidden></div>
   <button class="needs" id="needs" data-nav="inbox" hidden></button>
-  <h2 class="group">{{ui.next.side.label}}<button id="agent-new" hidden aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></h2>
+  <div class="side-add"><button id="agent-new" hidden aria-label="{{ui.next.member.add}}" title="{{ui.next.member.add}}">+</button></div>
   <div class="teams" id="teams" hidden></div>
   <div class="agents" id="agents"></div>
   <div class="side-links">
@@ -475,8 +465,9 @@ export const NEXT_HTML = `<!doctype html>
 var MSG = {{@messages}};
 function t(key, vars) {
   var text = MSG[key] === undefined ? key : MSG[key];
-  return text.replace(/\\{(\\w+)\\}/g, function (whole, name) { return vars && vars[name] !== undefined ? String(vars[name]) : whole; });
+  return fillWords(text, vars);
 }
+${FILL_WORDS_JS}
 function $(id) { return document.getElementById(id); }
 function el(tag, className, text) {
   var node = document.createElement(tag);
@@ -507,6 +498,7 @@ function toast(text) {
 }
 function failed(error) { toast(t("ui.next.failed", { error: error && error.message ? error.message : String(error) })); }
 ${NEXT_LOGIC_JS}
+${FIRST_SCREEN_LOGIC_JS}
 ${NEXT_VIEWS_JS}
 ${NEXT_CHAT_JS}
 ${NEXT_PANEL_JS}
@@ -514,6 +506,7 @@ ${NEXT_DIAGNOSTICS_JS}
 ${NEXT_SCREEN_JS}
 ${NEXT_FILES_JS}
 ${NEXT_SETTINGS_JS}
+${FIRST_SCREEN_JS}
 ${NEXT_AUTO_JS}
 ${NEXT_REMINDER_JS}
 ${NEXT_THREAD_JS}
@@ -541,6 +534,7 @@ ${NEXT_SET_MEMORY_JS}
 ${NEXT_SET_SUPERVISION_JS}
 ${NEXT_CALIBRATION_JS}
 ${NEXT_SET_GUESTS_JS}
+${NEXT_SET_ORGANISATION_JS}
 ${NEXT_SET_SHELL_JS}
 ${NEXT_SPEND_JS}
 ${NEXT_COMPOSER_JS}

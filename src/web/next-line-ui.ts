@@ -46,7 +46,14 @@ function memberLine(agent) {
   if (awaiting) return t(MSG["ui.next.line.await." + awaiting.kind] ? "ui.next.line.await." + awaiting.kind : "ui.next.line.await.other");
   var now = nowLine(agent);
   if (now) return now.text;
-  return agent.running ? t("ui.next.agent.working") : (agent.title || agent.description || "");
+  return agent.running ? t("ui.next.agent.working") : roleOf(agent);
+}
+
+/** An agent's role as a person reads it: a role the starter team ships with is a word in the tables; one a person wrote is theirs, as written. */
+function roleOf(agent) {
+  if (!agent) return "";
+  var key = "ui.role." + String(agent.title || "").toLowerCase();
+  return MSG[key] !== undefined ? t(key) : (agent.title || agent.description || "");
 }
 
 /** The member's line on the work it is about: the work its running turn is on, else the one piece it is doing in that conversation. */

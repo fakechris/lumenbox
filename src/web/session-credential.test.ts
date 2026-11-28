@@ -156,9 +156,9 @@ test("a box is for its members: the list, the web, and the chat door all say the
 
     // Everyone, which is what every installation has today: nothing changes.
     assert.equal((await boxes(dana)).length, 1);
-    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /^共享 box/);
+    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /^团队沙盒/);
     assert.match((await boxes(dana))[0]!.membersLabel ?? "", /访问它。$/);
-    assert.match((await boxes(dana, "en"))[0]!.membersLabel ?? "", /^Shared box: .* or the web UI\.$/);
+    assert.match((await boxes(dana, "en"))[0]!.membersLabel ?? "", /^Team sandbox: .* or the web page\.$/);
     assert.equal((await drive(dana)).status, 400, "reached the body");
     assert.equal((await drive(mia)).status, 400);
 
@@ -167,12 +167,12 @@ test("a box is for its members: the list, the web, and the chat door all say the
     const update = await fetch(`${base}/api/boxes/update`, { method: "POST", headers: ui, body: JSON.stringify({ name, members: [danaId] }) });
     assert.equal(update.status, 200);
     assert.equal((await boxes(dana)).length, 1);
-    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /Dana 的 box/);
+    assert.match((await boxes(dana))[0]!.membersLabel ?? "", /Dana 的沙盒/);
     assert.deepEqual(await boxes(mia), [], "a box she is not in is not a box she is told about");
     assert.equal((await drive(dana)).status, 400);
     const refused = await drive(mia);
     assert.equal(refused.status, 403);
-    assert.match(((await refused.json()) as { error: string }).error, /is not a box Mia is in/);
+    assert.match(((await refused.json()) as { error: string }).error, /is not a sandbox Mia is in/);
 
     // The operator's own credential is not a member of anything, and is not refused.
     assert.equal((await fetch(`${base}/api/prompt`, { method: "POST", headers: ui, body: JSON.stringify({ agent: ada, text: "" }) })).status, 400);

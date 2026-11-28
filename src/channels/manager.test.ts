@@ -361,7 +361,7 @@ test("a quick turn posts its answer alone; a slow one says it is under way first
   await adapter.inject({ identity: "telegram:7", senderLabel: "c", text: "@Ada slow one" });
   await manager.idle();
   assert.equal(adapter.sent.length, 2);
-  assert.match(adapter.sent[0]!.text, /Ada开工了/);
+  assert.match(adapter.sent[0]!.text, /Ada 开工了/);
   assert.match(adapter.sent[0]!.text, /发在这里/);
   assert.equal(adapter.sent[1]!.text, "the answer");
 });
@@ -1151,7 +1151,7 @@ test("a dropped file is stored and acknowledged, and no task opens", async () =>
     files: [{ name: "a.txt", base64: "eA==" }],
   });
   await boxless.idle();
-  assert.match(adapter2.chatSent[0]!.text, /没有开着的 box/);
+  assert.match(adapter2.chatSent[0]!.text, /没有开着的沙盒/);
 });
 
 test("a wordless drop is looked at: content first, then the chat hears what it is", async () => {
@@ -2577,7 +2577,7 @@ test("a refused stop says it is not yours, not that nothing is running (INV-538 
   await new Promise(resolve => setTimeout(resolve, 20));
 
   const stopReply = await adapter.inject({ ...room, messageId: "s2", text: "停" });
-  assert.match(String(stopReply ?? ""), /box/, "the refusal names the box rather than claiming nothing is running");
+  assert.match(String(stopReply ?? ""), /沙盒/, "the refusal names the sandbox rather than claiming nothing is running");
 
   release();
   await manager.idle();

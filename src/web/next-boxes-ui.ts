@@ -35,7 +35,7 @@ function boxSetupEvent(event) {
   boxes.starting = !event.done;
   if (event.line) boxes.log = boxes.log.concat([String(event.line)]).slice(-200);
   if (event.done) { boxes.failed = event.ok ? "" : String(event.line || ""); refresh(); }
-  var log = document.querySelector("#box-notice pre"); // drawn only while starting, so not looked up by id
+  var log = document.querySelector("#agents .box-log"); // drawn under the sandbox's heading only while starting (first-screen-ui.ts)
   if (!changed && log) { log.textContent = boxes.log.slice(-8).join(String.fromCharCode(10)); log.scrollTop = log.scrollHeight; } else render();
 }
 
@@ -59,54 +59,17 @@ function personalBoxRetry(id, onRetried) {
 /** On Kubernetes the installation's own computer is started by nobody here: it is listed only as an attached node, and offered no start (INV-2310). */
 function ownCannotStart() { return !!(boxes.state && boxes.state.backend === "kubernetes"); }
 
-/** Why this installation's own computer is not there, in words a person can act on. */
-function boxWhy(box) {
-  var docker = boxes.state && boxes.state.docker;
-  if (box.id === boxes.own && docker && docker.state === "no-binary") return "missing";
-  if (box.id === boxes.own && docker && docker.state === "no-engine") return "stopped";
-  return "offline";
-}
-
-/** Said beside the agents when the computer they are on is not reachable: it explains every silence below it. */
+/**
+ * Who else is in the sandbox being looked at, beside the agents. Why a sandbox is not ready, and its one button, is
+ * under its heading (sandboxWhy, first-screen-ui.ts).
+ */
 function boxNotice() {
-  var box = boxById(chat.box), strip = $("box-notice"), members = $("box-members");
-  if (box && box.members === "everyone" && box.membersLabel) {
+  var box = boxById(chat.box), members = $("box-members");
+  // Nobody shares the desktop's one sandbox: it is the Owner's (docs/112 §1), so it names no members.
+  if (box && box.members === "everyone" && box.membersLabel && isOrganisation()) {
     if (members.dataset.label !== box.membersLabel) { members.replaceChildren(boxMembers(box)); members.dataset.label = box.membersLabel; }
   } else { members.replaceChildren(); delete members.dataset.label; }
   members.hidden = !members.firstChild;
-  strip.hidden = !box || box.connected !== false;
-  if (strip.hidden) return;
-  var admin = canOperateInstallation();
-  if (box.kind === "kubernetes" && box.id !== boxes.own) {
-    strip.replaceChildren(el("span", "", podUnreachable(box.detail)));
-    if (admin) {
-      var settingsLink = el("button", "act", t("ui.next.box.podSettings"));
-      settingsLink.addEventListener("click", function () { openSettingsPane("boxes"); });
-      strip.appendChild(settingsLink);
-    } else if (canDriveAgents()) {
-      strip.appendChild(personalBoxRetry(box.id));
-    }
-    return;
-  }
-  var why = admin ? boxWhy(box) : "offline";
-  var sharedKubernetes = box.id === boxes.own && ownCannotStart();
-  strip.replaceChildren(el("span", "", sharedKubernetes ? (admin ? boxes.state.detail : t("ui.next.box.offline", { name: box.name })) :
-    why === "missing" ? t("ui.box.dockerMissing") : why === "stopped" ? t("ui.box.dockerStopped") : t("ui.next.box.offline", { name: box.name })));
-  if (why === "missing") {
-    [["Docker Desktop", "https://www.docker.com/products/docker-desktop/"], ["OrbStack", "https://orbstack.dev/"]].forEach(function (pair) {
-      var link = el("a", "", pair[0]); link.href = pair[1]; link.target = "_blank"; link.rel = "noopener noreferrer"; strip.appendChild(link);
-    });
-  }
-  if (!admin || box.id !== boxes.own || sharedKubernetes) return;
-  var start = el("button", "act", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
-  start.id = "box-start"; start.disabled = boxes.starting;
-  start.addEventListener("click", startBox);
-  strip.appendChild(start);
-  if (boxes.failed) strip.appendChild(el("div", "", t("ui.next.box.failed", { why: boxes.failed })));
-  if (boxes.starting || boxes.log.length) {
-    var log = el("pre", "raw"); log.id = "box-log"; log.textContent = boxes.log.slice(-8).join(String.fromCharCode(10));
-    strip.appendChild(log);
-  }
 }
 
 function boxMembers(box) {

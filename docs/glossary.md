@@ -65,7 +65,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 
 | User-facing name (en / zh) | Internal name (code, specs) | Identifier | State words | Entry points (app · IM · CLI) |
 |---|---|---|---|---|
-| **sandbox** / 沙盒 | box (Box); "room" in docs/22 §1 | box name, e.g. `default`; Docker container `agentbox-box` | running · stopped · unavailable | Settings → Boxes, `+ box` · — · `agentbox box up/attach/list/down/status` |
+| **sandbox** / 沙盒 | box (Box); "room" in docs/22 §1 | box name, e.g. `default`; Docker container `agentbox-box` | preparing · ready · stopped · failed (docs/112 §3) | the sidebar's sandbox headings, Settings → Sandboxes · — · `agentbox box up/attach/list/down/status` |
 | **agent** / 智能体 | Agent, AgentProfile; "worker" in docs/22 | agent id (lowercase name), e.g. `ada` | idle · working · paused | sidebar `+`, Configure, Settings → Team · `@name` · `agentbox agent new` |
 | **team** / 团队 | agent `tags` | lowercase name with hyphens, at most 24 characters | — (a label: on or off an agent) | Configure → Teams field · — · `CreateAgent`/`UpdateAgent` `tags` |
 | **crew** / 小队 | `CATALOG_CREWS` (catalog.ts) | crew slug, e.g. `media-desk` | in the catalog · added | New agent → catalog chips · — · `GET /api/catalog` |
@@ -74,10 +74,10 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **channel** / 渠道 | door, Channel record (docs/22, docs/53) | channel id, the prefix of every identity it mints, e.g. `feishu-work:ou_…` | connected · not connected · needs a restart | Settings → Channels · the chat itself · — |
 | **group chat** / 群 | chat, "room" in channel code | platform chat id, e.g. `oc_…` | group rule `addressed` · `all` | Settings → Channels group rule · the group · — |
 | **installation** / 安装 | Installation: the roster's `installation.mode` (docs/22 §1a), its kinds in docs/95 | personal: this computer; organisation: its name and address | personal (个人) · organisation (组织) | the sidebar's first level (INV-1691) · — · `agentbox web --desktop` (personal, the app passes it), `agentbox web` on a server (organisation) |
-| **machine** / 机器 | box host: where a box runs — `BoxEntry.kind` `docker`, `attached` or `host`, or a pod of a server's `AGENTBOX_BOX_BACKEND=kubernetes` (docs/96 §2) | none in today's code: `GET /api/boxes` gives each box's `kind` and, for a VM or a native environment, its endpoint address; the box name names a box, not a machine; a node's id arrives with INV-1697 | this computer (本机) · a VM · the organisation's cluster · an organisation node | Settings → Boxes · — · `agentbox box up`, `box attach`, `host up`, `box connect` |
+| **machine** / 机器 | box host: where a box runs — `BoxEntry.kind` `docker`, `attached` or `host`, or a pod of a server's `AGENTBOX_BOX_BACKEND=kubernetes` (docs/96 §2) | none in today's code: `GET /api/boxes` gives each box's `kind` and, for a VM or a native environment, its endpoint address; the box name names a box, not a machine; a node's id arrives with INV-1697 | this computer (本机) · a VM · the organisation's cluster · an organisation node | Settings → Sandboxes · — · `agentbox box up`, `box attach`, `host up`, `box connect` |
 | **machine use** / 这台机器的用途 | the first-run choice (docs/96 §3, INV-1696) | one per machine, in this machine's configuration | personal machine (个人的机器) · personal + organisation (个人 + 组织) · organisation node (组织的节点) | the first-run wizard, Settings → This machine (本机) · — · — |
-| **organisation node** / 组织的节点 | a machine the organisation owns, running LumenBox with no personal installation; its boxes are the organisation's (docs/96 §4, INV-1697) | the node credential the organisation issued | online · offline · revoked | the organisation's Settings → Boxes · — · the first run's "organisation node" |
-| **native environment** / 原生环境 | box kind `host`: the box daemon headless on the machine itself (INV-438, `src/boxd/headless.ts`) | box name, e.g. `studio-mac` | running · stopped · unavailable | Settings → Boxes · — · `agentbox host up <name>` |
+| **organisation node** / 组织的节点 | a machine the organisation owns, running LumenBox with no personal installation; its boxes are the organisation's (docs/96 §4, INV-1697) | the node credential the organisation issued | online · offline · revoked | the organisation's Settings → Sandboxes · — · the first run's "organisation node" |
+| **native environment** / 原生环境 | box kind `host`: the box daemon headless on the machine itself (INV-438, `src/boxd/headless.ts`) | box name, e.g. `studio-mac` | running · stopped · unavailable | Settings → Sandboxes · — · `agentbox host up <name>` |
 | **person** / 人 | Principal, Identity | principal id; identity `<channel id>:<subject>` | viewer · driver · admin | Settings → Team → People · `bind CODE` · — |
 | **Owner** / 机主 | Principal with role `admin` on an installation whose `installation.mode` is `single-machine` (installation.ts, docs/22 §1a) | principal id `local:owner`; the ids a merge folded in are its aliases (INV-1698) | Owner (the only person; never converted) | Settings → Team → People (Owner · 机主; *See whether these are all me* on an older desktop roster) · `bind CODE` with the Owner's own code · `agentbox web --desktop` (the app passes it) |
 | **Admin** / 管理员 | Principal with role `admin` on an organisation installation (`installation.mode` absent or `organisation`) | principal id | admin | Settings → Team → People · the bootstrap code's sign-in page · — |
@@ -88,7 +88,7 @@ renamed: `door`, `worker`, `expert`, `front` stay in the code and the specs.
 | **task** / 任务 | Task, the board | `tN`, e.g. `t12` | open · doing · blocked · review · done · dropped | Tasks tab · `/continue tN`, `/recover tN`, 停, 可以 · MCP `task_status` |
 | **goal** / 目标 | pursuit (goal-mode.ts); not `Task.goal`, which is a reminder of a person's aim (docs/74) | the task it lives on, `tN` | active · verifying · paused · complete · cleared | Settings → Supervision · `/goal <text>` · MCP `goal_start` |
 | **routine** / 例行任务 | routine: a skill with `schedule:` or `trigger:` (docs/44) | skill slug | off · observe · auto | Automations tab · reports to a group chat · `agentbox routines runs <slug>` |
-| **skill** / skill | Skill, `SKILL.md` | folder slug under `/home/box/work/skills/` | — (present or absent in a box) | `/` in the chat box lists them · — · `agentbox skills import/improve` |
+| **skill** / skill | Skill, `SKILL.md` | folder slug under `/home/box/work/skills/` | — (present or absent in a box) | `/` in the chat input lists them · — · `agentbox skills import/improve` |
 | **engine** / 引擎 | preset, `Delegate`, ACP session (docs/81, docs/84) | preset name, e.g. `claude`, `codex`, `self` | running · finished · failed | background run on a task · — · `Delegate` tool |
 | **background run** / 后台运行 | worker, `Delegate` preset `self` (docs/42) | the job id on the task | running · finished · failed | the task stays `doing` on the Tasks tab · — · — |
 | **extension** / 扩展 | extension module (docs/34) | file name in `~/.agentbox/extensions/` | loaded · failed | Settings → Team → Reload extensions · — · `agentbox extensions reload` |
@@ -119,27 +119,26 @@ its spelling.
 | `worker`, `workers` | agent, or background run | docs/42's sense is a background run. |
 | `expert`, `experts`, `specialist`, `specialists` | agent | A catalog entry for one agent is an agent. |
 | `front agent` | the default agent | |
-| `room`, `rooms` | box, or group chat | docs/22 used *room* for a box. |
+| `room`, `rooms` | sandbox, or group chat | docs/22 used *room* for a box. |
 | `team room` | team chat | |
-| `机器人`, `智能体` | agent | |
-| `箱子`, `工作机` | box | |
+| `机器人` | 智能体 | docs/112: 智能体 is the Chinese word for an agent. |
+| `箱子`, `工作机` | 沙盒 | docs/112: a person reads 沙盒 for a box. |
 | `一道门`, `这道门` | 渠道 | |
 | `box host`, `box hosts` | machine | The specs keep *box host* (docs/96). |
 | `host box`, `host boxes` | native environment | The code keeps `kind: "host"`. |
 | `宿主` | 机器 | Covers 宿主机. |
+| `box`, `boxes`, `shared box`, `personal box` | sandbox, your sandbox, team sandbox | docs/112. Code, specs and the CLI keep *box*: write a command in backticks (`agentbox box up`). Case is not checked, so *Box* is refused too. |
+| `盒子`, `电脑`, `个人 Box`, `共享 box` | 沙盒, 你的沙盒, 团队沙盒；this computer itself is 本机 | docs/112. 电脑 collided with this computer; 机器 stays for where a sandbox runs (decision 5). |
+| `agent`, `agents` | 智能体 | In Chinese copy only: English keeps *agent* (docs/112). |
 
-## Being replaced (docs/112)
+## Not checked by `npm test` (docs/112)
 
-These words are still on pages and are being converted; each moves into the table above when its
-pages are done, so the check then refuses it. Until then a new page does not use them.
+Two old uses cannot be told from right ones by a word list, so a writer and a reviewer check them:
 
-| Old word | New word | Note |
+| Old use | New word | Note |
 |---|---|---|
-| `机器人`, `箱子`, `工作机` (already refused above) | 智能体, 沙盒 | The table above still names *agent* and *box* as their replacement; it changes with the first converted page, together with its test. |
-| `box`, `boxes`, `Box`, `shared box`, `personal box` (a person reads) | sandbox, your sandbox, team sandbox | Code, specs and CLI keep *box*. |
-| `盒子`, `电脑` and `机器` when they mean a box, `个人 Box`, `共享 box` | 沙盒, 你的沙盒, 团队沙盒 | 机器 stays for where a sandbox runs (decision 5). |
-| `成员` meaning an agent | 智能体 | 成员 stays for a person in an organisation. |
-| `agent` in Chinese copy | 智能体 | |
+| `成员` meaning an agent | 智能体 | 成员 is only a person in an organisation. |
+| *computer* meaning a sandbox | sandbox | *This computer* is right where it means the computer itself (本机). |
 
 ## Allowed names
 

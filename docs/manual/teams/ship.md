@@ -14,12 +14,12 @@ one reviews it.
 ## Architecture
 
 The `ship` crew (研发小队 in the app) adds three agents from the catalog. Each has its own
-desktop and files in the same box. The split is real because each one can do different
+desktop and files in the same sandbox. The split is real because each one can do different
 things, not because each one is described differently.
 
 | Role | Agent | What it does | What it touches | What it does not do |
 |---|---|---|---|---|
-| Product | Mo (产品) | Turns a wish into a spec: who uses it, what counts as done, what is out | Files in the box, Feishu docs (`ReadFeishuDoc`) | Write code |
+| Product | Mo (产品) | Turns a wish into a spec: who uses it, what counts as done, what is out | Files in the sandbox, Feishu docs (`ReadFeishuDoc`) | Write code |
 | Engineer | Lin (工程师) | Writes and runs code; hands large changes to a coding engine | Files, the shell, `Delegate` to a coding engine | Decide whether to build it |
 | Reviewer | Heng (审查) | Reviews the change for correctness and security, in a review file | Files and the shell; no outside services | Rewrite the code it reviews |
 
@@ -40,7 +40,7 @@ change the code under review". Lin's rule is that a failing test is not done, an
 
 ### Tools and permissions
 
-- Mo has the desk tools — files, tasks, memory, teammates and the box's MCP services — plus
+- Mo has the desk tools — files, tasks, memory, teammates and the sandbox's MCP services — plus
   `ReadFeishuDoc`.
 - Lin has the desk tools plus `Delegate`, and no browser: the coding engine reads the repository.
 - Heng has the desk tools without the MCP services, because a service's tool may write.
@@ -49,7 +49,7 @@ change the code under review". Lin's rule is that a failing test is not done, an
 
 ### Skills
 
-The skills ship with every box, so a persona only says when to read one: Mo reads `grill-me`,
+The skills ship with every sandbox, so a persona only says when to read one: Mo reads `grill-me`,
 `market-researcher` and `deep-research`. Lin reads `diagnose`, `fullstack-dev`, `grill-me` and
 `code-review`. Heng reads `code-review`, `diagnose` and `fullstack-dev`.
 
@@ -63,8 +63,8 @@ memory.
 ### Credentials
 
 The crew needs no secret of its own. A coding engine runs through LumenBox's model connection;
-the `engine-check` skill installs one in the box. A private repository needs a deploy key or a
-token in the box. Store it with Settings → Team (secrets), so that a "Before Lin can start"
+the `engine-check` skill installs one in the sandbox. A private repository needs a deploy key or a
+token in the sandbox. Store it with Settings → Team (secrets), so that a "Before Lin can start"
 card asks for it instead of the agent failing halfway.
 
 ## Configuration: minimal and daily
@@ -72,7 +72,7 @@ card asks for it instead of the agent failing halfway.
 | | Minimal | Daily |
 |---|---|---|
 | Agents | Mo, Lin and Heng, on the `ship` team the crew puts them on | The same three |
-| Box | The default Docker box | A box with the repository checked out under `/home/box/work` and an engine installed (`engine-check`) |
+| Sandbox | The default Docker sandbox | A sandbox with the repository checked out under `/home/box/work` and an engine installed (`engine-check`) |
 | Tools | As the catalog gives them | Heng: `edit_file` off; Lin: `bash` on ask me until you trust it |
 | Review | You read Heng's review file | A task with Heng as reviewer: Lin's `done` moves it to `review`, Heng's closes it |
 | Channel | The app only | A Feishu or DingTalk group with Mo as the default agent |
@@ -105,11 +105,11 @@ Then run `agentbox usage --task tN` on the task.
 
 ### In the app
 
-1. Press `+` beside *Agents*. Under *From catalog*, press `研发小队`.
-2. Read the three members in the preview and press *Create these 3 in <box>*. They arrive on
+1. Press `+` on the first sandbox heading in the sidebar. Under *From catalog*, press `研发小队`.
+2. Read the three agents in the preview and press *Create these 3 in <sandbox>*. They arrive on
    the `ship` team, and the sidebar lists them under SHIP.
 3. Pick Mo and write the wish: who it is for, and what counts as done.
-4. When the spec is in the box, ask Lin to build it and to hand the result to Heng.
+4. When the spec is in the sandbox, ask Lin to build it and to hand the result to Heng.
 
 ### In a chat
 
@@ -141,7 +141,7 @@ install command.
   of work* when Lin splits the job into forks, and the *Gate* line.
 - **Spend:** the tokens-today figure in the top bar opens the Spend view.
 
-## Outside the box
+## Outside the sandbox
 
 - You decide `done`. A reviewer's approval moves the task; nobody else's word closes it.
 - The repository's access: a deploy key or token, and who may push.
@@ -152,7 +152,7 @@ install command.
 
 - Add `xi` (分析师) when the work needs numbers with sources behind them.
 - Make a routine that has Heng review every new change each night (Automations → *+ New*).
-- Save the tuned Lin as a template (Configure → *Ask it to draft a template*) for the next box.
+- Save the tuned Lin as a template (Configure → *Ask it to draft a template*) for the next sandbox.
 - Install the LumenBox skill for Claude Code or Codex (`agentbox skill install`) to hand the crew
   work from your own editor.
 
@@ -165,8 +165,8 @@ install command.
   `agentbox web --no-box` with a scripted model that has no key (`AGENTBOX_PROVIDER=custom`
   pointed at a local stub). Steps 1–3 of *In the app* ran: the crew was added,
   three agents appeared (on the `ship` team since INV-1680), Mo answered with one usage row (`in 1,200 out 60`), and
-  `agentbox usage` printed it. Without a box, each member logged "cannot install its recipe; it
-  will start blank". Not reproduced: step 4 (it needs a box and a model), the chat steps, and
+  `agentbox usage` printed it. Without a sandbox, each agent logged "cannot install its recipe; it
+  will start blank". Not reproduced: step 4 (it needs a sandbox and a model), the chat steps, and
   any cost.
 - Design: [docs/94](../../94-catalog.md) (the catalog), [docs/75](../../75-cost-per-accepted-task.md)
   (why a cost is per accepted task).

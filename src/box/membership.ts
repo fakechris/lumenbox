@@ -40,12 +40,12 @@ export function mayEnterBox(box: Pick<BoxEntry, "members">, principalId: string 
  */
 export function membersLabel(box: Pick<BoxEntry, "members">, nameOf: (principalId: string) => string, locale: Locale = "zh"): string {
   if (box.members === "everyone") return tr("ui.access.sharedMembership", locale);
-  if (box.members.length === 0) return "无人 box：成员集合是空的，只有安装自身的凭证进得来";
-  if (box.members.length === 1) return `${nameOf(box.members[0]!)} 的 box：只有他/她进得来`;
-  return `${box.members.length} 人的 box：${box.members.map(nameOf).join("、")}`;
+  if (box.members.length === 0) return "无人沙盒：成员集合是空的，只有安装自身的凭证进得来";
+  if (box.members.length === 1) return `${nameOf(box.members[0]!)} 的沙盒：只有他/她进得来`;
+  return `${box.members.length} 人的沙盒：${box.members.map(nameOf).join("、")}`;
 }
 
 /** What somebody who is not a member is told — by name, because a blank refusal is a support ticket. */
 export function refusalToEnter(boxName: string, principalName: string): string {
-  return `${boxName} is not a box ${principalName} is in. An admin can add you to it; nothing here is hidden from its members, and nothing is shown to anyone else.`;
+  return `${boxName} is not a sandbox ${principalName} is in. An admin can add you to it; nothing here is hidden from its members, and nothing is shown to anyone else.`;
 }

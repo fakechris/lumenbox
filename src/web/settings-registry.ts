@@ -22,8 +22,8 @@ export interface SettingsPane {
   config: readonly string[];
   /** The API routes the pane reads and writes. */
   apis: readonly string[];
-  /** `page`: the tab is in the dialog's markup. `script`: a script mounts it when it loads. */
-  mounted: "page" | "script";
+  /** `page`: the tab is in the dialog's markup. `script`: a script mounts it when it loads. `rebuilt`: only the rebuilt page has it (next-settings-ui.ts), the classic dialog has no tab. */
+  mounted: "page" | "script" | "rebuilt";
 }
 
 export const SETTINGS_PANES: readonly SettingsPane[] = [
@@ -39,8 +39,8 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
   },
   {
     key: "boxes",
-    title: "Boxes",
-    titleZh: "Box",
+    title: "Sandboxes",
+    titleZh: "沙盒",
     about: "The box and every machine attached to it, personal-box limits, host execution, the startup item, box image updates, resource diagnostics, and an organisation's nodes.",
     aboutZh: "这台 box 和接入的每台机器、个人 box 限额、在本机执行命令、开机启动、box 镜像更新、资源诊断，以及组织的节点。",
     config: ["boxImage", "boxCpus", "boxes", "personalBoxQuota", "personBoxQuotas", "departmentBoxQuotas", "hostExec", "startupItem", "upgradeHour"],
@@ -116,6 +116,16 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
     config: [],
     apis: ["/api/guests", "/api/guests/audit"],
     mounted: "script",
+  },
+  {
+    key: "organisation",
+    title: "Organisation",
+    titleZh: "本组织",
+    about: "On an organisation, for an Admin: the channel app members sign in with, the public address, and activating members, each with its state. Channels and Team keep the rest.",
+    aboutZh: "只在组织里、给管理员：成员登录用的渠道应用、公开地址、激活成员，各带状态。其余设置在「渠道」和「团队」里。",
+    config: [],
+    apis: ["/api/channels", "/api/channels/public-url", "/api/activations"],
+    mounted: "rebuilt",
   },
   {
     key: "organisations",

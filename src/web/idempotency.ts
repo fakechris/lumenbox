@@ -15,7 +15,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { appendLine } from "../host/jsonl.ts";
 
 export const IDEMPOTENCY_TTL_MS = 5 * 60_000;
-const KEY_PATTERN = /^[A-Za-z0-9_.:-]{8,128}$/;
+/** What a key may be: what a client sends as `Idempotency-Key`, here and on `/api/v1`. */
+export const KEY_PATTERN = /^[A-Za-z0-9_.:-]{8,128}$/;
 
 interface Entry {
   fingerprint: string;

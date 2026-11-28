@@ -13,7 +13,7 @@
 
 ## 模板
 
-55 个现成模板（`lumenbox-template/1`，src/host/catalog-data/templates）：每个都是一个完整可用的 agent——人设、记忆、skill、例行任务、连接器。名称和说明来自目录，保持原文。
+55 个现成模板（`lumenbox-template/1`，src/host/catalog-data/templates）：每个都是一个完整可用的智能体——人设、记忆、skill、例行任务、连接器。名称和说明来自目录，保持原文。
 
 | slug | 名称 | 标题 | skill | 例行任务 | 连接器 | 记忆 |
 |---|---|---|---|---|---|---|
@@ -73,7 +73,7 @@
 | `下载专家` | 下载专家 | 下载专家 | 3 | 0 | — | 1 |
 | `推特运营方法论` | 推特运营方法论 | 推特运营方法论 | 1 | 0 | mcp:x | 3 |
 
-## 目录里的 agent
+## 目录里的智能体
 
 | slug | 领域 | 名称 | 标题 | 简介 | 工具 | skill |
 |---|---|---|---|---|---|---|
@@ -88,7 +88,7 @@
 
 ## 小队
 
-| slug | 领域 | 名称 | 简介 | 成员 |
+| slug | 领域 | 名称 | 简介 | 智能体 |
 |---|---|---|---|---|
 | `ship` | engineering | 研发小队 | Product specifies, engineering builds, review is a different person. | mo, lin, heng |
 | `media-desk` | media | 内容小队 | One source, three forms: long article, Xiaohongshu note, short-video script. | jian, he, jing |

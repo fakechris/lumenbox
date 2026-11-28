@@ -80,6 +80,7 @@ import { IdempotencyStore } from "./idempotency.ts";
 import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts"; import { installationBoxRuns, runnableAgents, startsWithStarterTeam, strandedAgentsRoute } from "./installation-box-here.ts";
+import { setupRoute, yoursOf } from "./first-screen-route.ts";
 import { describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
 import { modelConfigured } from "../host/model-readiness.ts";
 import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
@@ -234,7 +235,7 @@ import {
   handleMcpRequest,
   type McpServerTool,
 } from "./mcp-server.ts";
-import { McpTokenStore } from "./mcp-tokens.ts";
+import { McpTokenStore } from "./mcp-tokens.ts"; import { mountClientApi } from "./client-api/mount.ts"; import { clientTokenRoute } from "./client-token-routes.ts"; // docs/106 §4
 import { Vault, type Grant } from "../host/vault.ts";
 import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
@@ -2981,6 +2982,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
+  const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log }); // /api/v1
 
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
@@ -3106,6 +3108,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       ) {
         return;
       }
+      if (await v1.handle(req, res, url)) return; // the client API (docs/106 §4): its own tokens and route table, before the page's gate
       // The MCP face (docs/33): a delegated engine in the box calling the host's MCP tools
       // through its per-job route. Before the UI gate, like the side door, and with one 401 for
       // every way to be wrong — unknown key, lapsed lease, wrong bearer.
@@ -4454,6 +4457,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // use them. The roster is the access-control list now, not a flat allow list.
         // The bridges to other people's tools: what is running, and how much of every
         // agent's prompt each one is spending.
+        const clientTokens = await clientTokenRoute(route, { readJson: () => readJson(req), userId: caller.userId, role: callerRole, principals, tokens: mcpTokens });
+        if (clientTokens !== undefined) { send(res, clientTokens.status, clientTokens.body); return; } // personal and service tokens for /api/v1
         if (route === "POST /api/mcp/tokens") {
           if (refusedRole("driver")) return;
           const body = await readJson(req);
@@ -5079,30 +5084,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, { created: [{ id: imported.agent.id, name: imported.agent.profile.name }] });
           return;
         }
-        // Setup progress belongs to the selected box; installation controls belong to the admin.
-        if (route === "GET /api/setup") {
-          const installationId = registry.box.id;
-          if (callerRole !== "admin") {
-            const identity = caller.userId;
-            const member = callerRole === "driver" && identity && principals.isKnown(identity) ? principals.resolve(identity).id : undefined;
-            const hasPersonalBox = member && principals.installation().mode === "organisation" ? personalBoxesOf(registry.listBoxes(), member).length > 0 : undefined;
-            send(res, 200, { installationId, hasPersonalBox, ...(member && hasPersonalBox === false ? { autoBox: autoBoxes.view(member) } : {}) }); return;
-          }
-          const agents = registry.list().filter(agent => mayReadAgent(agent.id) && !agent.profile.hidden);
-          const reviewed = new Set((orchestrator.tasks?.list() ?? []).filter(task => task.status === "review" || task.status === "done").map(task => task.assigneeId));
-          const byBox = Object.fromEntries(orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(box => {
-            const here = agents.filter(agent => registry.boxOf(agent.id).id === box.id);
-            const agentTurn = here.some(agent => registry.readTranscript(agent.id).length > 0), review = here.some(agent => reviewed.has(agent.id));
-            return [box.id, { box: box.connected, agent: here.length > 0, agentTurn, review, established: agentTurn && review }];
-          }));
-          const key = await modelConfigured(orchestrator.provider), me = caller.userId !== undefined && principals.isKnown(caller.userId) ? principals.resolve(caller.userId).id : undefined;
-          // On an organisation the first Admin is a member like the others: their own box, made at first use, is their first step (INV-2310).
-          const own = me !== undefined && principals.installation().mode === "organisation" ? personalBoxesOf(registry.listBoxes(), me).length > 0 : undefined;
-          send(res, 200, { installationId, ...byBox[installationId], byBox, key, hasPersonalBox: own,
-            ...(me && own === false ? { autoBox: autoBoxes.view(me) } : {}), door: channelRecords.some(channelCredentialsSet), search: configuredProviders().length > 0,
-            bootstrapPending: caller.userId === undefined && bootstrapPending() });
-          return;
-        }
+        // Setup progress per box a person may read; installation controls are the admin's (first-screen-route.ts, INV-2311).
+        const me = caller.userId !== undefined && principals.isKnown(caller.userId) ? principals.resolve(caller.userId).id : undefined;
+        const setup = await setupRoute(route, { role: callerRole, person: me, mode: principals.installation().mode, installationBox: registry.box.id, entries: () => registry.listBoxes(), boxes: () => orchestrator.boxStatus(),
+          mayReadBox, agents: () => registry.list().filter(agent => mayReadAgent(agent.id) && !agent.profile.hidden).map(agent => ({ id: agent.id, boxId: registry.boxOf(agent.id).id })),
+          hasTranscript: id => registry.readTranscript(id).length > 0, modelConfigured: () => modelConfigured(orchestrator.provider), autoBox: id => autoBoxes.view(id),
+          reviewed: () => new Set((orchestrator.tasks?.list() ?? []).filter(task => task.status === "review" || task.status === "done").map(task => task.assigneeId ?? "")),
+          door: () => channelRecords.some(channelCredentialsSet), search: () => configuredProviders().length > 0, bootstrapPending: () => caller.userId === undefined && bootstrapPending() });
+        if (setup !== undefined) { send(res, setup.status, setup.body); return; }
 
         // For the composer's "/" menu. Names and descriptions only — the same index the agent gets,
         // for the same reason.
@@ -5906,10 +5895,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // tells them it exists, which is the one thing a members set is for.
           // Registered boxes carry their lifecycle state and version (INV-434).
           const nameOfPrincipal = (id: string): string => principals.list().find(person => person.id === id)?.name ?? id;
-          const labels = personalBoxes.names();
+          const labels = personalBoxes.names(), yours = yoursOf(registry.listBoxes(), me, principals.installation().mode, registry.box.id);
           const boxes = orchestrator.boxStatus().filter(box => mayReadBox(box.id)).map(status => {
             const label = labels.get(status.id);
-            const backendBox = withBoxBackend(status);
+            const backendBox = { ...withBoxBackend(status), ...(yours.has(status.id) ? { yours: true } : {}) }; // the person's own: "your sandbox" (INV-2311)
             const box = label === undefined ? backendBox : { ...backendBox, name: label, personal: true };
             const entry = registry.listBoxes().find(candidate => candidate.id === box.id);
             const membership =

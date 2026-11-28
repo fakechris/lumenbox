@@ -17,6 +17,13 @@
  *   - **webhook/…** (S6): the header names a routine's sender may authenticate with.
  *   - **skill/…, rule/…, template/…** (S7): skill frontmatter keys, rule-file fields and their
  *     aliases, the template format.
+ *   - **api/…** (S10): the client API, read off its OpenAPI document (`docs/api/v1.openapi.json`,
+ *     built from `src/web/client-api/schema.ts`): every stable operation with its scope, parameters,
+ *     answer and error codes; every resource field with its type and whether it is always present;
+ *     every known value of an open enumeration; every scope. Preview operations are no promise and
+ *     are not held. `api/revision` may only rise, and must rise with any `api/…` addition
+ *     (docs/106 §4.1). The document itself must be what the schema builds: when it is not, the check
+ *     fails and `--write-baseline` writes it.
  *
  * Three outcomes for an item:
  *
@@ -33,20 +40,21 @@
  *
  * What this does not hold, said so nobody reads the tick as more: exit statuses, the files
  * `audit export` writes, HTTP status codes, a flag read by a helper in another module, and the
- * client API (its OpenAPI document joins this file when it exists).
+ * behaviour behind an operation (the contract tests in `src/web/client-api/` hold that).
  *
  *   node scripts/surface-ratchet.mjs                    check (run by `npm run arch`)
  *   node scripts/surface-ratchet.mjs --write-baseline   add what is new; drop what is deprecated and due
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 // Plain TypeScript with nothing to transform, so Node reads it as it is: when an item may go is decided in one place.
 import { deprecationOf, releaseLine, removable } from "../src/deprecations.ts";
 import { hermeticEnv } from "./test-env.mjs";
 
 export const BASELINE_FILE = "surface-baseline.json";
+export const OPENAPI_FILE = "docs/api/v1.openapi.json";
 export const DEPRECATIONS_FILE = "src/deprecations.ts";
 const root = fileURLToPath(new URL("..", import.meta.url));
 
@@ -186,12 +194,60 @@ function schemaItems(prefix, schema, into) {
   }
 }
 
+/** A schema's type in a few words, for the client API: `$ref`s by name, an open enumeration as a string. */
+function apiType(schema) {
+  if (schema?.$ref !== undefined) return schema.$ref.split("/").pop();
+  if (schema?.type === "array") return `array of ${apiType(schema.items)}`;
+  return `${schema?.type ?? "any"}${schema?.format !== undefined ? ` (${schema.format})` : ""}`;
+}
+
+/** Known values of an open enumeration at `path`, as items. */
+function knownValues(path, schema, into) {
+  for (const value of schema?.["x-extensible-enum"] ?? schema?.items?.["x-extensible-enum"] ?? []) into[`${path}=${value}`] = "known value";
+}
+
+/** The client API's items from its OpenAPI document: what a phone app or a company's back end relies on. */
+export function apiItems(document) {
+  const items = {};
+  if (document === undefined) return items;
+  items["api/revision"] = document.info.version;
+  for (const [path, methods] of Object.entries(document.paths ?? {})) {
+    for (const [method, operation] of Object.entries(methods)) {
+      if (operation["x-tier"] !== "stable") continue;
+      const at = `api/op/${method.toUpperCase()} ${path}`;
+      items[at] = `operation ${operation.operationId}, scope ${operation["x-scope"]}`;
+      for (const param of operation.parameters ?? []) {
+        items[`${at}/${param.in}/${param.name}`] = `${apiType(param.schema)}${param.required ? ", required" : ""}`;
+        knownValues(`${at}/${param.in}/${param.name}`, param.schema, items);
+      }
+      for (const [status, response] of Object.entries(operation.responses ?? {})) {
+        const schema = response.content?.["application/json"]?.schema;
+        items[`${at}/response/${status}`] = schema === undefined ? "no body" : apiType(schema);
+        for (const code of response["x-error-codes"] ?? []) items[`${at}/error/${code}`] = status;
+      }
+    }
+  }
+  for (const [name, schema] of Object.entries(document.components?.schemas ?? {})) {
+    items[`api/schema/${name}`] = apiType(schema);
+    const required = new Set(schema.required ?? []);
+    for (const [field, definition] of Object.entries(schema.properties ?? {})) {
+      items[`api/schema/${name}/${field}`] = `${apiType(definition)}${required.has(field) ? ", required" : ""}`;
+      knownValues(`api/schema/${name}/${field}`, definition, items);
+    }
+  }
+  for (const [name, scheme] of Object.entries(document.components?.securitySchemes ?? {})) items[`api/security/${name}`] = `${scheme.type} ${scheme.scheme ?? ""}`.trim();
+  return items;
+}
+
+/** "1.12" → 12. */
+const revisionOf = version => Number.parseInt(String(version ?? "").split(".")[1] ?? "", 10);
+
 /**
  * The whole surface as `{ item: what it is }`, from the pieces read off the code. Pure, so a test
  * can hand it a copy with a flag, a key or a field taken out.
  */
-export function surfaceItems({ cli = {}, config = {}, env = [], tools = [], capabilities = {}, taskStates = [], incompleteReasons = [], webhookHeaders = {}, skillKeys = [], ruleFields = [], templateFormat }) {
-  const items = {};
+export function surfaceItems({ cli = {}, config = {}, env = [], tools = [], capabilities = {}, taskStates = [], incompleteReasons = [], webhookHeaders = {}, skillKeys = [], ruleFields = [], templateFormat, openapi }) {
+  const items = { ...apiItems(openapi) };
   for (const [command, flags] of Object.entries(cli)) {
     items[`cli/${command}`] = "command";
     for (const flag of flags) items[`cli/${command}/${flag}`] = "flag";
@@ -225,6 +281,13 @@ export function surfaceItems({ cli = {}, config = {}, env = [], tools = [], capa
 export function verify(baseline, measured, deprecations = [], version = "0.0.0") {
   const problems = [];
   const due = [];
+  // The client API's revision is the one item that changes in place: up, and with every addition (docs/106 §4.1).
+  const [was, now] = [baseline["api/revision"], measured["api/revision"]];
+  if (was !== undefined && now !== undefined && revisionOf(now) < revisionOf(was)) problems.push(`api/revision went down from ${was} to ${now}: it only rises (API_REVISION in src/web/client-api/schema.ts)`);
+  const apiAdded = Object.keys(measured).some(item => item.startsWith("api/") && item !== "api/revision" && baseline[item] === undefined);
+  if (was !== undefined && apiAdded && revisionOf(now) <= revisionOf(was)) problems.push(`the client API gained items and its revision is still ${was}: raise API_REVISION in src/web/client-api/schema.ts, so a client can tell this server from one without them`);
+  baseline = Object.fromEntries(Object.entries(baseline).filter(([item]) => item !== "api/revision"));
+  measured = Object.fromEntries(Object.entries(measured).filter(([item]) => item !== "api/revision"));
   const added = Object.keys(measured).filter(item => baseline[item] === undefined);
   if (added.length > 0) {
     problems.push(`${added.length} item(s) are new on the stable surface: ${added.join(", ")}. Each is a promise from now on (docs/106 §3). Update the baseline — \`node scripts/surface-ratchet.mjs --write-baseline\` — and add a line to the release notes saying what was added`);
@@ -249,6 +312,7 @@ export function verify(baseline, measured, deprecations = [], version = "0.0.0")
 export function written(baseline, measured, deprecations = [], version = "0.0.0") {
   const { due } = verify(baseline, measured, deprecations, version);
   const next = { ...baseline };
+  if (measured["api/revision"] !== undefined && (next["api/revision"] === undefined || revisionOf(measured["api/revision"]) > revisionOf(next["api/revision"]))) next["api/revision"] = measured["api/revision"];
   for (const item of due) {
     if (measured[item] === undefined) delete next[item];
     else next[item] = measured[item];
@@ -273,8 +337,9 @@ function measure() {
 async function readSurface() {
   const load = path => import(pathToFileURL(join(root, path)).href);
   const text = path => readFileSync(join(root, path), "utf8");
-  const [{ mcpServerTools }, { SIDE_DOOR_CAPABILITIES }, { WEBHOOK_AUTH_HEADERS }, { SKILL_FRONTMATTER_KEYS }, { RULE_FIELDS }, { TEMPLATE_FORMAT }, { DEPRECATIONS }] = await Promise.all([
+  const [{ mcpServerTools }, { SIDE_DOOR_CAPABILITIES }, { WEBHOOK_AUTH_HEADERS }, { SKILL_FRONTMATTER_KEYS }, { RULE_FIELDS }, { TEMPLATE_FORMAT }, { DEPRECATIONS }, { openApiDocument, openApiText }] = await Promise.all([
     load("src/web/mcp-tools.ts"), load("src/web/mcp-contract.ts"), load("src/host/webhooks.ts"), load("src/host/skills.ts"), load("src/host/rules-grammar.ts"), load("src/host/template.ts"), load(DEPRECATIONS_FILE),
+    load("src/web/client-api/openapi.ts"),
   ]);
   // Every optional dependency given, so every tool the door can carry is on it. Nothing is called: only the definitions are read.
   const never = () => { throw new Error("the surface ratchet reads tool definitions; it runs none"); };
@@ -296,8 +361,9 @@ async function readSurface() {
     skillKeys: [...SKILL_FRONTMATTER_KEYS],
     ruleFields: RULE_FIELDS,
     templateFormat: TEMPLATE_FORMAT,
+    openapi: openApiDocument(),
   });
-  return { items, deprecations: DEPRECATIONS, version: JSON.parse(text("package.json")).version };
+  return { items, deprecations: DEPRECATIONS, version: JSON.parse(text("package.json")).version, openapi: openApiText() };
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -306,12 +372,16 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
   if (args[0] === "--measure") {
     console.log(JSON.stringify(await readSurface()));
   } else {
-    const { items, deprecations, version } = measure();
+    const { items, deprecations, version, openapi } = measure();
+    const documentPath = join(root, OPENAPI_FILE);
+    let document;
+    try { document = readFileSync(documentPath, "utf8"); } catch { document = undefined; }
     let baseline;
     try { baseline = JSON.parse(readFileSync(path, "utf8")); } catch { baseline = {}; }
     if (args.includes("--write-baseline")) {
       const next = written(baseline, items, deprecations, version);
       writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+      if (document !== openapi) { mkdirSync(dirname(documentPath), { recursive: true }); writeFileSync(documentPath, openapi); console.log(`[surface] ${OPENAPI_FILE} written from src/web/client-api/schema.ts`); }
       const left = verify(next, items, deprecations, version).problems;
       console.log(`[surface] ${BASELINE_FILE}: ${Object.keys(next).length} item(s); additions written, removals only where ${DEPRECATIONS_FILE} allows. An addition needs a line in the release notes`);
       if (left.length > 0) {
@@ -320,6 +390,7 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
       }
     } else {
       const { problems, due } = verify(baseline, items, deprecations, version);
+      if (document !== openapi) problems.push(`${OPENAPI_FILE} is not what src/web/client-api/schema.ts builds: run \`node scripts/surface-ratchet.mjs --write-baseline\` and commit the document with the change`);
       if (problems.length > 0) {
         console.error(problems.join("\n"));
         process.exitCode = 1;

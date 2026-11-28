@@ -13,7 +13,7 @@ How people reach your agents from Feishu or DingTalk, and who is let in.
 ## What it is
 
 A **channel** is one app on a chat platform — a Feishu app, a DingTalk app — that opens into
-your box. Once it is connected, a message in that chat is a message to an agent, and the
+your sandbox. Once it is connected, a message in that chat is a message to an agent, and the
 reply comes back in the same chat. A conversation there is a **group chat** or a private chat.
 The same person is one person across every channel, so an approval given in one counts in
 another.
@@ -40,13 +40,13 @@ Channels.
   people and where each stands: *Listed*, *Asked to join*, *Active* or *Left*. Choose a role and
   press *Activate* beside a person, or *Activate the N listed now* for a whole department, with
   its sub-departments if you tick that. The person is on the team at once: a message from them in
-  the channel is theirs, their own computer is made with one assistant in it if their limit allows one (a
-  few computers start at a time when a department is activated), and they sign in through the
-  channel whenever they come. When a computer made at their activation is ready, their assistant
-  writes to them in the channel with the address to open; a computer made when they first open
-  the page sends nothing, since they are already there. A department's press first says how many computers it
+  the channel is theirs, their own sandbox is made with one assistant in it if their limit allows one (a
+  few sandboxes start at a time when a department is activated), and they sign in through the
+  channel whenever they come. When a sandbox made at their activation is ready, their assistant
+  writes to them in the channel with the address to open; a sandbox made when they first open
+  the page sends nothing, since they are already there. A department's press first says how many sandboxes it
   starts and how much memory that asks of the cluster, and starts nothing until you confirm.
-  *Computers made at activation* then counts them as ready, starting, queued and failed, with the
+  *Sandboxes made at activation* then counts them as ready, starting, queued and failed, with the
   platform's reason; *Retry* starts a failed one again, and *Tell them again* writes to somebody
   the channel could not reach. Somebody who signs in before being activated sees "Your request to join is with the
   Admins" and waits under *Asked to join*, here and in Settings → Channels. Somebody the
@@ -82,7 +82,7 @@ credentials in `~/.agentbox/config.json`.
   activates them.
 - When a sync no longer lists somebody who was let in by activation, the sign-in through that
   channel ends and they are shown as *Left*. Somebody who also signs in another way keeps that
-  and their role; somebody with no other way in can no longer sign in. Their computers and files
+  and their role; somebody with no other way in can no longer sign in. Their sandboxes and files
   are kept until an Admin decides in the People list. People let in another way, and the only
   Admin, are never signed out by a sync.
 - A sync that would end many sign-ins at once changes nobody: when it lists nobody, lists fewer

@@ -11,7 +11,7 @@
 [English](reference-skills.md) · 中文。本页由 `scripts/docs-reference.mjs` 生成，来源：`starterSkillsWithEvals()`（src/host/starter-skills.ts）和 `hubSkillSlugs()`（src/host/catalog.ts，包在 src/host/catalog-data/skills 里）。
 本页与来源不一致时 `npm test` 会失败；改来源，然后运行 `node scripts/docs-reference.mjs --write`。
 
-25 个入门 skill，每台 box 都会放进去；17 个 hub 包，随目录里的 agent 一起提供。**运行方式**是 skill 自己的 `schedule:` 或 `trigger:`；没有的话，请求与它的说明相符时才会读它。说明来自 skill 本身，保持原文。
+25 个入门 skill，每个沙盒都会放进去；17 个 hub 包，随目录里的智能体一起提供。**运行方式**是 skill 自己的 `schedule:` 或 `trigger:`；没有的话，请求与它的说明相符时才会读它。说明来自 skill 本身，保持原文。
 
 | slug | 名称 | 说明 | 运行方式 | 来源 |
 |---|---|---|---|---|

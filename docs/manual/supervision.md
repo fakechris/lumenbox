@@ -68,7 +68,7 @@ and Revoke ends either one. `agentbox watchdog install` needs no `--principal` t
 ## Limits
 
 - Neither the watchdog nor the supervisor can mark work done, resume what the system stopped,
-  raise a budget or touch a box.
+  raise a budget or touch a sandbox.
 - The watchdog flags work in hand with no change for 60 minutes, and a goal the system stopped
   that nobody touched for 30 minutes. Your own pause is never flagged.
 - A supervised goal spends twice: the supervisor's model and the agent's model.

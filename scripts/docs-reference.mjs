@@ -170,9 +170,9 @@ async function renderTools(zh = false) {
       `${tools.length} 个工具：\`buildTools\` 在所有可选项都打开时给出的清单——一台 box、视觉、主机执行器、桌面、飞书文档阅读器、模板暂存、一个搜索 key，以及连接器 ${CONNECTORS.join("、")}。真实的一轮拿到的更少；**何时提供**一栏写每个工具需要什么。工具说明来自源代码，保持英文。`,
       "",
       "- **层级**——一次调用对外界做了什么（side-effects.ts）：`observe` 只看，`self` 留在 box 里或只涉及提出请求的人，`reach` 越出 box 行事，`credential` 触及权限。",
-      "- **询问**——闸门是否先问人，以及确认卡片上的说法。由主机写，从不由 agent 写。",
+      "- **询问**——闸门是否先问人，以及确认卡片上的说法。由主机写，从不由智能体写。",
       "- **名单**——`resident` 每一轮都带着；`deferred` 通过 `FindMcpTool` 找到、通过 `UseMcpTool` 调用。",
-      "- **工具组**——装上一个目录 agent 时，它在哪些目录工具组（desk、web、code、team）里得到这个工具。",
+      "- **工具组**——装上一个目录里的智能体时，它在哪些目录工具组（desk、web、code、team）里得到这个工具。",
       "",
       ...table(["工具", "做什么", "层级", "询问", "何时提供", "名单", "工具组", "参数"], rows),
       "",
@@ -207,7 +207,7 @@ async function renderSkills(zh = false) {
   if (zh) {
     return [
       ...header("reference-skills", "参考：随附的 skill", "`starterSkillsWithEvals()`（src/host/starter-skills.ts）和 `hubSkillSlugs()`（src/host/catalog.ts，包在 src/host/catalog-data/skills 里）", true),
-      `${starters.length} 个入门 skill，每台 box 都会放进去；${hub.length} 个 hub 包，随目录里的 agent 一起提供。**运行方式**是 skill 自己的 \`schedule:\` 或 \`trigger:\`；没有的话，请求与它的说明相符时才会读它。说明来自 skill 本身，保持原文。`,
+      `${starters.length} 个入门 skill，每个沙盒都会放进去；${hub.length} 个 hub 包，随目录里的智能体一起提供。**运行方式**是 skill 自己的 \`schedule:\` 或 \`trigger:\`；没有的话，请求与它的说明相符时才会读它。说明来自 skill 本身，保持原文。`,
       "",
       ...table(["slug", "名称", "说明", "运行方式", "来源"], rows),
       "",
@@ -232,17 +232,17 @@ async function renderTemplates(zh = false) {
       ...header("reference-templates", "参考：模板货架", "`shelfTemplates()`、`CATALOG_EXPERTS`、`CATALOG_CREWS` 和 `CATALOG_CONNECTORS`（src/host/catalog.ts）", true),
       "## 模板",
       "",
-      `${templates.length} 个现成模板（\`lumenbox-template/1\`，src/host/catalog-data/templates）：每个都是一个完整可用的 agent——人设、记忆、skill、例行任务、连接器。名称和说明来自目录，保持原文。`,
+      `${templates.length} 个现成模板（\`lumenbox-template/1\`，src/host/catalog-data/templates）：每个都是一个完整可用的智能体——人设、记忆、skill、例行任务、连接器。名称和说明来自目录，保持原文。`,
       "",
       ...table(["slug", "名称", "标题", "skill", "例行任务", "连接器", "记忆"], templates.map(t => [`\`${t.slug}\``, t.name, t.title, t.skills.length, t.routines.length, list(t.connectors), t.memoryCount])),
       "",
-      "## 目录里的 agent",
+      "## 目录里的智能体",
       "",
       ...table(["slug", "领域", "名称", "标题", "简介", "工具", "skill"], catalog.CATALOG_EXPERTS.map(e => [`\`${e.slug}\``, e.domain, e.name, e.title, e.summary, set(e), list(e.skills)])),
       "",
       "## 小队",
       "",
-      ...table(["slug", "领域", "名称", "简介", "成员"], catalog.CATALOG_CREWS.map(c => [`\`${c.slug}\``, c.domain, c.name, c.summary, list(c.members)])),
+      ...table(["slug", "领域", "名称", "简介", "智能体"], catalog.CATALOG_CREWS.map(c => [`\`${c.slug}\``, c.domain, c.name, c.summary, list(c.members)])),
       "",
       "## 连接器",
       "",
@@ -264,7 +264,7 @@ async function renderTemplates(zh = false) {
     "",
     "## Crews",
     "",
-    ...table(["slug", "domain", "name", "summary", "members"], catalog.CATALOG_CREWS.map(c => [`\`${c.slug}\``, c.domain, c.name, c.summary, list(c.members)])),
+    ...table(["slug", "domain", "name", "summary", "agents"], catalog.CATALOG_CREWS.map(c => [`\`${c.slug}\``, c.domain, c.name, c.summary, list(c.members)])),
     "",
     "## Connectors",
     "",
@@ -315,7 +315,7 @@ async function renderCommands(zh = false) {
     });
     return [
       ...header("reference-commands", "参考：在聊天里能说什么", "`CHAT_COMMANDS`（src/channels/commands.ts）——渠道管理器按它分派、`/help` 照它回答的那张表", true),
-      `${CHAT_COMMANDS.length} 条命令，按一条消息与它们比对的顺序排列。只有整条消息就是命令时才算命令——“停下来改用另一个文件夹”是一条指示，不是停——其他每条消息都是交给 agent 的活。`,
+      `${CHAT_COMMANDS.length} 条命令，按一条消息与它们比对的顺序排列。只有整条消息就是命令时才算命令——“停下来改用另一个文件夹”是一条指示，不是停——其他每条消息都是交给智能体的活。`,
       "",
       "- **其他写法**——命令还认的其他拼写，不区分大小写。",
       "- **回答方式**——`直接回答`是主机不经模型直接回；`一轮模型`会开始或引导一轮。",
@@ -350,7 +350,7 @@ async function renderSettings(zh = false) {
       ...header("reference-settings", "参考：设置面板", "`SETTINGS_PANES`（src/web/settings-registry.ts），设置对话框按它渲染标签页", true),
       `${SETTINGS_PANES.length} 个面板。**配置**是面板在 \`~/.agentbox/config.json\` 里改的项；**API** 是它背后的路由。由脚本挂载的面板，在那个脚本加载后才出现。`,
       "",
-      ...table(["key", "面板", "用途", "配置", "API", "挂载"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.titleZh, pane.aboutZh, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "页面自带" : "由脚本挂载"])),
+      ...table(["key", "面板", "用途", "配置", "API", "挂载"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.titleZh, pane.aboutZh, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "页面自带" : pane.mounted === "rebuilt" ? "只在新页面" : "由脚本挂载"])),
       "",
     ].join("\n");
   }
@@ -358,7 +358,7 @@ async function renderSettings(zh = false) {
     ...header("reference-settings", "Reference: the Settings panes", "`SETTINGS_PANES` (src/web/settings-registry.ts), which the dialog renders its tabs from"),
     `${SETTINGS_PANES.length} panes. **config** is what the pane edits in \`~/.agentbox/config.json\`; **API** is the routes behind it. A pane mounted by a script appears when that script has loaded.`,
     "",
-    ...table(["key", "pane", "what it is for", "config", "API", "mounted"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.title, pane.about, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "in the page" : "by a script"])),
+    ...table(["key", "pane", "what it is for", "config", "API", "mounted"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.title, pane.about, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "in the page" : pane.mounted === "rebuilt" ? "the rebuilt page only" : "by a script"])),
     "",
   ].join("\n");
 }
