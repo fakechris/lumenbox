@@ -6115,6 +6115,7 @@ test("an agent nobody wrote to from a chat asks its own person there, and takes 
     assert.equal(episode.score.questions, 1);
     assert.deepEqual(episode.score.said.map(line => line.text), ["Waiting for the answer.", "Preparing the Q4 report."], "Ana's agent asked, waited, and went on with her answer; no other agent said anything");
   } finally { episode.cleanup(); rmSync(home, { recursive: true, force: true }); }
+});
 
 test("a member's first conversation in a box with a required organisation skill that installs a tool and needs their sign-in: nothing runs until they agree, then the agent installs, offers the sign-in once, never asks for a password, and does not offer it again (INV-2222)", async () => {
   const fixture = join(import.meta.dirname, "fixtures", "org-skill-hello");

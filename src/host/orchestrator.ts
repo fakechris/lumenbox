@@ -291,9 +291,8 @@ export class Orchestrator {
   private readonly boxAccesses = new Map<string, BoxClass>();
   /** One skills directory per box; the prompt shows an agent its own box's. */
   private readonly skillCaches = new Map<string, SkillCache>();
-  /** Set by `attachOrgSkills` (INV-2222): the organisation's skills in a box, the sync a connecting box is due, and a turn's end (what was said once is said). */
+  turnOpening: (agentId: string, inbound: readonly InboundMessage[]) => Promise<void> = async () => {}; // set by attachOrgSkills (INV-2222), as the three below
   orgSkillRoot: (boxId: string) => OrgSkillRoot | undefined = () => undefined; boxConnected: (boxId: string) => void = () => {}; busNoted: (event: BusEvent) => void = () => {};
-  turnOpening: (agentId: string, inbound: readonly InboundMessage[]) => Promise<void> = async () => {}; // a person's "agree <slug>" counts in that turn
   private readonly memoryMirror: MemoryMirror;
 
   /** Pushes an agent's standing files to its box after a person edited them on the host (INV-777). */
