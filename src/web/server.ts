@@ -270,7 +270,7 @@ import { QuestionWatch } from "../host/question-expiry.ts";
 import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
-import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts"; import { chatBoxFor, chatFiles } from "./chat-files.ts"; import { PersonReach } from "../host/reach-person.ts";
+import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts"; import { chatBoxFor, chatFiles } from "./chat-files.ts"; import { PersonReach } from "../host/reach-person.ts"; import { AssistantReady } from "../host/assistant-ready.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
@@ -338,6 +338,7 @@ type OutboundEvent =
   | { type: "handover_pending"; agentId: string; agentName: string; instruction: string; reason: string }
   /** An imported bot's setup turn ended; `summary` says what landed (docs/29 §5.4). */
   | { type: "template_import"; agentId: string; agentName: string; summary: string; complete: boolean }
+  | { type: "activation_progress" } // a box an activation asked for was queued, started, came up or failed, or its person was told (INV-2220)
   /** A bot staged a version of its template; the chat shows a card with what it carries. */
   | { type: "template_staged"; agentId: string; agentName: string; id: string; version: number; name: string; description: string; counts: string };
 
@@ -842,7 +843,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } catch (error) { log(`home agent in ${id}: not made (${error instanceof Error ? error.message : String(error)})`); }
     }
   };
-  const autoBoxes = new AutoPersonalBoxes({ home: join(agentboxHome(), "personal-boxes"), boxes: personalBoxes, quota: personalQuota, eligible: mayProvision, ready: reconnectPersonalBox, log,
+  let tellReady: (boxId: string) => Promise<void> = async () => {}; // set once the activations ledger exists, below
+  const autoBoxes = new AutoPersonalBoxes({ home: join(agentboxHome(), "personal-boxes"), boxes: personalBoxes, quota: personalQuota, eligible: mayProvision, log,
+    ready: async (id, atActivation) => { try { await reconnectPersonalBox(id); } finally { if (atActivation) await tellReady(id); } }, changed: () => broadcast({ type: "activation_progress" }),
     // At activation or at the first page load (INV-2220, INV-2203); by default where the boxes are the cluster's (or a given driver's), not this machine's Docker.
     when: () => principals.installation().mode === "organisation" ? personalBoxAt(loadConfig(), kubernetes || options.personalBoxDriver !== undefined) : "never" });
 
@@ -2987,6 +2990,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
     signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log,
     boxes: (people: readonly { id: string; name: string }[]) => autoBoxes.activated(people, person => tr("ui.personal.defaultName", localeOfPerson(person.id), { name: person.name })) };
+  // Its person told that their assistant is ready, once, through the one path to a person (INV-2220, assistant-ready.ts).
+  const assistantReady = new AssistantReady({ activations: admissionDeps.activations, principals, registry, reach, publicUrl: () => process.env.AGENTBOX_PUBLIC_URL, locale: localeOfPerson, log,
+    sourceOf: door => directoryCredentials(door)?.source });
+  tellReady = async id => { const owner = registry.boxById(id)?.members; if (Array.isArray(owner) && owner.length === 1) { await assistantReady.tell(owner[0]!); broadcast({ type: "activation_progress" }); } };
+  const onboarding = { autoBoxes, boxes: personalBoxes, ready: assistantReady, quotaOf: (id: string) => personalQuotaFor(id, loadConfig(), directories.membership([id], directorySources())) };
   const orgAdmission = admission(admissionDeps); chatDesk = orgAdmission;
   orgAdmission.catchUp(channelRecords.map(record => record.id)); // an activation a crash interrupted is finished, and boxes owed from before are queued (INV-2220)
   const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
@@ -4758,7 +4766,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           doorType: door => channelRecords.find(record => record.id === door)?.type, publicUrl: configuredPublicUrl(), callerId: () => caller.userId, log });
         if (peopleReply !== undefined) { if (peopleReply.status !== 0) send(res, peopleReply.status, peopleReply.body); return; }
         const activationReply = await activationRoute(route, url.searchParams, { ...admissionDeps, admission: orgAdmission, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req),
-          callerId: () => caller.userId, doors: () => channelRecords, boxesHeld: id => personalBoxesOf(registry.listBoxes(), id).length });
+          callerId: () => caller.userId, doors: () => channelRecords, onboarding, boxesHeld: id => personalBoxesOf(registry.listBoxes(), id).length });
         if (activationReply !== undefined) { if (activationReply.status !== 0) send(res, activationReply.status, activationReply.body); return; }
 
         // One click on a knock. The person is told on the channel they knocked from,

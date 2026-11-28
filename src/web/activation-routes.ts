@@ -25,6 +25,7 @@ import type { Principal, Principals, Role } from "../host/principals.ts";
 import { enrol, type Enrolled } from "../host/enrolment.ts";
 import type { DirectoryCredentials } from "../channels/directory-sources.ts";
 import { apiError } from "./api-error.ts";
+import { estimateOf, progress, retryBoxes, type OnboardingDeps } from "./activation-progress.ts";
 import type { Locale } from "../i18n/locale.ts";
 import { tr } from "../i18n/messages.ts";
 
@@ -264,6 +265,8 @@ export interface ActivationRouteDeps extends AdmissionDeps {
   callerId: () => string | undefined;
   doors: () => readonly { id: string; name: string; type: string }[];
   boxesHeld: (principalId: string) => number;
+  /** The estimate before a department's press, the boxes' progress after, telling people again (activation-progress.ts). Absent: none of it. */
+  onboarding?: OnboardingDeps;
 }
 
 type Reply = { status: number; body: unknown };
@@ -271,6 +274,7 @@ type Reply = { status: number; body: unknown };
 const ROUTES = [
   "GET /api/activations", "GET /api/activations/people", "GET /api/activations/audit", "POST /api/activations/person", "POST /api/activations/department", "POST /api/activations/dismiss",
   "POST /api/activations/held/confirm", "POST /api/activations/held/dismiss",
+  "GET /api/activations/estimate", "GET /api/activations/progress", "POST /api/activations/tell", "POST /api/activations/retry-boxes",
 ];
 
 export async function activationRoute(route: string, query: URLSearchParams, deps: ActivationRouteDeps): Promise<Reply | undefined> {
@@ -350,6 +354,20 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
     };
   }
 
+  if (route === "GET /api/activations/progress") {
+    if (deps.onboarding === undefined) return { status: 200, body: { counts: {}, notTold: 0, latest: null } };
+    const state = query.get("state");
+    return { status: 200, body: progress(activations, source, deps.onboarding, state ? { state, offset: Math.max(0, Number(query.get("offset")) || 0) } : undefined) };
+  }
+  if (route === "POST /api/activations/tell" || route === "POST /api/activations/retry-boxes") {
+    const subjects = typeof body.subject === "string" ? [body.subject] : undefined;
+    if (deps.onboarding === undefined) return { status: 200, body: { told: 0, notTold: 0, retried: 0 } };
+    if (route === "POST /api/activations/retry-boxes") return { status: 200, body: { retried: retryBoxes(activations, source, subjects, deps.onboarding, principals) } };
+    const done = await deps.onboarding.ready.tellAgain(source, subjects, by);
+    deps.log(`assistant ready, told again by ${by}: ${done.told} told, ${done.notTold} still not`);
+    return { status: 200, body: done };
+  }
+
   if (route === "POST /api/activations/dismiss") {
     activations.dismiss(source, String(body.subject ?? ""), by);
     return { status: 200, body: { ok: true } };
@@ -364,7 +382,7 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
     return { status: 200, body: { ok: true } };
   }
 
-  const role = activationRole(body.role);
+  const role = activationRole(reading ? query.get("role") : body.role);
   if (role === undefined) return { status: 400, body: apiError("activation-role-invalid") };
 
   if (route === "POST /api/activations/person") {
@@ -376,8 +394,15 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
   // Never as Admins: one press must not hand the settings to a whole department.
   if (role === "admin") return { status: 400, body: apiError("activation-department-admin") };
   if (snapshot === undefined) return { status: 409, body: apiError("directory-not-synced") };
-  const department = String(body.department ?? ""), includeSub = body.includeSub === true;
-  const done = activations.activateDepartment(source, snapshot, department, includeSub, role, by, subject => onRoster(source, subject));
+  const department = reading ? query.get("department") ?? "" : String(body.department ?? ""), includeSub = reading ? query.get("includeSub") === "true" : body.includeSub === true;
+  // What the press would start, decided by the same list the press uses; a press that starts boxes is refused until exactly that number was confirmed.
+  const would = activations.departmentPeople(source, snapshot, department, includeSub, subject => onRoster(source, subject));
+  if (would === undefined) return { status: 404, body: apiError("directory-department-unknown") };
+  const estimate = deps.onboarding === undefined ? undefined : estimateOf(would.people.map(person => identityOf(source, person.subject)), role, deps.onboarding);
+  if (route === "GET /api/activations/estimate") return { status: 200, body: { ...(estimate ?? { people: would.people.length, boxes: 0, outOfQuota: 0, memoryRequest: null, memoryBytes: null }), alreadyActive: would.alreadyActive } };
+  const confirmed = (body.confirm as { boxes?: unknown } | undefined)?.boxes;
+  if (estimate !== undefined && estimate.boxes > 0 && confirmed !== estimate.boxes) return { status: 409, body: { ...apiError("activation-confirm-needed", { boxes: estimate.boxes }), estimate } };
+  const done = activations.activateDepartment(source, snapshot, department, includeSub, role, by, subject => onRoster(source, subject), estimate);
   if (done === undefined) return { status: 404, body: apiError("directory-department-unknown") };
   deps.admission.activated(source, by);
   deps.log(`activated department ${department} of ${source.channelId}${includeSub ? " with its sub-departments" : ""}: ${done.activated} as ${role} by ${by}, ${done.alreadyActive} already active`);

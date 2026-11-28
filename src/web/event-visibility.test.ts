@@ -13,6 +13,7 @@ test("member streams preserve box setup, health and owned task notices without e
     { type: "error", boxId: "shared" },
     { type: "task_aging", taskId: "my-task" },
     { type: "error", agentId: "mine" },
+    { type: "activation_progress" }, // "re-read", with nothing in it: the read is the Admin's route
   ])
     assert.equal(mayReadScopedEvent(event, access), true);
   for (const event of [
@@ -20,6 +21,7 @@ test("member streams preserve box setup, health and owned task notices without e
     { type: "task_aging", taskId: "other-task" },
     { type: "error", message: "unknown private details" },
     { type: "error", agentId: "missing" },
+    { type: "activation_progress", name: "somebody" }, // anything put in it is not carried unscoped
   ])
     assert.equal(mayReadScopedEvent(event, access), false);
 });

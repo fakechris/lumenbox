@@ -214,6 +214,9 @@ test("kubernetes is a server's backend: the desktop app refuses it, and docker s
   t.after(() => { if (previous === undefined) delete process.env.AGENTBOX_IMAGE; else process.env.AGENTBOX_IMAGE = previous; });
   assert.ok(provisionedBoxDriver(false, { api, env: {} }) instanceof PersonalDocker);
   assert.ok(provisionedBoxDriver(false, { api, env: { AGENTBOX_BOX_BACKEND: "kubernetes" } }) instanceof KubernetesBoxDriver);
+  // What an activation's estimate multiplies (INV-2220): the memory the pod is placed with, as the operator set it.
+  assert.deepEqual([provisionedBoxDriver(false, { api, env: { AGENTBOX_BOX_BACKEND: "kubernetes" } }).memoryRequest,
+    provisionedBoxDriver(false, { api, env: { AGENTBOX_BOX_BACKEND: "kubernetes", AGENTBOX_K8S_MEMORY: "6Gi" } }).memoryRequest, provisionedBoxDriver(false, { api, env: {} }).memoryRequest], ["4Gi", "6Gi", undefined]);
   assert.throws(() => provisionedBoxDriver(true, { api, env: { AGENTBOX_BOX_BACKEND: "kubernetes" } }), /server installation/);
   assert.throws(() => provisionedBoxDriver(false, { api, env: { AGENTBOX_BOX_BACKEND: "nomad" } }), /docker or kubernetes/);
 });

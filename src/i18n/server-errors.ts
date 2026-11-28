@@ -117,6 +117,7 @@ export const SERVER_ERRORS = {
   "err.directory-nothing-held": ["没有等待确认的同步结果。", "No sync result is waiting to be confirmed."],
   "err.directory-person-unknown": ["通讯录里没有这个人，他也没有申请加入。请先同步通讯录。", "The directory does not list this person and they have not asked to join. Sync the directory first."],
   "err.directory-department-unknown": ["通讯录里没有这个部门。请先同步通讯录。", "The directory has no such department. Sync the directory first."],
+  "err.activation-confirm-needed": ["这次激活会启动 {boxes} 台电脑。请先看过资源估算再确认。", "This activation starts {boxes} computers. Look at the estimate and confirm it first."],
   "err.directory-not-synced": ["这个渠道的通讯录还没有同步。", "This channel's directory has not been synced yet."],
   "err.directory-channel-needed": ["请选一个已配置的飞书或钉钉渠道。", "Choose a configured Feishu or DingTalk channel."],
   "err.directory-sync-failed": ["通讯录同步失败。上一份完整快照已保留，新的分配已暂停。请检查权限后重试。如果换了租户，请用新的渠道 ID 并重新绑定身份。", "Directory sync failed. Previous complete snapshot retained; new allocations paused. Check permissions and retry. If the tenant changed, use a new channel ID and bind its identities."],

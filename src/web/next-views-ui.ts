@@ -420,6 +420,7 @@ function nextStart() {
     chatEvent(event);
     cardsEvent(event);
     boxSetupEvent(event);
+    directoryEvent(event); // a computer an activation asked for moved (INV-2220)
     // The system page is a snapshot: what can change it re-reads it while it is the page being looked at.
     if (next.view === "system" && (kind === "turn_failed" || kind === "turn_finished" || kind === "error" || kind === "reset")) loadSystem();
   };

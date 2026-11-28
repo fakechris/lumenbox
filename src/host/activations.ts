@@ -34,7 +34,11 @@ interface Stamp { at: string; source: DirectorySource }
 
 export type ActivationEvent =
   | (Stamp & Named & { type: "activate-person"; by: string; role: Role; listed: boolean })
-  | (Stamp & { type: "activate-department"; by: string; role: Role; department: { vendorId: string; name: string }; includeSub: boolean; count: number; alreadyActive: number; people: Named[] })
+  | (Stamp & {
+      type: "activate-department"; by: string; role: Role; department: { vendorId: string; name: string }; includeSub: boolean; count: number; alreadyActive: number; people: Named[];
+      /** What the Admin was shown and confirmed before the press (INV-2220): the boxes it would start and what they ask of the cluster. */
+      estimate?: ActivationEstimate;
+    })
   | (Stamp & Named & { type: "request" })
   | (Stamp & { type: "dismiss"; by: string; subject: string })
   /** The roster people an activation made (INV-2220): one line for the act, however many. `migrated`: made after the fact, by home format 2 or by a server start, from an activation that had made nobody. */
@@ -43,6 +47,8 @@ export type ActivationEvent =
   | (Stamp & { type: "admitted"; subject: string; principalId: string })
   /** Personal boxes asked for on these roster people's behalf: `by` the Admin who activated them, or `start` for the ones a server start caught up on. */
   | (Stamp & { type: "boxes"; by: string; count: number; people: string[] })
+  /** The person was told their assistant is ready (`delivered`), or the door would not carry it (`why`): `by` the activation, or the Admin who asked again. */
+  | (Stamp & { type: "told"; by: string; subject: string; principalId: string; delivered: boolean; why?: string })
   /** Activated before the directory listed them, and a later sync did. */
   | (Stamp & { type: "listed"; subjects: string[] })
   | (Stamp & Named & { type: "left"; principalId?: string })
@@ -77,6 +83,19 @@ export function holdReason(sync: { leaving: number; standing: number; listedNow:
 
 type Unstamped = ActivationEvent extends infer E ? (E extends ActivationEvent ? Omit<E, "at"> : never) : never;
 
+/** What a department activation asks of the cluster, as the Admin confirmed it (docs/109 §3). */
+export interface ActivationEstimate {
+  /** People it would make. */
+  people: number;
+  /** Personal boxes it would start now: drivers and Admins within quota, where boxes are made at activation. */
+  boxes: number;
+  /** People it would make who are out of quota and get no box. */
+  outOfQuota: number;
+  /** One box's memory request as the allocator places it (`4Gi`), and the boxes' total in bytes; null where the backend does not say. */
+  memoryRequest: string | null;
+  memoryBytes: number | null;
+}
+
 export interface Activation extends Named {
   role: Role;
   by: string;
@@ -97,6 +116,10 @@ export interface Activation extends Named {
    */
   migrated?: true;
   leftAt?: string;
+  /** When a personal box was asked for on their behalf at activation. */
+  boxAskedAt?: string;
+  /** The last attempt to tell them their assistant is ready. */
+  told?: { at: string; delivered: boolean; why?: string };
 }
 export interface JoinRequest extends Named { at: string }
 
@@ -180,7 +203,13 @@ export class Activations {
     else if (event.type === "activate-department") for (const person of event.people) activate(person, event.role, event.by, true, event.department);
     else if (event.type === "request") state.requests.set(event.subject, { subject: event.subject, name: event.name, at: event.at });
     else if (event.type === "dismiss") state.requests.delete(event.subject);
-    else if (event.type === "boxes") { /* the audit's, not the state's */ }
+    else if (event.type === "boxes") {
+      const asked = new Set(event.people);
+      for (const activation of state.activations.values()) if (activation.principalId !== undefined && asked.has(activation.principalId)) activation.boxAskedAt = event.at;
+    } else if (event.type === "told") {
+      const activation = state.activations.get(event.subject);
+      if (activation !== undefined) activation.told = { at: event.at, delivered: event.delivered, ...(event.why !== undefined ? { why: event.why } : {}) };
+    }
     else if (event.type === "enrolled") {
       for (const person of event.people) {
         const activation = state.activations.get(person.subject);
@@ -260,19 +289,29 @@ export class Activations {
    * left as they are: their role is not rewritten by a bulk press.
    */
   activateDepartment(
-    source: DirectorySource, snapshot: DirectorySnapshot, vendorId: string, includeSub: boolean, role: Role, by: string, onRoster: (subject: string) => boolean,
+    source: DirectorySource, snapshot: DirectorySnapshot, vendorId: string, includeSub: boolean, role: Role, by: string, onRoster: (subject: string) => boolean, estimate?: ActivationEstimate,
   ): { activated: number; alreadyActive: number } | undefined {
+    const found = this.departmentPeople(source, snapshot, vendorId, includeSub, onRoster);
+    if (found === undefined) return undefined;
+    const { node, people, alreadyActive } = found, result = { activated: people.length, alreadyActive };
+    this.record({
+      type: "activate-department", source, by, role, department: { vendorId, name: node.name }, includeSub, count: result.activated, alreadyActive, people,
+      ...(estimate !== undefined ? { estimate } : {}),
+    });
+    return result;
+  }
+
+  /** Who a department activation would make now, and how many it lists who are active already: what the press does and what its estimate counts, decided once. */
+  departmentPeople(
+    source: DirectorySource, snapshot: DirectorySnapshot, vendorId: string, includeSub: boolean, onRoster: (subject: string) => boolean,
+  ): { node: DepartmentNode; people: Named[]; alreadyActive: number } | undefined {
     const node = departmentTree(snapshot).find(department => department.vendorId === vendorId);
     if (node === undefined) return undefined;
     const scope = departmentScope(snapshot, vendorId, includeSub);
     const members = snapshot.people.filter(person => person.departmentVendorIds.some(id => scope.has(id)));
     const people = members.filter(person => this.stateOf(source, person.vendorSubject, onRoster(person.vendorSubject)) !== "active")
       .map(person => ({ subject: person.vendorSubject, name: person.name }));
-    const result = { activated: people.length, alreadyActive: members.length - people.length };
-    this.record({
-      type: "activate-department", source, by, role, department: { vendorId, name: node.name }, includeSub, count: result.activated, alreadyActive: result.alreadyActive, people,
-    });
-    return result;
+    return { node, people, alreadyActive: members.length - people.length };
   }
 
   /** One request per person however often they scan; false when it was already there. */
@@ -300,6 +339,10 @@ export class Activations {
 
   boxesAsked(source: DirectorySource, by: string, people: string[]): void {
     if (people.length > 0) this.record({ type: "boxes", source, by, count: people.length, people });
+  }
+
+  told(source: DirectorySource, by: string, person: { subject: string; principalId: string }, reached: { delivered: boolean; why?: string }): void {
+    this.record({ type: "told", source, by, ...person, delivered: reached.delivered, ...(reached.why !== undefined ? { why: reached.why } : {}) });
   }
 
   listed(source: DirectorySource, subjects: string[]): void {

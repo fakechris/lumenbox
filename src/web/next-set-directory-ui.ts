@@ -5,6 +5,12 @@
  *
  * The tree is closed until a department is opened, and a department's people are read then, fifty
  * at a time: an organisation of hundreds is a few lines until somebody looks inside.
+ *
+ * A department's press first shows what it asks of the cluster — the computers it starts and their
+ * memory — and starts nothing until the Admin confirms (INV-2220). After it, the computers made at
+ * activation are counted by state, each state opened to see its people fifty at a time, updated
+ * live from the page's event stream; the failed ones can be retried and the people not told can be
+ * told again.
  */
 export const NEXT_SET_DIRECTORY_CSS = `
 .dept { margin: 2px 0; } .dept > summary { cursor: pointer; padding: 5px 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
@@ -19,7 +25,33 @@ export const NEXT_SET_DIRECTORY_CSS = `
 `;
 
 export const NEXT_SET_DIRECTORY_JS = `
-var directory = { data: null, loading: false, channelId: "", open: {}, people: {}, role: {}, sub: {}, note: "" };
+var directory = { data: null, loading: false, channelId: "", open: {}, people: {}, role: {}, sub: {}, note: "", progress: null, shown: {}, rows: {}, ask: {} };
+
+/** Bytes as the cluster's unit, GiB. */
+function directoryGiB(bytes) { return (Math.round(bytes / 1073741824 * 10) / 10) + " GiB"; }
+
+/** The counts of the computers made at activation; an open state's people with them. */
+function loadProgress() {
+  if (!directory.channelId) return;
+  getJson("/api/activations/progress?channelId=" + encodeURIComponent(directory.channelId)).then(function (got) {
+    directory.progress = got;
+    Object.keys(directory.shown).forEach(function (state) { if (directory.shown[state]) loadProgressPeople(state, 0); });
+    if (next.view === "settings") render();
+  }, function () {});
+}
+function loadProgressPeople(state, offset) {
+  getJson("/api/activations/progress?channelId=" + encodeURIComponent(directory.channelId) + "&state=" + encodeURIComponent(state) + "&offset=" + offset).then(function (got) {
+    var before = offset > 0 && directory.rows[state] ? directory.rows[state].people : [];
+    directory.rows[state] = { total: got.total, people: before.concat(got.people || []) };
+    if (next.view === "settings") render();
+  }, failed);
+}
+/** The page's event stream: a computer an activation asked for moved, or its person was told. Re-read, at most once a second. */
+var progressTimer = 0;
+function directoryEvent(event) {
+  if (!event || event.type !== "activation_progress" || progressTimer) return;
+  progressTimer = setTimeout(function () { progressTimer = 0; if (next.view === "settings") loadProgress(); }, 1000);
+}
 
 /** Where a directory person stands, as a chip in the page's own tones. */
 function directoryChip(state) {
@@ -34,6 +66,7 @@ function loadDirectory() {
   getJson("/api/activations" + (directory.channelId ? "?channelId=" + encodeURIComponent(directory.channelId) : "")).then(function (got) {
     directory.data = got; directory.channelId = got.channelId || "";
     Object.keys(directory.open).forEach(function (id) { if (directory.open[id]) loadDepartmentPeople(id, 0); });
+    loadProgress();
   }, function () { directory.data = directory.data || { doors: [] }; }).then(function () { directory.loading = false; if (next.view === "settings") render(); });
 }
 
@@ -103,21 +136,98 @@ function departmentActs(node) {
   sub.addEventListener("change", function () { directory.sub[node.vendorId] = sub.checked; go.textContent = t("ui.next.directory.activateDept", { n: count() }); });
   go.textContent = t("ui.next.directory.activateDept", { n: count() });
   subLabel.appendChild(sub); subLabel.appendChild(document.createTextNode(" " + t("ui.next.directory.withSub")));
+  // The press asks first: what it would start, and the memory that asks of the cluster. Nothing happens until it is confirmed.
   go.addEventListener("click", function () {
-    var sure = el("button", "act-primary", t("ui.next.directory.activateDeptSure", { n: count(), role: t("ui.next.team.role." + (directory.role[key] || "driver")) }));
-    sure.addEventListener("click", function () {
-      sure.disabled = true;
-      postJson("/api/activations/department", { channelId: directory.channelId, department: node.vendorId, includeSub: !!directory.sub[node.vendorId], role: directory.role[key] || "driver" })
-        .then(function (got) {
-          directory.note = t("ui.next.directory.deptDone", { name: node.name || t("ui.next.directory.root"), n: got.activated, already: got.alreadyActive }); loadDirectory();
-        }, function (error) { failed(error); loadDirectory(); });
-    });
-    go.replaceWith(sure);
-  });
+    var role = directory.role[key] || "driver";
+    go.disabled = true;
+    getJson("/api/activations/estimate?channelId=" + encodeURIComponent(directory.channelId) + "&department=" + encodeURIComponent(node.vendorId) + "&includeSub=" + !!directory.sub[node.vendorId] + "&role=" + role)
+      .then(function (got) { directory.ask[node.vendorId] = { estimate: got, role: role }; render(); }, function (error) { go.disabled = false; failed(error); });
+  });  var asking = directory.ask[node.vendorId];
+  if (asking) return departmentConfirm(node, asking);
   line.appendChild(directoryRolePick(key, true));
   if (node.total > node.direct) line.appendChild(subLabel);
   line.appendChild(go);
   return line;
+}
+
+/** What the press will do, said before it is done: people, computers, memory, who is out of quota. Confirm or cancel. */
+function departmentConfirm(node, asking) {
+  var box = el("div", "needbox"), acts = el("div", "acts"), e = asking.estimate, role = t("ui.next.team.role." + asking.role);
+  var sure = el("button", "act-primary", t("ui.next.directory.estimateConfirm")), cancel = el("button", "act", t("ui.next.directory.estimateCancel"));
+  box.setAttribute("data-directory", "estimate");
+  box.appendChild(el("strong", "", !e.boxes ? t("ui.next.directory.estimateNone", { people: e.people, role: role })
+    : e.memoryBytes === null ? t("ui.next.directory.estimateNoMemory", { people: e.people, role: role, boxes: e.boxes })
+    : t("ui.next.directory.estimate", { people: e.people, role: role, boxes: e.boxes, memory: directoryGiB(e.memoryBytes), each: e.memoryRequest })));
+  if (e.outOfQuota) box.appendChild(el("div", "why", t("ui.next.directory.estimateQuota", { n: e.outOfQuota })));
+  cancel.addEventListener("click", function () { delete directory.ask[node.vendorId]; render(); });
+  sure.addEventListener("click", function () {
+    sure.disabled = true;
+    postJson("/api/activations/department", { channelId: directory.channelId, department: node.vendorId, includeSub: !!directory.sub[node.vendorId], role: asking.role, confirm: { boxes: e.boxes } })
+      .then(function (got) {
+        delete directory.ask[node.vendorId];
+        directory.note = t("ui.next.directory.deptDone", { name: node.name || t("ui.next.directory.root"), n: got.activated, already: got.alreadyActive }); loadDirectory();
+      }, function (error) { delete directory.ask[node.vendorId]; failed(error); loadDirectory(); });
+  });
+  acts.appendChild(cancel); acts.appendChild(sure); box.appendChild(acts);
+  return box;
+}
+
+/** The computers made at activation, by state: a line of counts, each state opened to see its people. */
+function progressBlock() {
+  var data = directory.progress;
+  if (!data || !data.latest) return null;
+  var counts = data.counts || {}, open = (counts.starting || 0) + (counts.queued || 0) + (counts.failed || 0) + (data.notTold || 0);
+  if (!open && Date.now() - Date.parse(data.latest) > 86400000) return null; // all done a day ago: nothing to watch
+  var box = el("div", ""), states = ["starting", "queued", "failed", "quota", "ready", "not-told"];
+  box.setAttribute("data-directory", "progress");
+  box.appendChild(el("h3", "group", t("ui.next.directory.progress")));
+  box.appendChild(el("p", "why", t("ui.next.directory.progressNote")));
+  states.forEach(function (state) {
+    var n = state === "not-told" ? data.notTold || 0 : counts[state] || 0;
+    if (!n) return;
+    var fold = el("details", "dept"), head = el("summary", ""), body = el("div", "dept-body");
+    fold.setAttribute("data-progress", state);
+    head.appendChild(el("strong", "", t("ui.next.directory.progress." + state, { n: n })));
+    fold.appendChild(head); fold.open = !!directory.shown[state];
+    fold.addEventListener("toggle", function () {
+      if (fold.open === !!directory.shown[state]) return;
+      directory.shown[state] = fold.open;
+      if (fold.open) loadProgressPeople(state, 0); else render();
+    });
+    if (!fold.open) { box.appendChild(fold); return; }
+    if (state === "not-told") body.appendChild(el("p", "why", t("ui.next.directory.notToldNote")));
+    if (state === "failed" || state === "not-told") body.appendChild(progressAgain(state, undefined, state === "failed" ? t("ui.next.directory.retryFailed") : t("ui.next.directory.tellAgain")));
+    var held = directory.rows[state];
+    if (!held) body.appendChild(el("p", "why", t("ui.next.auto.reading")));
+    (held ? held.people : []).forEach(function (person) {
+      var line = el("div", "dept-row"), why = person.reason || (person.told && !person.told.delivered ? person.told.why : "");
+      var who = el("div", "grow"); who.appendChild(el("div", "", person.name)); if (why) who.appendChild(el("div", "why", why)); // the reason under the name, so the button stays on its row
+      line.appendChild(who);
+      if (state === "failed" || state === "not-told") line.appendChild(progressAgain(state, person.subject, state === "failed" ? t("ui.next.directory.retryOne") : t("ui.next.directory.tellAgain")));
+      body.appendChild(line);
+    });
+    if (held && held.people.length < held.total) {
+      var more = el("button", "act", t("ui.next.directory.more", { n: held.total - held.people.length }));
+      more.addEventListener("click", function () { more.disabled = true; loadProgressPeople(state, held.people.length); });
+      body.appendChild(more);
+    }
+    fold.appendChild(body); box.appendChild(fold);
+  });
+  return box;
+}
+
+/** Again, for one person or for all of a state: retry the failed computers, or tell the people not told. */
+function progressAgain(state, subject, label) {
+  var go = el("button", "act", label);
+  go.addEventListener("click", function () {
+    go.disabled = true;
+    postJson(state === "failed" ? "/api/activations/retry-boxes" : "/api/activations/tell", subject ? { channelId: directory.channelId, subject: subject } : { channelId: directory.channelId })
+      .then(function (got) {
+        directory.note = state === "failed" ? t("ui.next.directory.retried", { n: got.retried }) : t("ui.next.directory.toldAgain", { told: got.told, left: got.notTold });
+        loadProgress();
+      }, function (error) { go.disabled = false; failed(error); });
+  });
+  return go;
 }
 
 function departmentNode(node, all) {
@@ -207,6 +317,7 @@ function directoryBlock() {
   if (data.held) box.appendChild(heldSyncBox(data.held));
   (data.unlisted || []).forEach(function (person) { box.appendChild(el("div", "needbox", t("ui.next.directory.lastAdminKept", { name: person.name }))); });
   if (requests) box.appendChild(requests);
+  var progressNow = progressBlock(); if (progressNow) box.appendChild(progressNow);
   departments.filter(function (node) { return node.parentVendorId === null; }).forEach(function (node) { box.appendChild(departmentNode(node, departments)); });
   var left = data.left || [];
   if (left.length) {

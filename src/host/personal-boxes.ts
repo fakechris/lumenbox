@@ -47,6 +47,8 @@ export interface RecoveredBox {
 }
 export interface PersonalBoxDriver {
   readonly image?: string;
+  /** One box's memory request as the allocator places it (`4Gi`): what starting a box asks of the cluster. Absent where the backend does not say. */
+  readonly memoryRequest?: string;
   start(record: PersonalBoxRecord): Promise<string>;
   remove(record: PersonalBoxRecord, deleteData: boolean): Promise<void>;
   podStatus?(name: string): Promise<string>;
@@ -235,6 +237,8 @@ export class PersonalBoxes {
   list(owner: string) { return this.listed(owner).map(row => this.summary(row)); }
   /** Whether this person was ever given a personal box, deleted ones included (INV-2203). */
   known(owner: string): boolean { return this.read(db => this.records(db).some(row => row.owner === owner)); }
+  /** One box's memory request, as the driver places it; undefined where the backend does not say. */
+  memoryRequest(): string | undefined { return this.options.driver.memoryRequest; }
   /** The request id a box was made under: how the box an installation made for a member is told from one they made by hand (INV-2220). */
   requestOf(id: string): string | undefined { return this.read(db => this.records(db).find(row => row.id === id)?.request); }
   checkMemberRemoval(owner: string): void {

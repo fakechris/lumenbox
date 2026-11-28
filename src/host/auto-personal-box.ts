@@ -60,14 +60,17 @@ interface Options {
   /** Signed-in, driver or above, and eligible in the directory — the create route's own test. */
   eligible(owner: string): boolean;
   quota(owner: string): number | undefined;
-  /** After the box came up: what the create route does next (reconnect it). */
-  ready(id: string): Promise<void>;
+  /** After the box came up: what the create route does next (reconnect it). `atActivation`: it was made because an Admin activated the person, who is then told (INV-2220). */
+  ready(id: string, atActivation: boolean): Promise<void>;
+  /** Something a person's box progress shows changed: queued, started, up or failed. For the page's live view. */
+  changed?(): void;
   log(line: string): void;
 }
 
 export class AutoPersonalBoxes {
   private readonly path: string;
-  private readonly queue: Array<{ person: { id: string; name: string }; name: string }> = [];
+  /** People waiting their turn: to have a box made, or (`retry`) to have the failed one started again. */
+  private readonly queue: Array<{ person: { id: string; name: string }; name: string; retry?: string }> = [];
   private starting = 0;
   /** People whose box has started and whose `ready` step has not ended. */
   private readonly finishing = new Set<string>();
@@ -114,7 +117,47 @@ export class AutoPersonalBoxes {
     const queued = people.filter(person => !this.queue.some(entry => entry.person.id === person.id) && this.owed(person, "at activation"));
     for (const person of queued) this.queue.push({ person, name: nameOf(person) });
     this.drain();
+    if (queued.length > 0) this.options.changed?.();
     return queued.map(person => person.id);
+  }
+
+  /** Whether this person is waiting their turn in the queue. */
+  queued(owner: string): boolean { return this.queue.some(entry => entry.person.id === owner); }
+
+  /**
+   * What activating these people would start now, asked before the press (docs/109 §3): a box each
+   * for a driver or Admin with none, within quota, where boxes are made at activation. They need not
+   * be on the roster yet: `quotaOf` reads the quota by the identity they will hold, as the directory
+   * lists it — the roster's own quota calls a person it does not hold yet ineligible.
+   */
+  estimate(people: readonly string[], role: "viewer" | "driver" | "admin", quotaOf: (id: string) => number | undefined = this.options.quota): { boxes: number; outOfQuota: number } {
+    if (this.options.when() !== "activation" || role === "viewer") return { boxes: 0, outOfQuota: 0 };
+    const entries = this.options.boxes.quotaEntries();
+    let boxes = 0, outOfQuota = 0;
+    for (const id of people) {
+      if (this.options.boxes.known(id) || personalBoxesOf(entries, id).length > 0) continue;
+      const quota = quotaOf(id);
+      if (quota !== undefined && quota < 1) outOfQuota += 1; else boxes += 1;
+    }
+    return { boxes, outOfQuota };
+  }
+
+  /**
+   * An Admin asks again for boxes made at activation that failed to start: each is started again
+   * through the same queue, a few at a time, by the member's own retry. Returns who was queued.
+   */
+  retryFailed(people: readonly { id: string; name: string }[]): string[] {
+    const queued: string[] = [];
+    for (const person of people) {
+      if (this.queued(person.id)) continue;
+      const box = this.options.boxes.list(person.id).find(row => (row.status === "failed" || row.status === "interrupted") && this.options.boxes.requestOf(row.id) === AUTO_REQUEST);
+      if (box === undefined) continue;
+      this.queue.push({ person, name: box.name, retry: box.id });
+      queued.push(person.id);
+    }
+    this.drain();
+    if (queued.length > 0) this.options.changed?.();
+    return queued;
   }
 
   private drain(): void {
@@ -122,9 +165,10 @@ export class AutoPersonalBoxes {
       const next = this.queue.shift()!;
       this.starting += 1;
       // One person's refusal, however it comes, frees their place and never stops the rest.
-      void Promise.resolve().then(() => this.make(next.person, next.name, "at activation"))
+      this.options.changed?.();
+      void Promise.resolve().then(() => next.retry !== undefined ? this.restart(next.person.id, next.retry) : this.make(next.person, next.name, "at activation"))
         .catch((error: unknown) => this.options.log(`personal box for ${next.person.id}: not created at activation: ${error instanceof Error ? error.message : String(error)}`))
-        .finally(() => { this.starting -= 1; this.drain(); });
+        .finally(() => { this.starting -= 1; this.options.changed?.(); this.drain(); });
     }
   }
 
@@ -143,6 +187,15 @@ export class AutoPersonalBoxes {
     return true;
   }
 
+  /** A failed box made at activation, started again by the member's own retry; ready as if it had come up the first time. */
+  private async restart(owner: string, id: string): Promise<void> {
+    const row = await this.options.boxes.retry(owner, id, () => this.options.eligible(owner));
+    this.options.log(`personal box for ${owner}: started again at an Admin's request, ${row.status}${row.stateReason ? ` (${row.stateReason})` : ""}`);
+    if (row.status !== "ready") return;
+    this.finishing.add(owner);
+    try { await this.options.ready(row.id, true); } finally { this.finishing.delete(owner); }
+  }
+
   /** Reserves and starts the person's box; the promise settles when the start has ended, well or badly. Undefined when none is owed. */
   private make(person: { id: string; name: string }, name: string, when: string): Promise<void> | undefined {
     const { options } = this;
@@ -153,7 +206,7 @@ export class AutoPersonalBoxes {
       (row) => {
         options.log(`personal box for ${person.id}: created ${when}, ${row.status}${row.stateReason ? ` (${row.stateReason})` : ""}`);
         // Up, and what follows is still being done (reconnecting it, making the person's agent): being prepared until that has ended (INV-2221).
-        if (row.status === "ready") { this.finishing.add(person.id); return options.ready(row.id); }
+        if (row.status === "ready") { this.finishing.add(person.id); return options.ready(row.id, when === "at activation"); }
       },
       (error: unknown) => {
         // Refused before anything was reserved: a quota taken meanwhile is said like any other; any other refusal is looked at again next time.

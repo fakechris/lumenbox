@@ -200,6 +200,9 @@ export function exportAudit(options: ExportOptions): ExportManifest {
   // Credentials minted, revoked and rotated (web/token-ledger.ts, R8): side-door tokens are the
   // installation's, by time alone; a box's rotation names its box.
   write("tokens.jsonl", select(readLines(join(options.home, "tokens.jsonl")), record => record.kind !== "box" || record.box === box.id));
+  // Who an Admin let in, the department presses with the estimate confirmed, the boxes asked for them, and whether
+  // each was told their assistant is ready (host/activations.ts, INV-2202, INV-2220): the installation's, by time alone.
+  write("activations.jsonl", select(readLines(join(options.home, "activations.jsonl")), () => true));
   // Who watched or drove a desktop in this box, from when to when, and why it ended
   // (web/desktop-streams.ts, R6/R8). Each line names its box.
   write("desktop-sessions.jsonl", select(readLines(join(options.home, "desktop-sessions.jsonl")), record => record.box === box.id));
