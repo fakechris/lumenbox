@@ -7,6 +7,7 @@ import { runInNewContext } from "node:vm";
 import { startWebServer } from "./server.ts";
 import { APP_PAGE } from "./page-locale.ts";
 import { NEXT_BOXES_JS } from "./next-boxes-ui.ts";
+import { drawFirstScreen, texts } from "./testing/first-screen-page.ts";
 import { UsageLog } from "../host/usage.ts";
 import { Principals } from "../host/principals.ts";
 import { AgentRegistry } from "../agents/registry.ts";
@@ -118,51 +119,33 @@ test("INV-2040/2041/2049: Kubernetes uses cluster status, never the shared Docke
 
   const subtitles: string[] = [];
   const buttons: string[] = [];
-  const notice: string[] = [];
   const node = { appendChild() {}, dataset: {}, replaceChildren() {} };
-  const strip = {
-    ...node,
-    replaceChildren: (...children: { value: string }[]) => notice.splice(0, notice.length, ...children.map(child => child.value)),
-    appendChild: (child: { value: string }) => notice.push(child.value),
-  };
-  const chat = { box: computers.data.own };
-  let retry: (() => Promise<void>) | undefined;
-  let refreshes = 0;
-  const drawNotice: () => void = runInNewContext(NEXT_BOXES_JS + "\nObject.assign(boxes, input); renderBoxes(view); boxNotice(); boxNotice;", {
+  runInNewContext(NEXT_BOXES_JS + "\nObject.assign(boxes, input); renderBoxes(view);", {
     input: { list: computers.data.boxes, own: computers.data.own, state: state.data.box },
-    view: node, initial: String, t: String, canOperateInstallation: () => false, canDriveAgents: () => true, chat,
-    refreshSoon: () => { refreshes++; }, failed: assert.fail,
-    postJson: async (path: string, body: { id: string }) => {
-      assert.equal(path, "/api/personal-boxes/retry");
-      assert.equal(body.id, personal.data.boxId);
-      const response = await request(path, "web:alice", body);
-      assert.equal(response.status, 200);
-      assert.equal(response.data.boxId, personal.data.boxId);
-    },
-    $: (id: string) => id === "box-notice" ? strip : node,
-    el: (tag: string, style: string, value: string) => {
+    view: node, initial: String, t: String, canOperateInstallation: () => false, canDriveAgents: () => true, chat: { box: computers.data.own },
+    $: () => node, el: (tag: string, style: string, value: string) => {
       if (style === "why") subtitles.push(value);
       if (tag === "button") buttons.push(value);
-      return {
-        ...node, dataset: {}, value,
-        addEventListener: (event: string, action: () => Promise<void>) => {
-          if (event === "click" && value === "ui.next.boxset.retryConnection") retry = action;
-        },
-      };
+      return { ...node, dataset: {}, value, addEventListener() {} };
     },
   });
   assert.match(subtitles[computers.data.boxes.findIndex((row: { id: string }) => row.id === personal.data.boxId)] ?? "", /^kubernetes · /);
   assert.ok(subtitles.every(value => !/docker|Kubernetes backend/i.test(value)));
-  assert.deepEqual(notice, [], "no refusal is drawn for a box nobody is shown");
   assert.ok(!buttons.includes("ui.next.box.start"));
   const otherComputers = await request("/api/boxes", "web:bob");
   assert.ok(!otherComputers.data.boxes.some((row: { id: string }) => row.id === personal.data.boxId));
-  chat.box = personal.data.boxId;
-  drawNotice();
-  assert.deepEqual(notice, ["ui.next.box.podUnreachable", "ui.next.boxset.retryConnection"]);
-  assert.ok(retry, "the driver can retry the unreachable personal box without opening admin settings");
-  await retry();
-  assert.equal(refreshes, 1);
+  // The sidebar: their own sandbox, not answering, says so under its heading with the one button that tries again (INV-2311).
+  const first = drawFirstScreen({ state: state.data, computers: computers.data, setup: (await request("/api/setup", "web:alice")).data, me: { role: "driver", identity: "web:alice" } });
+  const own = first.side.findIndex(row => row.cls === "sandbox-head" && texts(row)[0] === "ui.first.yours ·");
+  assert.ok(own >= 0, "their own sandbox is their heading");
+  assert.deepEqual(texts(first.side[own]), ["ui.first.yours ·", "ui.first.state.failed"]);
+  assert.deepEqual(texts(first.side[own + 1]), ["ui.first.why.noAnswer", "ui.first.tryAgain"]);
+  first.side[own + 1]!.kids[1]!.press!();
+  assert.deepEqual(first.pressed, [{ retry: personal.data.boxId }]);
+  assert.ok(!first.why.some(line => /podUnreachable|Kubernetes|pod/.test(line)), "a driver reads no internal word in the sidebar");
+  const retried = await request("/api/personal-boxes/retry", "web:alice", { id: personal.data.boxId });
+  assert.equal(retried.status, 200, "the driver can retry the unreachable personal box without opening admin settings");
+  assert.equal(retried.data.boxId, personal.data.boxId);
 
   const shelf = await request("/api/templates/shelf", "web:alice");
   const shelfPage = page.slice(page.indexOf("function openShelf("), page.indexOf('$("shelfopen").onclick'));

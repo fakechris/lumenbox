@@ -350,7 +350,7 @@ async function renderSettings(zh = false) {
       ...header("reference-settings", "参考：设置面板", "`SETTINGS_PANES`（src/web/settings-registry.ts），设置对话框按它渲染标签页", true),
       `${SETTINGS_PANES.length} 个面板。**配置**是面板在 \`~/.agentbox/config.json\` 里改的项；**API** 是它背后的路由。由脚本挂载的面板，在那个脚本加载后才出现。`,
       "",
-      ...table(["key", "面板", "用途", "配置", "API", "挂载"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.titleZh, pane.aboutZh, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "页面自带" : "由脚本挂载"])),
+      ...table(["key", "面板", "用途", "配置", "API", "挂载"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.titleZh, pane.aboutZh, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "页面自带" : pane.mounted === "rebuilt" ? "只在新页面" : "由脚本挂载"])),
       "",
     ].join("\n");
   }
@@ -358,7 +358,7 @@ async function renderSettings(zh = false) {
     ...header("reference-settings", "Reference: the Settings panes", "`SETTINGS_PANES` (src/web/settings-registry.ts), which the dialog renders its tabs from"),
     `${SETTINGS_PANES.length} panes. **config** is what the pane edits in \`~/.agentbox/config.json\`; **API** is the routes behind it. A pane mounted by a script appears when that script has loaded.`,
     "",
-    ...table(["key", "pane", "what it is for", "config", "API", "mounted"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.title, pane.about, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "in the page" : "by a script"])),
+    ...table(["key", "pane", "what it is for", "config", "API", "mounted"], SETTINGS_PANES.map(pane => [`\`${pane.key}\``, pane.title, pane.about, codes(pane.config), codes(pane.apis), pane.mounted === "page" ? "in the page" : pane.mounted === "rebuilt" ? "the rebuilt page only" : "by a script"])),
     "",
   ].join("\n");
 }

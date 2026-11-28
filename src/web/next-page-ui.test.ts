@@ -14,6 +14,8 @@ import { NEXT_PANEL_JS } from "./next-panel-ui.ts";
 import { NEXT_FILES_JS } from "./next-files-ui.ts";
 import { NEXT_CHAT_JS } from "./next-chat-ui.ts";
 import { NEXT_DOCK_JS } from "./next-dock-ui.ts";
+import { firstScreen } from "./first-screen.ts";
+import { drawFirstScreen, pageFunctions, texts, type Fake as PageFake } from "./testing/first-screen-page.ts";
 
 /** The inline scripts of a page, in order. */
 const pageScripts = (page: string): string[] => [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]!);
@@ -528,28 +530,21 @@ test("Mine Tokens guides an unsigned fresh install to bootstrap and handles an o
 });
 
 test("welcome setup uses the latest box result even when setup is the last response", async () => {
-  const settings = { setup: { installationId: "fresh", box: false }, me: { identity: null } };
-  const boxes = { list: [], own: "", state: null };
-  const setupCard = pageFunction("setupCard", {
-    settings, chat: { box: "b1" }, agentsHere: () => [], canOperateInstallation: () => true, canDriveAgents: () => true,
-    localStorage: { getItem: () => null }, t: String, el: fakeEl,
-  });
-  const boxStep = () => (setupCard() as Fake).kids[2]!;
-  let finishSetup!: (setup: typeof settings.setup) => void;
-  const delayedSetup = new Promise<typeof settings.setup>(resolve => { finishSetup = resolve; });
+  const screen = drawFirstScreen({ state: { agents: [], box: {} }, computers: { boxes: [{ id: "b1", name: "Default", connected: false }], own: "b1" },
+    setup: { installationId: "fresh", edition: "personal", key: true }, me: { role: "admin", identity: null } });
+  const sandboxStep = () => texts(screen.page.setupCard!()!.kids.find((row: PageFake) => texts(row).some(text => text.startsWith("ui.first.step.sandbox"))));
+  let finishSetup!: (setup: unknown) => void;
+  const delayedSetup = new Promise(resolve => { finishSetup = resolve; });
   const drawn: string[][] = [];
-  const refresh = pageFunction("refresh", {
-    next: { agents: {} }, settings, boxes, chat: {}, member: {}, panel: {}, rereadRole: () => {},
-    getJson: (path: string) => path === "/api/setup" ? delayedSetup : Promise.resolve({ boxes: [{ id: "b1", connected: true }] }),
-    render: () => { drawn.push(boxStep().kids.map(node => node.text)); },
-    failed: (error: unknown) => { throw error; },
-  });
-  assert.deepEqual(boxStep().kids.map(node => node.text), ["○", "ui.next.setup.box", "ui.next.box.off", "ui.next.setup.go"]);
+  Object.assign(screen.globals, { panel: {}, rereadRole: () => {}, failed: (error: unknown) => { throw error; }, render: () => { drawn.push(sandboxStep()); },
+    getJson: (path: string) => path === "/api/setup" ? delayedSetup : path.startsWith("/api/boxes") ? Promise.resolve({ boxes: [{ id: "b1", name: "Default", connected: true }], own: "b1" }) : Promise.resolve({ agents: [], box: {} }) });
+  const refresh = pageFunctions(["refresh"], screen.globals).refresh!;
+  assert.deepEqual(sandboxStep(), ["○", "ui.first.step.sandbox · ui.first.state.stopped", "ui.first.startIt"]);
   const pending = refresh();
   await new Promise(resolve => setImmediate(resolve));
-  finishSetup({ installationId: "fresh", box: true });
+  finishSetup({ installationId: "fresh", edition: "personal", key: true });
   await pending;
-  assert.deepEqual(drawn, [["✓", "ui.next.setup.box", "ui.next.box.on"]], "the refresh redraws the card from the new setup response");
+  assert.deepEqual(drawn, [["✓", "ui.first.step.sandbox · ui.first.state.ready"]], "the refresh redraws the card from the new boxes and setup");
 });
 
 test("reopening Boxes settings refreshes its status and preserves the settings route", () => {
@@ -606,48 +601,33 @@ test("member Settings has only personal panes; an installation pane cannot be op
   assert.equal(viewer.kids.length, 0);
 });
 
-test("the member setup checklist counts only the selected box; a viewer gets no operator tasks", () => {
-  const chat = { box: "empty" }, settings = { setup: { installationId: "test", hasPersonalBox: true }, me: { identity: "person", role: "driver" } };
-  const setupCard = pageFunction("setupCard", {
-    settings, chat, canDriveAgents: () => settings.me.role === "driver", canOperateInstallation: () => false,
-    agentsHere: () => chat.box === "shared" ? [{ id: "ada" }] : [], createSetupBox: () => {},
-    localStorage: { getItem: () => null }, t: String, el: fakeEl,
-  }) as () => Fake | null;
-  assert.deepEqual(setupCard()!.kids.slice(1, 3).map(step => step.kids.map(part => part.text)), [
-    ["✓", "ui.next.setup.personalBox"], ["○", "ui.next.setup.agent", "ui.next.setup.go"],
-  ]);
-  chat.box = "shared";
-  assert.equal(setupCard(), null, "the completed steps are no longer in the way");
-  settings.me.role = "viewer";
-  chat.box = "empty";
-  assert.equal(setupCard(), null);
+test("a member's checklist is their own sandbox and their agent; a viewer gets no list", () => {
+  const draw = (role: string, agents: { id: string; name: string; boxId: string }[]) => drawFirstScreen({ state: { agents, box: {} },
+    computers: { boxes: [{ id: "mine", name: "Alice's", connected: true, personal: true, yours: true }, { id: "shared", name: "Shared", connected: true }], own: "default" },
+    setup: { installationId: "test", edition: "organisation", key: true, hasPersonalBox: true }, me: { role, identity: "person" } });
+  const empty = draw("driver", [{ id: "ada", name: "Ada", boxId: "shared" }]);
+  assert.deepEqual(empty.headings, ["ui.first.yours · ui.first.state.ready", "Shared · ui.first.state.ready"], "theirs first, then the others they may use");
+  assert.deepEqual(empty.steps, ["✓ | ui.first.step.sandbox · ui.first.state.ready", "○ | ui.first.step.agent | ui.first.addAgent"], "no agent in their own sandbox yet: add one there");
+  const one = draw("driver", [{ id: "bob", name: "Bob", boxId: "mine" }]);
+  assert.deepEqual(one.steps.slice(1), ["○ | ui.first.step.agent | ui.first.talkTo"]);
+  assert.deepEqual(one.walk(), [{ chat: "bob" }]);
+  assert.equal(draw("viewer", []).card, null);
 });
 
-test("a driver with no visible box can start personal-box creation from setup, or sees the one made at first sign-in", () => {
-  let created = false;
-  const views: string[] = [];
-  const setup: { installationId: string; hasPersonalBox: boolean; autoBox?: { state: string; reason?: string } } = { installationId: "test", hasPersonalBox: false };
-  const setupCard = pageFunction("setupCard", {
-    settings: { setup, me: { identity: "person" } },
-    chat: { box: "" }, canDriveAgents: () => true, canOperateInstallation: () => false, navigateView: (view: string) => views.push(view),
-    localStorage: { getItem: () => null }, t: (key: string, vars?: { why?: string }) => vars?.why ? `${key}: ${vars.why}` : key, el: fakeEl,
-    agentsHere: () => [], createSetupBox: () => { created = true; },
-  }) as () => Fake | null;
-  const card = setupCard();
-  assert.ok(card);
-  assert.deepEqual(card.kids.slice(1, -1).map(step => step.kids[1]!.text), ["ui.next.setup.personalBox"]);
-  card.kids[1]!.kids[2]!.press!();
-  assert.ok(created);
-  // INV-2203: being prepared and out of quota offer nothing to press; a failure says why and leads to where it is retried.
-  for (const state of ["preparing", "quota"]) {
-    setup.autoBox = { state };
-    assert.deepEqual(setupCard()!.kids[1]!.kids.map(part => part.text), ["○", `ui.next.setup.personalBox.${state}`]);
-  }
-  setup.autoBox = { state: "failed", reason: "ImagePullBackOff" };
-  const failed = setupCard()!.kids[1]!;
-  assert.equal(failed.kids[1]!.text, "ui.next.setup.personalBox.failed: ImagePullBackOff");
-  failed.kids[2]!.press!();
-  assert.deepEqual(views, ["boxes"]);
+test("a driver with no sandbox can create one from the list, or sees the one made at first sign-in being prepared, out of quota, or failed", () => {
+  const draw = (autoBox?: { state: string; reason?: string; id?: string }) => drawFirstScreen({ state: { agents: [], box: {} }, computers: { boxes: [], own: "default" },
+    setup: { installationId: "test", edition: "organisation", key: true, hasPersonalBox: false, ...(autoBox ? { autoBox } : {}) }, me: { role: "driver", identity: "person" },
+    t: (key, vars) => vars?.name ? `${key}: ${vars.name}` : key });
+  const none = draw();
+  assert.deepEqual(none.steps, ["○ | ui.first.step.sandbox | ui.first.sandbox.create"]);
+  assert.deepEqual(none.walk(), [{ create: true }]);
+  // INV-2203: being prepared and out of quota offer nothing to press; a failure says why and starts it again.
+  assert.deepEqual(draw({ state: "preparing" }).steps, ["○ | ui.first.step.sandbox · ui.first.state.preparing"]);
+  assert.deepEqual(draw({ state: "preparing" }).headings, ["ui.first.yours · ui.first.state.preparing"]);
+  assert.deepEqual(draw({ state: "quota" }).steps, ["○ | ui.first.sandbox.quota"]);
+  const failed = draw({ state: "failed", reason: "ImagePullBackOff", id: "p1" });
+  assert.deepEqual(failed.steps, ["○ | ui.first.step.sandbox · ui.first.state.failed · ui.first.why.download | ui.first.tryAgain"]);
+  assert.deepEqual(failed.walk(), [{ retry: "p1" }]);
 });
 
 test("creating a personal box from chat clears the previous transcript before refresh renders", async () => {
@@ -1024,9 +1004,11 @@ test("a supervision run's ceilings are read strictly, and the desktop app's pane
   assert.deepEqual([panes(undefined), panes({ machine: {} }), panes({ machine: {}, organisations: {} })], [[], ["machine"], ["machine", "organisations"]]);
 });
 
-test("a computer that is not there says why in words a person can act on: no Docker, Docker stopped, or simply offline", () => {
-  const why = (docker: unknown, own = "b1") => pageFunction("boxWhy", { boxes: { own, state: docker === undefined ? null : { docker } } })({ id: "b1" });
-  assert.deepEqual([why({ state: "no-binary" }), why({ state: "no-engine" }), why(undefined), why({ state: "no-binary" }, "other")], ["missing", "stopped", "offline", "offline"]);
+test("a sandbox that is not there says why in words a person can act on: no Docker, Docker stopped, or simply not started", () => {
+  const facts = { edition: "personal", admin: true, own: "b1", starting: false, failed: "" };
+  const of = (docker: string, own = "b1") => firstScreen.sandboxesOf([{ id: "b1", name: "Default" }], { ...facts, own, docker })[0]!;
+  assert.deepEqual([of("no-binary"), of("no-engine"), of(""), of("no-binary", "other")].map(box => [box.state, box.reason, box.act]),
+    [["failed", "noDocker", "docker"], ["failed", "noEngine", "start"], ["stopped", undefined, "start"], ["stopped", undefined, undefined]]);
 });
 
 test("an agent's topics stay its own: a refresh keeps the older ones, a stale read gives way, search sees them in time order (INV-1896)", async () => {

@@ -53,7 +53,12 @@ function channelsBlock() {
     setup.href = "/bootstrap"; box.appendChild(setup);
   }
   if (doors.note) box.appendChild(el("p", "why", doors.note));
-  box.appendChild(publicUrlBlock(data));
+  // On an organisation the public address lives in Settings → Organisation (INV-2311): one home, and this says where.
+  if (isOrganisation()) {
+    var moved = el("div", "fact"), there = el("button", "act", t("ui.org.open"));
+    there.addEventListener("click", function () { openSettingsPane("organisation"); });
+    moved.appendChild(el("span", "why", t("ui.org.movedHere"))); moved.appendChild(there); box.appendChild(moved);
+  } else box.appendChild(publicUrlBlock(data));
   var change = function (record, extra) {
     postJson("/api/channels/records", Object.assign({ id: record.id, type: record.type }, extra)).then(function (got) { doors.note = doorSaved(got); loadDoors(); }, failed);
   };

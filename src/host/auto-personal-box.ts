@@ -49,7 +49,7 @@ export function personalBoxAt(config: { personalBoxAt?: string; autoPersonalBox?
 type Outcome = "created" | "had" | "quota";
 export type AutoPersonalBoxView =
   | { state: "preparing" }
-  | { state: "failed"; reason: string }
+  | { state: "failed"; reason: string; /** The box to start again: its owner's "Try again" (INV-2311). */ id: string }
   | { state: "quota" };
 
 interface Options {
@@ -236,7 +236,7 @@ export class AutoPersonalBoxes {
     if (box.status === "provisioning") return { state: "preparing" };
     // Failed, interrupted by a restart, or a cleanup left half done: each waits for a person's retry, with what is known of why.
     if (box.status === "failed" || box.status === "interrupted" || (box.status === "deleting" && box.error))
-      return { state: "failed", reason: box.stateReason ?? box.error ?? box.status };
+      return { state: "failed", reason: box.stateReason ?? box.error ?? box.status, id: box.id };
   }
 
   /** The people whose box waits for an Admin to raise their quota. */

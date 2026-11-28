@@ -15,13 +15,13 @@ var markdown = window.markdownit ? window.markdownit({ html: false, linkify: tru
 function agentsHere() {
   return Object.keys(next.agents).map(function (id) { return next.agents[id]; }).filter(function (agent) { return !chat.box || agent.boxId === chat.box; });
 }
-/** The computers to choose between: the ones the server lists, else the ones the agents name. */
+/** The sandboxes to choose between: the ones the server lists, else the ones the agents name. */
 function boxesKnown() {
-  if (boxes.list.length) return boxes.list.map(function (box) { return { id: box.id, name: box.name, off: box.connected === false, personal: !!box.personal }; });
+  if (boxes.list.length) return boxes.list.map(function (box) { return { id: box.id, name: box.name, kind: box.kind, connected: box.connected !== false, personal: !!box.personal, yours: !!box.yours }; });
   var seen = {}, list = [];
   Object.keys(next.agents).forEach(function (id) {
     var agent = next.agents[id];
-    if (agent.boxId && !seen[agent.boxId]) { seen[agent.boxId] = true; list.push({ id: agent.boxId, name: agent.boxName || agent.boxId }); }
+    if (agent.boxId && !seen[agent.boxId]) { seen[agent.boxId] = true; list.push({ id: agent.boxId, name: agent.boxName || agent.boxId, connected: true }); }
   });
   return list;
 }
@@ -34,41 +34,47 @@ function agentOwes(agent) {
   });
 }
 
+/** One agent's row in the sidebar. */
+function agentRow(agent) {
+  var row = el("button", "agent"), body = el("span", "body");
+  row.setAttribute("aria-current", String(next.view === "chat" && agent.id === chat.agentId));
+  var title = el("div", "title-row"); title.appendChild(el("span", "title", agent.name));
+  // The one that answers this person's direct messages in a chat channel (INV-2221).
+  if (settings.me && settings.me.homeAgentId === agent.id) { var mark = el("span", "home-mark", t("ui.next.agent.home")); mark.title = t("ui.next.member.isHome"); title.appendChild(mark); }
+  body.appendChild(title);
+  body.appendChild(lineNode("role", memberLine(agent))); // what it asks of the person, else what it says it is doing (next-line-ui.ts)
+  row.appendChild(el("span", "who", initial(agent.name)));
+  row.appendChild(body);
+  if (member.paused[agent.id]) row.appendChild(el("span", "chip", t("ui.next.agent.paused")));
+  else if (agentOwes(agent)) row.appendChild(el("span", "chip-need", t("ui.next.agent.needs")));
+  else if (agent.running) row.appendChild(el("span", "dot"));
+  else if (agent.facts && agent.facts.unreadCount) row.appendChild(el("span", "count", agent.facts.unreadCount));
+  row.addEventListener("click", function () { openChat(agent.id); });
+  return row;
+}
+
+/**
+ * The sidebar (docs/112 §4): a heading per sandbox this person may use — "Your sandbox · Ready" for theirs — with the agents
+ * in it under it, and why one is not ready with the button that works (first-screen-ui.ts). The one pressed is where a new
+ * agent goes and what the team chips narrow.
+ */
 function renderSide() {
-  var boxes = boxesKnown(), holder = $("boxes"), list = $("agents");
-  if (!chat.box || !boxes.some(function (box) { return box.id === chat.box; })) chat.box = boxes[0] ? boxes[0].id : "";
-  holder.replaceChildren();
-  // A switch between computers, and the one a member has as their heading: an organisation's person sees their own box even when it is their only one (INV-2310).
-  holder.hidden = boxes.length < 2 && !(boxes[0] && boxes[0].personal);
-  boxes.forEach(function (box) {
-    var button = el("button", box.off ? "off" : "", box.name);
-    button.setAttribute("aria-pressed", String(box.id === chat.box));
-    button.addEventListener("click", function () { chat.box = box.id; chat.agentId = ""; render(); });
-    holder.appendChild(button);
-  });
+  var known = boxesKnown(), sandboxes = mySandboxes(known), list = $("agents");
+  var chosen = function (id) { return sandboxes.some(function (box) { return box.id === id; }) || known.some(function (box) { return box.id === id; }); };
+  if (!chat.box || !chosen(chat.box)) chat.box = sandboxes[0] ? sandboxes[0].id : known[0] ? known[0].id : "";
   var everyone = agentsHere(), here = inTeam(everyone, teams.chosen);
   renderTeams(everyone);
   // The agent being talked to stays the one talked to when the list is narrowed to another team.
   // Before the agents are read there is nobody to compare with: a link that names an agent keeps naming it until then.
   if (Object.keys(next.agents).length && !everyone.some(function (agent) { return agent.id === chat.agentId; })) chat.agentId = here[0] ? here[0].id : "";
   list.replaceChildren();
-  here.forEach(function (agent) {
-    var row = el("button", "agent"), body = el("span", "body");
-    row.setAttribute("aria-current", String(next.view === "chat" && agent.id === chat.agentId));
-    var title = el("div", "title-row"); title.appendChild(el("span", "title", agent.name));
-    // The one that answers this person's direct messages in a chat channel (INV-2221).
-    if (settings.me && settings.me.homeAgentId === agent.id) { var mark = el("span", "home-mark", t("ui.next.agent.home")); mark.title = t("ui.next.member.isHome"); title.appendChild(mark); }
-    body.appendChild(title);
-    body.appendChild(lineNode("role", memberLine(agent))); // what it asks of the person, else what it says it is doing (next-line-ui.ts)
-    row.appendChild(el("span", "who", initial(agent.name)));
-    row.appendChild(body);
-    if (member.paused[agent.id]) row.appendChild(el("span", "chip", t("ui.next.agent.paused")));
-    else if (agentOwes(agent)) row.appendChild(el("span", "chip-need", t("ui.next.agent.needs")));
-    else if (agent.running) row.appendChild(el("span", "dot"));
-    else if (agent.facts && agent.facts.unreadCount) row.appendChild(el("span", "count", agent.facts.unreadCount));
-    row.addEventListener("click", function () { openChat(agent.id); });
-    list.appendChild(row);
+  var all = Object.keys(next.agents).map(function (id) { return next.agents[id]; });
+  sandboxes.forEach(function (box) {
+    list.appendChild(sandboxHeading(box));
+    var why = sandboxWhy(box); if (why) list.appendChild(why);
+    (box.id === chat.box ? here : all.filter(function (agent) { return box.id && agent.boxId === box.id; })).forEach(function (agent) { list.appendChild(agentRow(agent)); });
   });
+  if (!sandboxes.length) here.forEach(function (agent) { list.appendChild(agentRow(agent)); });
   boxNotice();
   var needs = $("needs");
   needs.hidden = next.mine.length === 0;
@@ -80,6 +86,7 @@ function openChat(agentId) {
   // Another agent's half-written words and its thread are not this one's.
   if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.plan = null; chat.liveSurfaces = {}; }
   chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
+  if (agentId) firstScreenSee("opened"); // getting started's "Your agent" is done (first-screen-ui.ts)
   if (next.agents[agentId] && next.agents[agentId].boxId) chat.box = next.agents[agentId].boxId; // an agent on another computer brings its computer with it
   render();
 }
