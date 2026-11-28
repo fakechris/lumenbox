@@ -125,6 +125,23 @@ export function judgeRefusal({ code, output, format, before, after }) {
   return { problems, message: said?.slice("error: ".length) };
 }
 
+/**
+ * Whether the server answering is the candidate. An upgrade starts the candidate on the port the
+ * previous app used; if the previous server outlived its app, every later check would read the old
+ * app and pass. `build` is `/api/state`'s `{ version, commit }`; `stamped` the candidate's packaged
+ * package.json (`version`, and `buildCommit` when the build stamped one — either may be the short form).
+ */
+export function servingProblems(build, stamped) {
+  const problems = [];
+  if (build?.version !== stamped.version) problems.push(`the server says version ${build?.version ?? "nothing"}, the candidate is ${stamped.version}`);
+  if (stamped.buildCommit !== undefined) {
+    const commit = String(build?.commit ?? "");
+    const same = commit.length >= 7 && (commit.startsWith(stamped.buildCommit) || stamped.buildCommit.startsWith(commit));
+    if (!same) problems.push(`the server says build ${commit || "nothing"}, the candidate is ${stamped.buildCommit}`);
+  }
+  return problems;
+}
+
 // ── machine parts ─────────────────────────────────────────────────────────────────────
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -143,6 +160,11 @@ export function homeSnapshot(home) {
   let backups = [];
   try { backups = readdirSync(`${home}-backups`); } catch {}
   return { format, ledger, backups };
+}
+
+/** What an installed app's build stamped into its package.json. */
+function appStamp(appRoot) {
+  return JSON.parse(readFileSync(join(appRoot, "LumenBox.app", "Contents", "Resources", "app", "package.json"), "utf8"));
 }
 
 /** The format an installed app reads, from the source it ships. */
@@ -342,6 +364,13 @@ export async function phaseUpgrade(kit) {
       await candidate.connect();
       await candidate.shot("01-opened");
       return `server answers, window open; first-run question: ${asked}`;
+    }))) return;
+    if (!(await run.step("upgrade: the server answering is the candidate's build", async () => {
+      const stamped = appStamp(run.dir);
+      const { build } = await candidate.api("/api/state");
+      const problems = servingProblems(build, stamped);
+      if (problems.length > 0) throw new Error(`${problems.join("; ")}: the previous app's server may still hold port ${options.port}, and nothing after this would test the candidate`);
+      return `version ${build.version}, build ${build.commit}`;
     }))) return;
     await run.step("upgrade: FORMAT and format-migrations.jsonl say what the migrations did", async () => {
       const after = homeSnapshot(shared.home);
