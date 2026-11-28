@@ -14,7 +14,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { AgentRegistry } from "../agents/registry.ts";
+import type { AgentRecord, AgentRegistry } from "../agents/registry.ts";
 import { goalCommand, parseGoalCommand } from "../host/goal-mode.ts";
 import type { Orchestrator } from "../host/orchestrator.ts";
 import type { McpServerTool } from "./mcp-server.ts";
@@ -29,7 +29,16 @@ export interface McpGoalDeps {
   aliasesOf?: (principalId: string) => readonly string[];
   /** Whether a goal's requester is this person, one of their sign-ins included (INV-2074); absent, the same id. */
   owns?: (requester: string | undefined, principalId: string) => boolean;
+  /** Who a call naming no agent reaches (INV-2310, `ChatRoute.coordinatorFor`); absent, the first agent, made if there is none. */
+  coordinator?: (principalId: string) => AgentRecord | undefined;
   log: (line: string) => void;
+}
+
+/** The agent a call that names none reaches, or the refusal that nobody is available to this person here (INV-2310, docs/109 §4). */
+export function coordinatorOf(deps: Pick<McpGoalDeps, "registry" | "orchestrator" | "coordinator">, principalId: string): AgentRecord {
+  const agent = deps.coordinator !== undefined ? deps.coordinator(principalId) : deps.registry.list()[0] ?? deps.orchestrator.ensureDefaultAgent();
+  if (agent === undefined) throw new Error("No agent is available to you here yet: your own agent is made with your box. Nothing was created.");
+  return agent;
 }
 
 /**
@@ -89,7 +98,7 @@ export function mcpGoalTools(deps: McpGoalDeps): McpServerTool[] {
         const budget = typeof input.budget === "number" && Number.isFinite(input.budget) && input.budget > 0 ? Math.round(input.budget) : undefined;
         const text = `/goal ${objective}${budget !== undefined ? ` --budget ${budget}` : ""}`;
         if (parseGoalCommand(text).kind !== "create") throw new Error("That objective reads as a /goal subcommand, not a goal. Say what done looks like.");
-        const agent = agentNamed(registry, input.agent, () => registry.list()[0] ?? orchestrator.ensureDefaultAgent());
+        const agent = agentNamed(registry, input.agent, () => coordinatorOf(deps, principalId));
         const asked = askedAs(board, [principalId, ...(deps.aliasesOf?.(principalId) ?? [])], key);
         const conversation = goalConversation(asked, key);
         const operationId = goalOperation(asked, key);

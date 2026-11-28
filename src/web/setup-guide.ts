@@ -19,7 +19,7 @@ function refreshSetup() {
   var selected = currentBox;
   return fetch("/api/setup").then(function (r) { return r.json(); }).then(function (s) {
     if (selected !== currentBox) return;
-    if (!selected && (myRole !== "driver" || s.hasPersonalBox !== false)) { card.style.display = "none"; return; }
+    if (!selected && s.hasPersonalBox !== false) { card.style.display = "none"; return; }
     // Each step also names the command that does the same thing (INV-542): an
     // installation run on a server has no window to click in, and the person setting it
     // up over ssh was reading a page that assumed a mouse.
@@ -45,9 +45,10 @@ function refreshSetup() {
       { done: s.search || searchSkipped, skip: "search", head: t("ui.setup.search"), sub: t("ui.setup.searchWhy"), act: t("ui.setup.searchAct"), cli: "{{ui.app.settings-model}}", go: function () { openSettings("model"); } },
       { done: s.door || doorSkipped, skip: "door", head: t("ui.setup.door"), sub: t("ui.setup.doorWhy"), act: t("ui.setup.doorAct"), cli: "{{ui.app.settings-channels-no-cli-yet}}", go: function () { openSettings("doors"); } },
       { done: here.review, head: t("ui.setup.work"), sub: t("ui.setup.workWhy"), act: t("ui.setup.workAct"), cli: "{{ui.app.agentbox-chat}} <name> \"…\"", go: function () { var tab = $("tabtasks"); if (tab) tab.click(); } }
-    ] : selected ? [{ done: agents.some(function (agent) { return agent.boxId === selected && !agent.hidden; }), head: t("ui.next.setup.agent"), sub: "", act: t("ui.setup.agentAct"), go: function () { openShelf(selected); } }] : [];
-    // A box made at first sign-in (INV-2203): being prepared, why it failed, or out of quota.
-    if (myRole === "driver" && s.hasPersonalBox !== undefined) steps.unshift({
+    ].filter(function (x, i) { return i !== 1 || s.hasPersonalBox === undefined; })
+      : selected ? [{ done: agents.some(function (agent) { return agent.boxId === selected && !agent.hidden; }), head: t("ui.next.setup.agent"), sub: "", act: t("ui.setup.agentAct"), go: function () { openShelf(selected); } }] : [];
+    // A box made at first sign-in (INV-2203): being prepared, why it failed, or out of quota. On an organisation an Admin's too, instead of the installation's box (INV-2310).
+    if (s.hasPersonalBox !== undefined) steps.unshift({
       done: s.hasPersonalBox, head: t("ui.next.setup.personalBox"), act: t("ui.next.setup.go"),
       sub: s.autoBox ? t("ui.next.setup.personalBox." + s.autoBox.state, { why: s.autoBox.reason || "" }) : "",
       go: function () { openShelf(selected); if (!s.autoBox) $("personalcreate").focus(); },

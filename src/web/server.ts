@@ -79,7 +79,7 @@ import { RELAY_PATH } from "../host/model-relay.ts";
 import { IdempotencyStore } from "./idempotency.ts";
 import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
-import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts";
+import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts"; import { installationBoxRuns, runnableAgents, startsWithStarterTeam, strandedAgentsRoute } from "./installation-box-here.ts";
 import { describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
 import { modelConfigured } from "../host/model-readiness.ts";
 import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
@@ -483,6 +483,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       } satisfies BoxProvisioner;
     }
   })();
+  // The installation's own box, when it cannot run here: shown nowhere, and none of its agents answers (INV-2310, installation-box-here.ts).
+  const hiddenBox = () => installationBoxRuns(kubernetes, provisioner.kind) ? undefined : registry.box.id;
   const withBoxBackend = (box: ReturnType<Orchestrator["boxStatus"]>[number]) =>
     kubernetes && box.id === registry.box.id ? { ...box, kind: provisioner.kind } : box;
 
@@ -610,7 +612,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     pendingQuestions: (agentId, conversation) => questions.list().filter(item => item.agentId === agentId && item.conversation === conversation && item.expiresAt > Date.now()).length,
     registry,
     provider,
-    useBox: options.useBox,
+    useBox: options.useBox, starterTeam: startsWithStarterTeam(backend),
     boxProvisioner: provisioner,
     hostRunner,
     hostProcess,
@@ -829,6 +831,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     detach: id => { orchestrator.detachBox(id); openDesktops.recheck(); }, residents: id => registry.agentsIn(id).length,
     driver: options.personalBoxDriver ?? provisionedBoxDriver(options.desktop === true, { log }),
   }); void personalBoxes.recover(line => log(line)); // a server's pods come back after it restarts (INV-1692)
+  const unavailableHere = () => { const boxes = personalBoxes.unavailable(), own = hiddenBox(); if (own !== undefined) boxes.add(own); return boxes; };
   /** The language a person is written to before they have opened anything: their door's. */
   const localeOfPerson = (id: string) => resolveLocale({ channelType: channelRecords.find(record => record.id === (principals.byId(id)?.identities[0] ?? "").split(":")[0])?.type });
   // A box made for a member came up: reconnected, their agent made, and told if an activation asked for it (INV-2220, member-onboarding.ts).
@@ -1082,7 +1085,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const guestDesk = new GuestDesk({ settings: join(agentboxHome(), "guests.jsonl"), turns: join(agentboxHome(), "guest-turns.jsonl"), reviews: join(agentboxHome(), "guest-reviews.jsonl") }); // who answers guests, what is public to them, their turns and the reviews of their answers (INV-1708, INV-1713, docs/97)
   // Who a chat message reaches, by who wrote it (INV-2221, docs/109 §4): the one place that decides it.
   const chatBoxOf = chatBoxFor({ registry, boxClient: id => orchestrator.boxClient(id) });
-  const chatRoute = new ChatRoute({ registry, principals, log, door: adapterName => channelRecords.find(record => record.id === adapterName),
+  const chatRoute = new ChatRoute({ registry: runnableAgents(registry, hiddenBox), principals, log, door: adapterName => channelRecords.find(record => record.id === adapterName),
     preparing: id => autoBoxes.view(id)?.state === "preparing", firstAgent: () => orchestrator.ensureDefaultAgent() });
   // An agent reaches its own person, and one path sends to a person through a door they hold (INV-2221, reach-person.ts).
   const reach = new PersonReach({ registry, principals, budget: pushBudget, log, push: (chatKey, text, purpose) => chats?.tryPushToChat(chatKey, text, purpose),
@@ -2953,7 +2956,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
 
   // The outside door (docs/90 §2): a computer and a team, never our memory, files or settings; every call goes through a person's objects (INV-1358).
   function progressAccessForPrincipal(principalId: string): ProgressSourceAccess {
-    const unavailable = personalBoxes.unavailable();
+    const unavailable = unavailableHere();
     const box = (id: string) => {
       const entry = registry.boxById(id);
       return !!entry && !unavailable.has(id) && (entry.members === "everyone" || ((person => person !== undefined && mayEnterBox(entry, person.id))(principals.personOf(principalId))));
@@ -2971,7 +2974,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const stopExecutionFeed = orchestrator.turns?.onExecution((record, revision) => { const id = record.taskBinding?.taskId; const task = id ? orchestrator.tasks?.get(id) : undefined; if (task) { changeFeed.recordExecution(task, revision); broadcast({ type: "task_execution", taskId: task.id, revision }); } });
   const sideDoorTools = () => mcpServerTools({
     progressAccess: progressAccessForPrincipal,
-    registry, orchestrator, principals, workDir: workRootOf(registry.defaultBox()), log, redact: text => outboundRedactor(vault.heldValues())(text), mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
+    registry, orchestrator, principals, workDir: workRootOf(registry.defaultBox()), log, coordinator: principalId => chatRoute.coordinatorFor(principalId), redact: text => outboundRedactor(vault.heldValues())(text), mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
     stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
     notifyTask: (task, text) => { const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation); if (chatKey !== undefined) void channels.pushToChat(chatKey, text, { kind: "notice", about: `supervisor flag on ${task.id}` }).catch((error: unknown) => log(`supervisor flag ${task.id}: notice not sent (${error instanceof Error ? error.message : String(error)})`));
       else if (task.assigneeId !== undefined) void reach.tellOwner(task.assigneeId, text, { about: `supervisor flag on ${task.id}`, exempt: true }); }, // INV-1509; with no chat, the agent's own person (INV-2221)
@@ -3309,7 +3312,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       let unavailableBoxes: Set<string> | undefined;
       const agentBoxes = new Map<string, string>();
       const mayReadBox = (boxId: string): boolean => {
-        unavailableBoxes ??= personalBoxes.unavailable();
+        unavailableBoxes ??= unavailableHere();
         const box = registry.boxById(boxId);
         return box !== undefined && !unavailableBoxes.has(boxId) && (caller.userId === undefined || ((box.members === "everyone" || principals.isKnown(caller.userId)) && mayEnterBox(box, principals.resolve(caller.userId).id)));
       };
@@ -3328,7 +3331,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (caller.userId === undefined) return true;
         const revision = `${fileRevision(principalsPath())}/${fileRevision(configPath())}/${personalBoxes.revision()}`;
         if (revision !== eventRevision) {
-          principals.reload(); unavailableBoxes = personalBoxes.unavailable(); eventRevision = revision;
+          principals.reload(); unavailableBoxes = unavailableHere(); eventRevision = revision;
         }
         if (!principals.isKnown(caller.userId)) return false;
         return mayReadScopedEvent(event, { agent: mayReadAgent, box: mayReadBox, defaultBox: registry.box.id,
@@ -5092,8 +5095,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             const agentTurn = here.some(agent => registry.readTranscript(agent.id).length > 0), review = here.some(agent => reviewed.has(agent.id));
             return [box.id, { box: box.connected, agent: here.length > 0, agentTurn, review, established: agentTurn && review }];
           }));
-          const key = await modelConfigured(orchestrator.provider);
-          send(res, 200, { installationId, ...byBox[installationId], byBox, key, door: channelRecords.some(channelCredentialsSet), search: configuredProviders().length > 0,
+          const key = await modelConfigured(orchestrator.provider), me = caller.userId !== undefined && principals.isKnown(caller.userId) ? principals.resolve(caller.userId).id : undefined;
+          // On an organisation the first Admin is a member like the others: their own box, made at first use, is their first step (INV-2310).
+          const own = me !== undefined && principals.installation().mode === "organisation" ? personalBoxesOf(registry.listBoxes(), me).length > 0 : undefined;
+          send(res, 200, { installationId, ...byBox[installationId], byBox, key, hasPersonalBox: own,
+            ...(me && own === false ? { autoBox: autoBoxes.view(me) } : {}), door: channelRecords.some(channelCredentialsSet), search: configuredProviders().length > 0,
             bootstrapPending: caller.userId === undefined && bootstrapPending() });
           return;
         }
@@ -5513,6 +5519,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const workStop = await workControlRoute(route,url,workControl,{host:orchestrator,pauses:agentPauses,mayReadAgent,mayReadTask:id=>{const task=orchestrator.tasks?.get(id);return !!task && mayReadTask(task);},readJson:()=>readJson(req) as Promise<Record<string,unknown>>,refusedAdmin:()=>refusedRole("admin"),by:()=>caller.userId ?? "the operator"}); if(workStop!==undefined){if(workStop.status!==0)send(res,workStop.status,workStop.body);return;}
         const longWork = await longWorkRoute(route, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); if (longWork !== undefined) { if (longWork.status !== 0) send(res, longWork.status, longWork.body); return; } const taskArchive = await taskArchiveRoute(route, { tasks: orchestrator.tasks, audience: (() => { const agents = new Set(registry.list().map(agent => agent.id)), people = new Set(principals.list().flatMap(person => [person.id, ...person.identities])); return (task: Task) => taskAudience(task, agents, people); })(), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin") }); if (taskArchive !== undefined) { if (taskArchive.status !== 0) send(res, taskArchive.status, taskArchive.body); return; }
         const person = await personRoute(route, orchestrator.people, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, caller: () => (caller.userId === undefined ? undefined : { id: caller.userId, name: principals.resolve(caller.userId).name ?? caller.userId }) }); if (person !== undefined) { send(res, person.status, person.body); return; } /* INV-1653 */ const factsRoute = await agentFactsRoute(route, orchestrator.agentFacts.state, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refused: () => refused(), hasAgent: id => registry.has(id) }); if (factsRoute !== undefined) { if (factsRoute.status !== 0) send(res, factsRoute.status, factsRoute.body); return; } /* INV-1625 */ const pauseRoute = await agentPauseRoute(route, agentPauses, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), caller: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (pauseRoute !== undefined) { if (pauseRoute.status !== 0) send(res, pauseRoute.status, pauseRoute.body); return; } const byName = () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"); const issues = await exceptionRoute(route, { ledger: orchestrator.exceptions, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayRead: id => id === undefined || mayReadAgent(id), refused: id => (id === undefined ? refusedRole("admin") : refused(id)), by: byName, titleOf: id => orchestrator.tasks?.get(id)?.title, retry: exceptionRetryDeps({ ledger: orchestrator.exceptions, prompt: (id, text, conversation) => orchestrator.prompt(id, text, undefined, { conversation, lane: "user", origin: "host:retry", steerable: false }), boxFor: id => orchestrator.boxFor(id), ownerOf: id => registry.boxOwnerTokenFor(id), watch: job => orchestrator.jobWatch.watch(job), by: byName, redeliver: async chatKey => { const door = channels.adapterFor(chatKey); if (door?.sendToChat === undefined) throw new Error(`no door can send to ${chatKey}`); return outboxSender.retry(chatKey, { sendToChat: (key, text) => door.sendToChat!(key, text) }); }, runRoutine: slug => orchestrator.scheduler.runNow(slug), reconnectBox: () => keeper.tick().then(state => { box = state; return state; }), notReady: id => { const task = orchestrator.tasks?.get(id); return task === undefined || orchestrator.tasks === undefined ? undefined : notReady(task, orchestrator.tasks); } }) }); if (issues !== undefined) { if (issues.status !== 0) send(res, issues.status, issues.body); return; } /* the Issues view (INV-1741) */ const spendRoute = await spendLimitRoute(route, spendLimits, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (spendRoute !== undefined) { if (spendRoute.status !== 0) send(res, spendRoute.status, spendRoute.body); return; } const permRoute = await toolPermissionRoute(route, url, { refused: id => refused(id), agent: id => { const record = registry.tryGet(id); return record === undefined ? undefined : { id, name: record.profile.name, ...(record.profile.toolPermissions !== undefined ? { toolPermissions: record.profile.toolPermissions } : {}) }; }, allTools: ALL_TOOLS, floorContext: () => orchestrator.policy.floorContext() }); if (permRoute !== undefined) { if (permRoute.status !== 0) send(res, permRoute.status, permRoute.body); return; } const versionRoute = await configVersionRoute(route, url, { registry, refused: id => refused(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log }); if (versionRoute !== undefined) { if (versionRoute.status !== 0) send(res, versionRoute.status, versionRoute.body); return; } const guestsRoute = await guestRoute(route, guestDesk, { query: () => url.searchParams, send: (chatKey, text) => channels.tryPushToChat(chatKey, text, { kind: "notice", about: "a guest answer an Admin approved" }), readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id), installationMode: () => principals.installation().mode, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (guestsRoute !== undefined) { if (guestsRoute.status !== 0) send(res, guestsRoute.status, guestsRoute.body); return; } /* INV-1708 */ const installed = installationRoute(route, { principals }); if (installed !== undefined) { send(res, installed.status, installed.body); return; } const merging = await mergeRoute(route, { paths: mergePaths, desktop: options.desktop === true, doorType: door => channelRecords.find(record => record.id === door)?.type, refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name : "the operator"), log }); if (merging !== undefined) { if (merging.status !== 0) send(res, merging.status, merging.body); return; } // "these are all me" (INV-1698) // INV-1554, INV-1615, INV-1664, INV-1669
+        const stranded = await strandedAgentsRoute(route, { hidden: hiddenBox, registry, busy: () => orchestrator.bus.activeAgentIds(), readJson: () => readJson(req) as Promise<Record<string, unknown>>,
+          refusedAdmin: () => refusedRole("admin"), log }); if (stranded !== undefined) { if (stranded.status !== 0) send(res, stranded.status, stranded.body); return; } // INV-2310
         const diagnostics = await diagnosticsRoute(route, { refusedAdmin: () => refusedRole("admin"), agents: () => registry.list().map(agent => ({ id: agent.id, name: agent.profile.name })), activeTurns: id => orchestrator.bus.activeTurnsOf(id), queued: id => orchestrator.bus.pendingCount(id), watchedJobs: id => orchestrator.jobWatch.countFor(id), eventSubscribers: () => events.size, box: () => orchestrator.boxClient(), home: agentboxHome() }); if (diagnostics !== undefined) { if (diagnostics.status !== 0) send(res, diagnostics.status, diagnostics.body); return; } // INV-1559
         const rest = await providerRestRoute(route, { refusedAdmin: () => refusedRole("admin"), readJson: () => readJson(req) as Promise<Record<string, unknown>>, rests: providerRests, quotaLine: locale => quotaStatusLine(Date.now(), locale), locale: localeOf(req, url) }); if (rest !== undefined) { if (rest.status !== 0) send(res, rest.status, rest.body); return; } // INV-1577
         const fallbacks = await fallbackRoute(route, {

@@ -33,7 +33,7 @@ import {
 } from "./box/docker.ts";
 import { describePreflight, isQuiet, preflight, verifyBox } from "./box/preflight.ts";
 import { DockerBoxProvisioner } from "./box/provisioner.ts";
-import { applyConfigEnv, ensureConfigFile, loadConfig } from "./config.ts";
+import { applyConfigEnv, boxBackendFromEnvironment, ensureConfigFile, loadConfig } from "./config.ts"; import { startsWithStarterTeam } from "./web/installation-box-here.ts";
 import { describeControlPlane, startControlPlane } from "./control/main.ts";
 import { deprecationsInUse } from "./deprecations.ts";
 import { HOME_REFUSED_EXIT, HomeFormatError, openHome, opensHome } from "./home-format.ts";
@@ -42,7 +42,7 @@ import { relayOptionsFromFlags } from "./egress/relay-cli.ts";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "./egress/events.ts";
 import { describeAbsences } from "./host/absences.ts";
 import { backupNow } from "./host/backup.ts";
-import { Orchestrator, STARTER_TEAM } from "./host/orchestrator.ts";
+import { Orchestrator, seedStarterTeam } from "./host/orchestrator.ts";
 import {
   createClient,
   describeProvider,
@@ -953,7 +953,7 @@ async function cmdChat(argv: string[]): Promise<number> {
   try {
     orchestrator = new Orchestrator({
       provider,
-      useBox: !noBox,
+      useBox: !noBox, starterTeam: startsWithStarterTeam(boxBackendFromEnvironment()),
       onTurnEvent: renderer.onTurnEvent,
       onBusEvent: renderer.onBusEvent,
     });
@@ -972,6 +972,7 @@ async function cmdChat(argv: string[]): Promise<number> {
   const agent = agentArg
     ? orchestrator.registry.resolve(agentArg)
     : orchestrator.ensureDefaultAgent();
+  if (agent === undefined) { err("No agent is here: this installation's boxes run on Kubernetes, so it has no starter team. Name one: agentbox chat <name>."); return 1; }
   out(dim(`talking to ${agent.profile.name} (${agent.id})`));
   out("");
 
@@ -1246,12 +1247,10 @@ async function cmdWeb(argv: string[]): Promise<number> {
   // Through STARTER_TEAM rather than a copy of it. There used to be a second definition of Ada
   // inline here, and the two drifted the moment the team grew: `agentbox web` — which is what the
   // box itself runs — kept seeding one agent while the orchestrator's own path seeded four. One
-  // definition, used by both.
-  const registry = new AgentRegistry();
-  if (registry.list().length === 0) {
-    const created = STARTER_TEAM.map(profile => registry.create(profile));
-    out(dim(`created ${created.map(record => record.profile.name).join(", ")} to start with`));
-  }
+  // definition, used by both. Not on an organisation whose sandboxes run on Kubernetes (INV-2310):
+  // its own box never starts there, and each person gets their own box and agent at first use.
+  const created = seedStarterTeam(new AgentRegistry(), startsWithStarterTeam(boxBackendFromEnvironment()));
+  if (created.length > 0) out(dim(`created ${created.map(record => record.profile.name).join(", ")} to start with`));
 
   out(dim(`model: ${describeProvider(provider)}`));
   // Written on first run so the settings are visible in an editor, not just in docs.

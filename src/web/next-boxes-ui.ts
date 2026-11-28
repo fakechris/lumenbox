@@ -18,10 +18,7 @@ function boxById(id) { return boxes.list.filter(function (box) { return box.id =
  */
 function startBox() {
   if (!canOperateInstallation()) return;
-  if (boxes.starting) return;
-  if (boxes.state && boxes.state.backend === "kubernetes") {
-    boxes.failed = t("ui.next.box.sharedKubernetes"); render(); return;
-  }
+  if (boxes.starting || ownCannotStart()) return;
   boxes.starting = true; boxes.log = []; boxes.failed = ""; render();
   postJson("/api/box/up", {}).then(function (got) {
     // Already up: there will be no events to wait for.
@@ -59,6 +56,9 @@ function personalBoxRetry(id, onRetried) {
   return retry;
 }
 
+/** On Kubernetes the installation's own computer is started by nobody here: it is listed only as an attached node, and offered no start (INV-2310). */
+function ownCannotStart() { return !!(boxes.state && boxes.state.backend === "kubernetes"); }
+
 /** Why this installation's own computer is not there, in words a person can act on. */
 function boxWhy(box) {
   var docker = boxes.state && boxes.state.docker;
@@ -89,8 +89,8 @@ function boxNotice() {
     return;
   }
   var why = admin ? boxWhy(box) : "offline";
-  var sharedKubernetes = box.id === boxes.own && boxes.state && boxes.state.backend === "kubernetes";
-  strip.replaceChildren(el("span", "", sharedKubernetes ? (box.kind === "kubernetes" ? t("ui.next.box.sharedKubernetes") : admin ? boxes.state.detail : t("ui.next.box.offline", { name: box.name })) :
+  var sharedKubernetes = box.id === boxes.own && ownCannotStart();
+  strip.replaceChildren(el("span", "", sharedKubernetes ? (admin ? boxes.state.detail : t("ui.next.box.offline", { name: box.name })) :
     why === "missing" ? t("ui.box.dockerMissing") : why === "stopped" ? t("ui.box.dockerStopped") : t("ui.next.box.offline", { name: box.name })));
   if (why === "missing") {
     [["Docker Desktop", "https://www.docker.com/products/docker-desktop/"], ["OrbStack", "https://orbstack.dev/"]].forEach(function (pair) {
@@ -133,9 +133,7 @@ function renderBoxes(view) {
     row.appendChild(el("span", "who", initial(box.name)));
     row.appendChild(body);
     row.appendChild(el("span", box.connected ? "chip-run" : "chip", t(box.connected ? "ui.next.box.on" : "ui.next.box.off")));
-    if (!admin && !box.connected && box.id === boxes.own && box.kind === "kubernetes") {
-      body.appendChild(el("div", "why", t("ui.next.box.sharedKubernetes")));
-    } else if (admin && !box.connected && box.id === boxes.own) {
+    if (admin && !box.connected && box.id === boxes.own && !ownCannotStart()) {
       var start = el("button", "act", t(boxes.starting ? "ui.next.box.starting" : "ui.next.box.start"));
       start.disabled = boxes.starting; start.addEventListener("click", startBox);
       row.appendChild(start);

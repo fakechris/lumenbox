@@ -17,7 +17,7 @@ function agentsHere() {
 }
 /** The computers to choose between: the ones the server lists, else the ones the agents name. */
 function boxesKnown() {
-  if (boxes.list.length) return boxes.list.map(function (box) { return { id: box.id, name: box.name, off: box.connected === false }; });
+  if (boxes.list.length) return boxes.list.map(function (box) { return { id: box.id, name: box.name, off: box.connected === false, personal: !!box.personal }; });
   var seen = {}, list = [];
   Object.keys(next.agents).forEach(function (id) {
     var agent = next.agents[id];
@@ -38,7 +38,8 @@ function renderSide() {
   var boxes = boxesKnown(), holder = $("boxes"), list = $("agents");
   if (!chat.box || !boxes.some(function (box) { return box.id === chat.box; })) chat.box = boxes[0] ? boxes[0].id : "";
   holder.replaceChildren();
-  holder.hidden = boxes.length < 2;
+  // A switch between computers, and the one a member has as their heading: an organisation's person sees their own box even when it is their only one (INV-2310).
+  holder.hidden = boxes.length < 2 && !(boxes[0] && boxes[0].personal);
   boxes.forEach(function (box) {
     var button = el("button", box.off ? "off" : "", box.name);
     button.setAttribute("aria-pressed", String(box.id === chat.box));

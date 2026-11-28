@@ -157,6 +157,7 @@ export interface OrchestratorOptions {
   effort?: Effort;
   /** Connect to a running box. When false, agents run without box tools. */
   useBox?: boolean;
+  starterTeam?: boolean; // whether an empty installation gets the starter team (`startsWithStarterTeam`, src/web/installation-box-here.ts); default true
   /**
    * Where the box comes from. Defaults to the environment's choice — a named URL if one
    * is set, Docker otherwise. Injectable so a deployment can supply its own, and so this
@@ -2634,20 +2635,19 @@ export class Orchestrator {
    * one agent, because it would imply a structure that does not exist.
    *
    * **Only when empty.** A person who deletes one does not get it back on the next start, and an
-   * upgrade does not repopulate a team someone has curated.
+   * upgrade does not repopulate a team someone has curated. **Only where it can work** (INV-2310):
+   * undefined, nothing made, where the installation does not start with one; the caller says so.
    *
    * Deliberately not done: a hidden first turn per agent so each introduces itself. It reads well and
    * it spends four model calls before the user has said anything, which is not a cost to impose by
    * default.
    */
-  ensureDefaultAgent(): AgentRecord {
-    const existing = this.registry.list();
-    if (existing.length > 0) return existing[0]!;
-
-    const created = STARTER_TEAM.map(profile => this.registry.create(profile));
-    return created[0]!;
+  ensureDefaultAgent(): AgentRecord | undefined {
+    return this.registry.list()[0] ?? seedStarterTeam(this.registry, this.options.starterTeam !== false)[0];
   }
 }
+/** The starter team, made in an empty registry where the installation starts with one (INV-2310); what was made. */
+export const seedStarterTeam = (registry: Pick<AgentRegistry, "list" | "create">, starts: boolean): AgentRecord[] => starts && registry.list().length === 0 ? STARTER_TEAM.map(profile => registry.create(profile)) : [];
 
 /**
  * The team a fresh install starts with.
