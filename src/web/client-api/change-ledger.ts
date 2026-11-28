@@ -24,7 +24,8 @@ export const CHANGES_LEDGER = "changes.jsonl";
 export const RETAIN_DAYS = 30;
 export const RETAIN_LINES = 200_000;
 
-export type ChangeType = "work" | "agent";
+/** `inbox`: something now waits on a person, or no longer does (INV-2214); routed by `assigneeId` (its agent) and `requester`. */
+export type ChangeType = "work" | "agent" | "inbox";
 export type ChangeOp = "upsert" | "delete";
 
 /** A line of the ledger. `seq`, `at`, `type`, `id`, `op` are what a client is shown; the rest is for judging who may be. */

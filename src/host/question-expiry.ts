@@ -124,8 +124,9 @@ export class QuestionWatch {
     }
   }
 
+  /** The questions still waiting: one its person has answered is not, though the sweep settles it later (INV-2214). */
   list(): WatchedQuestion[] {
-    return [...this.pending.values()].map(question => ({ ...question }));
+    return [...this.pending.values()].filter(question => !this.answered.has(question.id)).map(question => ({ ...question }));
   }
   cancelWork(workId: string): void {
     for (const [key, question] of this.pending) if (question.work?.id === workId) {

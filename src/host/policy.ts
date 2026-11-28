@@ -156,7 +156,7 @@ export interface PendingApproval {
    */
   harnessResumes?: boolean;
   /** Only "once" may be granted (INV-1309): a tainted turn's outbound call is never a standing grant. */
-  onceOnly?: true; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; // why: the agent's one-line case for the step, as its claim (INV-1651); taskLevel: the task it serves (INV-1650) — the card's background
+  onceOnly?: true; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; tier?: SideEffectTier; // why: the agent's one-line case for the step, as its claim (INV-1651); taskLevel: the task it serves (INV-1650) — the card's background
 }
 
 // ── limits ────────────────────────────────────────────────────────────────────────────
@@ -245,7 +245,7 @@ type PolicyEvent =
   | { at: string; kind: "reply-refused"; purpose: string; chatKey: string; reason: string } // A host push whose purpose's claim did not hold (INV-1459).
   | { at: string; kind: "observed"; slug: string; would: string } // A routine in observe mode was triggered and did not run (INV-1458).
   | { at: string; kind: "resume"; agentId: string; by: string }
-  | { at: string; kind: "approval-requested"; returnTo?: WorkReturn; grantFingerprint?: string; id: string; fingerprint: string; agentId: string; description: string; action?: string; runLater?: RunLaterFinding; harnessResumes?: boolean; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5 } // why/taskLevel: the card's background survives a restart (INV-1651)
+  | { at: string; kind: "approval-requested"; returnTo?: WorkReturn; grantFingerprint?: string; id: string; fingerprint: string; agentId: string; description: string; action?: string; runLater?: RunLaterFinding; harnessResumes?: boolean; why?: string; taskLevel?: 1 | 2 | 3 | 4 | 5; tier?: SideEffectTier } // why/taskLevel: the card's background survives a restart (INV-1651)
   | { at: string; kind: "approval-granted"; id: string; by: string }
   | { at: string; kind: "approval-granted-session"; id: string; by: string }
   | {
@@ -748,7 +748,7 @@ export class PolicyGate {
       agentName: request.agentName, ...(request.returnTo ? {returnTo:request.returnTo,grantFingerprint:actionFingerprint} : {}),
       description,
       ...(later !== undefined ? { action: runLaterAction(later), runLater: later } : effect.action !== undefined ? { action: effect.action } : {}),
-      requestedAt: this.now().toISOString(), ...(request.why !== undefined ? { why: request.why } : {}), ...(request.taskLevel !== undefined ? { taskLevel: request.taskLevel } : {}),
+      requestedAt: this.now().toISOString(), tier, ...(request.why !== undefined ? { why: request.why } : {}), ...(request.taskLevel !== undefined ? { taskLevel: request.taskLevel } : {}),
       ...(this.lastTaint !== undefined ? { onceOnly: true as const } : {}),
     };
     this.awaiting.set(fingerprint, approval);
@@ -766,7 +766,7 @@ export class PolicyGate {
         id: approval.id,
         fingerprint,
         agentId: approval.agentId, ...(approval.returnTo ? {returnTo:approval.returnTo,grantFingerprint:approval.grantFingerprint} : {}),
-        description, ...(approval.runLater !== undefined ? { runLater: approval.runLater } : {}),
+        description, ...(approval.runLater !== undefined ? { runLater: approval.runLater } : {}), ...(approval.tier !== undefined ? { tier: approval.tier } : {}),
         ...(approval.action !== undefined ? { action: approval.action } : {}), ...(approval.why !== undefined ? { why: approval.why } : {}), ...(approval.taskLevel !== undefined ? { taskLevel: approval.taskLevel } : {}),
       },
     };
@@ -1043,7 +1043,7 @@ export class PolicyGate {
             fingerprint: event.fingerprint,
             agentId: event.agentId, ...(event.returnTo ? {returnTo:event.returnTo,grantFingerprint:event.grantFingerprint} : {}),
             agentName: "",
-            description: event.description, ...(event.runLater !== undefined ? { runLater: event.runLater } : {}),
+            description: event.description, ...(event.runLater !== undefined ? { runLater: event.runLater } : {}), ...(event.tier !== undefined ? { tier: event.tier } : {}),
             ...(event.action !== undefined ? { action: event.action } : {}), ...(event.why !== undefined ? { why: event.why } : {}), ...(event.taskLevel !== undefined ? { taskLevel: event.taskLevel } : {}),
             ...(event.harnessResumes === true ? { harnessResumes: true } : {}),
             requestedAt: event.at,

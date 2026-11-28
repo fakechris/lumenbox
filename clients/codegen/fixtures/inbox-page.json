@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "id": "approval:ap-1", "kind": "approval", "title": "Writer wants to send a message outside the box", "detail": "post the issue to the list",
+      "decision": true, "actions": ["allow", "deny", "delegate"], "stepUpRequired": true, "agentId": "a7", "agentName": "Writer",
+      "approval": { "id": "ap-1", "description": "post the issue to the list", "tier": "teleport", "scopes": ["once", "session"], "requestedAt": "2026-11-28T10:00:00Z", "risk": 7 }
+    },
+    {
+      "id": "meeting:m1", "kind": "meeting-invite", "title": "Writer invites you to a review at 15:00", "detail": "Open it on the page to answer",
+      "decision": true, "actions": ["open-on-page"], "stepUpRequired": false, "meeting": { "at": "2026-11-28T15:00:00Z" }
+    },
+    {
+      "id": "outbox:dr-1", "kind": "outbox", "title": "Writer: fax to the printer", "detail": "Page 1 of 3",
+      "decision": true, "actions": ["approve", "edit", "reject"], "stepUpRequired": true,
+      "draft": { "kind": "fax", "target": "the printer", "body": "Page 1 of 3", "why": "The proofs are ready" }
+    }
+  ],
+  "nextCursor": "abc"
+}

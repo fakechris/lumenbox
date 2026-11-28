@@ -243,7 +243,8 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { quietWiring } from "./quiet-wiring.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
 import { SessionEpochs } from "./session-epochs.ts";
-import { OpenDesktops } from "./open-desktops.ts"; import { deviceRoute } from "./device-routes.ts"; // a person's phones (INV-2214)
+import { OpenDesktops } from "./open-desktops.ts"; import { type DecisionWorld, decisionsFor } from "./decisions.ts"; import { type ApprovalAnswerDeps, answerApproval } from "./approval-answer.ts";
+import { type SecretAnswerDeps, type SecretRequest, answerSecret, dismissSecret } from "./secret-requests.ts"; import { personActions } from "./person-actions.ts"; import { deviceRoute } from "./device-routes.ts"; // a person's phones (INV-2214)
 import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
 import { Directories } from "../host/directory.ts"; import { Activations, activationRole } from "../host/activations.ts"; import { admission, activationRoute, joinRequestWords } from "./activation-routes.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
@@ -254,7 +255,7 @@ import { provisionedBoxDriver } from "../box/kubernetes-box.ts";
 import { personalAllocationRefusal, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { mayEnterBox, membersLabel, refusalToEnter } from "../box/membership.ts";
 import { policyFor } from "./policy-scope.ts";
-import { attentionFor, isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
+import { isDecision, urgencyOf } from "../host/attention.ts"; import { docsReaderAt, involuteStateReader, ownerAttention, PACKAGE_DOCS_DIR, watchOrgEvidence } from "../host/org-knowledge-staleness.ts"; import { parseLevel } from "../host/autonomy-level.ts"; import { openTurnsOf, staleApprovals } from "../host/approval-wait.ts";
 import { approvedCallNotice } from "../host/approval-notice.ts";
 import {workRootSummary} from "../host/work-root-store.ts";
 import { stageWorldOf, taskStage } from "../host/task-stage.ts"; import { signOffView } from "../host/review-settle.ts";
@@ -603,7 +604,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const channelTurnListeners = new Set<(event: TurnEvent) => void>();
   const idempotency = new IdempotencyStore();
   /** Secrets agents asked the person for, by id; names and descriptions only. */
-  const pendingSecrets = new Map<string, { agentId: string; agentName: string; id: string; description: string; work?: import("../agents/work-attention.ts").WorkStamp; conversation?: string; at: string }>();
+  const pendingSecrets = new Map<string, SecretRequest>();
   /** Desktops handed to the person, by agent. */
   const pendingHandovers = new Map<string, { agentId: string; agentName: string; instruction: string; reason: string; work?: import("../agents/work-attention.ts").WorkStamp; conversation?: string; at: string; desktopPath?: string }>();
 
@@ -2982,11 +2983,26 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
+  // What waits on a person, and how each is answered: one home for the page and /api/v1 (decisions.ts, approval-answer.ts, secret-requests.ts).
+  const decisionWorld: DecisionWorld = {
+    tasks: () => orchestrator.tasks?.list() ?? [], questions: () => questions.list(), approvals: () => orchestrator.policy.pending(), drafts: () => orchestrator.outboxDrafts.waiting(),
+    paused: () => orchestrator.bus.pausedChains(), exceptions: () => orchestrator.exceptions.list(), undeliverable: () => outbox.problems(), unanswered: () => involuteUnanswered,
+    routinesHeld: async () => (await orchestrator.scheduler.status()).filter(entry => entry.hold !== undefined).map(entry => ({ slug: entry.slug, name: entry.name, ...entry.hold!, ...(entry.boxId !== undefined ? { boxId: entry.boxId } : {}) })),
+    nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id, personIds: () => new Set(principals.list().flatMap(person => [person.id, ...person.identities])),
+    agentIds: () => new Set(registry.list().map(agent => agent.id)), chatKeyOf: conversation => conversations.chatKeyFor(conversation), active: taskActive, checkPending,
+    workOf: id => workRootOf(registry.tryGet(id) !== undefined ? registry.boxOf(id) : undefined), defaultBoxId: () => registry.box.id,
+  };
+  const approvalAnswers: ApprovalAnswerDeps = { policy: orchestrator.policy, parked: id => orchestrator.approvalIsParked(id), broadcast, deliverSystem: (...args) => { orchestrator.bus.deliverSystem(...args); } };
+  const secretAnswers: SecretAnswerDeps = { pending: pendingSecrets, vault, log, deliverSystem: (...args) => { orchestrator.bus.deliverSystem(...args); } };
   const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log, // /api/v1
     registry, tasks: () => orchestrator.tasks?.list() ?? [], working: id => orchestrator.bus.isActive(id), unavailable: unavailableHere, taskActive, checkPending,
     onTask: listener => { orchestrator.tasks?.onChange(listener); orchestrator.tasks?.onCreate(listener); }, // the change ledger hears the board (change-ledger.ts)
     recordToken, doors: () => webSignInDoors(channelRecords, channelCredentialsSet, configuredPublicUrl()), publicUrl: () => configuredPublicUrl(), desktops: openDesktops, // devices (INV-2214)
-    arrived: (id, locale) => { const person = principals.byId(id); if (person) autoBoxes.arrive(person, tr("ui.personal.defaultName", locale, { name: person.name })); } });
+    arrived: (id, locale) => { const person = principals.byId(id); if (person) autoBoxes.arrive(person, tr("ui.personal.defaultName", locale, { name: person.name })); },
+    decisions: { world: decisionWorld, approvals: approvalAnswers, secrets: secretAnswers, ...personActions({ board: () => orchestrator.tasks, workControl, questions, log, // what waits on a person, answered from /api/v1 (INV-2214)
+      message: (agentId, text, personId, conversation) => orchestrator.prompt(agentId, text, { userId: personId }, { conversation, messageId: randomUUID() }).then(() => orchestrator.settle()),
+      identitiesOf: id => [id, ...(principals.byId(id)?.identities ?? [])] }),
+      drafts: { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }) } } });
 
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
@@ -4060,47 +4076,12 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, { requests: [...pendingSecrets.values()].filter(entry => mayReadAgent(entry.agentId)) });
           return;
         }
-        if (route === "POST /api/secrets/requests/answer") {
+        if (route === "POST /api/secrets/requests/answer" || route === "POST /api/secrets/requests/dismiss") {
           if (refusedRole("admin")) return;
-          const body = await readJson(req);
-          const id = String(body.id ?? "");
-          const request = pendingSecrets.get(id);
-          const value = typeof body.value === "string" ? body.value : "";
-          if (request === undefined) {
-            send(res, 404, apiError("request-not-pending", { id }));
-            return;
-          }
-          if (value.trim() === "") {
-            send(res, 400, apiError("value-required"));
-            return;
-          }
-          // Into the vault with a grant to the agent that asked, and nothing else changes:
-          // the box never sees it, the transcript never holds it, RunOnHost may name it.
-          vault.setSecret({ id, description: request.description, value, grants: [{ holder: request.agentId }] });
-          pendingSecrets.delete(id);
-          orchestrator.bus.deliverSystem(
-            request.agentId,
-            `[The person saved the secret ${id} securely. You never see its value; name it in RunOnHost's \`secrets\` to use it, ` +
-              `or, if it is a provider key, delegated engines can use it through the relay. Confirm it by its effect, never by printing it.]`,
-            request.conversation ?? MAIN_CONVERSATION, request.work
-          );
-          send(res, 200, { saved: true });
-          return;
-        }
-        if (route === "POST /api/secrets/requests/dismiss") {
-          if (refusedRole("admin")) return;
-          const body = await readJson(req);
-          const id = String(body.id ?? "");
-          const request = pendingSecrets.get(id);
-          pendingSecrets.delete(id);
-          if (request !== undefined) {
-            orchestrator.bus.deliverSystem(
-              request.agentId,
-              `[The person dismissed your request for ${id} without saving it. Do without it, or say plainly what cannot be done.]`,
-              request.conversation ?? MAIN_CONVERSATION, request.work
-            );
-          }
-          send(res, 200, { dismissed: request !== undefined });
+          const body = await readJson(req), id = String(body.id ?? "");
+          if (route === "POST /api/secrets/requests/dismiss") { send(res, 200, { dismissed: dismissSecret(secretAnswers, id, caller.userId ?? "operator") }); return; }
+          const saved = answerSecret(secretAnswers, id, typeof body.value === "string" ? body.value : "", caller.userId ?? "operator"); // straight to the vault (secret-requests.ts)
+          if (saved === "saved") send(res, 200, { saved: true }); else if (saved === "unknown") send(res, 404, apiError("request-not-pending", { id })); else send(res, 400, apiError("value-required"));
           return;
         }
 
@@ -5256,33 +5237,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const id = String(body.id ?? "");
           const scope =
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
-          const waiting = orchestrator.policy.pending().find(item => item.id === id), parked = orchestrator.approvalIsParked(id);
+          const waiting = orchestrator.policy.pending().find(item => item.id === id);
           if (waiting && !seesAgent(waiting.agentId)) { send(res, 403, apiError("role-needed", { need: "admin", role: callerRole })); return; } // another box's approval (INV-2083)
-          const decider = deciderOf(caller); // who answered, on the record (R8)
-          const answered =
-            route === "POST /api/approve"
-              ? orchestrator.policy.grant(id, decider, scope)
-              : orchestrator.policy.deny(id, decider, String(body.reason ?? "") || undefined);
-          // 404 rather than an error for an unknown id: the usual cause is a second click or a page
-          // left open, and neither deserves a failure.
-          if (!answered) {
+          // Who answered, on the record (R8); the same path as an answer from a phone (approval-answer.ts).
+          if (!answerApproval(approvalAnswers, { id, allow: route === "POST /api/approve", scope, reason: String(body.reason ?? "") || undefined, decider: deciderOf(caller) })) {
+            // 404 rather than an error for an unknown id: the usual cause is a second click or a page left open.
             send(res, 404, apiError("approval-not-waiting"));
             return;
-          }
-          // The answer reaches the agent as a message, so it goes on by itself. It used to sit
-          // until the person typed something — the strip even said so — which read as the
-          // approval not having worked (docs/41 §4, 2026-09-08).
-          if (waiting !== undefined) {
-            const allowed = route === "POST /api/approve";
-            broadcast({ type: "approval_settled", id, agentId: waiting.agentId, how: allowed ? "allowed" : "refused", ...(allowed ? { scope } : {}) });
-            // An extension's confirmation is continued by the harness itself (INV-861): the agent
-            // hears the result from there, and a "go ahead" here would send it to retry nothing.
-            if (waiting.harnessResumes !== true && !parked) orchestrator.bus.deliverSystem(
-              waiting.agentId,
-              allowed
-                ? approvedCallNotice(waiting.description, scope)
-                : `[The person refused it: ${waiting.description}. Do not retry it; do without, or say what cannot be done.]`, waiting.returnTo?.conversation ?? MAIN_CONVERSATION, waiting.returnTo?.work
-            );
           }
           send(res, 200, { id });
           return;
@@ -5870,19 +5831,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (route === "GET /api/attention") {
           const me = caller.userId === undefined ? undefined : principals.resolve(caller.userId);
           const board = orchestrator.tasks;
-          const answer = attentionFor({
-            principalId: me?.id ?? "",
-            identities: me?.identities ?? [],
-            tasks: board === undefined ? [] : board.list().filter(task => caller.userId === undefined || (task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === principals.resolve(caller.userId).id)),
-            questions: questions.list(),
-            nameOf: id => registry.tryGet(id)?.profile.name ?? principals.list().find(person => person.id === id)?.name ?? id,
-            unanswered: involuteUnanswered, workOf: id => workRootOf(registry.tryGet(id) !== undefined ? registry.boxOf(id) : undefined), // where a submission's files are (INV-1737)
-            personIds: new Set(principals.list().flatMap(person=>[person.id,...person.identities])), paused: orchestrator.bus.pausedChains(), agentIds: new Set(registry.list().map(agent => agent.id)), approvals: orchestrator.policy.pending().filter(item => caller.userId === undefined || mayReadAgent(item.agentId)), outbox: orchestrator.outboxDrafts.waiting().filter(draft => caller.userId === undefined || mayReadAgent(draft.agentId)), // drafts in the Outbox (INV-1739); a parked command is the commonest block (INV-1627)
-            undeliverable: outbox.problems(), exceptionsHanded: orchestrator.exceptions.list().filter(entry => entry.handedAt !== undefined && entry.resolvedAt === undefined && (entry.agent === undefined || caller.userId === undefined || mayReadAgent(entry.agent))), routinesHeld: (await orchestrator.scheduler.status()).filter(entry => entry.hold !== undefined && mayReadBox(entry.boxId ?? registry.box.id)).map(entry => ({ slug: entry.slug, name: entry.name, ...entry.hold! })), // INV-1665
-            chatKeyOf: conversation => conversations.chatKeyFor(conversation), // The stage table's reads (INV-1464).
-            active: taskActive, checkPending,
-            ...(me === undefined ? { all: true } : {}),
-          });
+          const answer = await decisionsFor(decisionWorld, { principalId: me?.id ?? "", identities: me?.identities ?? [], all: me === undefined, // one projection with /api/v1/inbox (decisions.ts)
+            sees: { agent: mayReadAgent, box: mayReadBox, task: task => task.assigneeId ? mayReadAgent(task.assigneeId) : task.requester === me?.id } });
           const update = boxUpdate.available(); // an admin is shown a box that can be updated (INV-1538)
           if (update !== undefined && (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin"))) answer.mine.unshift({ kind: "box-update", ref: "box", title: "The box can be updated", detail: `It runs ${update.runningRef ?? "an older image"}; this app expects ${update.expectedRef}. Settings → Boxes → Apply update.` });
           if (me === undefined || roleAtLeast(principals.roleOf(me.id), "admin")) for (const { agentId, day } of spendLimits.pausedForSpend()) answer.mine.unshift({ kind: "spend-limit", ref: agentId, title: `${registry.tryGet(agentId)?.profile.name ?? agentId} is paused: its daily spend line was reached`, detail: `Reached on ${day}; it resumes tomorrow by itself. Resume it now or raise the line in Settings → Team → Agents.` }); // INV-1615

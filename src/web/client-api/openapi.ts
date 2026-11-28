@@ -41,7 +41,7 @@ function operationOf(operation: Operation): Json {
     ...(operation.method === "POST" ? [{
       name: "Idempotency-Key", in: "header", required: false, schema: { type: "string" },
       description: operation.secret === true
-        ? "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer holds a token)."
+        ? "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer or the request holds a secret)."
         : "A key the client keeps for this request: a repeat within 24 hours answers the first answer.",
     }] : []),
   ];

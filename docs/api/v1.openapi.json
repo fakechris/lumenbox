@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LumenBox client API",
-    "version": "1.3",
-    "description": "LumenBox client API, v1 (docs/106 §4). Additions only inside v1: a new operation, a new optional field, a new known value — each raises the revision `GET /api/v1/meta` reports.\n\nConventions, the same for every operation:\n- JSON, camelCase. Ids are opaque strings: compare them, never parse them. Times are RFC 3339 in UTC, to the second (`2026-11-28T10:00:00Z`).\n- A field with no value is absent, never null.\n- A client ignores fields it does not know.\n- A string listed with `x-extensible-enum` is an open enumeration: a client treats a value it does not know as \"other\", shows the item's plain words, and offers to open it on the page or the desktop app when it cannot act on it.\n- Lists take `?limit=` (1–100) and `?cursor=` and answer `{ items, nextCursor }`; `nextCursor` is absent on the last page.\n- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.\n- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.\n- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.\n- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer — within 30 seconds, from memory only, for an answer that holds a token (`x-secret-answer`).\n- 429 carries `Retry-After` in seconds.\n- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.\n\nCredentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view;\na device credential (`lbxd_…`, fifteen minutes, renewed with its refresh token `lbxr_…` at `POST /auth/refresh`) is a person's phone or desktop client.\nA request body is JSON: a field the operation does not take is refused (`api-param-unknown`), and `null` is the same as absent.\nWhat a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.\nCross-origin browser calls are not answered with CORS headers.",
+    "version": "1.4",
+    "description": "LumenBox client API, v1 (docs/106 §4). Additions only inside v1: a new operation, a new optional field, a new known value — each raises the revision `GET /api/v1/meta` reports.\n\nConventions, the same for every operation:\n- JSON, camelCase. Ids are opaque strings: compare them, never parse them. Times are RFC 3339 in UTC, to the second (`2026-11-28T10:00:00Z`).\n- A field with no value is absent, never null.\n- A client ignores fields it does not know.\n- A string listed with `x-extensible-enum` is an open enumeration: a client treats a value it does not know as \"other\", shows the item's plain words, and offers to open it on the page or the desktop app when it cannot act on it.\n- Lists take `?limit=` (1–100) and `?cursor=` and answer `{ items, nextCursor }`; `nextCursor` is absent on the last page.\n- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.\n- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.\n- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.\n- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer —\n  within 30 seconds, from memory only, for an operation whose answer or request holds a secret (`x-secret-answer`: a token, or a secret for the vault).\n- 429 carries `Retry-After` in seconds.\n- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.\n\nCredentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view;\na device credential (`lbxd_…`, fifteen minutes, renewed with its refresh token `lbxr_…` at `POST /auth/refresh`) is a person's phone or desktop client.\nA request body is JSON: a field the operation does not take is refused (`api-param-unknown`), and `null` is the same as absent.\nWhat a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.\nCross-origin browser calls are not answered with CORS headers.",
     "license": {
       "name": "GPL-3.0-only",
       "identifier": "GPL-3.0-only"
@@ -1615,7 +1615,7 @@
       "get": {
         "operationId": "getChanges",
         "summary": "What changed since a position, durably",
-        "description": "For a client waking from sleep, starting, or reconnecting: what changed since `since`, read from a ledger on the server's disk that survives restarts and is kept 30 days. A change is listed only when the caller may read the thing now (or, gone, could have read it); its words are fetched, not sent. Changes are of work and agents; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs — `work:read` for work, `agents:read` for agents — and a credential without that scope is not told of it.\n\nAny credential.",
+        "description": "For a client waking from sleep, starting, or reconnecting: what changed since `since`, read from a ledger on the server's disk that survives restarts and is kept 30 days. A change is listed only when the caller may read the thing now (or, gone, could have read it); its words are fetched, not sent. Changes are of work, agents and the inbox; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs — `work:read` for work, `agents:read` for agents, `work:decide` for the inbox — and a credential without that scope is not told of it.\n\nAny credential.",
         "tags": [
           "stable"
         ],
@@ -2235,7 +2235,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer holds a token)."
+            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer or the request holds a secret)."
           }
         ],
         "requestBody": {
@@ -2411,7 +2411,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer holds a token)."
+            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer or the request holds a secret)."
           }
         ],
         "requestBody": {
@@ -2587,7 +2587,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer holds a token)."
+            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer or the request holds a secret)."
           }
         ],
         "requestBody": {
@@ -3299,6 +3299,1122 @@
           }
         }
       }
+    },
+    "/api/v1/inbox": {
+      "get": {
+        "operationId": "listInbox",
+        "summary": "What waits on the person",
+        "description": "Every decision and notice waiting on the person — approvals, Outbox drafts, questions, secrets agents asked for, close proposals, reviews, paused chains and routines, failures handed to them — as the page lists them, only from agents and work the person may reach. Changes to it arrive in `/changes` and `/events` as type `inbox`.\n\nScope `work:decide`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:decide",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many items. 1 to 100; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "`nextCursor` from the page before.",
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What waits on the person, most urgent first: what stops work, then questions, then the rest, each by its deadline.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxPage"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-cursor-invalid`: The cursor is not one this list gave, or was given for other filters. Start the list again without it.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-cursor-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/approvals/{id}": {
+      "post": {
+        "operationId": "decideApproval",
+        "summary": "Allow or deny an action waiting for consent",
+        "description": "Allowing an item with `stepUpRequired` needs `stepUp`, signed over `allow:once` or `allow:session` as the decision; denying never does. `always` is refused. Who answered is recorded as `user:<person> device:<id>` for a device. An approval answered already, or out of reach, is 404.\n\nScope `work:decide`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:decide",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The approval's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 24 hours answers the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the answer did.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.\n`inbox-answer-invalid`: The answer does not fit this item: `INBOX_ACTIONS` it takes are in its `actions`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid",
+              "inbox-answer-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.\n`api-role-needed`: The person's role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin.\n`approval-always-refused`: `always` is not granted through v1: a standing grant is made on the page. Answer `once` or `session`.\n`step-up-required`: Allowing this needs a step-up proof (`stepUp`) from a device that registered a step-up key; a token without one cannot allow it.\n`step-up-invalid`: The step-up proof is not this device's registered key's signature over this decision.",
+            "x-error-codes": [
+              "api-scope-needed",
+              "api-role-needed",
+              "approval-always-refused",
+              "step-up-required",
+              "step-up-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "x-error-codes": [
+              "api-idempotency-conflict"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inbox/{id}/answer": {
+      "post": {
+        "operationId": "answerInboxItem",
+        "summary": "Answer a question, a draft or a secret request",
+        "description": "A question's answer goes to the agent as the person's message. Approving or editing a draft needs `stepUp` (decision `approve`, or `edit` with the SHA-256 of `body`, base64url, as the detail). A secret is saved to the vault, granted to the agent that asked, and never written anywhere else; saving or dismissing one takes an Admin.\n\nScope `work:decide`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:decide",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The inbox item's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer or the request holds a secret)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InboxAnswer"
+              }
+            }
+          }
+        },
+        "x-secret-answer": true,
+        "responses": {
+          "200": {
+            "description": "What the answer did.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: the answer holds a token.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.\n`inbox-answer-invalid`: The answer does not fit this item: `INBOX_ACTIONS` it takes are in its `actions`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid",
+              "inbox-answer-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.\n`api-role-needed`: The person's role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin.\n`step-up-required`: Allowing this needs a step-up proof (`stepUp`) from a device that registered a step-up key; a token without one cannot allow it.\n`step-up-invalid`: The step-up proof is not this device's registered key's signature over this decision.",
+            "x-error-codes": [
+              "api-scope-needed",
+              "api-role-needed",
+              "step-up-required",
+              "step-up-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "x-error-codes": [
+              "api-idempotency-conflict"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/work/{id}/decisions": {
+      "post": {
+        "operationId": "decideWork",
+        "summary": "Count work as done, keep it open, put it off, or stop it",
+        "description": "On work the person may read. `stop` stops what runs for it and drops it, as the page's Stop does.\n\nScope `work:decide`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:decide",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The work's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 24 hours answers the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What the answer did.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionAck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.\n`inbox-answer-invalid`: The answer does not fit this item: `INBOX_ACTIONS` it takes are in its `actions`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid",
+              "inbox-answer-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.\n`api-role-needed`: The person's role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin.",
+            "x-error-codes": [
+              "api-scope-needed",
+              "api-role-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).\n`decision-refused`: The board refused this decision for the work as it is now (for example done work cannot be put off); `error` says why.",
+            "x-error-codes": [
+              "api-idempotency-conflict",
+              "decision-refused"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notifications/{seq}": {
+      "get": {
+        "operationId": "getNotification",
+        "summary": "The words for a wake-only push",
+        "description": "For a phone's notification handler: the item the change at `seq` is about, if it still waits on the person. Gone, or not theirs: 404, and the generic banner stays.\n\nScope `work:decide`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "work:decide",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "description": "The `seq` the push carried.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "format": "int64"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What a wake-only push is about (docs/110 §5): the push carried only `seq`; the words come from here, to a device that may read them.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Notification"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3339,7 +4455,13 @@
               "auth-code-invalid",
               "pairing-code-invalid",
               "refresh-superseded",
-              "device-credential-needed"
+              "device-credential-needed",
+              "api-role-needed",
+              "approval-always-refused",
+              "step-up-required",
+              "step-up-invalid",
+              "inbox-answer-invalid",
+              "decision-refused"
             ]
           },
           "error": {
@@ -3904,10 +5026,11 @@
           },
           "type": {
             "type": "string",
-            "description": "What changed: `work` or `agent`.",
+            "description": "What changed: `work`, `agent`, or `inbox` (something now waits on a person, or no longer does: `GET /inbox`; `upsert` is also what a wake-only push names).",
             "x-extensible-enum": [
               "work",
-              "agent"
+              "agent",
+              "inbox"
             ]
           },
           "id": {
@@ -4388,6 +5511,532 @@
         },
         "required": [
           "items"
+        ]
+      },
+      "InboxItem": {
+        "type": "object",
+        "description": "One thing waiting on the person, as the page lists it under \"waiting on you\". Discriminated by `kind`: the field named like the kind (`approval`, `draft`, `question`, `secret`, `closeProposal`) carries what that kind needs, and `actions` says what may be done here. A kind a client does not know is shown by `title` and `detail`, and opened on the page.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The item: what `POST /inbox/{id}/answer` names. Opaque."
+          },
+          "kind": {
+            "type": "string",
+            "description": "What it is.",
+            "x-extensible-enum": [
+              "approval",
+              "outbox",
+              "question",
+              "secret",
+              "close-proposal",
+              "review",
+              "reauthorize",
+              "flagged",
+              "nudged",
+              "paused",
+              "routine-paused",
+              "exception",
+              "undeliverable",
+              "unanswered",
+              "verification",
+              "org-knowledge"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "What it is about, in a line."
+          },
+          "detail": {
+            "type": "string",
+            "description": "One line a person can act on without opening anything."
+          },
+          "decision": {
+            "type": "boolean",
+            "description": "Whether the person's answer changes what happens next (a decision), rather than something to know (a notice)."
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "An action.",
+              "x-extensible-enum": [
+                "allow",
+                "deny",
+                "approve",
+                "edit",
+                "reject",
+                "answer",
+                "save",
+                "dismiss",
+                "done",
+                "keep-open",
+                "put-off",
+                "stop",
+                "open-on-page"
+              ]
+            },
+            "description": "What may be done here. Empty: open it on the page."
+          },
+          "stepUpRequired": {
+            "type": "boolean",
+            "description": "Whether allowing or approving needs a step-up proof (`stepUp`): the action leaves the box or touches authority."
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the clock runs out and the default happens, when there is one."
+          },
+          "agentId": {
+            "type": "string",
+            "description": "The agent it is with, when one is and the caller may read it."
+          },
+          "agentName": {
+            "type": "string",
+            "description": "That agent's name, or the person it is with."
+          },
+          "workId": {
+            "type": "string",
+            "description": "The work it is about, when it is about work."
+          },
+          "approval": {
+            "$ref": "#/components/schemas/InboxApproval"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/InboxDraft"
+          },
+          "question": {
+            "$ref": "#/components/schemas/InboxQuestion"
+          },
+          "secret": {
+            "$ref": "#/components/schemas/InboxSecret"
+          },
+          "closeProposal": {
+            "$ref": "#/components/schemas/InboxCloseProposal"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "detail",
+          "decision",
+          "actions",
+          "stepUpRequired"
+        ]
+      },
+      "InboxApproval": {
+        "type": "object",
+        "description": "An action waiting for consent (kind `approval`): answered at `POST /approvals/{id}`.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The approval: what `POST /approvals/{id}` names."
+          },
+          "description": {
+            "type": "string",
+            "description": "The action exactly as it will run: what consent is given to."
+          },
+          "action": {
+            "type": "string",
+            "description": "What the tool does, in the host's words, when it says."
+          },
+          "why": {
+            "type": "string",
+            "description": "The agent's one-line case for it."
+          },
+          "tier": {
+            "type": "string",
+            "description": "What the action does, in the policy gate's classes: `reach`, `spend`, `credential`, `irreversible`, `run-later` leave the box or touch authority.",
+            "x-extensible-enum": [
+              "observe",
+              "self",
+              "reach",
+              "spend",
+              "credential",
+              "irreversible",
+              "run-later"
+            ]
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A scope this item may be allowed for.",
+              "x-extensible-enum": [
+                "once",
+                "session"
+              ]
+            },
+            "description": "`once`, and `session` unless only this one call may be allowed."
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was asked."
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "scopes",
+          "requestedAt"
+        ]
+      },
+      "InboxDraft": {
+        "type": "object",
+        "description": "What an agent wants to send or do outside the box, held in the Outbox (kind `outbox`).",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "What the step is.",
+            "x-extensible-enum": [
+              "message",
+              "publish",
+              "submit",
+              "email",
+              "other"
+            ]
+          },
+          "target": {
+            "type": "string",
+            "description": "Who or where it is for, as the agent named it."
+          },
+          "body": {
+            "type": "string",
+            "description": "The words, or the command."
+          },
+          "why": {
+            "type": "string",
+            "description": "The agent's one-line case for sending it."
+          },
+          "background": {
+            "type": "string",
+            "description": "What the agent says led to it."
+          }
+        },
+        "required": [
+          "kind",
+          "target",
+          "body",
+          "why"
+        ]
+      },
+      "InboxQuestion": {
+        "type": "object",
+        "description": "A question put to the person (kind `question`): answered with words, or one of `options`.",
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A choice."
+            },
+            "description": "Choices offered, when the agent offered some."
+          },
+          "fallback": {
+            "type": "string",
+            "description": "What the agent does with no answer by `deadline`."
+          },
+          "conversation": {
+            "type": "string",
+            "description": "The conversation the answer goes into."
+          }
+        },
+        "required": []
+      },
+      "InboxSecret": {
+        "type": "object",
+        "description": "A secret an agent asked for (kind `secret`): the value goes straight into the vault, granted to that agent alone.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name it will be saved under."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the agent says it is for."
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ]
+      },
+      "InboxCloseProposal": {
+        "type": "object",
+        "description": "An agent proposes closing work the person asked for (kind `close-proposal`): answered at `POST /work/{id}/decisions`.",
+        "properties": {
+          "by": {
+            "type": "string",
+            "description": "Who proposes it."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why."
+          },
+          "decideBy": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Say nothing until then and it closes."
+          }
+        },
+        "required": [
+          "by",
+          "reason"
+        ]
+      },
+      "InboxPage": {
+        "type": "object",
+        "description": "What waits on the person, most urgent first: what stops work, then questions, then the rest, each by its deadline.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxItem"
+            },
+            "description": "The items on this page."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "The next page's cursor; absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "StepUpProof": {
+        "type": "object",
+        "description": "A device's step-up proof (docs/110 §4): its registered key's ECDSA P-256 / SHA-256 signature over `lumenbox-step-up/1\\n<deviceId>\\n<item id>\\n<decision>\\n<detail>`.",
+        "properties": {
+          "keyId": {
+            "type": "string",
+            "description": "The `stepUpKeyId` the device registered.",
+            "maxLength": 100
+          },
+          "signature": {
+            "type": "string",
+            "description": "The signature, DER or raw r||s, base64url.",
+            "maxLength": 300,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        },
+        "required": [
+          "keyId",
+          "signature"
+        ]
+      },
+      "ApprovalDecision": {
+        "type": "object",
+        "description": "An answer to an approval. `decision` `allow:once`/`allow:session` in the signed text; `detail` is `-`.",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "`allow` or `deny`.",
+            "x-extensible-enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "description": "For `allow`: `once` (this call) or `session` (this agent's turn). `always` is refused here.",
+            "x-extensible-enum": [
+              "once",
+              "session"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "For `deny`: what the agent is told.",
+            "maxLength": 1000
+          },
+          "stepUp": {
+            "$ref": "#/components/schemas/StepUpProof"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "InboxAnswer": {
+        "type": "object",
+        "description": "An answer to an inbox item, by its kind: a question takes `answer` (`text`); a draft `approve`, `edit` (`body`) or `reject` (`reason`); a secret `save` (`value`) or `dismiss`.",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "One of the item's `actions`.",
+            "x-extensible-enum": [
+              "allow",
+              "deny",
+              "approve",
+              "edit",
+              "reject",
+              "answer",
+              "save",
+              "dismiss",
+              "done",
+              "keep-open",
+              "put-off",
+              "stop",
+              "open-on-page"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "For `answer`: the words, or one of the question's `options`.",
+            "maxLength": 20000
+          },
+          "body": {
+            "type": "string",
+            "description": "For `edit`: the words to send instead.",
+            "maxLength": 20000
+          },
+          "reason": {
+            "type": "string",
+            "description": "For `reject`: what the agent is told.",
+            "maxLength": 1000
+          },
+          "value": {
+            "type": "string",
+            "description": "For `save`: the secret. It goes to the vault and nowhere else — not a transcript, not a log, not a retry's memory.",
+            "maxLength": 20000
+          },
+          "stepUp": {
+            "$ref": "#/components/schemas/StepUpProof"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "WorkDecision": {
+        "type": "object",
+        "description": "A decision on work the person asked for.",
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "`done`: count it as done. `keep-open`: refuse a proposal to close it. `put-off`: ask again at `until`. `stop`: stop it and drop it.",
+            "x-extensible-enum": [
+              "done",
+              "keep-open",
+              "put-off",
+              "stop"
+            ]
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "For `put-off`: when to ask again."
+          },
+          "note": {
+            "type": "string",
+            "description": "What is said with it.",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "DecisionAck": {
+        "type": "object",
+        "description": "What the answer did.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "What was answered."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "What happened.",
+            "x-extensible-enum": [
+              "allowed",
+              "denied",
+              "approved",
+              "edited",
+              "rejected",
+              "answered",
+              "saved",
+              "dismissed",
+              "done",
+              "kept-open",
+              "put-off",
+              "stopped"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When."
+          }
+        },
+        "required": [
+          "id",
+          "outcome",
+          "at"
+        ]
+      },
+      "Notification": {
+        "type": "object",
+        "description": "What a wake-only push is about (docs/110 §5): the push carried only `seq`; the words come from here, to a device that may read them.",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The position in the change record the push named."
+          },
+          "itemId": {
+            "type": "string",
+            "description": "The inbox item."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Its kind.",
+            "x-extensible-enum": [
+              "approval",
+              "outbox",
+              "question",
+              "secret",
+              "close-proposal",
+              "review",
+              "reauthorize",
+              "flagged",
+              "nudged",
+              "paused",
+              "routine-paused",
+              "exception",
+              "undeliverable",
+              "unanswered",
+              "verification",
+              "org-knowledge"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "A line for the notification's title."
+          },
+          "body": {
+            "type": "string",
+            "description": "A line for its body."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it arrived."
+          }
+        },
+        "required": [
+          "seq",
+          "itemId",
+          "kind",
+          "title",
+          "body",
+          "at"
         ]
       },
       "DeviceEnded": {

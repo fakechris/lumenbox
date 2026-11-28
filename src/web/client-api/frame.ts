@@ -22,6 +22,7 @@ import { apiError, localizedBody } from "../api-error.ts";
 import { type IdempotencyStore, KEY_PATTERN } from "../idempotency.ts";
 import type { ClientCredential, McpTokenStore } from "../mcp-tokens.ts";
 import type { DeviceAuth } from "./auth.ts";
+import type { DecisionAccess } from "./inbox.ts";
 import { matchRoute, readBody, readParams, type ParamValue } from "./routes.ts";
 import { HANDLERS } from "./handlers.ts";
 import { API_PREFIX, ERRORS, OPERATIONS, type ApiErrorCode, type Operation, type OperationId } from "./schema.ts";
@@ -78,6 +79,8 @@ export interface ClientApiDeps {
   };
   /** Device sign-in, refresh and the person's devices (auth.ts, devices.ts). */
   devices: DeviceAuth;
+  /** What waits on a person, and their answers (inbox.ts). */
+  decisions: DecisionAccess;
   /** The roster person with this id, now; undefined once they are gone. */
   person(id: string): ClientPerson | undefined;
   installationMode(): "single-machine" | "organisation";

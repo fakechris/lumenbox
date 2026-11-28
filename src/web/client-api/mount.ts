@@ -21,6 +21,11 @@ import type { McpTokenStore } from "../mcp-tokens.ts";
 import type { Attempt, SignInDoor, SignInGuard } from "../sign-in-limits.ts";
 import type { TokenRecord } from "../token-ledger.ts";
 import type { DeviceAuth } from "./auth.ts";
+import { type ApprovalAnswerDeps, answerApproval } from "../approval-answer.ts";
+import { type DecisionWorld, decisionsFor } from "../decisions.ts";
+import { type OutboxAnswerDeps, answerDraft } from "../outbox-answer.ts";
+import { type SecretAnswerDeps, answerSecret, dismissSecret } from "../secret-requests.ts";
+import { type DecisionAccess, inboxRouting } from "./inbox.ts";
 import { CHANGES_LEDGER, ChangeLedger } from "./change-ledger.ts";
 import { type ClientWorld, clientApi } from "./frame.ts";
 
@@ -59,6 +64,14 @@ export function mountClientApi(server: {
   arrived(personId: string, locale: Locale): void;
   /** Open desktops let go of anybody whose access ended (open-desktops.ts). */
   desktops: { recheck(): void };
+  /** What waits on people and how each is answered: the page's own paths (decisions.ts, approval-answer.ts, outbox-answer.ts, secret-requests.ts). */
+  decisions: {
+    world: DecisionWorld; approvals: ApprovalAnswerDeps; drafts: OutboxAnswerDeps; secrets: SecretAnswerDeps;
+    /** The person's words to an agent, as the page's message is sent. */
+    say(personId: string, agentId: string, conversation: string, text: string, questionId?: string): Promise<void>;
+    /** A decision on work as the page's buttons make it. */
+    work(personId: string, taskId: string, decision: "done" | "keep-open" | "put-off" | "stop", until?: string, note?: string): Promise<{ ok: true } | { ok: false; why: string }>;
+  };
 }) {
   const { registry, principals } = server;
   // What changed, on disk, for a client that comes back later (change-ledger.ts).
@@ -143,8 +156,49 @@ export function mountClientApi(server: {
     arrived: server.arrived,
     askedWords: locale => tr("device.asked-to-join", locale),
   };
+  const { decisions } = server;
+  const inboxOf = async (person: { id: string }) => {
+    const reach = world.reachOf({ id: person.id, name: "", role: "viewer" }), roster = principals.byId(person.id);
+    const viewer = { principalId: person.id, identities: roster?.identities ?? [], all: false, sees: { agent: reach.agent, box: reach.box, task: reach.task } };
+    return {
+      items: (await decisionsFor(decisions.world, viewer)).mine, approvals: decisions.world.approvals(), drafts: decisions.world.drafts(), tasks: decisions.world.tasks(),
+      secrets: [...decisions.secrets.pending.values()].filter(request => reach.agent(request.agentId)),
+    };
+  };
+  // What waits on anybody, diffed against what the ledger last said: a change record per item that came or went, routed, never its words.
+  let noting: Promise<void> | undefined;
+  const noteInbox = (): Promise<void> => (noting ??= (async () => {
+    const everyone = { principalId: "", identities: [], all: true, sees: { agent: () => true, box: () => true, task: () => true } };
+    const found = { items: (await decisionsFor(decisions.world, everyone)).mine, approvals: decisions.world.approvals(), drafts: decisions.world.drafts(), tasks: decisions.world.tasks(), secrets: [...decisions.secrets.pending.values()] };
+    const last = changes.lastOf("inbox"), present = new Set<string>();
+    const routed = (row: { agentId?: string; requester?: string }) => ({ ...(row.agentId !== undefined ? { assigneeId: row.agentId } : {}), ...(row.requester !== undefined ? { requester: row.requester } : {}) });
+    for (const row of inboxRouting(found)) {
+      if (present.has(row.id)) continue;
+      present.add(row.id);
+      const before = last.get(row.id);
+      if (before === undefined || before.op === "delete") changes.append({ type: "inbox", id: row.id, op: "upsert", ...routed(row) });
+    }
+    for (const [id, line] of last) {
+      const was = { ...(line.assigneeId !== undefined ? { agentId: line.assigneeId } : {}), ...(line.requester !== undefined ? { requester: line.requester } : {}) };
+      if (line.op !== "delete" && !present.has(id)) changes.append({ type: "inbox", id, op: "delete", ...routed(was) });
+    }
+  })().catch(error => { server.log(`inbox changes: ${error instanceof Error ? error.message : String(error)}`); }).finally(() => { noting = undefined; }));
+  const inboxWatch = setInterval(() => { void noteInbox(); }, 5_000);
+  inboxWatch.unref();
+  const decisionAccess: DecisionAccess = {
+    inbox: inboxOf,
+    answerApproval: input => answerApproval(decisions.approvals, input),
+    answerDraft: (id, answer, by, decider) => answerDraft(decisions.drafts, id, answer, by, decider),
+    say: (person, agentId, conversation, text, questionId) => decisions.say(person.id, agentId, conversation, text, questionId),
+    saveSecret: (id, value, by) => answerSecret(decisions.secrets, id, value, by),
+    dismissSecret: (id, by) => dismissSecret(decisions.secrets, id, by),
+    work: (person, taskId, decision, until, note) => decisions.work(person.id, taskId, decision, until, note),
+    stepUpKeyOf: id => devices.stepUpKeyOf(id),
+    noteInbox,
+  };
   const api = clientApi({
     world,
+    decisions: decisionAccess,
     // A device's access token to the device store, any other to the token store: each prefix has one home.
     tokens: {
       clientFor: (presented, now) => (presented?.startsWith(ACCESS_PREFIX) === true ? devices.clientFor(presented, holds) : server.tokens.clientFor(presented, now)),
@@ -200,6 +254,6 @@ export function mountClientApi(server: {
       ended();
     },
     /** When the server stops: no agent diff of an old registry beside a new one, and no stream left open. */
-    close: () => { clearInterval(agentWatch); changes.close(); },
+    close: () => { clearInterval(agentWatch); clearInterval(inboxWatch); changes.close(); },
   };
 }

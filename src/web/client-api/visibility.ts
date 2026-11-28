@@ -58,6 +58,13 @@ export function sightOf(call: Call): Sight {
       if (call.deps.world.agents().some(fact => fact.id === line.id)) return agent(line.id);
       return line.boxId !== undefined && reach.box(line.boxId) && (view === undefined || view.allAgents || view.agentIds.includes(line.id));
     }
+    if (line.type === "inbox") {
+      // That something waits on somebody, told to those who could be the one: the agent's box, the person who asked, or —
+      // with neither (a held routine, an undelivered message) — everyone who decides. What it is comes from /inbox, filtered there.
+      if (!scopes.includes("work:decide") || service) return false;
+      if (line.assigneeId !== undefined) return reach.agent(line.assigneeId);
+      return line.requester === undefined || line.requester === person.id;
+    }
     if (!scopes.includes("work:read")) return false;
     const now = byId.get(line.id);
     if (now !== undefined) return task(now);

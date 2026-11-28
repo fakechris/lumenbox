@@ -229,6 +229,16 @@ below.
      last thirty days from issue and never past a year from the sign-in. The step-up key is registered
      at the exchange or the pairing (`stepUpKeyId`, `stepUpPublicKey`: P-256 SPKI). Organisation pairing
      is `lumenbox://pair#server=<origin>&code=<code>`, shown after a sign-in in the last ten minutes.
+   - *As built (INV-2214 part 2, docs/106 §8.1):* the step-up key is the P-256 key registered at sign-in;
+     the app creates it to need the person's biometrics for every use (iOS: Secure Enclave with
+     `.biometryCurrentSet`; Android: StrongBox/TEE, user authentication for every use, invalidated by a
+     new enrolment) and signs `lumenbox-step-up/1
+<deviceId>
+<item id>
+<decision>
+<detail>`. The server
+     checks the signature, not how the key was made: attestation is not checked in v1. `always` is
+     refused for every v1 credential. A device's answers are recorded as `user:<person> device:<id>`.
    - *A requirement on both apps before general availability:* receive the sign-in's `redirectUri` on a
      verified https app link (iOS Universal Links, Android App Links with `autoVerify`), not only the
      `lumenbox:` scheme. A custom scheme can be registered by any other app on the phone; with a sign-in

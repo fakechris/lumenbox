@@ -46,7 +46,7 @@ export interface AttentionItem {
   /** The task's stage by the table in task-stage.ts (INV-1464), on items that are about a task. */
   stage?: TaskStage;
   /** For a question: whom an answer goes to and the choices offered, so it can be answered where it is listed (INV-1825). */
-  answer?: { agentId: string; conversation: string; options?: string[] };
+  answer?: { agentId: string; conversation: string; options?: string[]; questionId?: string }; // questionId: an AskUser question's own id, which a phone's answer names (INV-2214)
   /** An Outbox draft (INV-1739), whole: the page shows the words, the target, the background and the case. */
   /** The member's own request, read from its note (INV-1923): what is in the way, the action, the sentences. */
   ask?: PersonAsk;
@@ -164,7 +164,7 @@ export function attentionFor(input: AttentionInput): Attention {
           ? `${question.agentName} is waiting; with no answer it goes with: ${question.fallback}`
           : `${question.agentName} is waiting; with no answer it decides and says which way`) + (questionLeanText(question.agentName, question.recommended) !== undefined ? ` · ${questionLeanText(question.agentName, question.recommended)}` : ""), // INV-1651
       deadline: new Date(question.expiresAt).toISOString(),
-      with: question.agentName, answer: { agentId: question.agentId, conversation: question.conversation },
+      with: question.agentName, answer: { agentId: question.agentId, conversation: question.conversation, questionId: question.id },
     });
   }
 
