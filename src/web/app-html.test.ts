@@ -164,7 +164,7 @@ test("classic Automations blocks a new draft when the computer is offline", () =
   render();
   assert.equal(get("autonew").style.display, "none");
   assert.equal(get("autocomputer").style.display, "");
-  assert.match(get("autocomputer-title").textContent, /Connect a computer to create an automation/);
+  assert.match(get("autocomputer-title").textContent, /Connect a sandbox to create an automation/);
   boxState.connected = true;
   render();
   assert.equal(get("autonew").style.display, "");

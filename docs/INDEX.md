@@ -47,7 +47,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [manual/agent](manual/agent.md) | Agent | current | 2026-11-27 |
 | [manual/approvals](manual/approvals.md) | Approvals | current | 2026-11-19 |
 | [manual/automations](manual/automations.md) | Automations | current | 2026-11-20 |
-| [manual/box](manual/box.md) | Box | current | 2026-11-06 |
+| [manual/box](manual/box.md) | Sandbox | current | 2026-11-06 |
 | [manual/channels](manual/channels.md) | Channels | current | 2026-11-28 |
 | [manual/memory](manual/memory.md) | Memory | current | 2026-11-06 |
 | [manual/README](manual/README.md) | The LumenBox manual | current | 2026-11-24 |

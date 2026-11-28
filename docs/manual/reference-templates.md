@@ -88,7 +88,7 @@ and the source disagree. Change the source and run `node scripts/docs-reference.
 
 ## Crews
 
-| slug | domain | name | summary | members |
+| slug | domain | name | summary | agents |
 |---|---|---|---|---|
 | `ship` | engineering | 研发小队 | Product specifies, engineering builds, review is a different person. | mo, lin, heng |
 | `media-desk` | media | 内容小队 | One source, three forms: long article, Xiaohongshu note, short-video script. | jian, he, jing |

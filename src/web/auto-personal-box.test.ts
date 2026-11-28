@@ -94,7 +94,7 @@ test("INV-2203: a driver's first sign-in makes one personal box, once, across ta
   const arrivals = await Promise.all([request("/api/me", "web:alice"), request("/api/me", "web:alice"), request("/api/me", "web:alice")]);
   assert.ok(arrivals.every(reply => reply.status === 200));
   await new Promise(resolve => setTimeout(resolve, 50));
-  assert.deepEqual(org.started, ["Alice’s computer"], "one box, named as the create dialog suggests");
+  assert.deepEqual(org.started, ["Alice’s sandbox"], "one box, named as the create dialog suggests");
   const preparing = await request("/api/setup", "web:alice");
   assert.equal(preparing.data.hasPersonalBox, false);
   assert.deepEqual(preparing.data.autoBox, { state: "preparing" });
@@ -198,7 +198,7 @@ test("INV-2220: activating a person makes their box and one agent in it, written
   assert.deepEqual(new Principals().byId("ding:p01"), { id: "ding:p01", name: "P01", role: "driver", identities: ["ding:p01"] }, "on the roster at once, while her box is still starting");
   open();
   const [box] = await allSettled(request, 1);
-  assert.deepEqual([box!.owner, box!.status, box!.name], ["ding:p01", "ready", "P01 的电脑"], "her own, made through the member's path, named in the door's language");
+  assert.deepEqual([box!.owner, box!.status, box!.name], ["ding:p01", "ready", "P01 的沙盒"], "her own, made through the member's path, named in the door's language");
   for (let i = 0; i < 100 && new Principals().byId("ding:p01")?.homeAgentId === undefined; i++) await new Promise(resolve => setTimeout(resolve, 20));
   const home = new Principals().byId("ding:p01")!.homeAgentId!;
   const registry = new AgentRegistry(join(org.home, "agents"));

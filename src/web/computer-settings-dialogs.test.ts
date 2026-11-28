@@ -50,7 +50,7 @@ test("reset explains the real data loss and labels confirmation with the configu
   vm.runInContext(NEXT_SET_BOXES_JS, context);
   const form = vm.runInContext("boxSet.limits = { container: 'custom-computer' }; limitsAndResetBlock()", context) as Node;
   const reset = form.querySelector("details")!;
-  assert.match(reset.querySelector(".guidance")!.textContent, /deletes .*work folder.*Files saved outside this computer are kept/);
+  assert.match(reset.querySelector(".guidance")!.textContent, /deletes .*work folder.*Files saved outside this sandbox are kept/);
   const label = reset.querySelector("label")!;
   assert.equal(label.textContent, "Type custom-computer to confirm");
   assert.equal(label.children[0]?.tag, "input");
@@ -95,7 +95,7 @@ test("an offline local computer has in-panel recovery actions instead of desktop
   });
   vm.runInContext(NEXT_SCREEN_JS, context);
   vm.runInContext("screen2.open = true; renderScreen()", context);
-  assert.equal(body.querySelector("h2")!.textContent, "Computer not connected");
+  assert.equal(body.querySelector("h2")!.textContent, "Sandbox not connected");
   assert.match(body.querySelector("p")!.textContent, /My computer/);
   assert.equal(body.querySelector("iframe"), undefined);
   assert.equal(body.querySelector(".desk"), undefined);

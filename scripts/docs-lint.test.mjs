@@ -160,6 +160,23 @@ test("user-facing pages use the glossary's words, and the glossary names every c
   assert.ok(!glossary.deprecated.some(rule => rule.term === "智能体"));
 });
 
+test("a page holds text only: a NUL or other control character in the README or a docs page fails, tab, newline and CR do not (INV-2311)", () => {
+  const { lintControlCharacters } = awaitImported;
+  assert.deepEqual(lintControlCharacters(root), [], lintControlCharacters(root).join("\n"));
+  const dir = mkdtempSync(join(tmpdir(), "control-"));
+  try {
+    mkdirSync(join(dir, "docs", "manual"), { recursive: true });
+    // What a rewrite once left where a URL was: a NUL, the mask's number, a U+0001.
+    writeFileSync(join(dir, "README.md"), "# LumenBox\n\n<a href=\"\u00000\u0001\">Download</a>\n");
+    writeFileSync(join(dir, "docs", "manual", "page.md"), "Tab\there, a CRLF line\r\nand a bell \u0007.\n");
+    writeFileSync(join(dir, "docs", "fine.md"), "Plain text, 中文 too.\n");
+    assert.deepEqual(lintControlCharacters(dir), [
+      "README.md:3: control character U+0000; a page holds text only.",
+      "docs/manual/page.md:2: control character U+0007; a page holds text only.",
+    ]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a deprecated synonym is reported by file and line, in the listed files and in audience: user pages; code, links, allowed names and specs are not checked", () => {
   const { lintVocabulary, GLOSSARY } = awaitImported;
   const dir = mkdtempSync(join(tmpdir(), "vocabulary-"));
@@ -177,13 +194,19 @@ test("a deprecated synonym is reported by file and line, in the listed files and
     ].join("\n"));
     mkdirSync(join(dir, "docs"));
     writeFileSync(join(dir, "docs", "22-spec.md"), "<!-- doc: 22-spec\n     family: spec\n-->\n# A spec\n\nThe door grants nothing.\n");
-    writeFileSync(join(dir, "docs", "manual.md"), "<!-- doc: manual\n     audience: user\n-->\n# A page\n\nEvery door opens into one box.\n");
+    writeFileSync(join(dir, "docs", "manual.md"), "<!-- doc: manual\n     audience: user\n-->\n# A page\n\nEvery door opens into one agent's box; run `agentbox box up`.\n");
+    writeFileSync(join(dir, "docs", "manual.zh.md"), "<!-- doc: manual-zh\n     audience: user\n-->\n# 一页\n\n交给 agent，在本机上。\n");
     // The language bundle is read like a user page (INV-1684): both the Chinese and the English.
     mkdirSync(join(dir, "src", "i18n"), { recursive: true });
     writeFileSync(join(dir, "src", "i18n", "ui-page.ts"), [
       "export const UI_PAGE = {",
       '  "ui.page.ask": ["问机器人", "Ask the agent"],',
-      '  "ui.page.fine": ["box 已启动", "The box is up"],',
+      '  "ui.page.fine": ["沙盒已启动", "The sandbox is up"],',
+      '  "ui.page.box": ["box 已启动", "The box is up"],',
+      // docs/112: an agent is 智能体 in Chinese and still *agent* in English.
+      '  "ui.page.agent": ["交给 agent", "Hand it to the agent"],',
+      // A key with a colon is read too; an identifier typed as it is (agent:id) is not prose.
+      '  "ui.page.q:colon": ["问 agent", "Ask the agent"], "ui.page.id": ["* 或 agent:id", "* or agent:id"],',
       '  "ui.page.door": ["渠道", "Add a door"],',
       '  const bot = "bot";',
       "};",
@@ -192,17 +215,24 @@ test("a deprecated synonym is reported by file and line, in the listed files and
     mkdirSync(join(dir, "src", "host", "catalog-data", "templates"), { recursive: true });
     writeFileSync(join(dir, "src", "host", "catalog-data", "templates", "x.lumenbox-template.json"), JSON.stringify({
       format: "lumenbox-template/1",
-      profile: { name: "Haggle Bot", description: "A bot that haggles.", descriptionZh: "砍价机器人。" },
+      profile: { name: "Haggle Bot", description: "A bot that haggles.", descriptionZh: "砍价机器人，一个 agent。" },
       skills: [{ slug: "haggle", description: "the bot's own skill" }],
     }, null, 1));
     const problems = lintVocabulary(dir, ["gui*.md"], join(root, GLOSSARY));
     assert.deepEqual(problems, [
       'docs/manual.md:6: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
+      'docs/manual.md:6: "box" is a deprecated synonym; write "sandbox, your sandbox, team sandbox" (docs/glossary.md).',
+      'docs/manual.zh.md:6: "agent" is a deprecated synonym; write "智能体" (docs/glossary.md).',
       'guide.md:4: "bot" is a deprecated synonym; write "agent" (docs/glossary.md).',
       'guide.md:9: "箱子" is a deprecated synonym; write "沙盒" (docs/glossary.md).',
       'src/i18n/ui-page.ts:2: "机器人" is a deprecated synonym; write "智能体" (docs/glossary.md).',
-      'src/i18n/ui-page.ts:4: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:4: "box" is a deprecated synonym; write "sandbox, your sandbox, team sandbox" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:4: "box" is a deprecated synonym; write "sandbox, your sandbox, team sandbox" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:5: "agent" is a deprecated synonym; write "智能体" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:6: "agent" is a deprecated synonym; write "智能体" (docs/glossary.md).',
+      'src/i18n/ui-page.ts:7: "door" is a deprecated synonym; write "channel" (docs/glossary.md).',
       'src/host/catalog-data/templates/x.lumenbox-template.json:6: "机器人" is a deprecated synonym; write "智能体" (docs/glossary.md).',
+      'src/host/catalog-data/templates/x.lumenbox-template.json:6: "agent" is a deprecated synonym; write "智能体" (docs/glossary.md).',
     ]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

@@ -120,11 +120,13 @@ test("INV-2311: the desktop Owner — Your sandbox heading over the starter team
   assert.equal(screen.setup.edition, "personal");
   assert.equal(screen.headings.length, 1, "one sandbox, one heading — the desktop's is the Owner's own");
   assert.match(screen.headings[0]!, /^Your sandbox · (Stopped|Failed)$/);
+  assert.equal(screen.headingActs.length, 1, "the heading line carries the one button; nothing sits alone under it");
+  if (/Stopped/.test(screen.headings[0]!)) assert.deepEqual([screen.headingActs[0], screen.why], ["Start it", []]);
   assert.deepEqual([...screen.agents].sort(), STARTER_TEAM.map(profile => profile.name).sort(), "the agents in it, under it");
   assert.ok(!screen.panes.includes("organisation"), "no Settings → Organisation on the desktop");
   const steps = screen.steps.join("\n");
   // The suite has no credential, so no model is set; a run with one has nothing to choose (the logic test below holds both).
-  if (screen.setup.key === false) assert.match(steps, /Model \| Choose a model/); else assert.doesNotMatch(steps, /Model/);
+  if (screen.setup.key === false) assert.match(steps, /No model is chosen yet\. \| Choose a model/); else assert.doesNotMatch(steps, /Model/);
   assert.match(steps, /Your sandbox · (Stopped \| Start it|Failed · .+ \| (Try again|Get Docker Desktop))/);
   assert.match(steps, /Your agent \| Talk to Ada/);
   assert.match(steps, /Chat channel \(optional\) \| Connect DingTalk or Feishu/);
@@ -147,7 +149,7 @@ test("INV-2311: an organisation's Admin and member — each their own sandbox; t
   assert.equal(admin.panes[0], "organisation", "Settings → Organisation leads the Admin's list");
   assert.ok(!member.panes.includes("organisation"));
   if (admin.setup.key === false) {
-    assert.match(admin.steps.join("\n"), /Model \| Choose a model/);
+    assert.match(admin.steps.join("\n"), /No model is chosen yet\. \| Choose a model/);
     assert.match(member.steps.join("\n"), /Your Admin has not chosen a model yet\./);
   }
   assert.equal(member.setup.key, admin.setup.key, "a member is told whether a model is set, as the Admin is");
@@ -165,8 +167,9 @@ test("INV-2311: a member whose sandbox failed is told why in plain words, and Tr
   const failed = await firstScreenOf(request, "ding:alice");
   assert.equal(failed.setup.autoBox.state, "failed");
   assert.deepEqual(failed.headings, ["Your sandbox · Failed"]);
-  assert.equal(failed.why.length, 1);
-  assert.match(failed.why[0]!, /\| Try again$/, "the reason, and one button that works");
+  assert.equal(failed.why.length, 1, "the reason under the heading");
+  assert.doesNotMatch(failed.why[0]!, /Try again/);
+  assert.deepEqual(failed.headingActs, ["Try again"], "and its one button that works, on the heading line");
   assert.match(failed.steps.join("\n"), /Your sandbox · Failed · .+ \| Try again/);
   assert.doesNotMatch(failed.words, INTERNAL);
   const walked = failed.walk();
@@ -189,7 +192,7 @@ test("INV-2311: state words are four, a failed sandbox always has its reason and
   for (const raw of ["ImagePullBackOff", "0/3 nodes: Insufficient memory", "connect ECONNREFUSED", "exit 137"]) assert.ok(tr(`ui.first.why.${firstScreen.sandboxReasonOf(raw)}`, "en") !== `ui.first.why.${firstScreen.sandboxReasonOf(raw)}`, raw);
   const member = { admin: false, key: true, door: false, quota: false, canCreate: false, readyOnce: false, agent: undefined, opened: false };
   const model = (admin: boolean) => firstScreen.gettingStartedOf({ ...member, admin, key: false, yours: undefined, door: true }).map(step => [step.words, step.act?.to]);
-  assert.deepEqual([model(true), model(false)], [[["ui.first.step.model", { pane: "model" }]], [["ui.first.model.member", undefined]]], "an Admin opens Settings → Model; a member is told, with nothing to press");
+  assert.deepEqual([model(true), model(false)], [[["ui.first.model.none", { pane: "model" }]], [["ui.first.model.member", undefined]]], "an Admin opens Settings → Model; a member is told, with nothing to press");
   assert.deepEqual(firstScreen.gettingStartedOf({ ...member, yours: { id: "default", name: "", yours: true, state: "stopped" } }), [], "a member's stopped sandbox they cannot start is the sidebar's to say");
   assert.deepEqual(firstScreen.gettingStartedOf({ ...member, yours: undefined, quota: true }).map(step => [step.words, step.act]), [["ui.first.sandbox.quota", undefined]]);
   for (const state of ["preparing", "ready", "stopped", "failed"]) for (const locale of ["en", "zh"] as const) assert.notEqual(tr(`ui.first.state.${state}`, locale), `ui.first.state.${state}`);
@@ -204,12 +207,13 @@ test("INV-2311: Settings → Organisation is the Admin's on an organisation: the
     settings: { setup: { edition: "organisation" }, me: { role: "admin" } }, SETTING_PANES: ["model", "boxes", "doors"], shellPanes: () => [],
   };
   const page = pageFunctions(["isOrganisation", "canOperateInstallation", "canDriveAgents", "settingsPanes", "organisationApps", "organisationHead", "organisationAppBlock",
-    "organisationAddressBlock", "organisationActivateBlock", "renderOrganisationPane", "channelsBlock"], globals);
+    "organisationAddressBlock", "organisationActivateBlock", "appConnected", "renderOrganisationPane", "channelsBlock"], globals);
   assert.deepEqual([...page.settingsPanes!()], ["organisation", "model", "boxes", "doors"]);
   const view = fakeEl("div");
   page.renderOrganisationPane!(view);
   assert.deepEqual(view.kids.map(section => texts(section.kids[0]).join("")), ["ui.org.channelApp · ui.org.state.connected", "ui.org.publicAddress · ui.org.state.notSet", "ui.org.activate · ui.org.state.needsApp"]);
   assert.deepEqual(moved, { publicUrl: 1, directory: 1 }, "the public address and activation are the very blocks Channels and Team had");
+  assert.deepEqual(texts(view.kids[0]).slice(3, 4), ["Acme · ui.org.state.connected"], "an app by its name and state, no id or vendor code");
   for (const kid of view.kids.flatMap(section => section.kids)) kid.press?.();
   assert.deepEqual(opened, ["doors", "doors"], "the channel app is edited where every channel is");
 

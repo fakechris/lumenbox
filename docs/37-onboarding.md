@@ -8,7 +8,7 @@
 
 What a person does on day one, path by path. The README says the short version; this is the
 whole of it. Product name LumenBox; the command line still says `agentbox`.
-Each word for a thing you meet here (box, agent, channel, team, task) means one thing, and
+Each word for a thing you meet here (sandbox, agent, channel, team, task) means one thing, and
 [the glossary](glossary.md) says what. This page is the quickstart; [the manual](manual/README.md)
 has a page for each thing you meet afterwards — what it is, and how to use it from the app, a
 chat and the command line.
@@ -19,7 +19,7 @@ chat and the command line.
   the tooling but have not been produced or tested yet — say so if you want one.
 - **A model key.** Any of the built-in providers (Anthropic, MiniMax, DeepSeek, Kimi, GLM,
   OpenAI, OpenRouter, SiliconFlow, and the OpenAI-compatible endpoints). One key is enough; the Settings page lists them.
-- **A box** — one Linux computer the agents work in, with a desktop, a browser and a shell.
+- **A sandbox** — one Linux computer the agents work in, with a desktop, a browser and a shell.
   Three ways to get one, below. You need at least one.
 
 ## 1. Install the app
@@ -38,28 +38,28 @@ xattr -dr com.apple.quarantine /Applications/LumenBox.app
 ```
 
 Then open it normally. It shows a window on `http://127.0.0.1:7777` and sits in the menu bar;
-quitting the window keeps the box running.
+quitting the window keeps the sandbox running.
 
 ## 2. First run: what this machine is for, then the two things it asks for
 
 **Before anything is created, the app asks what this machine is for** (INV-1696, docs/96 §3):
 
-- **Personal machine** (个人的机器) — a personal installation and this computer's Docker box,
+- **Personal machine** (个人的机器) — a personal installation and this computer's Docker sandbox,
   both yours alone as the Owner. What follows below.
 - **Personal + organisation** (个人 + 组织) — the same, then Settings → Organisations opens so
   you can join an organisation that runs elsewhere (its address or an invite link). Your local
-  boxes are never offered to it.
+  sandboxes are never offered to it.
 - **Organisation node** (组织的节点) — no personal installation; the machine becomes a node of
   one organisation (INV-1697). Enter the organisation's address (and a node name, the host name by
   default), then sign in to the organisation as one of its Admins with Feishu or DingTalk — no code
   to type. The organisation issues the node credential, which the app keeps in the keychain
   ("LumenBox node"), and the app starts `agentbox node run` in `userData/node`: the machine's Docker
-  box (`<name>-docker`) and its native environment (`<name>-native`) register with the organisation.
+  sandbox (`<name>-docker`) and its native environment (`<name>-native`) register with the organisation.
   A member who is not an Admin cannot enrol a node. The native environment joins with nobody in
-  it; an Admin opens it in Settings → Boxes → Nodes, which is refused while its shell is not
-  running inside the OS sandbox (INV-1700). The boxes listen on the address in
+  it; an Admin opens it in Settings → Sandboxes → Nodes, which is refused while its shell is not
+  running inside the OS sandbox (INV-1700). The sandboxes listen on the address in
   `AGENTBOX_NODE_ADVERTISE` (a network the node and the organisation share, such as a tailnet),
-  loopback otherwise. Revoking the node there stops its boxes; the app then says it was revoked.
+  loopback otherwise. Revoking the node there stops its sandboxes; the app then says it was revoked.
   On a Mac that runs a business desktop application, the node can open the machine's own screen
   to the `computer` tool (INV-1707): start the app with `AGENTBOX_NODE_SCREEN=1` (or run
   `agentbox node run --screen`), and in System Settings → Privacy & Security give the app that
@@ -67,7 +67,7 @@ quitting the window keeps the box running.
   them: until they are granted every screen action is refused with PERMISSION_DENIED and nothing is
   sent. The screen is desktop 1 of the native environment, one agent at a time; every click, key or
   text an agent sends there asks a person first, a takeover pauses it at the next input, and stopping
-  the node sends nothing more. Settings → Boxes → Nodes marks the box "its own screen is open".
+  the node sends nothing more. Settings → Sandboxes → Nodes marks the sandbox "its own screen is open".
 
 The answer is kept in the app's own data directory (`machine.json` in Electron's userData, e.g.
 `~/Library/Application Support/LumenBox/`), not under `~/.agentbox`: a node has no `~/.agentbox`.
@@ -79,7 +79,7 @@ has a personal installation, so it is recorded as a personal machine, or persona
 if it had joined one.
 
 
-*The page also shows a four-step card — a box, your first agent, a channel, your first piece
+*The page also shows a four-step card — a sandbox, your first agent, a channel, your first piece
 of work — which disappears when all four are done and comes back from the `?` button. Each
 step names the command that does the same thing, for an installation running on a server
 where there is nothing to click (INV-542).*
@@ -87,66 +87,66 @@ where there is nothing to click (INV-542).*
 The Settings dialog opens by itself with a welcome note. It wants:
 
 1. **A provider and a key.** Pick one, paste the key, Save. Keys live in
-   `~/.agentbox/config.json`, readable only by you, never inside the box.
-2. **A box.** The *Box* section shows whether one is running and offers to start one. Which of
+   `~/.agentbox/config.json`, readable only by you, never inside the sandbox.
+2. **A sandbox.** The *Sandbox* section shows whether one is running and offers to start one. Which of
    the three paths applies to you is the next section.
 
 Everything else — agents, chat channels, skills — has defaults and can wait.
 
-## 3. Getting a box
+## 3. Getting a sandbox
 
 ### 3a. Docker on this Mac (the default)
 
 Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) or
 [OrbStack](https://orbstack.dev/) and start it. Back in LumenBox Settings, press *Start the
-box*. The first time, it pulls `fakechris/lumenbox:<version>` from Docker Hub — the same version
+sandbox*. The first time, it pulls `fakechris/lumenbox:<version>` from Docker Hub — the same version
 as the app — which takes a few minutes. Then it starts one container named `agentbox-box`,
 and the page turns green when the desktop inside it is up. Nothing else to configure; the
-box is only reachable from this machine.
+sandbox is only reachable from this machine.
 
 From a checkout of this repository you can build that image yourself instead of pulling it:
 `npm run build:image`. `npm run push:image` publishes `fakechris/lumenbox:<version>` and
 `fakechris/lumenbox:latest` (it needs `docker login`). An image already on the machine is used as
 it is; a pull only happens when the version tag is absent.
 
-The Box section says which of the three situations you are in before you press anything:
+The Sandbox section says which of the three situations you are in before you press anything:
 no `docker` command on this machine (it names Docker Desktop and OrbStack, with links),
 Docker installed but its engine not answering (start it and press again), or the engine
 fine and only the container missing. `docker version` in a terminal is the same check.
 
 **On a network where Docker Hub is slow or unreachable.** The pull can come from a mirror
-instead: Settings → Box has an *image override* — a full `registry/repo:tag` reference —
+instead: Settings → Sandbox has an *image override* — a full `registry/repo:tag` reference —
 saved to `~/.agentbox/config.json` as `boxImage` (empty again means the release default).
 `AGENTBOX_IMAGE` in the environment still wins over it, and configuring Docker Desktop's own
 *registry-mirrors* is the other way to the same effect. A pull that fails says which kind of
 failure it was: the registry answered *no such image* (update the app — a just-released
 version can race its image), or the registry never answered (network; set the mirror).
 
-**Updating the box.** A new app version usually expects a new box image. The app notices, and
-Settings → Boxes says *an update is available*. *Apply update* waits for work in progress to
-finish, then recreates the box on the new image. What agents made and your browser logins stay:
-they are on volumes, not in the box. Anything written elsewhere in the box does not stay. If the
-new box does not work, it goes back to the image it had. *Reset the box…* is different. It starts
-an empty box and deletes what agents made and every login, so it asks for the box's name.
+**Updating the sandbox.** A new app version usually expects a new sandbox image. The app notices, and
+Settings → Sandboxes says *an update is available*. *Apply update* waits for work in progress to
+finish, then recreates the sandbox on the new image. What agents made and your browser logins stay:
+they are on volumes, not in the sandbox. Anything written elsewhere in the sandbox does not stay. If the
+new sandbox does not work, it goes back to the image it had. *Reset the sandbox…* is different. It starts
+an empty sandbox and deletes what agents made and every login, so it asks for the sandbox's name.
 
 ### 3b. Docker on another machine
 
-If you keep Docker on a server (a NAS, a homelab box, a cloud VM), point the app at it the way
+If you keep Docker on a server (a NAS, a homelab sandbox, a cloud VM), point the app at it the way
 you would point `docker` itself: set `DOCKER_HOST` (for example
-`ssh://you@server`) or make a `docker context` and select it, then start LumenBox. The box
+`ssh://you@server`) or make a `docker context` and select it, then start LumenBox. The sandbox
 runs there; the desktop is streamed to your app over that connection. The operator's guide
-(docs/38, "Putting the box on another machine") has the details and the ports.
+(docs/38, "Putting the sandbox on another machine") has the details and the ports.
 
-### 3c. A box somebody else runs — including a Grok Bot's
+### 3c. A sandbox somebody else runs — including a Grok Bot's
 
-LumenBox can drive a box it did not start, as long as that box runs the LumenBox daemon and
+LumenBox can drive a sandbox it did not start, as long as that sandbox runs the LumenBox daemon and
 you can reach it over a private network. Two cases:
 
-- **A Grok Bot box.** Open the *LumenBox Bridge* template —
+- **A Grok Bot sandbox.** Open the *LumenBox Bridge* template —
   https://x.ai/bot/U8xEPyVxQHL_JznVhVotB — and press *Add to Grok Bot*. The Grok Bot it creates
-  prepares its own box: joins your Tailscale network (it sends you the login link), installs the
+  prepares its own sandbox: joins your Tailscale network (it sends you the login link), installs the
   daemon on a desktop of its own, and tells you exactly what to paste into LumenBox → Settings →
-  Boxes → Attach. Nothing of the Grok bot's own desktop or files is touched. docs/35 is the whole
+  Sandboxes → Attach. Nothing of the Grok bot's own desktop or files is touched. docs/35 is the whole
   story.
 - **Any Linux machine you have a shell on.** Run the same installer there yourself:
 
@@ -158,10 +158,10 @@ you can reach it over a private network. Two cases:
   ~/.lumen/bin/lumen-bridge.sh connect-hint  # what to paste into LumenBox
   ```
 
-  It needs Debian/Ubuntu with `apt`, `sudo` for the Tailscale install, and Node 22 on the box.
+  It needs Debian/Ubuntu with `apt`, `sudo` for the Tailscale install, and Node 22 on the sandbox.
 
-An attached box appears in Settings → Boxes beside the Docker one. Agents are created *into* a
-box and stay there; each box keeps its own desktops, skills and memory.
+An attached sandbox appears in Settings → Sandboxes beside the Docker one. Agents are created *into* a
+sandbox and stay there; each sandbox keeps its own desktops, skills and memory.
 
 ## 4. Your first agent, your first message
 
@@ -206,10 +206,10 @@ the supervisor's model and the agent's model spend.
   `~/Library/Logs/LumenBox/server.log`: a `catch-up looked at …` line every five minutes means
   the channel is being checked; `replaying …` means a message the socket missed was picked up.
 
-- **The page says the box is unavailable.** If something outside LumenBox stopped it (a
+- **The page says the sandbox is unavailable.** If something outside LumenBox stopped it (a
   `docker stop`, an engine restart), LumenBox starts it again within a minute, tells admins,
-  and lets agents whose turns it stopped go on. A box you stopped with `agentbox box down`
-  stays stopped. To start it yourself: Settings → Box → Start; or `agentbox box up` in
+  and lets agents whose turns it stopped go on. A sandbox you stopped with `agentbox box down`
+  stays stopped. To start it yourself: Settings → Sandbox → Start; or `agentbox box up` in
   a terminal (the CLI is `dist/cli.js` inside the app bundle, or `npm run agentbox --` from a
   checkout).
 - **Docker is fine but the desktop never comes up.** `agentbox box status` prints the
@@ -217,12 +217,12 @@ the supervisor's model and the agent's model spend.
   "The desktop" says what each part is.
 - **The agent says it has no key.** Settings → provider; keys are per installation, and a
   restart applies them.
-- **An attached box went away.** It has to be reachable on the network you attached it over
-  (Tailscale, a tunnel); Settings → Boxes shows the last error. A Grok box after a reboot:
+- **An attached sandbox went away.** It has to be reachable on the network you attached it over
+  (Tailscale, a tunnel); Settings → Sandboxes shows the last error. A Grok sandbox after a reboot:
   tell that Grok Bot "把 LumenBox 桥拉起来".
 
 ## 7. Uninstalling
 
 Quit the app; `docker rm -f agentbox-box` and `docker volume rm agentbox-work agentbox-home`
-if you want the box's files gone; delete `/Applications/LumenBox.app` and `~/.agentbox` (the
+if you want the sandbox's files gone; delete `/Applications/LumenBox.app` and `~/.agentbox` (the
 configuration, transcripts and memory — that is the part you might want to keep).

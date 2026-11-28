@@ -20,9 +20,9 @@ test("a refusal keeps its code and speaks the asker's language: ?lang=, then the
   const refusal = { ...apiError("agent-unknown", { agent: "ada" }), extra: 1 };
   assert.deepEqual(JSON.parse(JSON.stringify(refusal)), { code: "agent-unknown", error: "No agent ada", extra: 1 }, "built in English; the blanks never reach the JSON");
   const said = (req: IncomingMessage) => localizedBody(refusal, req) as { code: string; error: string; extra: number };
-  assert.deepEqual(said(request("/api/x")), { ...refusal, error: "没有 agent ada" }, "no signal at all is the default language");
+  assert.deepEqual(said(request("/api/x")), { ...refusal, error: "没有智能体 ada" }, "no signal at all is the default language");
   assert.equal(said(request("/api/x", { "accept-language": "en-GB,en;q=0.9" })).error, "No agent ada");
-  assert.equal(said(request("/api/x", { "accept-language": "en", cookie: "lumen-lang=zh" })).error, "没有 agent ada", "a choice beats the browser");
+  assert.equal(said(request("/api/x", { "accept-language": "en", cookie: "lumen-lang=zh" })).error, "没有智能体 ada", "a choice beats the browser");
   assert.equal(said(request("/api/x?lang=en", { cookie: "lumen-lang=zh" })).error, "No agent ada", "?lang= beats the cookie");
   assert.equal(said(request("/api/x?lang=en")).code, "agent-unknown", "the code is the same in every language");
   assert.deepEqual(localizedBody({ error: "from a deeper module" }, request("/")), { error: "from a deeper module" }, "a body that is not an apiError passes as it is");
@@ -60,7 +60,7 @@ test("Settings speaks the reader's language: prompt parts, connector setup, the 
       assert.equal(statuses.find(s => s.name === "feishu")!.detail, lang === "zh" ? "请设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET" : "set FEISHU_APP_ID and FEISHU_APP_SECRET", `${lang}: a channel's status`);
       if (lang === "zh") assert.deepEqual(shelf.filter(t => !/\p{Script=Han}/u.test(t.description)).map(t => t.slug), [], "every shelf template carries its Chinese line");
       const missing = await read("/api/agents/config-versions?agent=nobody", lang);
-      assert.deepEqual([missing.code, missing.error], ["agent-unknown", lang === "zh" ? "没有 agent nobody" : "No agent nobody"], `${lang}: a route module's refusal, through send`);
+      assert.deepEqual([missing.code, missing.error], ["agent-unknown", lang === "zh" ? "没有智能体 nobody" : "No agent nobody"], `${lang}: a route module's refusal, through send`);
     }
   } finally {
     stop?.();

@@ -170,7 +170,7 @@ export const TEAM_SECTIONS = [
   "## Build the minimal version",
   ...MANUAL_ENTRIES.map(s => `### ${s}`),
   "## Run monitoring",
-  "## Outside the box",
+  "## Outside the sandbox",
   "## Extensions",
   "## The run this page is based on",
 ];
@@ -234,7 +234,7 @@ export const TEAM_SECTIONS_ZH = [
   "## 搭一个最小版本",
   ...MANUAL_ENTRIES_ZH.map(s => `### ${s}`),
   "## 运行监控",
-  "## box 之外",
+  "## 沙盒之外",
   "## 扩展",
   "## 本页依据的那次运行",
 ];
@@ -471,8 +471,10 @@ const ticked = cell => [...cell.matchAll(/`([^`]+)`/g)].map(m => m[1]);
 export function parseGlossary(text) {
   const tables = tablesOf(text);
   const deprecated = [];
-  for (const [terms, instead] of tables.get("Deprecated synonyms") ?? []) {
-    for (const term of ticked(terms)) deprecated.push({ term, instead: (instead ?? "").replace(/`/g, "") });
+  for (const [terms, instead, note] of tables.get("Deprecated synonyms") ?? []) {
+    // "In Chinese copy only": a word that is right in English and wrong in Chinese (`agent`, docs/112).
+    const chineseOnly = /^In Chinese copy only/i.test(note ?? "");
+    for (const term of ticked(terms)) deprecated.push({ term, instead: (instead ?? "").replace(/`/g, ""), ...(chineseOnly ? { chineseOnly } : {}) });
   }
   const allowed = (tables.get("Allowed names") ?? []).flatMap(([name]) => ticked(name));
   return { concepts: tables.get("Concepts") ?? [], deprecated, allowed };
@@ -482,6 +484,10 @@ export function parseGlossary(text) {
 function proseOf(line, allowed) {
   let prose = line
     .replace(/`[^`]*`/g, " ")
+    .replace(/\{\{?[\w.@-]+\}\}?/g, " ") // a placeholder ({box}, {{ui.key}}) is code: the word put there is checked where it is written
+    .replace(/(^|[\s(（"“])~?\/[\w.\/-]+/g, "$1 ") // a path, typed as it is (/home/box/work)
+    .replace(/\bagentbox(?:\s+[a-z][\w-]*){1,2}/g, " ") // a command, typed as it is (agentbox box up)
+    .replace(/\b[a-z]+:[\w<>*-]+/gi, " ") // an identifier with its prefix, typed as it is (agent:id, oauth:<provider>)
     .replace(/<!--.*?-->/g, " ")
     .replace(/\]\([^)]*\)/g, "] ")
     .replace(/[\w:-]+\s*=\s*"[^"]*"/g, " ")
@@ -501,7 +507,7 @@ function matcherFor(term) {
 /** `file:line` for every deprecated synonym in one text. */
 export function vocabularyProblems(file, text, glossary) {
   const problems = [];
-  const rules = glossary.deprecated.map(rule => ({ ...rule, hit: matcherFor(rule.term) }));
+  const rules = glossary.deprecated.filter(rule => !rule.chineseOnly || file.endsWith(".zh.md")).map(rule => ({ ...rule, hit: matcherFor(rule.term) }));
   const lines = text.split("\n");
   let fenced = false;
   let header = text.startsWith("<!--");
@@ -514,6 +520,23 @@ export function vocabularyProblems(file, text, glossary) {
       if (rule.hit(prose)) problems.push(`${file}:${index + 1}: "${rule.term}" is a deprecated synonym; write "${rule.instead}" (${GLOSSARY}).`);
     }
   });
+  return problems;
+}
+
+/**
+ * A control character in a page (INV-2311): a NUL or any C0 byte but tab, newline and carriage
+ * return. One makes git read the file as binary and hides what the page says — a rewrite once left
+ * NUL markers where eight URLs were. Every Markdown file under docs/ and the README is read as bytes.
+ */
+export function lintControlCharacters(root, patterns = ["README.md", "docs/**/*.md"]) {
+  const problems = [];
+  for (const file of [...new Set(patterns.flatMap(pattern => globSync(pattern, { cwd: root })))].sort()) {
+    readFileSync(join(root, file), "latin1").split("\n").forEach((line, index) => {
+      // By code, not a regular expression of control characters (which the linter rightly refuses to read).
+      const code = [...line].map(ch => ch.charCodeAt(0)).find(c => c < 0x20 && c !== 0x09 && c !== 0x0d);
+      if (code !== undefined) problems.push(`${file}:${index + 1}: control character U+${code.toString(16).padStart(4, "0").toUpperCase()}; a page holds text only.`);
+    });
+  }
   return problems;
 }
 
@@ -556,15 +579,23 @@ export const BUNDLE = "src/i18n/{messages,ui-*,server-*}.ts";
 export function bundleVocabularyProblems(file, text, glossary) {
   const problems = [];
   const rules = glossary.deprecated.map(rule => ({ ...rule, hit: matcherFor(rule.term) }));
+  // Which language a value is: a pair `["中文", "English"]` says so by position; a `zh: { … }` block says so for its lines.
+  let section = "";
   text.split("\n").forEach((line, index) => {
-    if (!/^\s*"[\w.-]+": [["]/.test(line)) return;
+    if (/^\s*(zh|en):\s*\{/.test(line)) section = /^\s*zh/.test(line) ? "zh" : "en";
+    // A key may hold a colon (`ui.next.cal.q.memory-judge:fromContent`): a narrower pattern once let such lines go unread.
+    if (!/^\s*"[\w.:-]+": [["]/.test(line)) return;
     const strings = [...line.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(match => JSON.parse(`"${match[1]}"`));
-    for (const value of strings.slice(1)) {
+    const pair = /^\s*"[\w.:-]+": \[/.test(line), key = strings[0] ?? "";
+    strings.slice(1).forEach((value, at) => {
+      // Chinese by position in a pair, by its block, or by its key (a shelf template's `descriptionZh`).
+      const chinese = pair ? at === 0 : section === "zh" || /Zh$/.test(key);
       const prose = proseOf(value, glossary.allowed);
       for (const rule of rules) {
+        if (rule.chineseOnly && !chinese) continue;
         if (rule.hit(prose)) problems.push(`${file}:${index + 1}: "${rule.term}" is a deprecated synonym; write "${rule.instead}" (${GLOSSARY}).`);
       }
-    }
+    });
   });
   return problems;
 }

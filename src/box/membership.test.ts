@@ -20,9 +20,9 @@ test("who may enter", () => {
 
 test("the label is derived from the members, never from free text", () => {
   const nameOf = (id: string) => ({ "p-chris": "Chris", "p-mia": "Mia" })[id] ?? id;
-  assert.match(membersLabel({ members: "everyone" }, nameOf), /^共享 box/);
-  assert.match(membersLabel({ members: ["p-chris"] }, nameOf), /^Chris 的 box/);
-  assert.match(membersLabel({ members: ["p-chris", "p-mia"] }, nameOf), /2 人的 box：Chris、Mia/);
-  assert.match(membersLabel({ members: [] }, nameOf), /^无人 box/);
-  assert.match(refusalToEnter("finance", "Mia"), /finance is not a box Mia is in/);
+  assert.match(membersLabel({ members: "everyone" }, nameOf), /^团队沙盒/);
+  assert.match(membersLabel({ members: ["p-chris"] }, nameOf), /^Chris 的沙盒/);
+  assert.match(membersLabel({ members: ["p-chris", "p-mia"] }, nameOf), /2 人的沙盒：Chris、Mia/);
+  assert.match(membersLabel({ members: [] }, nameOf), /^无人沙盒/);
+  assert.match(refusalToEnter("finance", "Mia"), /finance is not a sandbox Mia is in/);
 });

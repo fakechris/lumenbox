@@ -326,13 +326,15 @@ function renderChat(view) {
   var agent = next.agents[chat.agentId];
   rememberPlace();
   $("view-title").textContent = agent ? agent.name : t("ui.next.nav.chat"); $("view-title").title = agent ? t("ui.next.thread.agent") : "";
-  $("view-hint").textContent = agent ? (agent.title || agent.description || "") : "";
+  $("view-hint").textContent = agent ? roleOf(agent) : "";
   $("composer").hidden = !agent;
-  renderModelNotice(); renderWatchOnly();
+  renderWatchOnly();
   syncChatComposer(agent ? chatTarget() : "");
   $("composer-text").placeholder = agent ? t("ui.next.chat.placeholder", { name: agent.name }) : "";
   if (agent && chat.loading !== chat.agentId && chat.loadedFor !== chat.agentId) loadThread();
   if (chat.loadedFor === chat.agentId || !agent) renderThread(view);
+  // After the thread: Getting started (setupCard) decides whether the list says the model sentence, and the footer reads that (INV-2311).
+  renderModelNotice();
 }
 
 /** The conversation is on screen: this agent's, in a visible tab, not behind the agent list on a narrow screen. */
