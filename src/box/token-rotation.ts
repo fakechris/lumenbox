@@ -11,6 +11,11 @@
  * 4. the box is asked, with the new token, to make it the token (`/token/confirm`): the old one
  *    then works for `TOKEN_OVERLAP_SECONDS` more and stops.
  *
+ * Between 3 and 4, `afterSave` writes any other copy the box is started from (a Kubernetes personal
+ * box's Secret): not before 3, or a pod re-created in between would boot with a token the host does
+ * not hold yet; and by then the box accepts both, so a pod restarted before the copy is written
+ * still takes the new token from its config volume.
+ *
  * A failure before step 2 changes nothing. A failure after it leaves the box accepting both until
  * the next rotation confirms one, which the answer says. A box whose daemon predates rotation answers
  * step 2 with 404, and is told to be re-created from the current image.
@@ -35,6 +40,8 @@ export interface RotationResult {
   /** Until when the old token still works; absent when the box could not be told to switch yet. */
   overlapUntil?: string;
   confirmed: boolean;
+  /** `afterSave` failed: what the box is started from still holds the old token, and why. */
+  notKept?: string;
 }
 
 /**
@@ -42,7 +49,9 @@ export interface RotationResult {
  * `alsoUse` is told the new token once it is saved: every other holder of a live connection
  * (the provisioner that hands out the own box's address). Never logs or returns the token.
  */
-export async function rotateBoxToken(input: { box: RotatableBox; tokenFile: string; label: string; alsoUse?: (next: string) => void; overlapSeconds?: number }): Promise<RotationResult> {
+export async function rotateBoxToken(input: {
+  box: RotatableBox; tokenFile: string; label: string; alsoUse?: (next: string) => void; afterSave?: () => Promise<void>; overlapSeconds?: number;
+}): Promise<RotationResult> {
   const next = randomBytes(32).toString("hex");
   const pending = `${input.tokenFile}.next`;
   writeFileSync(pending, `${next}\n`, { mode: 0o600 });
@@ -59,12 +68,17 @@ export async function rotateBoxToken(input: { box: RotatableBox; tokenFile: stri
   chmodSync(input.tokenFile, 0o600);
   input.box.useToken(next);
   input.alsoUse?.(next);
+  // Still confirmed when this fails: the box takes the new token across a restart from its own
+  // config volume, and whatever re-creates it reads the token file; leaving both tokens open would not help.
+  let notKept: string | undefined;
+  try { await input.afterSave?.(); } catch (error) { notKept = error instanceof Error ? error.message : String(error); }
+  const kept = notKept !== undefined ? { notKept } : {};
   try {
     const answer = await input.box.confirmToken(input.overlapSeconds ?? TOKEN_OVERLAP_SECONDS);
     const overlapUntil = answer.overlapUntil ?? answer.overlap_until;
-    return { confirmed: true, ...(overlapUntil !== undefined ? { overlapUntil } : {}) };
+    return { confirmed: true, ...(overlapUntil !== undefined ? { overlapUntil } : {}), ...kept };
   } catch {
     // The box accepts the old and the new token until a rotation is confirmed; the host holds the new one.
-    return { confirmed: false };
+    return { confirmed: false, ...kept };
   }
 }

@@ -81,6 +81,12 @@ export interface KubeBoxTokens {
   /** Only a box running its own orchestrator serves a UI; one driven from outside has none. */
   ui?: string;
   relay?: string;
+  /**
+   * The UI token a rotation replaced and when it stops opening the box: the gateway may still send it
+   * until the store holds the new one (`KubernetesAllocator.rotateTokens`). The box's UI reads it as
+   * `AGENTBOX_UI_TOKEN_PREVIOUS` / `…_UNTIL` (src/web/auth.ts `previousTokenFrom`).
+   */
+  uiPrevious?: { token: string; until: string };
 }
 
 /** Everything that decides one box's objects. The caller chooses the name and the owner labels. */
@@ -218,6 +224,7 @@ export class KubeBoxes {
     // Everything another box — or anyone with pod-read access — must not learn.
     const secretData: Record<string, string> = { BOXD_TOKEN: tokens.box };
     if (tokens.ui !== undefined) secretData.AGENTBOX_UI_TOKEN = tokens.ui;
+    if (tokens.uiPrevious !== undefined) Object.assign(secretData, { AGENTBOX_UI_TOKEN_PREVIOUS: tokens.uiPrevious.token, AGENTBOX_UI_TOKEN_PREVIOUS_UNTIL: tokens.uiPrevious.until });
     if (this.options.relayUrl !== undefined && tokens.relay !== undefined) {
       // Together these make the box's provider layer take the relay as its endpoint and this
       // token as its credential, while the capabilities follow the named provider's model.
@@ -389,6 +396,11 @@ export class KubeBoxes {
     }
     await this.options.api.applyPod(pod);
     await this.waitReady(name);
+  }
+
+  /** The Secret alone, re-written from the placement's tokens: what a pod started after this is given. Nothing running changes. */
+  async applySecret(placement: KubeBoxPlacement): Promise<void> {
+    await this.options.api.applySecret(this.manifests(placement).secret);
   }
 
   /** Pod and Service go; PVCs, Secret and policy stay — reversible, like compose's stop. */

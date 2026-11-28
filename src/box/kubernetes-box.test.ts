@@ -18,6 +18,9 @@ import { KubernetesError, parseMinimalYaml } from "../control/kube-client.ts";
 import { staticDecision } from "../control/policy.ts";
 import { fakeKubeApi } from "../control/testing/fake-kube.ts";
 import { PersonalBoxes } from "../host/personal-boxes.ts";
+import { BoxdTokens } from "../boxd/token-store.ts";
+import { boxTokenRoute } from "../web/box-token-routes.ts";
+import type { RotatableBox } from "./token-rotation.ts";
 
 function fixture(fake = fakeKubeApi(), image = "fakechris/lumenbox:0.3.28", log?: (line: string) => void) {
   const home = mkdtempSync(join(tmpdir(), "kube-org-boxes-"));
@@ -156,6 +159,67 @@ test("after a server restart a lost pod is recreated on its volumes with its tok
     assert.equal(after("alice").status, "ready");
     assert.equal(after("bob").status, "failed");
     assert.equal(after("bob").stateReason, "Gone");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a rotated token reaches the box's Secret once the box accepts it: a restarted pod and a re-created one both open with the token the host holds, wherever a crash stops it", async () => {
+  const { fake, open, entries, home, cleanup } = fixture();
+  try {
+    const boxes = open();
+    const record = await boxes.create("alice", "r1");
+    const decode = (value: string | undefined) => Buffer.from(value ?? "", "base64").toString();
+    const secretToken = () => decode(fake.secrets.get(`${record.name}-tokens`)!.data.BOXD_TOKEN);
+    const hostToken = () => readFileSync(record.tokenFile, "utf8").trim();
+    // The pod's config volume, which outlives the pod; a start reads BOXD_TOKEN from the Secret.
+    const stateFile = join(home, "config-volume", "boxd-token.json");
+    const start = () => new BoxdTokens(secretToken(), stateFile);
+    let daemon = start(), held = hostToken();
+    const first = held;
+    const box: RotatableBox = {
+      async rotateToken(next) { assert.equal(daemon.answer("POST /token/rotate", held, { token: next }).status, 200); },
+      useToken(next) { held = next; },
+      async confirmToken(overlapSeconds) { return daemon.answer("POST /token/confirm", held, { overlap_seconds: overlapSeconds }).body as { overlapUntil?: string }; },
+    };
+    // Every write of the Secret happens when the box already takes the token it carries and the host holds it.
+    let failSecret = false;
+    const applySecret = fake.api.applySecret.bind(fake.api);
+    fake.api.applySecret = async secret => {
+      const carried = decode(secret.data.BOXD_TOKEN);
+      assert.ok(daemon.accepts(carried) && hostToken() === carried, "the Secret is never ahead of the box or of the host");
+      if (failSecret) throw new Error("the apiserver said no");
+      await applySecret(secret);
+    };
+    const rotate = async () => (await boxTokenRoute("POST /api/boxes/rotate-token", {
+      boxes: () => entries, ownBoxId: "own", clientFor: () => box, provisioner: { kind: "attached" }, home, readJson: async () => ({ box: record.name }),
+      refusedAdmin: () => false, by: () => "ann", record: () => {}, log: () => {}, keeperOf: id => boxes.tokenKeeper(id),
+    }))!;
+
+    assert.equal((await rotate()).status, 200);
+    assert.notEqual(hostToken(), first);
+    assert.equal(secretToken(), hostToken(), "the Secret carries the token the host holds");
+    daemon = start();
+    assert.ok(daemon.accepts(hostToken()) && !daemon.accepts(first), "a restarted pod opens with the new token only");
+    fake.pods.delete(record.name);
+    await open().recover(() => {});
+    daemon = start();
+    assert.equal(secretToken(), hostToken());
+    assert.ok(daemon.accepts(hostToken()), "a re-created pod too");
+
+    // The Secret cannot be written: the rotation still lands, says so, and the box still opens with the host's token.
+    failSecret = true;
+    const before = hostToken(), answer = await rotate();
+    assert.equal(answer.status, 200);
+    assert.match((answer.body as { note: string }).note, /was not updated \(the apiserver said no\)/);
+    assert.equal(secretToken(), before, "the Secret still holds the old token");
+    daemon = start();
+    assert.ok(daemon.accepts(hostToken()), "a pod restarted now takes the new token from its config volume");
+    failSecret = false;
+    fake.pods.delete(record.name);
+    await open().recover(() => {});
+    daemon = start();
+    assert.ok(secretToken() === hostToken() && daemon.accepts(hostToken()), "and a re-created pod is given it again from the token file");
   } finally {
     cleanup();
   }

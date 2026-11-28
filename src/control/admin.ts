@@ -56,6 +56,8 @@ export type AdminRoute =
   | { kind: "put-settings" }
   | { kind: "restart-box" }
   | { kind: "destroy-box" }
+  /** New box and UI tokens for the tenant's box (docs/106 §5 R7). */
+  | { kind: "rotate-box-tokens" }
   /** The tenant's boxes: the primary and what it drives beside it (docs/30 Stage D). */
   | { kind: "boxes" }
   | { kind: "attach-box" }
@@ -81,6 +83,7 @@ export function adminRouteOf(method: string, pathname: string): AdminRoute {
   if (method === "PUT" && rest === "settings") return { kind: "put-settings" };
   if (method === "POST" && rest === "box/restart") return { kind: "restart-box" };
   if (method === "POST" && rest === "box/destroy") return { kind: "destroy-box" };
+  if (method === "POST" && rest === "box/rotate-tokens") return { kind: "rotate-box-tokens" };
   if (method === "GET" && rest === "boxes") return { kind: "boxes" };
   if (method === "POST" && rest === "boxes/attach") return { kind: "attach-box" };
   if (method === "POST" && rest === "boxes/detach") return { kind: "detach-box" };
@@ -406,6 +409,34 @@ export async function handleAdmin(
       }
       await restartable.restart(box);
       return { status: 200, body: { restarted: box.externalId } };
+    }
+
+    // Here, not in the tenant's box: the box's tokens are in this store, which the gateway reads on
+    // every request, and in a Secret the box cannot write (its pod mounts no cluster credential).
+    // Only the control plane holds all three copies, so only it can change them in an order that
+    // never leaves the gateway holding a token the box refuses (KubernetesAllocator.rotateTokens).
+    case "rotate-box-tokens": {
+      const box = await allocator.find(tenant.id);
+      if (box === undefined) return { status: 404, body: { error: "This tenant has no box." } };
+      const rotating = allocator as BoxAllocator & { rotateTokens?: (handle: typeof box) => Promise<{ overlapUntil: string }> };
+      if (typeof rotating.rotateTokens !== "function") {
+        return { status: 501, body: { error: `The ${allocator.kind} allocator cannot rotate a box's tokens; a box on Kubernetes can.` } };
+      }
+      audit("admin.box.rotate-tokens", box.externalId, { tokens: ["box", "ui"] });
+      try {
+        const { overlapUntil } = await rotating.rotateTokens(box);
+        log(`${session.userId} rotated ${box.externalId}'s tokens`);
+        return {
+          status: 200,
+          body: {
+            rotated: box.externalId,
+            overlapUntil,
+            note: `The box restarted with new tokens; its work is kept. The old UI token opens it until ${overlapUntil}, then nothing does but the new one.`,
+          },
+        };
+      } catch (error) {
+        return { status: 502, body: { error: `The box's tokens were not rotated: ${error instanceof Error ? error.message : String(error)} Ask again: a rotation starts from the tokens this control plane holds.` } };
+      }
     }
 
     case "destroy-box": {

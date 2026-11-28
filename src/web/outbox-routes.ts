@@ -19,7 +19,10 @@ export async function outboxRoute(
     mayAnswer: (agentId: string) => boolean;
     /** Told once the consent record is settled, so the chat's copy of the card settles too. */
     answered?: (draft: Draft, how: "allowed" | "refused") => void;
+    /** The name the draft is answered under. */
     by: () => string;
+    /** Who answered, as the consent record names them: `user:<principal>` (auth.ts `deciderOf`), as the API approvals do (docs/106 §5 R8). */
+    decider: () => string;
   }
 ): Promise<{ status: number; body: unknown } | undefined> {
   if (route === "GET /api/outbox") return { status: 200, body: { drafts: deps.drafts.waiting().filter(draft => deps.mayAnswer(draft.agentId)) } };
@@ -37,8 +40,8 @@ export async function outboxRoute(
   if (draft.status !== "waiting" || !deps.policy.pending().some(approval => approval.id === draft.approvalId)) return { status: 409, body: apiError("outbox-settled") };
   const decided = deps.drafts.decide(draft.id, answer, deps.by());
   if (!decided.ok) return { status: decided.why === "settled" ? 409 : 400, body: apiError(decided.why === "empty-body" ? "outbox-empty-body" : decided.why === "no-reason" ? "outbox-no-reason" : "outbox-settled") };
-  if (answer.decision === "reject") deps.policy.deny(draft.approvalId, "user", answer.reason);
-  else deps.policy.grant(draft.approvalId, "user", "once");
+  if (answer.decision === "reject") deps.policy.deny(draft.approvalId, deps.decider(), answer.reason);
+  else deps.policy.grant(draft.approvalId, deps.decider(), "once");
   deps.answered?.(draft, answer.decision === "reject" ? "refused" : "allowed");
   return { status: 200, body: { id: draft.id, status: decided.draft.status } };
 }

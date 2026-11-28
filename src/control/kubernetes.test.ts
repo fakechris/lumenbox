@@ -664,3 +664,84 @@ test("staticPolicy refuses a quantity the apiserver would reject", () => {
   assert.equal(decision.resources.memoryLimit, "4Gi");
   assert.equal(decision.storageSize, "10Gi");
 });
+
+test("an account holder rotates the tenant box's tokens: the store, the Secret and the pod change in an order that keeps the gateway through, during the overlap and after it (INV-2299)", async () => {
+  const { store, allocator, fake, cleanup } = fixture();
+  const { createServer } = await import("node:http");
+  const { authorize, previousTokenFrom } = await import("../web/auth.ts");
+  const { Gateway, PasswordListIdentity } = await import("./gateway.ts");
+  const decode = (value: string | undefined) => Buffer.from(value ?? "", "base64").toString("utf8");
+  const servers: { close(): void; closeAllConnections(): void }[] = [];
+  try {
+    const acme = store.upsertTenant({ name: "acme" });
+    const handle = await allocator.allocate(acme.id, { image: "agentbox/box:test" });
+    const secretOf = () => fake.secrets.get(`${handle.externalId}-tokens`)!.data;
+    const before = { box: handle.tokens.box, ui: handle.tokens.ui };
+
+    // The tenant's UI as it would start in the pod: its tokens are the Secret's at the moment the pod is applied.
+    let clock = Date.now();
+    let started = { token: decode(secretOf().AGENTBOX_UI_TOKEN), previous: previousTokenFrom(undefined, undefined) };
+    const applyPod = fake.api.applyPod.bind(fake.api);
+    const atStart: { storeHeld: string; accepted: boolean }[] = [];
+    fake.api.applyPod = async pod => {
+      const secret = secretOf();
+      started = { token: decode(secret.AGENTBOX_UI_TOKEN), previous: previousTokenFrom(decode(secret.AGENTBOX_UI_TOKEN_PREVIOUS), decode(secret.AGENTBOX_UI_TOKEN_PREVIOUS_UNTIL)) };
+      const storeHeld = store.readToken(handle.id, "ui")!;
+      atStart.push({ storeHeld, accepted: opens(storeHeld) });
+      await applyPod(pod);
+    };
+    const opens = (bearer: string) => authorize({ host: "0.0.0.0", level: "private", behindGateway: true, token: started.token, ...(started.previous !== undefined ? { previous: started.previous } : {}), now: () => clock },
+      { authorization: `Bearer ${bearer}` }).allow;
+    const ui = createServer((req, res) => {
+      const bearer = (req.headers.authorization ?? "").replace(/^Bearer /, "");
+      res.writeHead(opens(bearer) ? 200 : 401, { "content-type": "application/json" });
+      res.end(JSON.stringify({ bearer }));
+    });
+    await new Promise<void>(resolve => ui.listen(0, "127.0.0.1", resolve));
+    servers.push(ui);
+    const uiUrl = `http://127.0.0.1:${(ui.address() as { port: number }).port}`;
+    // The cluster's Service DNS is not reachable from the suite: the gateway is pointed at the stand-in, the rest is the allocator's.
+    const here = <T extends { uiUrl: string } | undefined>(found: T): T => (found === undefined ? found : { ...found, uiUrl });
+    const reachable = Object.assign(Object.create(allocator) as typeof allocator, {
+      find: async (tenantId: string) => here(await allocator.find(tenantId)),
+      allocate: async (tenantId: string, spec: { image: string }) => here(await allocator.allocate(tenantId, spec)),
+      reconcile: async (box: Parameters<typeof allocator.reconcile>[0]) => here(await allocator.reconcile(box)),
+    });
+    const gateway = new Gateway({ store, allocator: reachable, identity: PasswordListIdentity.parse("alice:secret:acme"), sessionSecret: Buffer.from("k".repeat(32)), image: "agentbox/box:test" });
+    const front = createServer((req, res) => { void gateway.handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(500); res.end(); }); });
+    await new Promise<void>(resolve => front.listen(0, "127.0.0.1", resolve));
+    servers.push(front);
+    const base = `http://127.0.0.1:${(front.address() as { port: number }).port}`;
+    const signIn = await fetch(`${base}/gateway/login`, { method: "POST", body: new URLSearchParams({ username: "alice", password: "secret" }), redirect: "manual" });
+    const session = (signIn.headers.get("set-cookie") ?? "").split(";")[0]!;
+    const through = async () => { const answer = await fetch(`${base}/api/agents`, { headers: { cookie: session } }); return { status: answer.status, bearer: ((await answer.json()) as { bearer: string }).bearer }; };
+    assert.deepEqual(await through(), { status: 200, bearer: before.ui });
+
+    const rotated = await fetch(`${base}/api/admin/box/rotate-tokens`, { method: "POST", headers: { cookie: session, "content-type": "application/json" }, body: "{}" });
+    const answer = (await rotated.json()) as { overlapUntil: string; note: string };
+    assert.equal(rotated.status, 200, JSON.stringify(answer));
+    const after = { box: store.readToken(handle.id, "box")!, ui: store.readToken(handle.id, "ui")! };
+    assert.ok(after.box !== before.box && after.ui !== before.ui, "the store holds new tokens, both of them");
+    assert.equal(decode(secretOf().BOXD_TOKEN), after.box, "the Secret holds the store's box token");
+    assert.equal(decode(secretOf().AGENTBOX_UI_TOKEN), after.ui, "and its UI token");
+    assert.equal(secretOf().AGENTBOX_UI_TOKEN_PREVIOUS, undefined, "the rotated-out token is not left for a later start");
+    assert.deepEqual(atStart, [{ storeHeld: before.ui, accepted: true }], "the pod started while the store still held the old token, and took it");
+
+    // During the overlap: the gateway sends the new token; a request that read the old one before the store changed still lands.
+    assert.deepEqual(await through(), { status: 200, bearer: after.ui });
+    assert.equal(opens(before.ui), true);
+    // After it: only the new one.
+    clock = Date.parse(answer.overlapUntil) + 1;
+    assert.equal(opens(before.ui), false);
+    assert.deepEqual(await through(), { status: 200, bearer: after.ui });
+
+    const audit = store.recentAudit().filter(row => row.tenantId === acme.id);
+    assert.ok(audit.some(row => row.action === "admin.box.rotate-tokens"), "asked for, on the record before it happened");
+    assert.ok(audit.some(row => row.action === "rotate-tokens"), "and done");
+    const written = JSON.stringify(audit);
+    for (const token of [before.box, before.ui, after.box, after.ui]) assert.ok(!written.includes(token), "never a token in the audit");
+  } finally {
+    for (const server of servers) { server.closeAllConnections(); server.close(); }
+    cleanup();
+  }
+});

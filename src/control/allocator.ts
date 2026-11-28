@@ -97,7 +97,7 @@ export class NotImplementedAllocator extends Error {
   }
 }
 
-function newToken(): string {
+export function newToken(): string {
   return randomBytes(16).toString("hex");
 }
 

@@ -54,6 +54,11 @@ export interface PersonalBoxDriver {
   podStatus?(name: string): Promise<string>;
   /** Bring a ready box back after this server restarted. Docker's restart policy needs no help, so optional. */
   recover?(record: PersonalBoxRecord): Promise<RecoveredBox>;
+  /**
+   * After a rotation saved a new token in `record.tokenFile`: write it wherever else the platform keeps
+   * the box's token for its next start (a Kubernetes Secret). Docker passes it at creation from the file, so optional.
+   */
+  keepToken?(record: PersonalBoxRecord): Promise<void>;
 }
 export class PersonalBoxStartError extends Error {
   constructor(message: string, readonly reason: string, readonly nextStep: string) {
@@ -198,6 +203,12 @@ export class PersonalBoxes {
   revision(): string {
     const stat = statSync(this.path, { bigint: true });
     return `${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  }
+  /** What a rotation of this box's token calls once the token file holds the new one (docs/106 §5 R7), or nothing when the platform keeps no copy. */
+  tokenKeeper(id: string): (() => Promise<void>) | undefined {
+    const keep = this.options.driver.keepToken?.bind(this.options.driver);
+    const record = keep === undefined ? undefined : this.read((db) => this.records(db).find((row) => row.id === id));
+    return record === undefined || keep === undefined ? undefined : () => keep(record);
   }
   unavailable(): Set<string> {
     return this.read(
