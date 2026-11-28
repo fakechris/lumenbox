@@ -102,7 +102,7 @@ import {
   type AuthDecision,
   isLoopback, boxSideRefusal,
   mayDrive, mayDriveDesktop,
-  operatorCookieFor,
+  operatorCookieFor, deciderOf, previousTokenFrom, type PreviousToken,
   parseCookies,
   refusalToDrive,
   safeNext,
@@ -2944,7 +2944,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const epochs = new SessionEpochs(undefined, () => openDesktops.recheck());
 
   const admit = (request: { authorization?: string; cookie?: string; query?: string | null; direct?: boolean }): AuthDecision | { allow: true; reason: "token"; sessionIdentity: string } | { allow: false; reason: "access-removed" | "session-expired" } => {
-    const byToken = authorize({ token, host, ...(exposure !== undefined ? { level: exposure.level, behindGateway: exposure.behindGateway } : {}) }, request);
+    const byToken = authorize({ token, host, ...(previousUi !== undefined ? { previous: previousUi } : {}), ...(exposure !== undefined ? { level: exposure.level, behindGateway: exposure.behindGateway } : {}) }, request);
     if (byToken.allow || byToken.reason === "token-in-address") return byToken;
     const cookie = parseCookies(request.cookie).get(SESSION_COOKIE);
     if (cookie === undefined) return byToken;
@@ -5246,7 +5246,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
           const waiting = orchestrator.policy.pending().find(item => item.id === id), parked = orchestrator.approvalIsParked(id);
           if (waiting && !seesAgent(waiting.agentId)) { send(res, 403, apiError("role-needed", { need: "admin", role: callerRole })); return; } // another box's approval (INV-2083)
-          const decider = caller.userId === undefined ? "user" : `user:${caller.userId}`; // who answered, on the record (R8)
+          const decider = deciderOf(caller); // who answered, on the record (R8)
           const answered =
             route === "POST /api/approve"
               ? orchestrator.policy.grant(id, decider, scope)
@@ -5490,7 +5490,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         if (boxUpdated !== undefined) { if (boxUpdated.status !== 0) send(res, boxUpdated.status, boxUpdated.body); return; }
         const pushRoute = await pushBudgetRoute(route, pushBudget, { readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), agentIds: () => registry.list().map(agent => agent.id) }); if (pushRoute !== undefined) { if (pushRoute.status !== 0) send(res, pushRoute.status, pushRoute.body); return; } // INV-1576
         const teamReview = await teamMemoryReviewRoute(route, { registry, readJson: () => readJson(req) as Promise<Record<string, unknown>>, refusedAdmin: () => refusedRole("admin"), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator"), log, mayReadAgent }); if (teamReview !== undefined) { if (teamReview.status !== 0) send(res, teamReview.status, teamReview.body); return; } // INV-1581
-        if (route === "POST /api/outbox/decide" && refused()) return; const outboxAnswer = await outboxRoute(route, { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayAnswer: id => caller.userId === undefined || mayReadAgent(id), answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (outboxAnswer !== undefined) { send(res, outboxAnswer.status, outboxAnswer.body); return; } // the Outbox: approve, edit, reject (INV-1739)
+        if (route === "POST /api/outbox/decide" && refused()) return; const outboxAnswer = await outboxRoute(route, { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, readJson: () => readJson(req) as Promise<Record<string, unknown>>, mayAnswer: id => caller.userId === undefined || mayReadAgent(id), answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }), decider: () => deciderOf(caller), by: () => (caller.userId !== undefined ? principals.resolve(caller.userId).name ?? caller.userId : "the operator") }); if (outboxAnswer !== undefined) { send(res, outboxAnswer.status, outboxAnswer.body); return; } // the Outbox: approve, edit, reject (INV-1739)
         const orgReview = await orgKnowledgeRoute(route, { ledger: orchestrator.orgKnowledge, registry, tasks: () => orchestrator.tasks, receipts: orchestrator.receipts, readJson: () => readJson(req) as Promise<Record<string, unknown>>, params: url.searchParams, refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? orchestrator.people.operator, nameOf: id => (principals.byId(id) ?? principals.resolve(id)).name ?? id, log, mayReadAgent, mayReadTask }); if (orgReview !== undefined) { if (orgReview.status !== 0) send(res, orgReview.status, orgReview.body); return; } // promotion and review of the organisation's knowledge (INV-1729)
         const orgSkillAnswer = await orgSkillRoute(route, {
           ...orgSkills, box: id => orchestrator.boxClientById(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, params: url.searchParams,
@@ -5959,6 +5959,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         const rotated = await boxTokenRoute(route, { boxes: () => registry.listBoxes(), ownBoxId: registry.box.id, clientFor: id => orchestrator.boxClientById(id), provisioner, // a box's new token (R7)
+          keeperOf: id => personalBoxes.tokenKeeper(id),
           home: agentboxHome(), readJson: () => readJson(req), refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? "operator", record: recordToken, log });
         if (rotated !== undefined) { if (rotated.status !== 0) send(res, rotated.status, rotated.body); return; }
         if (route === "POST /api/boxes/revoke") {
@@ -6800,7 +6801,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   });
   for (const note of exposure.notes) log(note);
   const configured = options.token ?? process.env.AGENTBOX_UI_TOKEN;
-  let token = configured;
+  let token = configured, previousUi: PreviousToken | undefined;
   if (process.env.AGENTBOX_NO_TOKEN === "1") {
     token = undefined;
   } else if (!token && (!isLoopback(host) || exposure.level !== "local")) {
@@ -6812,6 +6813,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       : `Operator token: kept in ${join(agentboxHome(), "ui-token")} on the server, for the CLI there. It does not sign anyone in at this level: the first Admin opens /bootstrap, everyone else /login.`);
   }
   if (token) holdHostToken(token); // whatever this web answers to is kept out of what agents see (INV-1543)
+  previousUi = previousTokenFrom(process.env.AGENTBOX_UI_TOKEN_PREVIOUS, process.env.AGENTBOX_UI_TOKEN_PREVIOUS_UNTIL); // a tenant box's rotated-out UI token, for the overlap (R7)
+  if (previousUi !== undefined) holdHostToken(previousUi.token);
   if (!token) {
     log("no UI token: anything that can reach this port can drive the agents");
   }

@@ -106,6 +106,17 @@ export class KubernetesBoxDriver implements PersonalBoxDriver {
     }
   }
 
+  /**
+   * The box's Secret, re-written from its token file after a rotation saved a new one there, so a pod
+   * re-created later starts with the token the host holds. Called only once the box accepts the new
+   * token and the host holds it (src/box/token-rotation.ts), which is the order that keeps the box
+   * and the host agreeing through a crash at any step: a pod that restarts before this still accepts
+   * the new token from its config volume (src/boxd/token-store.ts); one that starts after it boots with it.
+   */
+  async keepToken(record: PersonalBoxRecord): Promise<void> {
+    await this.options.boxes.applySecret(this.placement(record));
+  }
+
   podStatus(name: string) {
     return this.options.boxes.podStatus(name);
   }

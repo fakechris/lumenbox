@@ -6,7 +6,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,4 +80,36 @@ test("plain HTTP to a box is not touched: the network is what identifies it ther
     assert.equal(pins.check("http://127.0.0.1:1337", { authorized: true, getPeerCertificate: () => { throw new Error("not asked"); } } as never), "verified");
     assert.equal(originKey("HTTPS://Box.Example.test/x"), "https://box.example.test:443");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/** A throwaway authority and a certificate it signs for 127.0.0.1 — made here, trusted only by the connection given its root. */
+function authority(dir: string): { ca: Buffer; key: Buffer; cert: Buffer } {
+  const at = (name: string) => join(dir, name);
+  const run = (...args: string[]) => execFileSync("openssl", args, { stdio: "ignore" });
+  run("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", at("ca.key"), "-out", at("ca.crt"), "-days", "1", "-subj", "/CN=LumenBox test authority",
+    "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign");
+  run("req", "-newkey", "rsa:2048", "-nodes", "-keyout", at("box.key"), "-out", at("box.csr"), "-subj", "/CN=127.0.0.1");
+  writeFileSync(at("box.ext"), "subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n");
+  run("x509", "-req", "-in", at("box.csr"), "-CA", at("ca.crt"), "-CAkey", at("ca.key"), "-CAcreateserial", "-out", at("box.crt"), "-days", "1", "-extfile", at("box.ext"));
+  return { ca: readFileSync(at("ca.crt")), key: readFileSync(at("box.key")), cert: readFileSync(at("box.crt")) };
+}
+
+test("a certificate an authority vouches for is verified and pins nothing; the same certificate without that authority is pinned", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "box-tls-ca-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const signed = authority(dir), pinsFile = join(dir, "box-pins.json"), logged: string[] = [];
+  const said: string[] = [];
+  const pins = new (class extends BoxPins { override check(...args: Parameters<BoxPins["check"]>) { const answer = super.check(...args); said.push(answer); return answer; } })(pinsFile, line => logged.push(line));
+  const real = await box(t, signed);
+  /** What `check` said of one connection, given these trusted roots (the `ca` seam; the system store is not touched). */
+  const outcome = (options: { ca?: Buffer }) => new Promise<string>((resolve, reject) => {
+    const socket = connectToBox(real.url, options, () => { resolve(said.at(-1)!); socket.end(); }, "Grok", pins, reject);
+    socket.once("error", reject);
+  });
+
+  assert.equal(await outcome({ ca: signed.ca }), "verified", "the authority is trusted for this connection, and it signed the box's certificate for this address");
+  assert.equal(existsSync(pinsFile), false, "verified is not pinned: the certificate renews without anybody being asked");
+  assert.deepEqual(logged, []);
+  assert.equal(await outcome({}), "pinned", "without the authority the same certificate is any other self-signed one: pinned on first use");
+  assert.ok(existsSync(pinsFile));
 });

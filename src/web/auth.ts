@@ -130,6 +130,11 @@ export function mayDrive(caller: Caller): boolean {
   return caller.role === undefined || roleAtLeast(caller.role, "driver");
 }
 
+/** Who answered an approval, as `policy.jsonl` names them (docs/106 §5 R8): the person, or `user` for the operator's own credential. */
+export function deciderOf(caller: Pick<Caller, "userId">): string {
+  return caller.userId === undefined ? "user" : `user:${caller.userId}`;
+}
+
 /**
  * Whether a person is joined to a desktop's driving stream rather than its view-only one (INV-2228).
  *
@@ -181,6 +186,29 @@ export interface AuthConfig {
   level?: ExposureLevel;
   /** The control plane's gateway stands in front, so the token arrives from it and from nobody else. */
   behindGateway?: boolean;
+  /** The token a rotation replaced, still taken as a bearer until `until` (`previousTokenFrom`). */
+  previous?: PreviousToken;
+  now?: () => number;
+}
+
+/** The UI token the control plane rotated out of a tenant's box, and until when it still opens it (docs/106 §5 R7). */
+export interface PreviousToken { token: string; until: number }
+
+/**
+ * `AGENTBOX_UI_TOKEN_PREVIOUS` and `…_UNTIL`, as the control plane writes them into a tenant box's
+ * Secret when it rotates the box's tokens: the gateway may still hold the old one until the store
+ * says otherwise, so the restarted box takes it as a bearer for the overlap, and never after.
+ * Nothing without a time it ends.
+ */
+export function previousTokenFrom(token: string | undefined, until: string | undefined): PreviousToken | undefined {
+  const value = token?.trim() ?? "", ends = Date.parse(until ?? "");
+  return value === "" || !Number.isFinite(ends) ? undefined : { token: value, until: ends };
+}
+
+function bearerAccepted(config: AuthConfig, bearer: string): boolean {
+  if (config.token !== undefined && config.token !== "" && sameToken(bearer, config.token)) return true;
+  const previous = config.previous;
+  return previous !== undefined && (config.now?.() ?? Date.now()) < previous.until && sameToken(bearer, previous.token);
 }
 
 export type AuthDecision =
@@ -245,7 +273,7 @@ export function authorize(
   }
 
   const bearer = /^Bearer\s+(.+)$/i.exec(request.authorization ?? "")?.[1]?.trim();
-  if (bearer && sameToken(bearer, config.token)) return { allow: true, reason: "token" };
+  if (bearer && bearerAccepted(config, bearer)) return { allow: true, reason: "token" };
 
   const cookie = parseCookies(request.cookie).get(COOKIE_NAME);
   if (cookie && sameToken(cookie, config.token)) return { allow: true, reason: "token" };
@@ -303,7 +331,7 @@ function authorizeMachine(config: AuthConfig, request: { authorization?: string;
   const bearer = /^Bearer\s+(.+)$/i.exec(request.authorization ?? "")?.[1]?.trim();
   // No token cannot be reached off local — the server makes one — and must not mean "open" if it ever is.
   if (!bearer || !config.token) return { allow: false, reason: "missing" };
-  if (!sameToken(bearer, config.token)) return { allow: false, reason: "wrong" };
+  if (!bearerAccepted(config, bearer)) return { allow: false, reason: "wrong" };
   if (config.behindGateway === true || request.direct === true) return { allow: true, reason: "token" };
   return { allow: false, reason: "token-not-here" };
 }

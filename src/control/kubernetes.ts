@@ -39,7 +39,8 @@
 import { createHash } from "node:crypto";
 import { defaultBoxImage } from "../box/docker.ts";
 import type { AllocatorKind, BoxHandle, BoxSpec, BoxTokens } from "./allocator.ts";
-import { StoreBackedAllocator } from "./allocator.ts";
+import { newToken, StoreBackedAllocator } from "./allocator.ts";
+import { TOKEN_OVERLAP_SECONDS } from "../box/token-rotation.ts";
 import { containerNameFor } from "./compose.ts";
 import { KubeBoxes, type KubeBoxPlacement } from "./kube-box.ts";
 import type { KubeApi } from "./kube-client.ts";
@@ -100,6 +101,8 @@ export class KubernetesAllocator extends StoreBackedAllocator {
   private readonly prefix: string;
   private readonly boxes: KubeBoxes;
   private readonly policy: AllocationPolicy;
+  /** How long a restart may take before it is a failure; a rotated-out token outlives it by the overlap. */
+  private readonly startTimeoutMs: number;
   /**
    * One allocation per tenant at a time, in-process: a promise chain the next allocate for the
    * same tenant waits behind. The store's unique index already makes a lost race safe *between
@@ -140,6 +143,7 @@ export class KubernetesAllocator extends StoreBackedAllocator {
       );
     }
     this.policy = options.policy ?? staticPolicy();
+    this.startTimeoutMs = options.startTimeoutMs ?? 5 * 60_000;
     let resolvedDefaultImage: string | undefined;
     this.boxes = new KubeBoxes({
       api: options.api,
@@ -224,8 +228,13 @@ export class KubernetesAllocator extends StoreBackedAllocator {
    * grow a dead promise per tenant.
    */
   override async allocate(tenantId: string, spec: BoxSpec): Promise<BoxHandle> {
+    return this.oneAtATime(tenantId, () => super.allocate(tenantId, spec));
+  }
+
+  /** What changes a tenant's box — an allocation, a rotation of its tokens — runs behind the one before it for that tenant. */
+  private async oneAtATime<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     const gate = (this.allocations.get(tenantId) ?? Promise.resolve()).catch(() => {});
-    const run = gate.then(() => super.allocate(tenantId, spec));
+    const run = gate.then(work);
     this.allocations.set(tenantId, run);
     try {
       return await run;
@@ -295,6 +304,56 @@ export class KubernetesAllocator extends StoreBackedAllocator {
       action: "restart",
       target: handle.externalId,
     });
+  }
+
+  /**
+   * New box and UI tokens for a tenant's box, which an account holder asks for on the admin surface
+   * (docs/106 §5 R7, INV-2299). Both are fixed in the pod's environment when it starts — the box's
+   * own orchestrator reaches its daemon with BOXD_TOKEN, and its UI token is the key its sessions are
+   * derived from — so the pod is restarted with them; the volumes, and the work on them, stay.
+   *
+   * The order keeps the box accepting the UI token the gateway holds (it reads the store per request)
+   * at every step a crash could stop at:
+   *
+   * 1. the Secret is written with the new tokens and the old UI token as `uiPrevious`, until the
+   *    restart's timeout plus the overlap; the running pod still has the old ones;
+   * 2. the pod is re-created from it and waited for: it takes the new UI token and the old one;
+   * 3. the store takes the new tokens: the gateway sends the new one from its next request;
+   * 4. the Secret is written again without the old one, so no later start takes it.
+   *
+   * Interrupted between 1 and 3, the store still holds the old token and the box accepts it until the
+   * time in the Secret; asking again finishes it, from the store's token, without the box's help.
+   */
+  async rotateTokens(handle: BoxHandle, overlapSeconds = TOKEN_OVERLAP_SECONDS): Promise<{ overlapUntil: string }> {
+    // Behind any other change to this tenant's box, and from the tokens the store holds once it is this one's turn.
+    return this.oneAtATime(handle.tenantId, async () => {
+      const current = { ...handle, tokens: { ...handle.tokens, ui: this.store.readToken(handle.id, "ui") ?? handle.tokens.ui } };
+      return this.rotateNow(current, overlapSeconds);
+    });
+  }
+
+  private async rotateNow(handle: BoxHandle, overlapSeconds: number): Promise<{ overlapUntil: string }> {
+    const row = this.store.getBox(handle.id);
+    if (row === undefined) throw new KubernetesError(`cannot rotate ${handle.externalId}'s tokens: the store has lost its row`);
+    const next: BoxTokens = { box: newToken(), ui: newToken(), ...(handle.tokens.relay !== undefined ? { relay: handle.tokens.relay } : {}) };
+    const overlapUntil = new Date(Date.now() + this.startTimeoutMs + overlapSeconds * 1000).toISOString();
+    const placement = await this.placementFor(handle.tenantId, handle.externalId, { image: row.image }, next);
+    this.store.setBoxState(handle.id, "starting");
+    try {
+      await this.boxes.restart({ ...placement, tokens: { ...next, uiPrevious: { token: handle.tokens.ui, until: overlapUntil } } });
+    } catch (error) {
+      this.store.setBoxState(handle.id, "unreachable");
+      throw error;
+    }
+    this.store.putToken(handle.id, "ui", next.ui);
+    this.store.putToken(handle.id, "box", next.box);
+    this.store.setBoxState(handle.id, "ready");
+    // Done already: the time in the Secret ends the old token without this, so a failure here is recorded, not thrown.
+    let cleared: true | string = true;
+    try { await this.boxes.applySecret(placement); } catch (error) { cleared = error instanceof Error ? error.message : String(error); }
+    const detail = { tokens: ["box", "ui"], overlapUntil, ...(cleared === true ? {} : { oldTokenLeftInSecret: cleared }) };
+    this.store.audit({ tenantId: handle.tenantId, actor: `${this.kind}-allocator`, action: "rotate-tokens", target: handle.externalId, detail });
+    return { overlapUntil };
   }
 
   protected async locate(
