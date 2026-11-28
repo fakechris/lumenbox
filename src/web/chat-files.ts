@@ -24,15 +24,19 @@ export function chatBoxFor(deps: { registry: Pick<AgentRegistry, "tryGet" | "box
 }
 
 /** The chat door's file dependencies (ChannelManager `receiveFiles`, `workDir`, `readBoxFile`, `collectOutbox`, `outboxDelivered`). */
-export function chatFiles(deps: { boxOf: (agent: string | undefined) => ChatBox; workRoot: (box: BoxEntry) => string; log: (line: string) => void }) {
+export function chatFiles(deps: { boxOf: (agent: string | undefined) => ChatBox; workRoot: (box: BoxEntry) => string; log: (line: string) => void; mayEnter?: (box: BoxEntry, identity: string) => boolean }) {
   const { boxOf } = deps;
   return {
     // A file dropped in the chat lands in that chat's inbox on the box, under a name
     // that never overwrites: a second report.pdf becomes report-2.pdf, because the
     // first one may be exactly what the agent is reading.
-    receiveFiles: async (chatKey: string, files: { name: string; base64: string }[], agent?: string): Promise<string[] | undefined> => {
-      const { client, box } = boxOf(agent); // the box of the agent the message is for, where its turn reads its inbox (INV-2261)
+    receiveFiles: async (chatKey: string, files: { name: string; base64: string }[], agent?: string, identity?: string): Promise<string[] | undefined> => {
+      const { client, box } = boxOf(agent); // the box of the agent whose turn reads its inbox (INV-2261)
       if (client === undefined) return undefined;
+      if (identity !== undefined && deps.mayEnter !== undefined && !deps.mayEnter(box, identity)) { // never into a box the sender may not enter (INV-2303)
+        deps.log(`chat files: ${identity} may not enter ${box.name}; ${files.length} file(s) not stored there`);
+        return undefined;
+      }
       const dir = `${chatFilesRoot(conversationIdFor(chatKey), box)}/inbox`;
       await client.exec(`mkdir -p '${dir}'`, { actor: "host:chat-inbox" });
       let existing: Set<string>;
@@ -61,6 +65,7 @@ export function chatFiles(deps: { boxOf: (agent: string | undefined) => ChatBox;
     // For a reply that named a deliverable instead of sending it. Confined to the work
     // directory by the box's own upload/download guard, and refused above 25MB the same
     // way the outbox is.
+    filesBox: (agent?: string) => boxOf(agent).box.id, // which box an agent's chat files are on, so a drop follows the agent that reads it (INV-2303)
     workDir: (agent?: string) => deps.workRoot(boxOf(agent).box), // the box readBoxFile reads, whose paths a reply names (INV-1737)
     readBoxFile: async (path: string, agent?: string): Promise<{ name: string; base64: string } | undefined> => {
       const { client } = boxOf(agent);

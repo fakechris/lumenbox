@@ -26,6 +26,7 @@
 
 import { mandateNote, reauthorisationNeeded } from "./mandate-text.ts";
 import { followUpPrompt } from "../host/follow-up.ts";
+import { type Drop, type DropDeps, dropsFor } from "./drop-files.ts";
 import { describePurpose, type OutboundPurpose } from "../host/outbound.ts";
 import type { OutboxSender } from "./outbox-sender.ts"; import { recording, type SentLedger } from "./sent-ledger.ts";
 import { CONNECTED, statusText, type ChannelStatus, type StatusLine } from "./status-line.ts";
@@ -631,7 +632,8 @@ export interface ChannelManagerDeps {
    * Returns the saved names (as the chat should hear them), or undefined when there
    * is nowhere to store them — which the chat is told plainly.
    */
-  receiveFiles?: (chatKey: string, files: { name: string; base64: string }[], agent?: string) => Promise<string[] | undefined>; // agent: whose box they land in (INV-2261)
+  receiveFiles?: DropDeps["receiveFiles"]; // agent: whose box they land in (INV-2261); identity: the sender, refused a box they may not enter (INV-2303)
+  filesBox?: DropDeps["filesBox"]; // a dropped file follows the agent that reads it to its box (INV-2303, drop-files.ts)
   credentials?: { gate: (taskId: string, start: () => Promise<void>) => string | undefined }; // before a new task's turn (INV-1666): a line for the chat when a credential it needs is missing; the task waits and `start` begins it once one lands
   /**
    * The files a finished turn left in this chat's outbox — name and bytes, smallest
@@ -1709,7 +1711,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       parseScreenRequest(text) && this.deps.screenshot !== undefined
         ? this.runScreenshot(adapter, message, addressed)
         : (async () => {
-            const files = message.files?.length ? await this.storeFiles(adapter, message) : undefined;
+            const files = message.files?.length ? await this.storeFiles(adapter, message, addressed) : undefined; // for the agent that runs the turn — an answer's is the one that asked (INV-2303)
             if (message.files?.length && files === undefined) return;
             await this.runTask(adapter, message, addressed, textForTurn, files, { questionId: answering?.id, onSucceeded: () => { succeeded = true; } });
           })();
@@ -1766,7 +1768,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * the turn had to guess that the inbox was worth listing. Consumed once: the message
    * after the one that used them is about something else.
    */
-  private readonly pendingDrops = new Map<string, { files: string[]; at: number }>();
+  private readonly pendingDrops = new Map<string, { files: Drop[]; at: number }>();
   private readonly inflightContexts = new Map<Promise<unknown>, string>();
 
   /** What each conversation is running right now, for the one-at-a-time routing rule. */
@@ -1793,7 +1795,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
   private readonly lookTimers = new Map<string, NodeJS.Timeout>();
 
   /** The files recently dropped in this conversation, handed over exactly once. */
-  private takeDrops(conversationKey: string): string[] | undefined {
+  private takeDrops(conversationKey: string): Drop[] | undefined {
     const drop = this.pendingDrops.get(conversationKey);
     if (drop === undefined) return undefined;
     this.pendingDrops.delete(conversationKey);
@@ -1810,15 +1812,17 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
 
   /** A message carrying files: store them, then run its instruction if it brought one. */
   private async runDrop(adapter: ChannelAdapter, message: InboundMessage): Promise<void> {
-    const saved = await this.storeFiles(adapter, message);
     const { agentName, text } = addressOf(message);
+    const agent = agentName ?? message.to?.fallback; // the agent runTask runs it on
+    const saved = await this.storeFiles(adapter, message, agent);
     const conversationKey = message.threadKey ?? message.chatKey ?? message.identity;
     if (text === "") {
       if (saved !== undefined && saved.length > 0) {
         // Accumulate rather than replace: a folder arrives as one file message per file.
         const already = this.pendingDrops.get(conversationKey);
+        const files = message.files ?? [];
         this.pendingDrops.set(conversationKey, {
-          files: [...(already?.files ?? []), ...saved],
+          files: [...(already?.files ?? []), ...saved.map((path, i) => ({ path, agent, file: files[i]! }))],
           at: Date.now(),
         });
         await this.deliver(
@@ -1839,7 +1843,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
           this.lookTimers.delete(conversationKey);
           const pending = this.pendingDrops.get(conversationKey);
           if (pending === undefined || pending.files.length === 0) return;
-          const look = this.runLook(adapter, message, pending.files).catch(error => {
+          const look = this.runLook(adapter, message, pending.files.map(drop => drop.path)).catch(error => {
             this.deps.log(`channel ${adapter.name}: file preview failed (${error instanceof Error ? error.message : String(error)})`);
           }).finally(() => {
             this.inflight.delete(look);
@@ -1854,13 +1858,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // Storing failed and the chat was already told; running the instruction anyway would
     // have the agent working on files that never arrived, which reads as it ignoring them.
     if (saved === undefined) return;
-    await this.runTask(adapter, message, agentName, text, saved);
+    await this.runTask(adapter, message, agent, text, saved);
   }
 
   /** Files into the chat's inbox. Returns where they landed, or undefined when nowhere. */
   private async storeFiles(
     adapter: ChannelAdapter,
-    message: InboundMessage
+    message: InboundMessage,
+    agent: string | undefined
   ): Promise<string[] | undefined> {
     const chatKey = message.chatKey ?? message.identity;
     const anchor: PushOptions | undefined =
@@ -1871,7 +1876,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // the conversation's directory, and after conversations began following threads the
       // two disagreed — the agent was sent to a path nothing wrote and nothing read, which
       // it noticed and reported. One key for both, and the room stays the delivery address.
-      const saved = await this.deps.receiveFiles(message.threadKey ?? chatKey, message.files ?? [], message.to?.agent ?? message.to?.fallback); // into the box of the agent the message is for (INV-2261)
+      const saved = await this.deps.receiveFiles(message.threadKey ?? chatKey, message.files ?? [], agent, message.identity); // into the box of the agent whose turn reads them (INV-2261, INV-2303)
       if (saved === undefined) {
         await this.deliver(
           adapter,
@@ -2008,7 +2013,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     // wordlessly in this conversation just before. In the prompt and nowhere else — the
     // card and the board carry the person's own words, not a path listing.
     const handedFiles = [
-      ...(this.takeDrops(message.threadKey ?? chatKey) ?? []),
+      ...(await dropsFor(this.takeDrops(runningKey) ?? [], agentName, { key: runningKey, identity: message.identity }, this.deps)), // where this turn's agent finds them (INV-2303)
       ...(droppedFiles ?? []),
     ];
     const prompt=handedFiles.length ? `${text}\n\n[随这条消息收到的文件: ${handedFiles.join(", ")}]` : text;

@@ -53,7 +53,7 @@ test("a file a member sends their own agent lands in that agent's box, and the f
   const boxes = new Map([[registry.defaultBox().id, memoryBox()], ["ana-box", memoryBox()], ["bob-box", memoryBox()]]);
   const files = chatFiles({
     boxOf: chatBoxFor({ registry, boxClient: id => boxes.get(id === undefined ? registry.defaultBox().id : registry.boxOf(id).id)?.client }),
-    workRoot: () => "/home/box/work", log: () => {},
+    workRoot: () => "/home/box/work", log: () => {}, mayEnter: (box, identity) => box.members === "everyone" || box.members.includes(principals.resolve(identity).id),
   });
   const route = new ChatRoute({ registry, principals, door: () => ({ type: "dingtalk", defaultAgent: "Desk" }), preparing: () => false, firstAgent: () => desk, log: () => {} });
   const turns: { agent: string | undefined; text: string }[] = [], sent: { chatKey: string; name: string; text: string }[] = [];
@@ -63,7 +63,7 @@ test("a file a member sends their own agent lands in that agent's box, and the f
     sendFile: async (chatKey, name, base64) => { sent.push({ chatKey, name, text: Buffer.from(base64, "base64").toString() }); },
   };
   const manager = new ChannelManager({
-    log: () => {}, mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+    log: () => {}, lookAfterMs: 600_000, mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
     route: (adapterName, message, name) => route.route(adapterName, message, name),
     ...files,
     ask: async (token, text, identity, chatKey) => {
@@ -105,4 +105,30 @@ test("a file a member sends their own agent lands in that agent's box, and the f
   assert.deepEqual(sent.at(-1), { chatKey: "ding:dm-cat", name: "summary.txt", text: "summary by Desk for ding:cat" });
   assert.equal(files.workDir(anas.id), "/home/box/work");
   assert.equal(files.workDir(undefined), "/home/box/work");
+
+  // The agent that reads a file is decided after it arrives (INV-2303). A file dropped with no words waits for the
+  // next message, which may name another agent: the file is where that agent's turn looks, not where the drop landed.
+  const deskInbox = () => inbox(registry.defaultBox().id, "ding:dm-ana").map(path => path.split("/").pop());
+  await handler({ identity: "ding:ana", chatKey: "ding:dm-ana", privateChat: true, senderLabel: "ana", text: "", messageId: "m3", files: [file] });
+  await manager.idle();
+  await handler({ identity: "ding:ana", chatKey: "ding:dm-ana", privateChat: true, senderLabel: "ana", text: "@Desk summarise the file", messageId: "m4" });
+  await manager.idle();
+  assert.equal(turns.at(-1)!.agent, desk.id, "Desk did the work");
+  assert.match(turns.at(-1)!.text, /inbox\/notes\.txt/, "and was told where the file is");
+  assert.deepEqual(deskInbox(), ["notes.txt"], "the file is in Desk's box, where its turn reads its inbox");
+
+  // An answer runs on the agent that asked, whoever the message would otherwise reach: a file with it goes there too.
+  manager.remember(desk.id, "ding", "ding:ana", "ding:dm-ana");
+  manager.askQuestion({ questionId: "q1", agentId: desk.id, agentName: "Desk", question: "Which figures?" });
+  const before = inbox("ana-box", "ding:dm-ana").length;
+  await handler({ identity: "ding:ana", chatKey: "ding:dm-ana", privateChat: true, senderLabel: "ana", text: "/answer q1 these", messageId: "m5", files: [{ name: "figures.csv", base64: file.base64 }] });
+  await manager.idle();
+  assert.equal(turns.at(-1)!.agent, desk.id, "the agent that asked got the answer");
+  assert.match(turns.at(-1)!.text, /inbox\/figures\.csv/);
+  assert.deepEqual(deskInbox(), ["notes.txt", "figures.csv"], "with its file, in its own box");
+  assert.equal(inbox("ana-box", "ding:dm-ana").length, before, "and not in the box the message would have reached");
+
+  // A file never goes to a box its sender may not enter, whichever agent is asked for.
+  assert.equal(await files.receiveFiles("ding:dm-ana", [file], bobs.id, "ding:ana"), undefined);
+  assert.deepEqual(inbox("bob-box", "ding:dm-ana"), [], "Bob's box got nothing of Ana's");
 });
