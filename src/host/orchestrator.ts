@@ -49,7 +49,13 @@ import {
 import { SKILLS_DIR } from "./skills.ts";
 import { intersectTools } from "./catalog.ts";
 import { DisplayLease } from "../box/display-lease.ts";
-import { AttachedBoxProvisioner, resolveBoxProvisioner, type BoxProvisioner } from "../box/provisioner.ts";
+import {
+  AttachedBoxProvisioner,
+  DockerBoxProvisioner,
+  resolveBoxProvisioner,
+  type BoxProvisioner,
+} from "../box/provisioner.ts";
+import { DEFAULT_CONTAINER, defaultBoxConfig } from "../box/docker.ts";
 import { type BoxEntry, tokenOf } from "../box/boxes.ts";
 import { classifyBox, type BoxClass } from "../box/access.ts";
 import type { ResolutionConfig } from "../protocol/index.ts";
@@ -752,6 +758,36 @@ export class Orchestrator {
       this.attachedHealthy.add(entry.id);
       this.forgetDesktopsOf(entry.id);
       return { connected: true, detail: `${entry.name}: box attached directly` };
+    }
+    // A second Docker box (docs/36 Scene 4): a personal box the installation
+    // started itself, named by container. Reached through the same Docker
+    // machinery as the own box, just parameterized by the entry's container —
+    // and if the container is not running, that is an outcome to report, never
+    // a reason to fall through to somebody else's endpoint.
+    if (entry.kind === "docker" && entry.containerName !== undefined) {
+      if (entry.containerName === DEFAULT_CONTAINER && entry.id !== this.registry.box.id) {
+        return { connected: false, detail: `${entry.name}: the default container belongs to this installation's own box` };
+      }
+      try {
+        const provisioner = new DockerBoxProvisioner(defaultBoxConfig({ containerName: entry.containerName }));
+        const client = await provisioner.connect();
+        const health = await client.health();
+        this.boxClients.set(entry.id, client);
+        this.attachedHealthy.add(entry.id);
+        this.resolutions.set(entry.id, health.resolution);
+        this.boxAccesses.set(entry.id, classifyBox(provisioner.boxName, loadConfig(), entry.name));
+        this.forgetDesktopsOf(entry.id);
+        const size = health.resolution ? `${health.resolution.display.width}x${health.resolution.display.height}` : "no display";
+        const detail = `${entry.name}: box ready (${size}) via ${provisioner.label}`;
+        console.error(`[box] ${detail}`);
+        return { connected: true, detail };
+      } catch (error) {
+        this.boxClients.delete(entry.id);
+        this.attachedHealthy.delete(entry.id);
+        const detail = `${entry.name}: ${error instanceof Error ? error.message : String(error)}`;
+        console.error(`[box] ${detail}`);
+        return { connected: false, detail };
+      }
     }
     if (entry.kind !== "attached" || entry.endpoint === undefined) {
       return { connected: false, detail: `${entry.name}: not an attached box` };

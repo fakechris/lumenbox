@@ -82,6 +82,12 @@ export interface BoxEntry {
   workDir: string;
   members: BoxMembers;
   /**
+   * A second Docker box's container (docs/36 Scene 4): the own box's container
+   * is the default one and names none; a personal box names its own, and the
+   * Docker provisioner builds everything — network, ports, token — from it.
+   */
+  containerName?: string;
+  /**
    * The box's scope (docs/22 item 6): what its workers' `RunOnHost` may draw
    * from the vault. A box names one scope or none — per-agent `scopeId` shapes
    * labour (which tools an agent is offered) and never secret reach, because
@@ -126,6 +132,9 @@ function readEntries(path: string): BoxEntry[] | undefined {
       displayFloor: typeof entry.displayFloor === "number" && entry.displayFloor >= 1 ? Math.floor(entry.displayFloor) : 1,
       workDir: typeof entry.workDir === "string" && entry.workDir !== "" ? entry.workDir : DEFAULT_WORK_DIR,
       members: normalizeMembers(entry.members),
+      ...(typeof entry.containerName === "string" && entry.containerName !== ""
+        ? { containerName: entry.containerName }
+        : {}),
       ...(typeof entry.scopeId === "string" && entry.scopeId !== "" ? { scopeId: entry.scopeId } : {}),
       createdAt: typeof entry.createdAt === "string" ? entry.createdAt : new Date().toISOString(),
     };

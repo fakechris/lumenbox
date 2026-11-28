@@ -124,7 +124,8 @@ type AgentboxConfigHostExec = NonNullable<AgentboxConfig["hostExec"]>;
 
 import { randomUUID } from "node:crypto";
 import type { BoxMembers } from "../box/boxes.ts";
-import { attachedBox, tokenOf } from "../box/boxes.ts";
+import { DEFAULT_WORK_DIR, attachedBox, tokenOf } from "../box/boxes.ts";
+import { personalBoxName, personalBoxesOf, personalQuotaFor } from "../host/box-quota.ts";
 import { readBoxToken } from "../box/docker.ts";
 import { preflight } from "../box/preflight.ts";
 import { blockedAnnouncement, boardView } from "../channels/board-view.ts";
@@ -521,6 +522,31 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     const members = membersOfBox(boxId);
     return members === undefined ? "?" : audienceOf(members, membershipWorld);
   };
+  /** The quota chain's sources, read per request so an admin's edit applies to the next ask. */
+  const quotaSources = () => {
+    const config = loadConfig();
+    return {
+      installationDefault: config.personalBoxQuota ?? 1,
+      departmentQuotas: config.departmentBoxQuotas ?? {},
+      personQuotas: config.personBoxQuotas ?? {},
+    };
+  };
+  /** A person's departments as the quota keys know them: `<channelId>:<vendorId>`, every door. */
+  const departmentKeysOf = (identity: string): string[] => {
+    if (!principals.isKnown(identity)) return [];
+    const identities = principals.list().find(p => p.id === principals.resolve(identity).id)?.identities ?? [];
+    const keys: string[] = [];
+    for (const linked of identities) {
+      const at = linked.indexOf(":");
+      if (at <= 0) continue;
+      const channelId = linked.slice(0, at);
+      const person = directories.personOf(channelId, linked.slice(at + 1));
+      for (const vendorId of person?.departmentVendorIds ?? []) keys.push(`${channelId}:${vendorId}`);
+    }
+    return keys;
+  };
+  /** Personal boxes being started right now: one bring-up per container, ever concurrently. */
+  const personalUps = new Set<string>();
 
   // Letting somebody in is one click, not an id copied around. A stranger's message
   // records a knock; the settings dialog approves it with one button, or the owner
@@ -4028,6 +4054,153 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const updated = registry.setBoxMembers(entry.id, members);
           log(`box ${updated.name}: members set — ${audienceOf(members, membershipWorld)}`);
           send(res, 200, { boxId: updated.id, members: updated.members, audience: audienceOf(members, membershipWorld) });
+          return;
+        }
+
+        // A person's own box, taken within quota (docs/36 Scene 4, §5's ruling).
+        // Self-service for any driver the roster knows; the box is created
+        // listed to exactly them — invisible to everyone else by stage 3's
+        // no-leak rule — and started as its own Docker container, named after
+        // the person, on the same machinery the own box uses.
+        if (route === "GET /api/quotas/self") {
+          if (caller.userId === undefined) {
+            // The operator holds the machine; a personal box of one's own is a
+            // member idea, and the answer says so rather than pretending 1.
+            send(res, 200, { quota: 0, from: "operator", held: [] });
+            return;
+          }
+          const identity = caller.userId;
+          if (!principals.isKnown(identity)) {
+            send(res, 403, { error: "You are not linked here yet — knock first." });
+            return;
+          }
+          const principalId = principals.resolve(identity).id;
+          const answer = personalQuotaFor(principalId, departmentKeysOf(identity), quotaSources());
+          const held = personalBoxesOf(registry.listBoxes(), principalId).map(entry => ({
+            id: entry.id,
+            name: entry.name,
+            connected: orchestrator.boxStatus().find(box => box.id === entry.id)?.connected ?? false,
+          }));
+          send(res, 200, { ...answer, held });
+          return;
+        }
+        if (route === "POST /api/boxes/personal") {
+          if (refusedRole("driver")) return;
+          if (caller.userId === undefined) {
+            send(res, 400, { error: "The operator attaches boxes; a personal box is a member's to take." });
+            return;
+          }
+          const identity = caller.userId;
+          if (!principals.isKnown(identity)) {
+            send(res, 403, { error: "You are not linked here yet — knock first." });
+            return;
+          }
+          const principalId = principals.resolve(identity).id;
+          const answer = personalQuotaFor(principalId, departmentKeysOf(identity), quotaSources());
+          const held = personalBoxesOf(registry.listBoxes(), principalId);
+          if (held.length >= answer.quota) {
+            send(res, 403, {
+              error:
+                `Your personal-box quota is ${answer.quota} (from ${answer.from}); you hold ${held.length}. ` +
+                `An admin can change it.`,
+              quota: answer.quota,
+              from: answer.from,
+              held: held.length,
+            });
+            return;
+          }
+          // A name and a container of one's own; a collision (two principals
+          // slugging alike) is disambiguated, not overwritten.
+          let name = personalBoxName(principalId);
+          for (let n = 2; registry.listBoxes().some(entry => entry.name === name); n++) name = `${personalBoxName(principalId)}-${n}`;
+          const containerName = `agentbox-${name}`;
+          const displayFloor = Math.max(...registry.listBoxes().map(entry => entry.displayFloor)) + 1;
+          const entry = registry.attachBox({
+            id: `box_${randomUUID()}`,
+            name,
+            kind: "docker",
+            containerName,
+            displayFloor,
+            workDir: DEFAULT_WORK_DIR,
+            members: { kind: "listed", principalIds: [principalId] },
+            createdAt: new Date().toISOString(),
+          });
+          if (personalUps.has(containerName)) {
+            send(res, 409, { error: "Your box is already being started." });
+            return;
+          }
+          personalUps.add(containerName);
+          send(res, 202, { starting: true, box: { id: entry.id, name: entry.name } });
+          log(`box ${name}: personal box for ${principalId} — bringing up container ${containerName}`);
+          void (async () => {
+            try {
+              const manager = new BoxManager(defaultBoxConfig({ containerName }));
+              await manager.up({ onOutput: line => broadcast({ type: "box_setup", line }) });
+              const result = await orchestrator.connectAttached(entry);
+              broadcast({
+                type: "box_setup",
+                line: result.connected ? `ready — ${result.detail}` : `failed — ${result.detail}`,
+                done: true,
+                ok: result.connected,
+              });
+            } catch (error) {
+              const detail = error instanceof Error ? error.message : String(error);
+              log(`box ${name}: bring-up failed — ${detail}`);
+              broadcast({ type: "box_setup", line: `failed — ${detail}`, done: true, ok: false });
+            } finally {
+              personalUps.delete(containerName);
+            }
+          })();
+          return;
+        }
+        // The quota chain's knobs (docs/36 §5): the installation default, and
+        // the department and person refinements. Admin-only, like the members
+        // they bound.
+        if (route === "POST /api/quotas") {
+          if (refusedRole("admin")) return;
+          const body = await readJson(req);
+          const validQuota = (value: unknown): value is number =>
+            typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 99;
+          if (body.personalBoxQuota !== undefined && body.personalBoxQuota !== null && !validQuota(body.personalBoxQuota)) {
+            send(res, 400, { error: "personalBoxQuota is a whole number 0–99." });
+            return;
+          }
+          const readPatch = (
+            patch: unknown,
+            label: string
+          ): Record<string, number | null> | undefined => {
+            if (patch === undefined || patch === null) return undefined;
+            if (typeof patch !== "object" || Array.isArray(patch)) {
+              throw new Error(`${label} must be key to quota`);
+            }
+            const out: Record<string, number | null> = {};
+            for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+              if (value === null) out[key] = null;
+              else if (validQuota(value)) out[key] = value;
+              else throw new Error(`${label}.${key} is a whole number 0–99 or null`);
+            }
+            return out;
+          };
+          try {
+            const department = readPatch(body.departmentBoxQuotas, "departmentBoxQuotas");
+            const person = readPatch(body.personBoxQuotas, "personBoxQuotas");
+            saveConfig({
+              ...(body.personalBoxQuota !== undefined
+                ? { personalBoxQuota: body.personalBoxQuota === null ? null : Number(body.personalBoxQuota) }
+                : {}),
+              ...(department !== undefined ? { departmentBoxQuotas: department } : {}),
+              ...(person !== undefined ? { personBoxQuotas: person } : {}),
+            });
+          } catch (error) {
+            send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+            return;
+          }
+          const config = loadConfig();
+          send(res, 200, {
+            personalBoxQuota: config.personalBoxQuota ?? 1,
+            departmentBoxQuotas: config.departmentBoxQuotas ?? {},
+            personBoxQuotas: config.personBoxQuotas ?? {},
+          });
           return;
         }
 

@@ -49,6 +49,16 @@ export interface AgentboxConfig {
   /** Base URL for the `custom` preset, applied only when `AGENTBOX_BASE_URL` is not set. */
   baseUrl?: string;
   /**
+   * How many personal boxes a person may hold, before department and person
+   * refinements (docs/36 §5). The personal product ships `1`; an enterprise
+   * with no quota to give sets `0`. The chain is person → department → this.
+   */
+  personalBoxQuota?: number;
+  /** Per-department refinement, keyed `<channelId>:<departmentVendorId>`. */
+  departmentBoxQuotas?: Record<string, number>;
+  /** Per-person exception, keyed principal id. */
+  personBoxQuotas?: Record<string, number>;
+  /**
    * Environment variables applied at startup, under the real environment: a variable
    * already set in the shell always wins. This is where an API key lives when it is not
    * exported in a profile — the file is written 0600 and stays on this machine; nothing
@@ -263,8 +273,46 @@ export function loadConfig(onWarn: (message: string) => void = () => {}): Agentb
     ...(readStringList(raw.skillRoots, "skillRoots", onWarn) !== undefined
       ? { skillRoots: readStringList(raw.skillRoots, "skillRoots", onWarn) }
       : {}),
+    ...(readQuota(raw.personalBoxQuota, "personalBoxQuota", onWarn) !== undefined
+      ? { personalBoxQuota: readQuota(raw.personalBoxQuota, "personalBoxQuota", onWarn) }
+      : {}),
+    ...(readQuotaMap(raw.departmentBoxQuotas, "departmentBoxQuotas", onWarn) !== undefined
+      ? { departmentBoxQuotas: readQuotaMap(raw.departmentBoxQuotas, "departmentBoxQuotas", onWarn) }
+      : {}),
+    ...(readQuotaMap(raw.personBoxQuotas, "personBoxQuotas", onWarn) !== undefined
+      ? { personBoxQuotas: readQuotaMap(raw.personBoxQuotas, "personBoxQuotas", onWarn) }
+      : {}),
     ...(typeof raw.startupItem === "boolean" ? { startupItem: raw.startupItem } : {}),
   };
+}
+
+/** A quota: a whole number 0–99. Negative boxes and half boxes are nobody's plan. */
+function readQuota(value: unknown, name: string, warn: (message: string) => void): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 99) {
+    warn(`config: ${name} must be a whole number 0–99, ignoring it`);
+    return undefined;
+  }
+  return value;
+}
+
+/** A quota map: every value a quota, every key kept as written (it names a department or a person). */
+function readQuotaMap(
+  value: unknown,
+  name: string,
+  warn: (message: string) => void
+): Record<string, number> | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    warn(`config: ${name} must be an object of key to whole number, ignoring it`);
+    return undefined;
+  }
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const quota = readQuota(raw, `${name}.${key}`, warn);
+    if (quota !== undefined) out[key] = quota;
+  }
+  return out;
 }
 
 function readMcpServers(
@@ -469,6 +517,10 @@ export function saveConfig(
     /** Per-chat patch: a null hour removes that chat's digest, others are left alone. */
     digests?: Record<string, number | null>;
     startupItem?: boolean | null;
+    /** The personal-box quota chain (docs/36 §5): default, per-department, per-person. */
+    personalBoxQuota?: number | null;
+    departmentBoxQuotas?: Record<string, number | null>;
+    personBoxQuotas?: Record<string, number | null>;
   }
 ): string {
   const path = configPath();
@@ -501,6 +553,26 @@ export function saveConfig(
   if (changes.hostExec !== undefined) {
     if (changes.hostExec === null) delete raw.hostExec;
     else raw.hostExec = changes.hostExec;
+  }
+  if (changes.personalBoxQuota !== undefined) {
+    if (changes.personalBoxQuota === null) delete raw.personalBoxQuota;
+    else raw.personalBoxQuota = changes.personalBoxQuota;
+  }
+  for (const [field, patch] of [
+    ["departmentBoxQuotas", changes.departmentBoxQuotas],
+    ["personBoxQuotas", changes.personBoxQuotas],
+  ] as const) {
+    if (patch === undefined) continue;
+    const current =
+      raw[field] !== null && typeof raw[field] === "object" && !Array.isArray(raw[field])
+        ? { ...(raw[field] as Record<string, unknown>) }
+        : {};
+    for (const [key, quota] of Object.entries(patch)) {
+      if (quota === null) delete current[key];
+      else current[key] = quota;
+    }
+    if (Object.keys(current).length === 0) delete raw[field];
+    else raw[field] = current;
   }
   if (changes.digests !== undefined) {
     const current =

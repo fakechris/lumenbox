@@ -256,3 +256,34 @@ test("startupItem can be loaded and saved", () => {
   assert.equal(loadConfig().startupItem, undefined);
 });
 
+
+test("the personal-box quota chain round-trips: default, per-department, per-person", () => {
+  const saved = withHome();
+  assert.ok(saved.warnings.length === 0);
+  // The personal product's default is 1 — an enterprise with no quota sets 0.
+  assert.equal(loadConfig().personalBoxQuota, undefined, "absent means the default, applied at the ask");
+
+  saveConfig({ personalBoxQuota: 0, departmentBoxQuotas: { "feishu:od_eng": 1 }, personBoxQuotas: { "p-xiao": 2 } });
+  const first = loadConfig();
+  assert.equal(first.personalBoxQuota, 0);
+  assert.deepEqual(first.departmentBoxQuotas, { "feishu:od_eng": 1 });
+  assert.deepEqual(first.personBoxQuotas, { "p-xiao": 2 });
+
+  // Patches merge, never replace: a second department joins the first's row.
+  saveConfig({ departmentBoxQuotas: { "feishu:od_service": 0 } });
+  const second = loadConfig();
+  assert.deepEqual(second.departmentBoxQuotas, { "feishu:od_eng": 1, "feishu:od_service": 0 });
+
+  // A null removes one key, and the last key out takes the field with it.
+  saveConfig({ personBoxQuotas: { "p-xiao": null } });
+  assert.deepEqual(loadConfig().personBoxQuotas, {});
+  saveConfig({ departmentBoxQuotas: { "feishu:od_eng": null, "feishu:od_service": null } });
+  assert.equal(loadConfig().departmentBoxQuotas, undefined, "no rows left is no field, not an empty monument");
+
+  // A quota nobody can hold is refused with its words, not silently kept.
+  const refused = withHome();
+  writeFileSync(configPath(), JSON.stringify({ personalBoxQuota: -1 }), "utf8");
+  const broken = loadConfig();
+  assert.equal(broken.personalBoxQuota, undefined);
+  assert.ok(refused.warnings.some(w => w.includes("personalBoxQuota")), "the refusal says the field's name");
+});

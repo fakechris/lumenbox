@@ -195,3 +195,79 @@ test("two boxes: files, skills, desktops and memory follow the agent's box; a sc
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a personal box is a docker entry of one's own: it joins the union, and the default container stays the own box's", async () => {
+  const root = mkdtempSync(join(tmpdir(), "agentbox-personal-"));
+  process.env.AGENTBOX_HOME = root;
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  try {
+    const registry = new AgentRegistry(join(root, "agents"));
+    const mine = registry.attachBox({
+      id: "box_mine",
+      name: "p-ada",
+      kind: "docker",
+      containerName: "agentbox-p-ada",
+      displayFloor: 2,
+      workDir: "/home/box/work",
+      members: { kind: "listed", principalIds: ["p-ada"] },
+      createdAt: new Date().toISOString(),
+    });
+    const ada = registry.create({ name: "Ada", boxId: mine.id });
+    const displays: number[] = [];
+
+    const client = fakeModel(() => message([text("done")]));
+    const orchestrator = new Orchestrator({
+      registry,
+      client,
+      useBox: true,
+      boxClient: fakeBox(new Map(), []),
+      boxClientFor: entry =>
+        entry.id === mine.id
+          ? ({
+              health: async () => ({ ok: true, resolution: undefined }),
+              ensureDisplay: async (index: number) => {
+                displays.push(index);
+                return { display: index };
+              },
+            } as unknown as BoxClient)
+          : undefined,
+      inbox: null,
+      turns: null,
+      skillProvenance: new SkillProvenance(join(root, "prov.jsonl")),
+      hooks: null,
+      claims: null,
+      tasks: null,
+      scopes: null,
+      mcp: null,
+    });
+
+    // The union: connectBox dials the own box, then every attached one — a
+    // personal docker box rides the same sweep, through its container.
+    assert.equal((await orchestrator.connectBox()).connected, true);
+    const status = orchestrator.boxStatus().find(box => box.id === mine.id);
+    assert.equal(status?.connected, true, "the personal box is connected");
+    assert.equal(status?.kind, "docker");
+
+    // An agent of it gets a desktop on its floor, like any resident.
+    await orchestrator.ensureAllDesktops();
+    assert.ok(displays.includes(2), `desktop on the record's floor 2 (got ${JSON.stringify(displays)})`);
+
+    // The default container is the own box's; a second entry claiming it is
+    // refused as a matter of identity, before any Docker is asked.
+    const impostor = registry.attachBox({
+      id: "box_impostor",
+      name: "impostor",
+      kind: "docker",
+      containerName: "agentbox-box",
+      displayFloor: 3,
+      workDir: "/home/box/work",
+      members: { kind: "everyone" },
+      createdAt: new Date().toISOString(),
+    });
+    const refused = await orchestrator.connectAttached(impostor);
+    assert.equal(refused.connected, false);
+    assert.match(refused.detail, /default container belongs to this installation's own box/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
