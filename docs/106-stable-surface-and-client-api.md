@@ -213,8 +213,26 @@ only authority-vouched ones. A box's token can be rotated from Settings → Comp
 `agentbox box rotate-token <name>`: the box accepts the new token from the moment it is named and
 the old one until five minutes after the host confirms the switch, across a restart of either
 side; nothing is re-attached and no agent stops. Tokens minted, revoked and rotated are in
-`tokens.jsonl`, approvals answered through the API name who answered them in `policy.jsonl`, and
-`audit export` carries both.
+`tokens.jsonl`, approvals answered through the API or the Outbox name who answered them
+(`user:<person>`) in `policy.jsonl`, and `audit export` carries both.
+
+Where else a box is started from is changed with it (INV-2299):
+
+- **A personal box on Kubernetes**: its Secret is re-written from the host's token file once the box
+  accepts the new token and the host holds it, before the switch is confirmed. A pod restarted
+  before that takes the new token from its config volume; one re-created after it boots with it. A
+  Secret that cannot be written is said, and the next start from this installation writes it again.
+  The box's daemon keeps its rotated token across a start whose `BOXD_TOKEN` is any token it has had
+  (a Secret one or more rotations behind), and obeys only one it never had.
+- **A tenant's box on the control plane**: an account holder asks `POST /api/admin/box/rotate-tokens`
+  on the control plane, not the tenant's box — the tokens are in the control plane's store, which the
+  gateway reads on every request, and in a Secret the box cannot write. Both the box token and the
+  UI token are fixed in the pod's environment, so the pod restarts with new ones (its volumes are
+  kept), in this order: the Secret takes the new tokens and the old UI token with the time it ends
+  (the restart's timeout plus five minutes); the pod is re-created and takes both; the store takes
+  the new ones; the Secret drops the old one. The gateway's token is accepted at every step, and
+  after the time only the new one is. Asked and done are both rows in the control plane's audit
+  table; neither carries a token. The compose and static allocators say they cannot.
 
 ## 6. Upgrades that can be promised
 

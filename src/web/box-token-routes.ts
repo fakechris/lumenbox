@@ -23,6 +23,8 @@ export interface BoxTokenRouteDeps {
    * environment supplies it) and hands out the box's address with it; any other kind cannot rotate.
    */
   provisioner: { kind: string; tokenFile?(): string | undefined; useToken?(next: string): void };
+  /** Where a box keeps another copy of its token to start from — a Kubernetes personal box's Secret — the step that re-writes it (`PersonalBoxes.tokenKeeper`). */
+  keeperOf?: (boxId: string) => (() => Promise<void>) | undefined;
   /** The installation's home: a token file outside it is a copy somebody else may also hold. */
   home: string;
   readJson: () => Promise<Record<string, unknown>>;
@@ -56,7 +58,9 @@ export async function boxTokenRoute(route: string, deps: BoxTokenRouteDeps): Pro
   const client = deps.clientFor(entry.id);
   if (client === undefined) return refuse(409, `${entry.name} is not connected. A box's token is changed with the box: connect it first.`);
   try {
-    const result = await rotateBoxToken({ box: client, tokenFile, label: entry.name, ...(own && ownBox !== undefined ? { alsoUse: (next: string) => ownBox.useToken?.(next) } : {}) });
+    const afterSave = own ? undefined : deps.keeperOf?.(entry.id);
+    const result = await rotateBoxToken({ box: client, tokenFile, label: entry.name, ...(own && ownBox !== undefined ? { alsoUse: (next: string) => ownBox.useToken?.(next) } : {}), ...(afterSave !== undefined ? { afterSave } : {}) });
+    if (result.notKept !== undefined) deps.log(`boxes: ${entry.name}'s new token is saved but what its pod is started from was not updated: ${result.notKept}`);
     deps.record({ at, event: "rotated", kind: "box", box: entry.id, boxName: entry.name, by, confirmed: result.confirmed, ...(result.overlapUntil !== undefined ? { overlapUntil: result.overlapUntil } : {}) });
     deps.log(`boxes: ${entry.name}'s token rotated by ${by}${result.confirmed ? `; the old one works until ${result.overlapUntil ?? "the overlap ends"}` : "; the box accepts both until the next rotation confirms one"}`);
     const outside = !resolve(tokenFile).startsWith(resolve(deps.home) + sep);
@@ -70,6 +74,9 @@ export async function boxTokenRoute(route: string, deps: BoxTokenRouteDeps): Pro
           result.confirmed
             ? `${entry.name} has a new token. The old one keeps working until ${result.overlapUntil ?? "the overlap ends"} for requests already on their way, then opens nothing.`
             : `${entry.name} accepted the new token but could not be told to drop the old one yet; it accepts both until the next rotation.`,
+          ...(result.notKept !== undefined
+            ? [`What ${entry.name} is started from was not updated (${result.notKept}); it still starts with the new token, and the next start of it from this installation writes it again.`]
+            : []),
           ...(entry.kind !== "docker" && outside
             ? [`The new token is in ${tokenFile}. Any other copy of the old one — including what that machine's BOXD_TOKEN is set from — no longer opens the box: ` +
                 "to attach it from anywhere else, use this file, or set a new BOXD_TOKEN there and re-attach with --replace."]

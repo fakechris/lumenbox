@@ -96,6 +96,7 @@ test("only real admin paths are admin paths", () => {
     kind: "remove-member",
     userId: "abc-123",
   });
+  assert.deepEqual(adminRouteOf("POST", "/api/admin/box/rotate-tokens"), { kind: "rotate-box-tokens" });
 
   // Not admin, and importantly not mistaken for it.
   assert.equal(adminRouteOf("GET", "/api/state"), undefined);
@@ -241,6 +242,10 @@ test("restarting keeps the volumes, and is audited before it happens", async () 
     assert.equal((await call("POST", "/api/admin/box/restart")).status, 200);
     assert.deepEqual(restarted, ["agentbox-acme"]);
     assert.ok(store.recentAudit().some(row => row.action === "admin.box.restart"));
+    // Rotating a box's tokens restarts it with new ones; an allocator that cannot says so (Kubernetes can: kubernetes.test.ts).
+    const rotate = await call("POST", "/api/admin/box/rotate-tokens");
+    assert.equal(rotate.status, 501);
+    assert.match((rotate.body as { error: string }).error, /compose allocator cannot rotate/);
   } finally {
     cleanup();
   }
