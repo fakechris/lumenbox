@@ -308,9 +308,10 @@ class OpenAIWireStream {
     key: string | undefined,
     params: CreateParams,
     signal?: AbortSignal,
-    officialOpenAI = false
+    officialOpenAI = false,
+    headers: Record<string, string> = {}
   ) {
-    this.done = this.run(baseUrl, key, params, signal, officialOpenAI);
+    this.done = this.run(baseUrl, key, params, signal, officialOpenAI, headers);
     // A rejection that lands before finalMessage() is awaited must not be an unhandled
     // rejection; finalMessage() re-observes it.
     this.done.catch(() => {});
@@ -331,7 +332,8 @@ class OpenAIWireStream {
     key: string | undefined,
     params: CreateParams,
     signal?: AbortSignal,
-    officialOpenAI = false
+    officialOpenAI = false,
+    headers: Record<string, string> = {}
   ): Promise<Anthropic.Message> {
     const request = {
       ...toOpenAIRequest(params, officialOpenAI),
@@ -341,6 +343,7 @@ class OpenAIWireStream {
     const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: {
+        ...headers,
         "content-type": "application/json",
         ...(key ? { authorization: `Bearer ${key}` } : {}),
       },
@@ -468,18 +471,20 @@ export class OpenAIWireError extends Error {
  */
 export class OpenAIWireClient {
   readonly messages: {
-    create: (params: CreateParams) => Promise<Anthropic.Message>;
-    stream: (params: CreateParams, options?: { signal?: AbortSignal }) => OpenAIWireStream;
+    // `headers` are the caller's own (provider.ts adds the User-Agent and a session id, INV-2325); the content type and key stay ours.
+    create: (params: CreateParams, options?: { headers?: Record<string, string> }) => Promise<Anthropic.Message>;
+    stream: (params: CreateParams, options?: { signal?: AbortSignal; headers?: Record<string, string> }) => OpenAIWireStream;
   };
 
   constructor(options: { baseURL: string; key?: string }) {
     const { baseURL, key } = options;
     const officialOpenAI = new URL(baseURL).hostname === "api.openai.com";
     this.messages = {
-      create: async params => {
+      create: async (params, createOptions) => {
         const response = await fetch(`${baseURL.replace(/\/$/, "")}/chat/completions`, {
           method: "POST",
           headers: {
+            ...createOptions?.headers,
             "content-type": "application/json",
             ...(key ? { authorization: `Bearer ${key}` } : {}),
           },
@@ -495,7 +500,7 @@ export class OpenAIWireClient {
         );
       },
       stream: (params, streamOptions) =>
-        new OpenAIWireStream(baseURL, key, params, streamOptions?.signal, officialOpenAI),
+        new OpenAIWireStream(baseURL, key, params, streamOptions?.signal, officialOpenAI, streamOptions?.headers),
     };
   }
 }

@@ -1009,6 +1009,10 @@ test("saving the model sends a key only when one was typed, clears what was empt
   assert.deepEqual(plain(modelBody({ ...form, provider: "custom", key: " k1 ", model: "" })), { provider: "custom", model: null, baseUrl: "https://x", vision: "auto", summaryModel: null, key: "k1" });
   assert.deepEqual(plain(modelBody({ ...form, searchProvider: "" })).searchProvider, "", "choosing no search service is sent, so the server clears it");
   assert.deepEqual(plain(modelBody({ ...form, searchKey: "s1" })), { provider: "minimax", model: "MiniMax-M3", baseUrl: null, vision: "auto", summaryModel: null, searchProvider: "brave", searchKey: "s1" });
+  // The User-Agent (INV-2325) is sent only when it changed: a new one as typed, an emptied one as null for LumenBox's own.
+  assert.equal(plain(modelBody({ ...form, userAgent: "acme/1", userAgentWas: "acme/1" })).userAgent, undefined);
+  assert.equal(plain(modelBody({ ...form, userAgent: " acme/2 ", userAgentWas: "acme/1" })).userAgent, "acme/2");
+  assert.equal(plain(modelBody({ ...form, userAgent: "", userAgentWas: "acme/1" })).userAgent, null);
 });
 
 test("a saved channel says what happens next: it is connecting, or it needs a restart", () => {

@@ -28,6 +28,7 @@ test("a saved model is in force without a restart; a file that cannot be applied
     model: process.env.AGENTBOX_MODEL,
     vision: process.env.AGENTBOX_VISION,
     summary: process.env.AGENTBOX_SUMMARY_MODEL,
+    userAgent: process.env.AGENTBOX_USER_AGENT,
     key: process.env.ANTHROPIC_API_KEY,
     minimax: process.env[MINIMAX_KEY],
     openai: process.env.OPENAI_API_KEY,
@@ -36,6 +37,7 @@ test("a saved model is in force without a restart; a file that cannot be applied
   delete process.env.AGENTBOX_MODEL;
   delete process.env.AGENTBOX_VISION;
   delete process.env.AGENTBOX_SUMMARY_MODEL;
+  delete process.env.AGENTBOX_USER_AGENT;
   delete process.env[MINIMAX_KEY];
   delete process.env.OPENAI_API_KEY;
   // A credential the client constructor accepts; nothing here makes a request.
@@ -59,7 +61,7 @@ test("a saved model is in force without a restart; a file that cannot be applied
     const state = async () => ((await (await fetch(`${BASE}/api/state`, { headers })).json()) as { provider: string }).provider;
     const config = async () => (await (await fetch(`${BASE}/api/config`, { headers })).json()) as {
       current: string; effective: { provider: string; configured: boolean; model: string; vision: boolean; summaryModel: string | null; locked: string[] };
-      settings: { vision: string; summaryModel: string | null };
+      settings: { vision: string; summaryModel: string | null; userAgent: string | null; userAgentDefault: string };
       presets: { name: string; model: string; keyPresent: boolean; keySource: string | null }[];
     };
 
@@ -76,7 +78,8 @@ test("a saved model is in force without a restart; a file that cannot be applied
     assert.equal(shown.effective.vision, true);
     assert.equal(shown.effective.summaryModel, "model-small");
     assert.deepEqual(shown.effective.locked, []);
-    assert.deepEqual(shown.settings, { vision: "on", summaryModel: "model-small" });
+    assert.deepEqual(shown.settings, { vision: "on", summaryModel: "model-small", userAgent: null, userAgentDefault: shown.settings.userAgentDefault });
+    assert.match(shown.settings.userAgentDefault, /^LumenBox\/\d+\.\d+\.\d+/);
     const file = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as { model?: string; env?: Record<string, string> };
     assert.equal(file.model, "model-new");
     assert.equal(file.env?.AGENTBOX_VISION, "1");
@@ -88,6 +91,20 @@ test("a saved model is in force without a restart; a file that cannot be applied
     assert.equal(second.status, 200);
     assert.equal((await config()).effective.summaryModel, null);
     assert.equal(process.env.AGENTBOX_VISION, undefined);
+
+    // The User-Agent every model request sends (INV-2325): saved into the file and the process, refused when it is
+    // not one line of printable ASCII (and nothing changes), and cleared back to LumenBox's own by an empty value.
+    assert.equal((await post({ userAgent: "acme-agent/2.1" })).status, 200);
+    assert.equal((await config()).settings.userAgent, "acme-agent/2.1");
+    assert.equal(process.env.AGENTBOX_USER_AGENT, "acme-agent/2.1");
+    const refused = await post({ userAgent: "两个字" });
+    assert.equal(refused.status, 400);
+    assert.equal(refused.body.code, "user-agent-not-ascii");
+    assert.equal((await post({ userAgent: "x".repeat(201) })).body.code, "user-agent-too-long");
+    assert.equal((JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as { env?: Record<string, string> }).env?.AGENTBOX_USER_AGENT, "acme-agent/2.1");
+    assert.equal((await post({ userAgent: "" })).status, 200);
+    assert.equal((await config()).settings.userAgent, null);
+    assert.equal(process.env.AGENTBOX_USER_AGENT, undefined);
 
     // A provider with no credential: saved, not applied, the old runtime stays.
     const third = await post({ provider: "minimax" });
@@ -139,7 +156,7 @@ test("a saved model is in force without a restart; a file that cannot be applied
     for (const [key, value] of [
       ["AGENTBOX_HOME", saved.home], ["AGENTBOX_MODEL", saved.model], ["AGENTBOX_VISION", saved.vision],
       ["AGENTBOX_SUMMARY_MODEL", saved.summary], ["ANTHROPIC_API_KEY", saved.key], [MINIMAX_KEY, saved.minimax],
-      ["OPENAI_API_KEY", saved.openai],
+      ["OPENAI_API_KEY", saved.openai], ["AGENTBOX_USER_AGENT", saved.userAgent],
     ] as const) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }

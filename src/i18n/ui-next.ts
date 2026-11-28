@@ -495,6 +495,8 @@ export const UI_NEXT: Record<string, readonly [string, string]> = {
   "ui.next.model.vision.on": ["开", "On"],
   "ui.next.model.vision.off": ["关", "Off"],
   "ui.next.model.summary": ["做摘要用的模型（留空用同一个）", "Model for summaries (empty for the same one)"],
+  "ui.next.model.userAgent": ["User-Agent（留空用默认值）", "User-Agent (empty for the default)"],
+  "ui.next.model.userAgentNote": ["每个模型请求都用它表明自己是谁。有的服务（如 OpenCode Go）要求客户端用自己的名字，而不是 SDK 的名字。", "Every model request names itself with this. Some services (OpenCode Go, for one) ask a client for its own name rather than its SDK's."],
   "ui.next.model.search": ["联网搜索", "Web search"],
   "ui.next.model.noSearch": ["不配置", "Not configured"],
   "ui.next.model.searchKey": ["搜索服务的密钥（只在要换的时候填）", "Search key (only when changing it)"],
