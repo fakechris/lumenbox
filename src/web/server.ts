@@ -3124,12 +3124,18 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const publicUrl = configuredPublicUrl(), doors = webSignInDoors(channelRecords, channelCredentialsSet, publicUrl);
         const toSet = channelRecords.filter(record => signsInOnWeb(record.type)).map(record => ({ id: record.id, type: record.type as WebSignInType,
           keys: doorSignInFor(record.type, { feishuDomain: "feishu" })!.keys(channelEnvBase(record.id)), callback: signInCallbackUrl(publicUrl, record.id) }));
+        const lang = url.searchParams.get("lang");
+        const back = "/bootstrap" + (lang === "zh" || lang === "en" ? `?lang=${lang}` : "");
         const operatorUnlock = isLocal && Boolean(token) && !decision.allow
-          ? { credPath: join(agentboxHome(), "ui-token"), next: "/?ui=next&once=1&view=settings&pane=doors" }
+          ? { credPath: join(agentboxHome(), "ui-token"), next: back }
           : undefined;
+        const vendor = url.searchParams.get("vendor");
         res.setHeader("referrer-policy", "no-referrer"); // INV-2227: off local no step may need a page opened with the token
         send(res, 200, bootstrapPage({
-          doors, toSet, local: isLocal, locale: localeOf(req, url), codePath: bootstrap.codePath,
+          doors, toSet, local: isLocal, locale: localeOf(req, url), codePath: bootstrap.codePath, publicUrl,
+          canEdit: isLocal && decision.allow, publicUrlLocked: configCredentialSource("AGENTBOX_PUBLIC_URL") === "environment",
+          ...(vendor === "feishu" || vendor === "dingtalk" ? { vendor } : {}),
+          ...(url.searchParams.get("review") === "1" ? { review: true } : {}),
           callbackTemplate: signInCallbackUrl(publicUrl, "CHANNEL_ID"), ...(operatorUnlock ? { operatorUnlock } : {}),
         }), "text/html");
         } catch { if (!res.headersSent) send(res, 503, apiError("bootstrap-unavailable")); }
