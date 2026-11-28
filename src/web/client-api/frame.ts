@@ -17,6 +17,7 @@ import type { Locale } from "../../i18n/locale.ts";
 import type { BoardItem } from "../board-order.ts";
 import { requestLocaleOf } from "../page-locale.ts";
 import type { Reach } from "../reach.ts";
+import type { ChangeLedger } from "./change-ledger.ts";
 import { apiError, localizedBody } from "../api-error.ts";
 import { type IdempotencyStore, KEY_PATTERN } from "../idempotency.ts";
 import type { ClientCredential, McpTokenStore } from "../mcp-tokens.ts";
@@ -61,6 +62,10 @@ export interface ClientWorld {
   attention(person: ClientPerson, tasks: readonly Task[]): { mine: readonly BoardItem[]; theirs: readonly BoardItem[] };
   /** Who an id in a task's history is: a person or an agent; undefined for the installation's own bookkeepers. */
   actor(id: string): { kind: "person" | "agent"; name: string } | undefined;
+  /** The durable change ledger (change-ledger.ts). */
+  changes: Pick<ChangeLedger, "latest" | "after" | "onAppend" | "onClose">;
+  /** Writes what changed in the agents since the ledger last said; called before a read of the ledger. */
+  noteAgents(): void;
 }
 
 export interface ClientApiDeps {
@@ -93,7 +98,17 @@ export interface Call {
   requestId: string;
   /** The request's language, for the few words a resource carries for a person (a board column's title). */
   locale: Locale;
+  /** Whether the credential still works and its person still has access: what a long-lived stream asks before each event. */
+  stillValid(): boolean;
 }
+
+/** What a stream operation's handler answers: it writes the response itself, after the frame has said yes. */
+export interface Stream {
+  open(req: IncomingMessage, res: ServerResponse, requestId: string): void;
+}
+const STREAM = Symbol("stream");
+export const stream = (open: Stream["open"]): Stream & { [STREAM]: true } => ({ open, [STREAM]: true });
+const isStream = (value: unknown): value is Stream => typeof value === "object" && value !== null && STREAM in value;
 
 export type Handler = (call: Call) => unknown;
 export type Handlers = { readonly [K in OperationId]: Handler };
@@ -173,6 +188,15 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
     return { credential: found.credential, person };
   }
 
+  /** The same credential, judged again without counting a try: still issued, still in time, its person still there. */
+  function recheck(req: IncomingMessage, caller: Caller): boolean {
+    const bearer = /^Bearer\s+(\S+)\s*$/i.exec(req.headers.authorization ?? "")?.[1];
+    const found = deps.tokens.clientFor(bearer, now());
+    if ("refused" in found || found.credential.id !== caller.credential.id) return false;
+    const person = deps.person(found.credential.principalId);
+    return person !== undefined && !(found.credential.kind === "service" && person.role !== "admin");
+  }
+
   function limited(key: string, limit: number): void {
     const wait = window.take(key, limit, now().getTime());
     if (wait !== undefined) throw new Refused("api-rate-limited", { seconds: wait }, { "retry-after": String(wait) });
@@ -210,7 +234,14 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
       if (caller !== undefined) caller = { ...caller, credential: { ...caller.credential, lastUsedAt: deps.tokens.touch(caller.credential.id, now()) } };
       const handler = table.handlers[operation.operationId];
       if (handler === undefined) throw new Error(`no handler for ${operation.operationId}`);
-      const call: Call = { operation, params: read.values, ...(caller !== undefined ? { caller } : {}), deps, requestId, locale: requestLocaleOf(req) };
+      const stillValid = (): boolean => { try { return caller === undefined || recheck(req, caller); } catch { return false; } };
+      const call: Call = { operation, params: read.values, ...(caller !== undefined ? { caller } : {}), deps, requestId, locale: requestLocaleOf(req), stillValid };
+      if (operation.stream === true) {
+        const opened = await handler(call);
+        if (!isStream(opened)) throw new Error(`${operation.operationId} is a stream and answered something else`);
+        opened.open(req, res, requestId);
+        return true;
+      }
 
       if (operation.method === "POST") {
         // A repeat of a POST within 24 hours answers the first answer; the key is the credential's own.

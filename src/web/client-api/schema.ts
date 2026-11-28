@@ -19,7 +19,7 @@
 import type { ErrorCode } from "../../i18n/server-errors.ts";
 
 /** "1.<revision>": raised by every addition (docs/106 §4.1). The surface ratchet refuses an addition that leaves it. */
-export const API_REVISION = 1;
+export const API_REVISION = 2;
 export const API_VERSION = `1.${API_REVISION}`;
 export const API_PREFIX = "/api/v1";
 
@@ -96,6 +96,8 @@ export const WORK_STATES = ["open", "doing", "blocked", "review", "done", "dropp
 export const WAIT_KINDS = ["question", "review", "close-proposal", "reauthorize", "flagged", "nudged", "waiting"] as const;
 export const AGENT_STATUSES = ["working", "idle"] as const;
 export const ACTOR_KINDS = ["person", "agent", "system"] as const;
+export const CHANGE_TYPES = ["work", "agent"] as const;
+export const CHANGE_OPS = ["upsert", "delete"] as const;
 
 // --- errors -----------------------------------------------------------------------------------
 
@@ -230,6 +232,23 @@ export const SCHEMAS = {
     total: { type: "integer", description: "How much work is in the column; `cards` holds the first `limit` of it. The rest: `GET /work?state=`." },
     cards: list(ref("Work"), "The column's work, in board order."),
   }, ["id", "title", "total", "cards"]),
+  ChangeRecord: object("That something a client may hold changed: never what it now says. Fetch it (`GET /work/{id}`, `GET /agents/{id}`); a 404 then means it is gone, or no longer the caller's to read, and the client drops it.", {
+    seq: { type: "integer", format: "int64", description: "Rises with every change, across restarts: the position to resume from." },
+    at: time("When it changed."),
+    type: known("What changed: `work` or `agent`.", CHANGE_TYPES),
+    id: text("Its id."),
+    op: known("`upsert`: it is new or changed. `delete`: it is gone.", CHANGE_OPS),
+  }, ["seq", "at", "type", "id", "op"]),
+  Changes: object([
+    "What changed since `since`, oldest first, each thing once (its newest change).",
+    "When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history:",
+    "drop what is cached, read it again (`/work`, `/agents`, `/board`), then go on from `durableSeq`.",
+  ].join(" "), {
+    items: list(ref("ChangeRecord"), "The changes the caller may be told of."),
+    durableSeq: { type: "integer", format: "int64", description: "Send it as `since` next time: everything up to it has been looked at." },
+    hasMore: flag("Whether more changes follow `durableSeq` now: ask again at once."),
+    reset: flag("Whether the client must reload instead (see above)."),
+  }, ["items", "durableSeq", "hasMore", "reset"]),
 } as const satisfies Record<string, Schema>;
 export type SchemaName = keyof typeof SCHEMAS;
 
@@ -264,6 +283,8 @@ export interface Operation {
   response: SchemaName;
   /** Codes this operation answers beyond those every operation of its kind may (`commonErrors`). */
   errors?: ApiErrorCode[];
+  /** Server-sent events: `response` is the schema of each event's data; no `ETag`. */
+  stream?: true;
 }
 
 export const OPERATIONS = [
@@ -322,6 +343,31 @@ export const OPERATIONS = [
     query: [limit("How many cards per column.", 50)],
     summary: "The board",
     description: "The same work as `GET /work`, as the page's board: a column per state, what waits on the person first, then the most recently changed.",
+  },
+  {
+    operationId: "getChanges", method: "GET", path: "/changes", auth: "credential", tier: "stable", response: "Changes",
+    query: [
+      { name: "since", description: "The `durableSeq` from the last answer; 0 the first time.", schema: { type: "integer", minimum: 0, format: "int64" }, required: true },
+      { name: "limit", description: "How many changes at most. 1 to 1000; 500 when absent.", schema: { type: "integer", minimum: 1, maximum: 1000 } },
+    ],
+    summary: "What changed since a position, durably",
+    description: [
+      "For a client waking from sleep, starting, or reconnecting: what changed since `since`, read from a ledger on the server's disk that survives restarts",
+      "and is kept 30 days. A change is listed only when the caller may read the thing now (or, gone, could have read it); its words are fetched, not sent.",
+      "Changes are of work and agents; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs —",
+      "`work:read` for work, `agents:read` for agents — and a credential without that scope is not told of it.",
+    ].join(" "),
+  },
+  {
+    operationId: "streamEvents", method: "GET", path: "/events", auth: "credential", tier: "stable", response: "ChangeRecord", stream: true,
+    summary: "Changes as they happen (server-sent events)",
+    description: [
+      "`text/event-stream`, for a client in the foreground. Each `change` event's data is a `ChangeRecord` and its `id` is the record's `seq`.",
+      "Reconnect with `Last-Event-ID` (what `EventSource` sends) and the stream first replays, from the same durable ledger as `/changes`, each thing changed since, once;",
+      "then a `ready` event whose `id` is the newest position. When the gap is older than the ledger keeps, the first event is `reset`",
+      "(data `{ \"durableSeq\": n }`): reload, then go on. With no `Last-Event-ID` the stream starts now. A `: ping` comment comes every 20 seconds.",
+      "The stream ends when the credential stops being valid. What a credential may be told of is as for `/changes`.",
+    ].join(" "),
   },
 ] as const satisfies readonly Operation[];
 export type OperationId = (typeof OPERATIONS)[number]["operationId"];

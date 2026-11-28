@@ -8,6 +8,7 @@ import { getAgent, listAgents } from "./agents.ts";
 import type { Call, Handlers } from "./frame.ts";
 import { apiTime } from "./times.ts";
 import { getBoard, getWork, listWork, listWorkHistory } from "./work.ts";
+import { getChanges, streamEvents } from "./sync.ts";
 import { API_VERSION, OPERATIONS } from "./schema.ts";
 
 /** Whether a service token's view lets it read an agent; a personal token is held by its person's reach alone. */
@@ -18,7 +19,7 @@ export function viewAllowsAgent(call: Call, agentId: string): boolean {
 }
 
 export const HANDLERS: Handlers = {
-  listAgents, getAgent, listWork, getWork, listWorkHistory, getBoard,
+  listAgents, getAgent, listWork, getWork, listWorkHistory, getBoard, getChanges, streamEvents,
 
   getMeta: ({ deps }) => ({
     api: API_VERSION,

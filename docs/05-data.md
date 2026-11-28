@@ -779,7 +779,7 @@ thirteenth that does not.
 | `record` | move a line to an archive, never lose one | `ingress.jsonl`, `turns.jsonl`, `policy.jsonl` |
 | `queue` | drop what is settled; that was its job | `inbox.jsonl`, `deliveries.jsonl`, `turn-steps.jsonl` |
 | `state` | keep one line per key; older ones are noise | `conversations`, `sent-roots`, `cards`, `claims`, `tasks` |
-| `feed` | let old lines fall off the back | `usage.jsonl`, `activity` |
+| `feed` | let old lines fall off the back | `usage.jsonl`, `activity`, `changes.jsonl` |
 
 A `record` archives to `<name>.<yyyy-mm>.jsonl` beside itself, append-only and never compacted in
 turn. Two things had been quietly losing history. The catch-up sweep asks whether a message was
@@ -789,6 +789,19 @@ the only record of what a turn cost, how long it ran, which model and prompt pro
 ended; after five thousand turns all of it went, including the month an audit export was asking
 about. The archives are read on demand — `Ingress.list({ archived: true })`, `decidedAlready`, and
 the audit export — so ordinary reads stay as cheap as they were.
+
+`changes.jsonl` is the client API's change ledger (INV-2213, docs/106 §4.2, docs/110 §2;
+`src/web/client-api/change-ledger.ts`): one line each time a piece of work or an agent changes —
+`seq` (rising by one, across restarts: a reopen goes on from the last whole line), `at`, `type`
+(`work`, `agent`), `id`, `op` (`upsert`, `delete`) — and, to judge who may be told of a change to
+something that is gone, `requester` and `assigneeId` for work, `boxId` and a fingerprint of what a
+client shows (`print`) for an agent. Never a title, a description or a note: a client is told
+*that* it changed and fetches it. Work is written from the board's hooks (`onCreate`, `onChange`);
+agents by comparing their prints with the ledger's last word, at start, before each read and every
+five seconds, so a restart announces only what changed. A feed: kept 30 days and at most 200,000
+lines, the newest always, so the sequence survives; `GET /api/v1/changes?since=` and the replay of
+`GET /api/v1/events` read it, and a `since` older than what is kept — or beyond the newest — is
+answered with `reset` (reload, then go on). Not in `audit export`: it says what changed, not who did.
 
 Four files are records that never compact at all, so they declare no kind: they are appended to,
 one JSON object per line, and nothing in the product rewrites them (INV-2204, docs/106 §5 R4, R6,

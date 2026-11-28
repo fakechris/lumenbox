@@ -8,6 +8,7 @@
  */
 
 import type { Task } from "../../host/tasks.ts";
+import type { ChangeLine } from "./change-ledger.ts";
 import type { Call } from "./frame.ts";
 import { refuse } from "./frame.ts";
 import { EMPTY_VIEW } from "./schema.ts";
@@ -20,6 +21,12 @@ export interface Sight {
   /** The top of what this work was made for, by the chain of `origin.parentId`. */
   topLevelOf(task: Task): Task;
   byId: ReadonlyMap<string, Task>;
+  /**
+   * Whether the caller may be told of this change: they hold the scope its type needs, and may read the
+   * thing now — or, when it is gone, could have read it by what the ledger kept of it. A service token is
+   * not told of work that is gone unless its view takes all work: what top-level work it was under is gone with it.
+   */
+  change(line: Pick<ChangeLine, "type" | "id" | "requester" | "assigneeId" | "boxId">): boolean;
 }
 
 export function sightOf(call: Call): Sight {
@@ -44,7 +51,21 @@ export function sightOf(call: Call): Sight {
     // Named work is seen with what was made for it; "all work" is the work the view's agents hold.
     return view.workIds.includes(topLevelOf(row).id) || (view.allWork && row.assigneeId !== undefined && agent(row.assigneeId));
   };
-  return { agent, task, text: view === undefined || view.conversationText, topLevelOf, byId };
+  const scopes = credential.scopes;
+  const change = (line: Pick<ChangeLine, "type" | "id" | "requester" | "assigneeId" | "boxId">): boolean => {
+    if (line.type === "agent") {
+      if (!scopes.includes("agents:read")) return false;
+      if (call.deps.world.agents().some(fact => fact.id === line.id)) return agent(line.id);
+      return line.boxId !== undefined && reach.box(line.boxId) && (view === undefined || view.allAgents || view.agentIds.includes(line.id));
+    }
+    if (!scopes.includes("work:read")) return false;
+    const now = byId.get(line.id);
+    if (now !== undefined) return task(now);
+    const former = { requester: line.requester ?? "", ...(line.assigneeId !== undefined ? { assigneeId: line.assigneeId } : {}) };
+    if (!reach.task(former)) return false;
+    return view === undefined || (view.allWork && former.assigneeId !== undefined && agent(former.assigneeId));
+  };
+  return { agent, task, text: view === undefined || view.conversationText, topLevelOf, byId, change };
 }
 
 /** A cursor: the position to go on from and the filters it was given for, as base64url JSON. */

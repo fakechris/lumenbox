@@ -36,7 +36,8 @@ function operationOf(operation: Operation): Json {
   const params = [
     ...(operation.pathParams ?? []).map(param => parameter("path", param)),
     ...(operation.query ?? []).map(param => parameter("query", param)),
-    ...(operation.method === "GET" ? [{ name: "If-None-Match", in: "header", required: false, description: "An `ETag` this client holds: 304 when it still matches.", schema: { type: "string" } }] : []),
+    ...(operation.stream === true ? [{ name: "Last-Event-ID", in: "header", required: false, description: "The `id` of the last event this client read: the stream replays what changed since.", schema: { type: "string" } }] : []),
+    ...(operation.method === "GET" && operation.stream !== true ? [{ name: "If-None-Match", in: "header", required: false, description: "An `ETag` this client holds: 304 when it still matches.", schema: { type: "string" } }] : []),
     ...(operation.method === "POST" ? [{
       name: "Idempotency-Key", in: "header", required: false, description: "A key the client keeps for this request: a repeat within 24 hours answers the first answer.", schema: { type: "string" },
     }] : []),
@@ -52,12 +53,17 @@ function operationOf(operation: Operation): Json {
     "x-tier": operation.tier,
     ...(params.length > 0 ? { parameters: params } : {}),
     responses: {
-      200: {
+      200: operation.stream === true ? {
+        description: `Server-sent events; each \`change\` event's data is a \`${operation.response}\`.`,
+        headers: requestIdHeader,
+        content: { "text/event-stream": { schema: { type: "string" } } },
+        "x-event-data": { $ref: `#/components/schemas/${operation.response}` },
+      } : {
         description: SCHEMAS[operation.response].description,
         headers: { ...requestIdHeader, ...(operation.method === "GET" ? { ETag: { description: "Send it back as `If-None-Match`.", schema: { type: "string" } } } : {}) },
         content: { "application/json": { schema: { $ref: `#/components/schemas/${operation.response}` } } },
       },
-      ...(operation.method === "GET" ? { 304: { description: "Unchanged since the `ETag` in `If-None-Match`.", headers: requestIdHeader } } : {}),
+      ...(operation.method === "GET" && operation.stream !== true ? { 304: { description: "Unchanged since the `ETag` in `If-None-Match`.", headers: requestIdHeader } } : {}),
       ...errorResponses(commonErrors(operation)),
     },
   };

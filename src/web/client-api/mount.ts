@@ -4,6 +4,7 @@
  * that names the server's objects.
  */
 
+import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
 import type { AgentRegistry } from "../../agents/registry.ts";
@@ -14,6 +15,7 @@ import { reachOf } from "../reach.ts";
 import { IdempotencyStore } from "../idempotency.ts";
 import type { McpTokenStore } from "../mcp-tokens.ts";
 import type { Attempt, SignInDoor, SignInGuard } from "../sign-in-limits.ts";
+import { CHANGES_LEDGER, ChangeLedger } from "./change-ledger.ts";
 import { type ClientWorld, clientApi } from "./frame.ts";
 
 export const CLIENT_API_IDEMPOTENCY = "client-api-idempotency.jsonl";
@@ -38,8 +40,33 @@ export function mountClientApi(server: {
   /** The page's two questions about a task in flight, as its attention asks them. */
   taskActive(task: Task): boolean;
   checkPending(task: Task): boolean;
+  /** Told of every task made or changed: the board's own hooks (TaskStore.onCreate, onChange). */
+  onTask(listener: (task: Task) => void): void;
 }) {
   const { registry, principals } = server;
+  // What changed, on disk, for a client that comes back later (change-ledger.ts).
+  const changes = new ChangeLedger(join(server.home, CHANGES_LEDGER), server.log);
+  server.onTask(task => { changes.append({ type: "work", id: task.id, op: "upsert", requester: task.requester, ...(task.assigneeId !== undefined ? { assigneeId: task.assigneeId } : {}) }); });
+  // Agents change in files the registry reads, with no event of their own: what a client shows of each is fingerprinted,
+  // and a change to the print, a new agent or one gone is written. On start, against the ledger's last word, so a
+  // restart announces only what did change; then before each read of the ledger and every few seconds.
+  const printOf = (id: string): { print: string; boxId: string } => {
+    const record = registry.tryGet(id)!, box = registry.boxOf(id);
+    const shown = [record.profile.name, record.profile.title ?? "", record.profile.description, record.profile.tags ?? [], record.profile.hidden === true, box.id, box.name];
+    return { print: createHash("sha256").update(JSON.stringify(shown)).digest("base64url").slice(0, 16), boxId: box.id };
+  };
+  const noteAgents = (): void => {
+    const last = changes.lastOf("agent"), present = new Set<string>();
+    for (const record of registry.list()) {
+      present.add(record.id);
+      const now = printOf(record.id), before = last.get(record.id);
+      if (before === undefined || before.op === "delete" || before.print !== now.print) changes.append({ type: "agent", id: record.id, op: "upsert", ...now });
+    }
+    for (const [id, line] of last) if (line.op !== "delete" && !present.has(id)) changes.append({ type: "agent", id, op: "delete", ...(line.boxId !== undefined ? { boxId: line.boxId } : {}) });
+  };
+  noteAgents();
+  const agentWatch = setInterval(noteAgents, 5_000);
+  agentWatch.unref();
   const world: ClientWorld = {
     reachOf: person => reachOf(() => ({ personId: person.id, known: true }), {
       boxById: id => registry.boxById(id), boxIdOf: id => (registry.has(id) ? registry.boxOf(id).id : undefined), unavailable: server.unavailable,
@@ -65,9 +92,11 @@ export function mountClientApi(server: {
       const person = principals.byId(id) ?? (principals.isKnown(id) ? principals.resolve(id) : undefined);
       return person === undefined ? undefined : { kind: "person", name: person.name };
     },
+    changes,
+    noteAgents,
   };
   const attempt = (req: IncomingMessage) => server.attemptFrom(req, "client-api");
-  return clientApi({
+  const api = clientApi({
     world,
     tokens: server.tokens,
     person: id => {
@@ -83,4 +112,6 @@ export function mountClientApi(server: {
     idempotency: new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(server.home, CLIENT_API_IDEMPOTENCY) }),
     log: server.log,
   });
+  /** When the server stops: no agent diff of an old registry beside a new one, and no stream left open. */
+  return { ...api, close: () => { clearInterval(agentWatch); changes.close(); } };
 }

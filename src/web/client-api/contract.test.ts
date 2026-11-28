@@ -70,7 +70,10 @@ async function server(t: TestContext) {
   const expired = new McpTokenStore(join(home, "mcp-tokens.json")).mintClient({ kind: "personal", principalId: "dee", label: "old", scopes: SCOPE_NAMES, expiresAt: new Date(Date.now() - 60_000), by: "test" }).token;
   let base = "";
   const logs: string[] = [];
-  const stop = await startWebServer({ port: 0, host: "0.0.0.0", token: "t0k", useBox: false, onLog: line => logs.push(line), onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); } });
+  const start = () => startWebServer({ port: 0, host: "0.0.0.0", token: "t0k", useBox: false, onLog: line => logs.push(line), onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); } });
+  let stop = await start();
+  /** The server stops and another starts on the same home: what a client finds after a restart. */
+  const restart = async () => { stop(); stop = await start(); };
   t.after(() => {
     stop();
     for (const key of KEYS) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
@@ -92,7 +95,7 @@ async function server(t: TestContext) {
     fetch(`${base}/api/v1${operation.path.replace("{id}", encodeURIComponent(init.id ?? (operation.path.startsWith("/agents") ? writer.id : t1.id)))}${init.query ?? ""}`, { method: operation.method, headers: {
       "x-forwarded-for": init.from ?? fresh(), ...(init.token !== undefined ? { authorization: `Bearer ${init.token}` } : {}), ...init.headers,
     } });
-  return { base, home, logs, expired, roster, mint, fresh, call, operator, Principals, ids };
+  return { base, home, logs, expired, roster, mint, fresh, call, operator, Principals, ids, restart, url: () => base };
 }
 
 /** An error answer is the documented shape, with the code asked for and the request id of its header. */
@@ -113,14 +116,24 @@ test("every operation in the document answers its resource — every field docum
   assert.deepEqual(inDoc, OPERATIONS.map(operation => operation.operationId).sort(), "the document is the schema's operations, all of them");
   for (const operation of OPERATIONS as readonly Operation[]) {
     const token = operation.auth === "none" ? undefined : all.token;
-    const answer = await box.call(operation, token === undefined ? {} : { token });
+    if (operation.stream === true) {
+      // A stream is not JSON and has no ETag: what it says is the next test's.
+      const opened = await box.call(operation, { token: token! });
+      assert.equal(opened.status, 200);
+      assert.match(opened.headers.get("content-type") ?? "", /^text\/event-stream/);
+      assert.match(opened.headers.get("x-request-id") ?? "", /^[0-9a-f-]{36}$/);
+      await opened.body?.cancel();
+      continue;
+    }
+    const required = operation.operationId === "getChanges" ? "?since=0" : "";
+    const answer = await box.call(operation, { ...(token === undefined ? {} : { token }), query: required });
     const body = await answer.json();
     assert.equal(answer.status, 200, `${operation.operationId}: ${JSON.stringify(body)}`);
     assert.deepEqual(problemsOf(body, SCHEMAS[operation.response] as Schema), [], `${operation.operationId} answers exactly its documented ${operation.response}`);
     assert.match(answer.headers.get("x-request-id") ?? "", /^[0-9a-f-]{36}$/);
     const etag = answer.headers.get("etag");
     assert.match(etag ?? "", /^"[A-Za-z0-9_-]{32}"$/, `${operation.operationId} carries a validator`);
-    let again = await box.call(operation, { ...(token === undefined ? {} : { token }), headers: { "if-none-match": etag! } });
+    let again = await box.call(operation, { ...(token === undefined ? {} : { token }), query: required, headers: { "if-none-match": etag! } });
     // `me` names the minute of its last use: across a minute's turn the body did change, and once more settles it.
     if (again.status === 200 && operation.operationId === "getMe") { const turned = again.headers.get("etag")!; await again.body?.cancel(); again = await box.call(operation, { token: token!, headers: { "if-none-match": turned } }); }
     assert.equal(again.status, 304, `${operation.operationId}: unchanged is 304`);
@@ -286,7 +299,7 @@ test("tokens: a viewer mints their own, only an Admin mints a service token and 
 
 test("the generation check's fixtures stand for a newer server: each fits its schema once unknowns are allowed, and each has an unknown field and an unknown value", () => {
   // clients/codegen decodes these with the Swift and Kotlin code generated from the document (CI's client-codegen job).
-  const fixtures: [string, keyof typeof SCHEMAS][] = [["meta.json", "Meta"], ["me.json", "Me"], ["error.json", "Error"], ["work-page.json", "WorkPage"]];
+  const fixtures: [string, keyof typeof SCHEMAS][] = [["meta.json", "Meta"], ["me.json", "Me"], ["error.json", "Error"], ["work-page.json", "WorkPage"], ["changes.json", "Changes"]];
   for (const [file, name] of fixtures) {
     const body = JSON.parse(readFileSync(new URL(`../../../clients/codegen/fixtures/${file}`, import.meta.url), "utf8")) as unknown;
     assert.deepEqual(problemsOf(body, SCHEMAS[name] as Schema, false), [], `${file} is a ${name}, as a newer server would send it`);
@@ -376,3 +389,116 @@ test("agents, work and the board show what the page shows this person: their box
   const withText = await service({ allAgents: true, allWork: true, conversationText: true });
   assert.equal((await read<Work>("getWork", withText, { id: ids.t1 })).description, "Draft the plan for the December issue.");
 });
+
+/** Reads a server-sent event stream until `ready`, and gives each event's name, id and data. */
+async function eventsUntilReady(answer: Response): Promise<{ event: string; id?: string; data: Record<string, unknown> }[]> {
+  assert.equal(answer.status, 200);
+  const reader = answer.body!.getReader();
+  let text = "";
+  while (!/event: ready\n/.test(text)) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    text += new TextDecoder().decode(value);
+  }
+  await reader.cancel();
+  return text.split("\n\n").filter(block => /^(id|event|data):/m.test(block)).map(block => {
+    const field = (name: string) => new RegExp(`^${name}: (.*)$`, "m").exec(block)?.[1];
+    return { event: field("event") ?? "message", ...(field("id") !== undefined ? { id: field("id")! } : {}), data: JSON.parse(field("data") ?? "{}") as Record<string, unknown> };
+  });
+}
+
+test("a phone away for more than the page's 512 live events, and across a restart, catches up exactly: what changed, once each, only what it may read, and no reset", async t => {
+  const box = await server(t);
+  const { ids } = box;
+  const op = (id: string) => OPERATIONS.find(operation => operation.operationId === id) as Operation;
+  const dee = (await box.mint({ principalId: "dee", label: "phone", scopes: SCOPE_NAMES })).token;
+  type Changes = { items: { seq: number; type: string; id: string; op: string }[]; durableSeq: number; hasMore: boolean; reset: boolean };
+  const changes = async (since: number, limit?: number): Promise<Changes> => {
+    const answer = await box.call(op("getChanges"), { token: dee, query: `?since=${since}${limit !== undefined ? `&limit=${limit}` : ""}` });
+    const body = await answer.json() as Changes;
+    assert.equal(answer.status, 200, JSON.stringify(body));
+    assert.deepEqual(problemsOf(body, SCHEMAS.Changes as Schema), [], "the documented shape: no title, no text, nothing but that it changed");
+    return body;
+  };
+  /** Everything after `since`, page by page, as a phone would: each thing once (its newest change), and where to go on from. */
+  const catchUp = async (since: number) => {
+    const seen = new Map<string, number>();
+    let at = since, pages = 0;
+    for (;;) {
+      const page = await changes(at, 2);
+      assert.equal(page.reset, false, "no reset: the ledger still holds the gap");
+      for (const item of page.items) seen.set(`${item.type}:${item.id}`, item.seq);
+      assert.ok(page.durableSeq >= at);
+      at = page.durableSeq; pages += 1;
+      if (!page.hasMore) return { seen, at, pages };
+    }
+  };
+
+  // The phone is up to date, then goes to sleep.
+  const asleep = (await changes(0)).durableSeq;
+  assert.ok(asleep > 0, "the agents and the seeded work are on the ledger");
+  // The page's own cursor now: its 512-frame live ring is what is about to wrap.
+  const pageCursor = (await fetch(`${box.url()}/api/me`, { headers: box.operator })).headers.get("x-lumen-event-cursor")!;
+
+  // 600 changes while it sleeps: notes on Dee's two pieces of work, and on Pat's errand, which Dee may not read.
+  const touched = [ids.t1, ids.t2, ids.t3];
+  for (let n = 0; n < 600; n += 1) {
+    const answer = await fetch(`${box.url()}/api/tasks/update`, { method: "POST", headers: box.operator, body: JSON.stringify({ id: touched[n % 3], note: `step ${n}` }) });
+    assert.equal(answer.status, 200, await answer.text());
+  }
+  // The page's live replay has lost the gap: proof the phone could not have caught up from it.
+  const page = await eventsUntilReadyOrReset(await fetch(`${box.url()}/api/events`, { headers: { ...box.operator, "last-event-id": pageCursor } }));
+  assert.ok(page.includes('"type":"reset"'), "the page's 512-frame ring was wrapped");
+
+  // The server restarts; the phone wakes after it.
+  await box.restart();
+  const fresh = await box.mint({ principalId: "dee", label: "after", scopes: ["work:read"] }); // the store came back too
+  assert.ok(fresh.token.startsWith("lbxp_"));
+  const after = await catchUp(asleep);
+  assert.deepEqual([...after.seen.keys()].sort(), [`work:${ids.t1}`, `work:${ids.t2}`].sort(), "the two pieces of work Dee may read, once each; nothing of Pat's errand");
+  assert.ok(after.pages > 1, "and it came in pages");
+  // Work made after the restart follows on from where the phone now is, with a sequence that kept rising.
+  const made = await fetch(`${box.url()}/api/tasks`, { method: "POST", headers: box.operator, body: JSON.stringify({ title: "After the restart", assigneeId: ids.writer }) }); // held by an agent in Dee's box, so Dee may read it
+  const madeId = ((await made.json()) as { task?: { id: string }; id?: string }).task?.id;
+  const next = await changes(after.at);
+  assert.ok(next.items.some(item => item.type === "work" && item.id === madeId && item.seq > after.at), JSON.stringify(next.items));
+  assert.deepEqual((await changes(next.durableSeq)).items, [], "and then nothing more");
+
+  // The stream resumes from the same ledger: from where the phone slept, the same set, then ready at the newest position.
+  const replay = await eventsUntilReady(await box.call(op("streamEvents"), { token: dee, headers: { "last-event-id": String(asleep) } }));
+  const replayed = replay.filter(entry => entry.event === "change").map(entry => `${entry.data.type}:${entry.data.id}`);
+  assert.deepEqual(new Set(replayed), new Set([`work:${ids.t1}`, `work:${ids.t2}`, `work:${madeId}`]));
+  assert.equal(replayed.length, new Set(replayed).size, "each thing once");
+  assert.ok(replay.every(entry => entry.event !== "change" || entry.id === String(entry.data.seq)), "an event's id is its record's seq");
+  const ready = replay.at(-1)!;
+  assert.deepEqual([ready.event, Number(ready.id)], ["ready", next.durableSeq]);
+
+  // A position the ledger does not hold — from another installation, or past what is kept — is a reset, said the same way on both.
+  const beyond = await changes(next.durableSeq + 1000);
+  assert.deepEqual([beyond.reset, beyond.items.length, beyond.durableSeq], [true, 0, next.durableSeq]);
+  const resetStream = await eventsUntilReady(await box.call(op("streamEvents"), { token: dee, headers: { "last-event-id": String(next.durableSeq + 1000) } }));
+  assert.deepEqual(resetStream[0], { event: "reset", data: { durableSeq: next.durableSeq } });
+
+  // Live: a change made while the stream is open arrives as it happens; one Dee may not read does not.
+  const live = await box.call(op("streamEvents"), { token: dee });
+  const reader = live.body!.getReader();
+  let text = "";
+  const until = async (pattern: RegExp) => { while (!pattern.test(text)) { const { value, done } = await reader.read(); if (done) break; text += new TextDecoder().decode(value); } };
+  await until(/event: ready\n/);
+  for (const id of [ids.t3, ids.t1]) await (await fetch(`${box.url()}/api/tasks/update`, { method: "POST", headers: box.operator, body: JSON.stringify({ id, note: "live" }) })).body?.cancel();
+  await until(new RegExp(`"id":"${ids.t1}"`));
+  await reader.cancel();
+  assert.ok(!text.includes(`"id":"${ids.t3}"`), "Pat's errand changed and Dee was not told");
+  // On disk: a sequence and the routing, never a title or a note.
+  const ledger = readFileSync(join(box.home, "changes.jsonl"), "utf8");
+  assert.ok(!ledger.includes("step ") && !ledger.includes("Plan the issue"), "no words of the work in the ledger");
+});
+
+/** The page's stream, read until its first data line: a reset, or a replay. */
+async function eventsUntilReadyOrReset(answer: Response): Promise<string> {
+  const reader = answer.body!.getReader();
+  let text = "";
+  while (!/data: /.test(text)) { const { value, done } = await reader.read(); if (done) break; text += new TextDecoder().decode(value); }
+  await reader.cancel();
+  return text;
+}

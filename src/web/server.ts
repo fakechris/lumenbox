@@ -2983,7 +2983,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
   const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log, // /api/v1
-    registry, tasks: () => orchestrator.tasks?.list() ?? [], working: id => orchestrator.bus.isActive(id), unavailable: unavailableHere, taskActive, checkPending });
+    registry, tasks: () => orchestrator.tasks?.list() ?? [], working: id => orchestrator.bus.isActive(id), unavailable: unavailableHere, taskActive, checkPending,
+    onTask: listener => { orchestrator.tasks?.onChange(listener); orchestrator.tasks?.onCreate(listener); } }); // the change ledger hears the board (change-ledger.ts)
 
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
@@ -6865,7 +6866,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   return () => {
     personalBoxesStopping = true;
     stopExecutionFeed?.();
-    events.close();
+    events.close(); v1.close(); // the client API's streams and its agent watch
     // The backup timer, or an embedding that restarts the server in one process leaves the old one
     // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.
     backups?.stop();

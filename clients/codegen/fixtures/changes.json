@@ -1,0 +1,10 @@
+{
+  "items": [
+    { "seq": 9007199254740000, "at": "2026-11-28T10:00:00Z", "type": "work", "id": "t12", "op": "upsert" },
+    { "seq": 9007199254740001, "at": "2026-11-28T10:00:01Z", "type": "conversation", "id": "c3", "op": "archive", "conversationKind": "group" }
+  ],
+  "durableSeq": 9007199254740001,
+  "hasMore": false,
+  "reset": false,
+  "window": "30d"
+}

@@ -50,6 +50,13 @@ final class ForwardCompatibilityTests: XCTestCase {
         XCTAssertNotNil(page.nextCursor)
     }
 
+    func testChangesOfAKindThisClientDoesNotKnow() async throws {
+        let changes = try await client(.ok, "changes.json").getChanges(query: .init(since: 0)).ok.body.json
+        XCTAssertEqual(changes.items.map(\._type), ["work", "conversation"], "a change type added later arrives as itself: the client skips or reloads, and never fails")
+        XCTAssertEqual(changes.items.last?.op, "archive")
+        XCTAssertEqual(changes.durableSeq, 9007199254740001, "a sequence past 2^32 decodes")
+    }
+
     func testAnErrorWithAnUnknownCode() async throws {
         let answer = try await client(.unauthorized, "error.json").getMe()
         guard case .unauthorized(let refusal) = answer else { return XCTFail("401 is the documented refusal: \(answer)") }

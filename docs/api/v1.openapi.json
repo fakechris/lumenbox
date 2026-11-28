@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LumenBox client API",
-    "version": "1.1",
+    "version": "1.2",
     "description": "LumenBox client API, v1 (docs/106 §4). Additions only inside v1: a new operation, a new optional field, a new known value — each raises the revision `GET /api/v1/meta` reports.\n\nConventions, the same for every operation:\n- JSON, camelCase. Ids are opaque strings: compare them, never parse them. Times are RFC 3339 in UTC, to the second (`2026-11-28T10:00:00Z`).\n- A field with no value is absent, never null.\n- A client ignores fields it does not know.\n- A string listed with `x-extensible-enum` is an open enumeration: a client treats a value it does not know as \"other\", shows the item's plain words, and offers to open it on the page or the desktop app when it cannot act on it.\n- Lists take `?limit=` (1–100) and `?cursor=` and answer `{ items, nextCursor }`; `nextCursor` is absent on the last page.\n- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.\n- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.\n- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.\n- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer.\n- 429 carries `Retry-After` in seconds.\n- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.\n\nCredentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view.\nWhat a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.\nCross-origin browser calls are not answered with CORS headers.",
     "license": {
       "name": "GPL-3.0-only",
@@ -1610,6 +1610,333 @@
           }
         }
       }
+    },
+    "/api/v1/changes": {
+      "get": {
+        "operationId": "getChanges",
+        "summary": "What changed since a position, durably",
+        "description": "For a client waking from sleep, starting, or reconnecting: what changed since `since`, read from a ledger on the server's disk that survives restarts and is kept 30 days. A change is listed only when the caller may read the thing now (or, gone, could have read it); its words are fetched, not sent. Changes are of work and agents; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs — `work:read` for work, `agents:read` for agents — and a credential without that scope is not told of it.\n\nAny credential.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "any",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": true,
+            "description": "The `durableSeq` from the last answer; 0 the first time.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "format": "int64"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many changes at most. 1 to 1000; 500 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`), then go on from `durableSeq`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Changes"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "streamEvents",
+        "summary": "Changes as they happen (server-sent events)",
+        "description": "`text/event-stream`, for a client in the foreground. Each `change` event's data is a `ChangeRecord` and its `id` is the record's `seq`. Reconnect with `Last-Event-ID` (what `EventSource` sends) and the stream first replays, from the same durable ledger as `/changes`, each thing changed since, once; then a `ready` event whose `id` is the newest position. When the gap is older than the ledger keeps, the first event is `reset` (data `{ \"durableSeq\": n }`): reload, then go on. With no `Last-Event-ID` the stream starts now. A `: ping` comment comes every 20 seconds. The stream ends when the credential stops being valid. What a credential may be told of is as for `/changes`.\n\nAny credential.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "any",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "description": "The `id` of the last event this client read: the stream replays what changed since.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent events; each `change` event's data is a `ChangeRecord`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "x-event-data": {
+              "$ref": "#/components/schemas/ChangeRecord"
+            }
+          },
+          "400": {
+            "description": "`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2191,6 +2518,81 @@
           "title",
           "total",
           "cards"
+        ]
+      },
+      "ChangeRecord": {
+        "type": "object",
+        "description": "That something a client may hold changed: never what it now says. Fetch it (`GET /work/{id}`, `GET /agents/{id}`); a 404 then means it is gone, or no longer the caller's to read, and the client drops it.",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Rises with every change, across restarts: the position to resume from."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it changed."
+          },
+          "type": {
+            "type": "string",
+            "description": "What changed: `work` or `agent`.",
+            "x-extensible-enum": [
+              "work",
+              "agent"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "op": {
+            "type": "string",
+            "description": "`upsert`: it is new or changed. `delete`: it is gone.",
+            "x-extensible-enum": [
+              "upsert",
+              "delete"
+            ]
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "type",
+          "id",
+          "op"
+        ]
+      },
+      "Changes": {
+        "type": "object",
+        "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`), then go on from `durableSeq`.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeRecord"
+            },
+            "description": "The changes the caller may be told of."
+          },
+          "durableSeq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Send it as `since` next time: everything up to it has been looked at."
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether more changes follow `durableSeq` now: ask again at once."
+          },
+          "reset": {
+            "type": "boolean",
+            "description": "Whether the client must reload instead (see above)."
+          }
+        },
+        "required": [
+          "items",
+          "durableSeq",
+          "hasMore",
+          "reset"
         ]
       }
     }
