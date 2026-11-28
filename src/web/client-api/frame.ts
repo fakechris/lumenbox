@@ -71,19 +71,30 @@ export class Refused extends Error {
 }
 export const refuse = (code: ApiErrorCode, vars: Record<string, string | number> = {}): never => { throw new Refused(code, vars); };
 
-/** Counts requests per key in fixed windows: enough to answer 429 before a loop takes the server down. */
-class Window {
+/**
+ * Counts requests per key in fixed windows: enough to answer 429 before a loop takes the server down.
+ * At most `keys` windows are kept; past that the least recently used go first, so many addresses
+ * arriving at once cannot reset the count of one that is still calling.
+ */
+export class Window {
   private readonly counts = new Map<string, { start: number; count: number }>();
-  constructor(private readonly windowMs: number) {}
+  constructor(private readonly windowMs: number, private readonly keys = 10_000) {}
   /** Seconds to wait, or undefined when this request fits. */
   take(key: string, limit: number, now: number): number | undefined {
     const current = this.counts.get(key);
     if (current === undefined || now - current.start >= this.windowMs) {
-      if (this.counts.size > 10_000) this.counts.clear();
+      // The map's order is the order of last use: a new window goes to the back, as does each use below.
+      this.counts.delete(key);
       this.counts.set(key, { start: now, count: 1 });
+      for (const oldest of this.counts.keys()) {
+        if (this.counts.size <= this.keys) break;
+        this.counts.delete(oldest);
+      }
       return undefined;
     }
     current.count += 1;
+    this.counts.delete(key);
+    this.counts.set(key, current);
     return current.count > limit ? Math.max(1, Math.ceil((current.start + this.windowMs - now) / 1000)) : undefined;
   }
 }
@@ -151,7 +162,7 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
     let idempotencyKey: string | undefined;
     try {
       const match = matchRoute(req.method ?? "GET", url.pathname, table.operations);
-      if (match.kind === "unknown") throw new Refused("api-operation-unknown", { method: req.method ?? "", path: url.pathname });
+      if (match.kind === "unknown") throw new Refused("api-operation-unknown", { route: `${req.method ?? ""} ${url.pathname}` });
       if (match.kind === "method") throw new Refused("api-method-not-allowed", { method: req.method ?? "", allowed: match.allowed.join(", ") }, { allow: match.allowed.join(", ") });
       if (match.kind === "malformed") throw new Refused("api-param-invalid", { name: match.name, why: "percent-encoded UTF-8" });
       const operation = match.operation;

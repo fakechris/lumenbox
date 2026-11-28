@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { IdempotencyStore } from "../idempotency.ts";
 import type { ClientCredential } from "../mcp-tokens.ts";
-import { clientApi, refuse, type Handler } from "./frame.ts";
+import { clientApi, refuse, Window, type Handler } from "./frame.ts";
 import { matchRoute, readParams } from "./routes.ts";
 import { OPERATIONS, type Operation } from "./schema.ts";
 
@@ -100,4 +100,18 @@ test("a refused POST is refused again on its repeat; a handler that throws answe
   assert.ok(body.error.includes(body.requestId), "the words name the request, so a person can quote it");
   assert.ok(!JSON.stringify(body).includes("boom"), "what went wrong inside stays inside");
   assert.ok(box.logs.some(line => line.includes(body.requestId) && line.includes("boom")), "and is in the log under that id");
+});
+
+test("a limit's windows: over the limit waits out its own window, and new keys push out the least recently used, never one still calling", () => {
+  const window = new Window(60_000, 3);
+  assert.equal(window.take("busy", 2, 0), undefined);
+  assert.equal(window.take("busy", 2, 1_000), undefined);
+  assert.equal(window.take("busy", 2, 2_000), 58, "the third in a minute waits out the rest of the minute");
+  for (const key of ["a", "b"]) window.take(key, 2, 3_000);
+  assert.equal(window.take("busy", 2, 4_000), 56, "still calling: it moves to the back");
+  for (const key of ["c", "d"]) window.take(key, 2, 5_000);
+  assert.equal(window.take("busy", 2, 6_000), 54, "the two that went were a and b; busy is still limited");
+  for (const key of ["e", "f", "g"]) window.take(key, 2, 7_000);
+  assert.equal(window.take("busy", 2, 8_000), undefined, "pushed out only once three keys were used after it");
+  assert.equal(window.take("busy", 2, 69_000), undefined, "and a new minute is a new window");
 });
