@@ -33,7 +33,8 @@ export interface DecisionAccess {
   answerDraft(id: string, answer: { decision: "approve" } | { decision: "edit"; body: string } | { decision: "reject"; reason: string }, by: string, decider: string): OutboxAnswer;
   /** The person's words to an agent, in a conversation, as their message (a question's answer). */
   say(person: ClientPerson, agentId: string, conversation: string, text: string, questionId?: string): Promise<void>;
-  saveSecret(id: string, value: string, by: string): "saved" | "unknown" | "empty";
+  /** `forAgent`: the agent the person was shown asking; a request now made by another under that name is not theirs to answer. */
+  saveSecret(id: string, value: string, by: string, forAgent: string): "saved" | "unknown" | "empty";
   dismissSecret(id: string, by: string): boolean;
   /** A decision on work, as the page's buttons make it. */
   work(person: ClientPerson, taskId: string, decision: "done" | "keep-open" | "put-off" | "stop", until?: string, note?: string): Promise<{ ok: true } | { ok: false; why: string }>;
@@ -133,7 +134,10 @@ const resourceOf = ({ hidden: _hidden, ...item }: Built) => item;
 export async function listInbox(call: Call) {
   const items = await inboxOf(call);
   const after = decodeCursor(call.params.cursor, "inbox", (value: unknown): value is string => typeof value === "string");
-  const rest = after === undefined ? items : items.slice(items.findIndex(item => item.id === after) + 1);
+  const at = after === undefined ? -1 : items.findIndex(item => item.id === after);
+  // The item a cursor stopped at was answered meanwhile: say so, rather than start the list again under the client's feet.
+  if (after !== undefined && at < 0) return refuse("api-cursor-invalid");
+  const rest = items.slice(at + 1);
   const page = rest.slice(0, limitOf(call));
   return { items: page.map(resourceOf), ...(rest.length > page.length ? { nextCursor: encodeCursor(page.at(-1)!.id, "inbox") } : {}) };
 }
@@ -196,7 +200,7 @@ export async function answerInboxItem(call: Call) {
   }
   if (item.kind === "secret") {
     if (body.action === "dismiss") { decisions.dismissSecret(item.hidden.secretId!, by); return { id, outcome: "dismissed", at: now() }; }
-    const saved = decisions.saveSecret(item.hidden.secretId!, body.value ?? "", by);
+    const saved = decisions.saveSecret(item.hidden.secretId!, body.value ?? "", by, item.agentId!);
     if (saved === "unknown") return refuse("api-not-found");
     if (saved === "empty") return refuse("inbox-answer-invalid", { why: "a secret has a value" });
     return { id, outcome: "saved", at: now() };
@@ -241,6 +245,25 @@ export async function getNotification(call: Call) {
   const item = (await inboxOf(call)).find(entry => entry.id === line.id);
   if (item === undefined) return refuse("api-not-found");
   return { seq, itemId: item.id, kind: item.kind, title: item.title, body: item.detail, at: apiTime(line.at) };
+}
+
+/**
+ * The change records that bring the ledger's word on what waits on people up to `rows`: an item that came, or whose route
+ * changed (it moved to another agent: its new audience is told), is an upsert; one that went is a delete, routed as it was.
+ */
+export function inboxChanges(last: ReadonlyMap<string, { op: "upsert" | "delete"; assigneeId?: string; requester?: string }>, rows: readonly { id: string; agentId?: string; requester?: string }[]) {
+  type Line = { type: "inbox"; id: string; op: "upsert" | "delete"; assigneeId?: string; requester?: string };
+  const lines: Line[] = [], present = new Set<string>();
+  const routed = (agentId: string | undefined, requester: string | undefined) => ({ ...(agentId !== undefined ? { assigneeId: agentId } : {}), ...(requester !== undefined ? { requester } : {}) });
+  for (const row of rows) {
+    if (present.has(row.id)) continue;
+    present.add(row.id);
+    const before = last.get(row.id);
+    const moved = before !== undefined && (before.assigneeId !== row.agentId || before.requester !== row.requester);
+    if (before === undefined || before.op === "delete" || moved) lines.push({ type: "inbox", id: row.id, op: "upsert", ...routed(row.agentId, row.requester) });
+  }
+  for (const [id, line] of last) if (line.op !== "delete" && !present.has(id)) lines.push({ type: "inbox", id, op: "delete", ...routed(line.assigneeId, line.requester) });
+  return lines;
 }
 
 /** What the change record keeps of what waits on people: the item's id and how it is routed (visibility.ts). Never its words. */

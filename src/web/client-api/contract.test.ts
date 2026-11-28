@@ -938,6 +938,9 @@ test("decisions from a phone: the page's own inbox, an outside action allowed on
   const reach = items.find(item => item.id === "approval:ap-reach")!, self = items.find(item => item.id === "approval:ap-self")!;
   assert.deepEqual([reach.stepUpRequired, reach.approval?.tier, self.stepUpRequired, self.approval?.tier], [true, "reach", false, "self"], "the gate's own tiers decide the step-up");
   assert.deepEqual(items.find(item => item.kind === "outbox")!.stepUpRequired, true, "a draft goes outside the box");
+  // Paging: a cursor names the item it stopped at; answered meanwhile, the cursor is refused rather than the list restarting.
+  const first = await read<{ items: Item[]; nextCursor?: string }>(box.call(op("listInbox"), { token: phone.token, query: "?limit=1" }));
+  assert.equal(first.items[0]!.id, "outbox:dr-1", "what stops work comes first");
   // A viewer sees what waits in the boxes they are in, and answers none of it.
   assert.ok((await inbox(viewer)).every(item => item.actions.length === 0 || item.actions.join() === "open-on-page"));
 
@@ -968,6 +971,7 @@ test("decisions from a phone: the page's own inbox, an outside action allowed on
   await assertRefusal(await box.call(op("getNotification"), { token: phone.token, id: String(patSeq) }), "api-not-found", "a seq for what does not wait on Dee: no words");
   assert.equal((await read<{ outcome: string }>(box.call(op("answerInboxItem"), { token: phone.token, id: "outbox:dr-1", body: { action: "edit", body: words, stepUp: phone.proof("outbox:dr-1", "edit", digest) } }))).outcome, "edited");
   await assertRefusal(await box.call(op("getNotification"), { token: phone.token, id: String(seq) }), "api-not-found", "answered: the push says nothing more");
+  await assertRefusal(await box.call(op("listInbox"), { token: phone.token, query: `?limit=1&cursor=${first.nextCursor}` }), "api-cursor-invalid", "the cursor's item was answered");
 
   // The question, answered in words: it no longer waits on Dee.
   assert.equal((await read<{ outcome: string }>(box.call(op("answerInboxItem"), { token: phone.token, id: `question:${box.questionId}`, body: { action: "answer", text: "The blue one." } }))).outcome, "answered");

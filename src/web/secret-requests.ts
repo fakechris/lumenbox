@@ -28,10 +28,13 @@ export interface SecretAnswerDeps {
   log(line: string): void;
 }
 
-/** Saves `value` for the request `id`. `unknown`: not waiting; `empty`: nothing to save. */
-export function answerSecret(deps: SecretAnswerDeps, id: string, value: string, by: string): "saved" | "unknown" | "empty" {
+/**
+ * Saves `value` for the request `id`. `unknown`: not waiting — or, given `forAgent`, now asked by another agent under the
+ * same name than the one the person was shown, whose request it is not theirs to answer; `empty`: nothing to save.
+ */
+export function answerSecret(deps: SecretAnswerDeps, id: string, value: string, by: string, forAgent?: string): "saved" | "unknown" | "empty" {
   const request = deps.pending.get(id);
-  if (request === undefined) return "unknown";
+  if (request === undefined || (forAgent !== undefined && request.agentId !== forAgent)) return "unknown";
   if (value.trim() === "") return "empty";
   // Into the vault with a grant to the agent that asked, and nothing else changes: the box never sees it, the
   // transcript never holds it, RunOnHost may name it.

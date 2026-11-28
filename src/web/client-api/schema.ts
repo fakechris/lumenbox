@@ -143,7 +143,7 @@ export const ERRORS = {
   "api-cursor-invalid": { status: 400, meaning: "The cursor is not one this list gave, or was given for other filters. Start the list again without it." },
   "api-not-found": { status: 404, meaning: "No such resource, or none the credential may read: the two are one answer." },
   "api-idempotency-key-invalid": { status: 400, meaning: "`Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`." },
-  "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token)." },
+  "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long)." },
   "api-rate-limited": { status: 429, meaning: "Too many requests; wait the seconds `Retry-After` names." },
   "sign-in-limited": { status: 429, meaning: "Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names." },
   "api-internal": { status: 500, meaning: "The server failed; `requestId` names the failure in its log." },
@@ -285,7 +285,7 @@ export const SCHEMAS = {
   Changes: object([
     "What changed since `since`, oldest first, each thing once (its newest change).",
     "When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history:",
-    "drop what is cached, read it again (`/work`, `/agents`, `/board`), then go on from `durableSeq`.",
+    "drop what is cached, read it again (`/work`, `/agents`, `/board`, and `/inbox` with `work:decide`), then go on from `durableSeq`.",
   ].join(" "), {
     items: list(ref("ChangeRecord"), "The changes the caller may be told of."),
     durableSeq: { type: "integer", format: "int64", description: "Send it as `since` next time: everything up to it has been looked at." },
@@ -372,7 +372,9 @@ export const SCHEMAS = {
   }, ["items"]),
   InboxItem: object([
     "One thing waiting on the person, as the page lists it under \"waiting on you\". Discriminated by `kind`: the field named like the kind",
-    "(`approval`, `draft`, `question`, `secret`, `closeProposal`) carries what that kind needs, and `actions` says what may be done here.",
+    "(`approval`, `draft`, `question`, `secret`, `closeProposal`) carries what that kind needs, and `actions` says what may be done here, each at its own operation:",
+    "`allow`/`deny` at `POST /approvals/{approval.id}`; `answer`, `approve`, `edit`, `reject`, `save`, `dismiss` at `POST /inbox/{id}/answer`;",
+    "`done`, `keep-open`, `put-off`, `stop` at `POST /work/{workId}/decisions`; `open-on-page`: nothing here.",
     "A kind a client does not know is shown by `title` and `detail`, and opened on the page.",
   ].join(" "), {
     id: text("The item: what `POST /inbox/{id}/answer` names. Opaque."),
@@ -436,8 +438,12 @@ export const SCHEMAS = {
     reason: text("For `deny`: what the agent is told.", { maxLength: 1000 }),
     stepUp: ref("StepUpProof"),
   }, ["decision"]),
-  InboxAnswer: request("An answer to an inbox item, by its kind: a question takes `answer` (`text`); a draft `approve`, `edit` (`body`) or `reject` (`reason`); a secret `save` (`value`) or `dismiss`.", {
-    action: known("One of the item's `actions`.", INBOX_ACTIONS),
+  InboxAnswer: request([
+    "An answer to a question, an Outbox draft or a secret request; nothing else is answered here. A question takes `answer` (`text`); a draft",
+    "`approve`, `edit` (`body`) or `reject` (`reason`); a secret `save` (`value`) or `dismiss`. Approving signs `approve` with detail `-`; editing",
+    "signs `edit` with the detail BASE64URL(SHA-256(UTF-8 `body`)), no padding.",
+  ].join(" "), {
+    action: known("One of the item's `actions` this operation takes: `answer`, `approve`, `edit`, `reject`, `save`, `dismiss`.", INBOX_ACTIONS),
     text: text("For `answer`: the words, or one of the question's `options`.", { maxLength: 20_000 }),
     body: text("For `edit`: the words to send instead.", { maxLength: 20_000 }),
     reason: text("For `reject`: what the agent is told.", { maxLength: 1000 }),
@@ -696,7 +702,10 @@ export const OPERATIONS = [
     operationId: "decideWork", method: "POST", path: "/work/{id}/decisions", auth: "credential", scope: "work:decide", tier: "stable", response: "DecisionAck", requestBody: "WorkDecision",
     pathParams: [idParam("work")], errors: ["api-not-found", "api-role-needed", "decision-refused", "inbox-answer-invalid"],
     summary: "Count work as done, keep it open, put it off, or stop it",
-    description: "On work the person may read. `stop` stops what runs for it and drops it, as the page's Stop does.",
+    description: [
+      "On work the person may read. `stop` cancels what runs for it and drops it; when something runs for it that cannot be cancelled from here",
+      "(no trusted record of what runs), it is refused with `decision-refused` and nothing is dropped: stop it on the page.",
+    ].join(" "),
   },
   {
     operationId: "getNotification", method: "GET", path: "/notifications/{seq}", auth: "credential", scope: "work:decide", tier: "stable", response: "Notification",

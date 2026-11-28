@@ -468,7 +468,8 @@ all `work:decide`. What was decided here:
 - **What is answered here**: approvals (allow `once`/`session`, deny), Outbox drafts (approve, edit,
   reject), questions (the person's words, which settle the question and reach the agent as their
   message), secrets (save to the vault, dismiss; Admins), and work (done, keep open against a close
-  proposal, put off, stop — stop cancels what runs, as the page's Stop does). Listed and answered on
+  proposal, put off, stop — stop cancels what runs, and is refused rather than dropping work that runs and
+  cannot be cancelled from here). Listed and answered on
   the page: a paused chain (answered by a message, which arrives with conversations), a held routine,
   a failure handed to a person, an undelivered message, a verification, organisation knowledge.
 - **The step-up rule** is the gate's own tiers (`host/side-effects.ts`): allowing an approval of
@@ -477,12 +478,10 @@ all `work:decide`. What was decided here:
   `approval-requested` now carries `tier`). Approving or editing an Outbox draft always does — it goes
   outside. Denying and rejecting never do.
 - **The proof**: ECDSA P-256 / SHA-256 by the key the device registered at sign-in, over
-  `lumenbox-step-up/1
-<deviceId>
-<item id>
-<decision>
-<detail>` (`allow:once`, `allow:session`,
-  `approve`, `edit` with the SHA-256 of the words), DER or raw `r||s`. Only a device has one: a personal
+  `lumenbox-step-up/1\n<deviceId>\n<item id>\n<decision>\n<detail>` — for an approval the decision
+  `allow:once` or `allow:session` and the detail `-`, the item id the approval's; for a draft `approve`
+  with `-`, or `edit` with BASE64URL(SHA-256(UTF-8 words)) without padding, the item id the inbox item's —
+  DER or raw `r||s`. Only a device has one: a personal
   token cannot allow an outside action. Platform attestation (App Attest, Key Attestation) is not checked
   in v1: the server proves possession of the registered key, and the apps create it to need biometrics
   for every use (docs/110 §4).
@@ -494,7 +493,11 @@ all `work:decide`. What was decided here:
 - **The inbox in the change record**: type `inbox`, routed by the item's agent or the person who asked
   (never its words); `GET /notifications/{seq}` answers the words for an `upsert` only while the item
   still waits on the caller. The push itself is INV-2215's.
-- A question its person answered no longer waits, on the page or here, before the sweep settles it.
+- A question its person answered no longer waits, on the page or here, before the sweep settles it; it is
+  settled once the answer is in the agent's queue, so an answer refused on the way leaves it waiting.
+- A paused chain is shown to whoever reaches either of its agents (the page too); a secret is saved only
+  for the agent the person was shown; an `Idempotency-Key` reused for another target is a conflict; a
+  cursor whose item was answered meanwhile answers `api-cursor-invalid` rather than restarting the list.
 
 Step 4 is what a company needs to show the work board to its customers. Steps 5 and 6 can follow
 without changing anything a step-4 client relies on — which is the test of whether the design

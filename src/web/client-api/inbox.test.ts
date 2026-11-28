@@ -17,6 +17,9 @@ import { answerSecret, type SecretRequest } from "../secret-requests.ts";
 import { clientApi } from "./frame.ts";
 import type { DecisionAccess } from "./inbox.ts";
 import { stepUpRequiredFor, stepUpText, verifyStepUp } from "./step-up.ts";
+import { decisionsFor, type DecisionWorld } from "../decisions.ts";
+import { personActions } from "../person-actions.ts";
+import { inboxChanges } from "./inbox.ts";
 
 const credential = (id: string): ClientCredential => ({ id, kind: "personal", principalId: id === "tok_ann" ? "ann" : "dee", label: "t", scopes: ["work:decide"], createdAt: "2026-11-28T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" });
 
@@ -68,7 +71,7 @@ test("a secret an agent asked for: listed for those who may read the agent, save
   assert.ok(!text.includes(value), "never in the answer");
   assert.ok(box.told.every(line => !line.includes(value)) && box.told.some(line => line.includes("GITHUB_TOKEN")), "the agent is told it is saved, by name");
   assert.ok(box.logs.every(line => !line.includes(value)), "never in a log");
-  assert.ok(!existsSync(box.persisted) || !readFileSync(box.persisted, "utf8").includes("retry-key"), "and no trace of the request in the replay file: its retry lives in memory");
+  assert.ok(!existsSync(box.persisted) || readFileSync(box.persisted, "utf8").trim() === "", "and nothing in the replay file: its retry lives in memory");
   const again = await box.answer("lbxp_ann", { action: "save", value }, "retry-key-0001");
   assert.deepEqual([again.status, again.headers.get("idempotent-replayed")], [200, "true"], "a retry gets the first answer, from memory");
   assert.equal(box.vault.length, 1, "saved once");
@@ -89,4 +92,50 @@ test("a step-up proof is the registered key's ECDSA P-256 signature over one dec
   assert.ok(!verifyStepUp(spki, text, sign("sha256", Buffer.from(text), { key: other, dsaEncoding: "der" }).toString("base64url")), "another key");
   assert.ok(!verifyStepUp(spki, text, "not-a-signature"));
   assert.deepEqual(["observe", "self", "reach", "spend", "credential", "irreversible", "run-later", undefined].map(tier => stepUpRequiredFor(tier as never)), [false, false, true, true, true, true, true, true], "unknown is outside");
+});
+
+test("what the review found: a question settles only once its answer is admitted; stop never drops work it cannot stop; a secret goes only to the agent the person was shown; a paused chain only to those who reach it; a re-routed item is told to its new audience", async () => {
+  // A question's answer the agent never admitted leaves the question waiting.
+  const settled: string[] = [];
+  const reject = personActions({ board: () => undefined, workControl: {} as never, questions: { noteReply: (_a: string, identity: string) => { settled.push(identity); return []; } }, log: () => {}, identitiesOf: id => [id],
+    running: () => false, message: async () => { throw new Error("refused before admission"); } });
+  await reject.say("dee", "a1", "main", "/goal do it", "q1");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(settled.length, 0, "not admitted: not settled");
+  const admit = personActions({ board: () => undefined, workControl: {} as never, questions: { noteReply: (_a: string, identity: string) => { settled.push(identity); return []; } }, log: () => {}, identitiesOf: id => [id],
+    running: () => false, message: async (_agent, _text, _person, _conversation, onAdmitted) => { onAdmitted?.(); } });
+  await admit.say("dee", "a1", "main", "The blue one.", "q1");
+  assert.deepEqual(settled, ["dee"], "admitted: settled");
+
+  // Stop with nothing to cancel by, while something runs for the work: refused, and the row is not dropped.
+  const updates: unknown[] = [];
+  const task = { id: "t1", assigneeId: "a1", conversation: "main" };
+  const stop = (running: boolean) => personActions({ board: () => ({ get: () => task, update: (...args: unknown[]) => { updates.push(args); return { task } as never; }, opposeClose: () => ({ refused: "" }) }) as never,
+    workControl: { preview: () => ({ participants: [], resources: [] }) as never, cancel: async () => { throw new Error("no token"); } }, questions: { noteReply: () => [] }, log: () => {}, identitiesOf: id => [id],
+    running: () => running, message: async () => {} }).work("dee", "t1", "stop");
+  assert.equal((await stop(true)).ok, false, "running and nothing to cancel it by: refused");
+  assert.deepEqual(updates, []);
+  assert.equal((await stop(false)).ok, true, "nothing runs: dropped");
+  assert.equal(updates.length, 1);
+
+  // A secret asked for again under the same name by another agent: the person's save does not go to that one.
+  const pending = new Map<string, SecretRequest>([["K", { id: "K", agentId: "a2", agentName: "Other", description: "", at: "" }]]);
+  const vault: unknown[] = [];
+  assert.equal(answerSecret({ pending, vault: { setSecret: input => { vault.push(input); } }, deliverSystem: () => {}, log: () => {} }, "K", "v", "ann", "a1"), "unknown");
+  assert.deepEqual(vault, []);
+
+  // A chain between two agents the viewer reaches neither of is not theirs.
+  const world = { tasks: () => [], questions: () => [], approvals: () => [], drafts: () => [], exceptions: () => [], routinesHeld: async () => [], undeliverable: () => [], unanswered: () => [],
+    paused: () => [{ fromId: "a1", fromName: "A", toId: "a2", toName: "B", hops: 9, at: "2026-11-28T00:00:00.000Z" }], nameOf: (id: string) => id, personIds: () => new Set<string>(), agentIds: () => new Set(["a1", "a2"]),
+    chatKeyOf: () => undefined, active: () => false, checkPending: () => false, workOf: () => "/work", defaultBoxId: () => "default" } as DecisionWorld;
+  const viewing = (reached: string) => ({ principalId: "dee", identities: [], all: false, sees: { agent: (id: string) => id === reached, box: () => true, task: () => true } });
+  assert.deepEqual((await decisionsFor(world, viewing("a9"))).mine.map(item => item.kind), [], "neither agent");
+  assert.deepEqual((await decisionsFor(world, viewing("a2"))).mine.map(item => item.kind), ["paused"], "one of them");
+
+  // An item that moves to another agent is told again, routed to its new audience; one that goes is told as gone.
+  const last = new Map([["nudged:t1", { op: "upsert" as const, assigneeId: "a1" }], ["question:q1", { op: "upsert" as const, assigneeId: "a1" }]]);
+  assert.deepEqual(inboxChanges(last, [{ id: "nudged:t1", agentId: "a2" }]), [
+    { type: "inbox", id: "nudged:t1", op: "upsert", assigneeId: "a2" },
+    { type: "inbox", id: "question:q1", op: "delete", assigneeId: "a1" },
+  ]);
 });

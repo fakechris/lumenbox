@@ -67,7 +67,7 @@ function operationOf(operation: Operation): Json {
         description: SCHEMAS[operation.response].description,
         headers: {
           ...requestIdHeader, ...(operation.method === "GET" ? { ETag: { description: "Send it back as `If-None-Match`.", schema: { type: "string" } } } : {}),
-          ...(operation.secret === true ? { "Cache-Control": { description: "`no-store`: the answer holds a token.", schema: { type: "string" } } } : {}),
+          ...(operation.secret === true ? { "Cache-Control": { description: "`no-store`: the answer or the request holds a secret.", schema: { type: "string" } } } : {}),
         },
         content: { "application/json": { schema: { $ref: `#/components/schemas/${operation.response}` } } },
       },

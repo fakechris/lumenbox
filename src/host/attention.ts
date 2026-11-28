@@ -85,7 +85,7 @@ export interface AttentionInput {
   approvals?: readonly { id: string; agentId: string; agentName: string; description: string; action?: string; requestedAt: string; why?: string; taskLevel?: number }[];
   /** Outbox drafts waiting for a person (INV-1739); each is listed once, as itself, never again as its consent record. */
   outbox?: readonly Draft[];
-  /** Teammate chains the bus stopped (INV-1277): shown to everyone, since no person is in them by definition. */
+  /** Teammate chains the bus stopped (INV-1277): no person is in them, so anyone who reaches either agent may restart one (web/decisions.ts filters by reach). */
   paused?: readonly { fromName: string; toName: string; hops: number; at: string; fromId: string }[];
   /** Failures a person took on with Hand to me (INV-1741): theirs to settle — retry, fix or dismiss — from the Issues view. */
   exceptionsHanded?: readonly { id: string; kind: string; subject: string; reason: string; attempt: number; task?: string; handedBy?: string }[];

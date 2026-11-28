@@ -27,6 +27,8 @@ const OPS: Operation[] = [
   // A body of a real schema's shape (one string field), so the frame's body check runs as for real operations.
   { operationId: "makeThing", method: "POST", path: "/things", auth: "credential", tier: "stable", response: "Meta", requestBody: "TokenRefresh", summary: "", description: "" },
   { operationId: "mintThing", method: "POST", path: "/secrets", auth: "credential", tier: "stable", response: "Meta", requestBody: "TokenRefresh", secret: true, summary: "", description: "" },
+  { operationId: "answerThing", method: "POST", path: "/things/{id}/answer", auth: "credential", tier: "stable", response: "Meta", requestBody: "TokenRefresh", summary: "", description: "",
+    pathParams: [{ name: "id", description: "", schema: { type: "string" } }] },
   { operationId: "breakThing", method: "GET", path: "/broken", auth: "none", tier: "stable", response: "Meta", summary: "", description: "" },
 ];
 
@@ -85,7 +87,7 @@ test("parameters are read against their schema: unknown, repeated, out of range,
 test("a POST with an Idempotency-Key answers its first answer on a repeat, refuses the key on another body, and refuses a key not worth storing; an answer holding a secret is replayed for 30 seconds only, and never stored", async t => {
   let made = 0;
   const clock = { ms: Date.now() };
-  const box = await frame(t, { makeThing: () => { made += 1; return { made }; }, mintThing: () => { made += 1; return { made }; } }, clock);
+  const box = await frame(t, { makeThing: () => { made += 1; return { made }; }, mintThing: () => { made += 1; return { made }; }, answerThing: ({ params }) => { made += 1; return { made, id: params.id }; } }, clock);
   const post = (body: unknown, key?: string, path = "/things") => fetch(`${box.base}${path}`, { method: "POST", headers: { ...box.auth, "content-type": "application/json", ...(key ? { "idempotency-key": key } : {}) }, body: JSON.stringify(body) });
   const first = await post({ refreshToken: "a" }, "key-0000001");
   assert.deepEqual(await first.json(), { made: 1 });
@@ -101,14 +103,18 @@ test("a POST with an Idempotency-Key answers its first answer on a repeat, refus
   assert.equal(((await short.json()) as { code: string }).code, "api-idempotency-key-invalid");
   assert.deepEqual(await (await post({ refreshToken: "a" })).json(), { made: 2 }, "no key, no memory");
   assert.equal((await post({ refreshToken: "a", name: "x" })).status, 400, "a field the body does not declare");
+  // The target is part of the request: one key, one body, two things answered is two requests, not a replay of the first.
+  assert.deepEqual(await (await post({ refreshToken: "a" }, "key-0000005", "/things/one/answer")).json(), { made: 3, id: "one" });
+  const otherTarget = await post({ refreshToken: "a" }, "key-0000005", "/things/two/answer");
+  assert.equal(otherTarget.status, 409, "the key reused for another target is a conflict");
 
   const secret = await post({ refreshToken: "s" }, "key-0000009", "/secrets");
-  assert.deepEqual(await secret.json(), { made: 3 });
+  assert.deepEqual(await secret.json(), { made: 4 });
   assert.equal(secret.headers.get("cache-control"), "no-store", "a token in an answer is not cached anywhere");
   clock.ms += 29_000;
-  assert.deepEqual(await (await post({ refreshToken: "s" }, "key-0000009", "/secrets")).json(), { made: 3 }, "a retry within 30 seconds: the same answer");
+  assert.deepEqual(await (await post({ refreshToken: "s" }, "key-0000009", "/secrets")).json(), { made: 4 }, "a retry within 30 seconds: the same answer");
   clock.ms += 2_000;
-  assert.deepEqual(await (await post({ refreshToken: "s" }, "key-0000009", "/secrets")).json(), { made: 4 }, "after 30 seconds the key is forgotten: the request is judged again");
+  assert.deepEqual(await (await post({ refreshToken: "s" }, "key-0000009", "/secrets")).json(), { made: 5 }, "after 30 seconds the key is forgotten: the request is judged again");
 });
 
 test("a refused POST is refused again on its repeat; a handler that throws answers 500 with the request id and the log has why", async t => {

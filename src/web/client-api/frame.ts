@@ -286,7 +286,8 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
         if (key !== undefined && !KEY_PATTERN.test(key)) throw new Refused("api-idempotency-key-invalid");
         // One credential's key is not another's: the stored key is the key with whose and which operation, hashed to a fixed length.
         const scoped = key === undefined ? undefined : createHash("sha256").update(`${caller?.credential.id ?? "anyone"}\n${operation.operationId}\n${key}`).digest("hex");
-        const claim = store.claim(scoped, raw);
+        // The target is part of the request: one key and one body sent to two approvals is two requests (a conflict), not a replay.
+        const claim = store.claim(scoped, Object.keys(match.pathParams).length > 0 ? { path: match.pathParams, body: raw } : raw);
         if (claim.kind === "invalid") throw new Refused("api-idempotency-key-invalid");
         if (claim.kind === "conflict") throw new Refused("api-idempotency-conflict");
         if (claim.kind === "replay") { const reply = await claim.reply; write(res, reply.status, requestId, JSON.stringify(reply.body), { "idempotent-replayed": "true", ...noStore }); return true; }

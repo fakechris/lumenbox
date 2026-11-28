@@ -232,11 +232,7 @@ below.
    - *As built (INV-2214 part 2, docs/106 §8.1):* the step-up key is the P-256 key registered at sign-in;
      the app creates it to need the person's biometrics for every use (iOS: Secure Enclave with
      `.biometryCurrentSet`; Android: StrongBox/TEE, user authentication for every use, invalidated by a
-     new enrolment) and signs `lumenbox-step-up/1
-<deviceId>
-<item id>
-<decision>
-<detail>`. The server
+     new enrolment) and signs `lumenbox-step-up/1\n<deviceId>\n<item id>\n<decision>\n<detail>` (docs/106 §8.1 lists each decision and detail). The server
      checks the signature, not how the key was made: attestation is not checked in v1. `always` is
      refused for every v1 credential. A device's answers are recorded as `user:<person> device:<id>`.
    - *A requirement on both apps before general availability:* receive the sign-in's `redirectUri` on a

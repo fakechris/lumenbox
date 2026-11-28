@@ -25,7 +25,7 @@ import { type ApprovalAnswerDeps, answerApproval } from "../approval-answer.ts";
 import { type DecisionWorld, decisionsFor } from "../decisions.ts";
 import { type OutboxAnswerDeps, answerDraft } from "../outbox-answer.ts";
 import { type SecretAnswerDeps, answerSecret, dismissSecret } from "../secret-requests.ts";
-import { type DecisionAccess, inboxRouting } from "./inbox.ts";
+import { type DecisionAccess, inboxChanges, inboxRouting } from "./inbox.ts";
 import { CHANGES_LEDGER, ChangeLedger } from "./change-ledger.ts";
 import { type ClientWorld, clientApi } from "./frame.ts";
 
@@ -170,18 +170,7 @@ export function mountClientApi(server: {
   const noteInbox = (): Promise<void> => (noting ??= (async () => {
     const everyone = { principalId: "", identities: [], all: true, sees: { agent: () => true, box: () => true, task: () => true } };
     const found = { items: (await decisionsFor(decisions.world, everyone)).mine, approvals: decisions.world.approvals(), drafts: decisions.world.drafts(), tasks: decisions.world.tasks(), secrets: [...decisions.secrets.pending.values()] };
-    const last = changes.lastOf("inbox"), present = new Set<string>();
-    const routed = (row: { agentId?: string; requester?: string }) => ({ ...(row.agentId !== undefined ? { assigneeId: row.agentId } : {}), ...(row.requester !== undefined ? { requester: row.requester } : {}) });
-    for (const row of inboxRouting(found)) {
-      if (present.has(row.id)) continue;
-      present.add(row.id);
-      const before = last.get(row.id);
-      if (before === undefined || before.op === "delete") changes.append({ type: "inbox", id: row.id, op: "upsert", ...routed(row) });
-    }
-    for (const [id, line] of last) {
-      const was = { ...(line.assigneeId !== undefined ? { agentId: line.assigneeId } : {}), ...(line.requester !== undefined ? { requester: line.requester } : {}) };
-      if (line.op !== "delete" && !present.has(id)) changes.append({ type: "inbox", id, op: "delete", ...routed(was) });
-    }
+    for (const line of inboxChanges(changes.lastOf("inbox"), inboxRouting(found))) changes.append(line);
   })().catch(error => { server.log(`inbox changes: ${error instanceof Error ? error.message : String(error)}`); }).finally(() => { noting = undefined; }));
   const inboxWatch = setInterval(() => { void noteInbox(); }, 5_000);
   inboxWatch.unref();
@@ -190,7 +179,7 @@ export function mountClientApi(server: {
     answerApproval: input => answerApproval(decisions.approvals, input),
     answerDraft: (id, answer, by, decider) => answerDraft(decisions.drafts, id, answer, by, decider),
     say: (person, agentId, conversation, text, questionId) => decisions.say(person.id, agentId, conversation, text, questionId),
-    saveSecret: (id, value, by) => answerSecret(decisions.secrets, id, value, by),
+    saveSecret: (id, value, by, forAgent) => answerSecret(decisions.secrets, id, value, by, forAgent),
     dismissSecret: (id, by) => dismissSecret(decisions.secrets, id, by),
     work: (person, taskId, decision, until, note) => decisions.work(person.id, taskId, decision, until, note),
     stepUpKeyOf: id => devices.stepUpKeyOf(id),

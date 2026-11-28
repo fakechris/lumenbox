@@ -3000,7 +3000,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     recordToken, doors: () => webSignInDoors(channelRecords, channelCredentialsSet, configuredPublicUrl()), publicUrl: () => configuredPublicUrl(), desktops: openDesktops, // devices (INV-2214)
     arrived: (id, locale) => { const person = principals.byId(id); if (person) autoBoxes.arrive(person, tr("ui.personal.defaultName", locale, { name: person.name })); },
     decisions: { world: decisionWorld, approvals: approvalAnswers, secrets: secretAnswers, ...personActions({ board: () => orchestrator.tasks, workControl, questions, log, // what waits on a person, answered from /api/v1 (INV-2214)
-      message: (agentId, text, personId, conversation) => orchestrator.prompt(agentId, text, { userId: personId }, { conversation, messageId: randomUUID() }).then(() => orchestrator.settle()),
+      running: taskActive, message: (agentId, text, personId, conversation, onAdmitted) =>
+        orchestrator.prompt(agentId, text, { userId: personId }, { conversation, messageId: randomUUID(), ...(onAdmitted ? { onAdmitted } : {}) }).then(() => orchestrator.settle()),
       identitiesOf: id => [id, ...(principals.byId(id)?.identities ?? [])] }),
       drafts: { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }) } } });
 

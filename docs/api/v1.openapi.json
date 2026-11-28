@@ -1661,7 +1661,7 @@
         ],
         "responses": {
           "200": {
-            "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`), then go on from `durableSeq`.",
+            "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`, and `/inbox` with `work:decide`), then go on from `durableSeq`.",
             "headers": {
               "X-Request-Id": {
                 "description": "Names this request in the server's log.",
@@ -2145,7 +2145,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).",
             "x-error-codes": [
               "api-idempotency-conflict"
             ],
@@ -2260,7 +2260,7 @@
                 }
               },
               "Cache-Control": {
-                "description": "`no-store`: the answer holds a token.",
+                "description": "`no-store`: the answer or the request holds a secret.",
                 "schema": {
                   "type": "string"
                 }
@@ -2320,7 +2320,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).",
             "x-error-codes": [
               "api-idempotency-conflict"
             ],
@@ -2436,7 +2436,7 @@
                 }
               },
               "Cache-Control": {
-                "description": "`no-store`: the answer holds a token.",
+                "description": "`no-store`: the answer or the request holds a secret.",
                 "schema": {
                   "type": "string"
                 }
@@ -2496,7 +2496,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).",
             "x-error-codes": [
               "api-idempotency-conflict"
             ],
@@ -2612,7 +2612,7 @@
                 }
               },
               "Cache-Control": {
-                "description": "`no-store`: the answer holds a token.",
+                "description": "`no-store`: the answer or the request holds a secret.",
                 "schema": {
                   "type": "string"
                 }
@@ -2673,7 +2673,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).\n`refresh-superseded`: This refresh token was used in the last 30 seconds, and nothing was ended: the device holds the new pair where it keeps them, and a retry with the first request's `Idempotency-Key` answers it again.",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).\n`refresh-superseded`: This refresh token was used in the last 30 seconds, and nothing was ended: the device holds the new pair where it keeps them, and a retry with the first request's `Idempotency-Key` answers it again.",
             "x-error-codes": [
               "api-idempotency-conflict",
               "refresh-superseded"
@@ -3663,7 +3663,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).",
             "x-error-codes": [
               "api-idempotency-conflict"
             ],
@@ -3793,7 +3793,7 @@
                 }
               },
               "Cache-Control": {
-                "description": "`no-store`: the answer holds a token.",
+                "description": "`no-store`: the answer or the request holds a secret.",
                 "schema": {
                   "type": "string"
                 }
@@ -3901,7 +3901,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).",
             "x-error-codes": [
               "api-idempotency-conflict"
             ],
@@ -3977,7 +3977,7 @@
       "post": {
         "operationId": "decideWork",
         "summary": "Count work as done, keep it open, put it off, or stop it",
-        "description": "On work the person may read. `stop` stops what runs for it and drops it, as the page's Stop does.\n\nScope `work:decide`.",
+        "description": "On work the person may read. `stop` cancels what runs for it and drops it; when something runs for it that cannot be cancelled from here (no trusted record of what runs), it is refused with `decision-refused` and nothing is dropped: stop it on the page.\n\nScope `work:decide`.",
         "tags": [
           "stable"
         ],
@@ -4130,7 +4130,7 @@
             }
           },
           "409": {
-            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).\n`decision-refused`: The board refused this decision for the work as it is now (for example done work cannot be put off); `error` says why.",
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).\n`decision-refused`: The board refused this decision for the work as it is now (for example done work cannot be put off); `error` says why.",
             "x-error-codes": [
               "api-idempotency-conflict",
               "decision-refused"
@@ -5056,7 +5056,7 @@
       },
       "Changes": {
         "type": "object",
-        "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`), then go on from `durableSeq`.",
+        "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`, and `/inbox` with `work:decide`), then go on from `durableSeq`.",
         "properties": {
           "items": {
             "type": "array",
@@ -5515,7 +5515,7 @@
       },
       "InboxItem": {
         "type": "object",
-        "description": "One thing waiting on the person, as the page lists it under \"waiting on you\". Discriminated by `kind`: the field named like the kind (`approval`, `draft`, `question`, `secret`, `closeProposal`) carries what that kind needs, and `actions` says what may be done here. A kind a client does not know is shown by `title` and `detail`, and opened on the page.",
+        "description": "One thing waiting on the person, as the page lists it under \"waiting on you\". Discriminated by `kind`: the field named like the kind (`approval`, `draft`, `question`, `secret`, `closeProposal`) carries what that kind needs, and `actions` says what may be done here, each at its own operation: `allow`/`deny` at `POST /approvals/{approval.id}`; `answer`, `approve`, `edit`, `reject`, `save`, `dismiss` at `POST /inbox/{id}/answer`; `done`, `keep-open`, `put-off`, `stop` at `POST /work/{workId}/decisions`; `open-on-page`: nothing here. A kind a client does not know is shown by `title` and `detail`, and opened on the page.",
         "properties": {
           "id": {
             "type": "string",
@@ -5863,11 +5863,11 @@
       },
       "InboxAnswer": {
         "type": "object",
-        "description": "An answer to an inbox item, by its kind: a question takes `answer` (`text`); a draft `approve`, `edit` (`body`) or `reject` (`reason`); a secret `save` (`value`) or `dismiss`.",
+        "description": "An answer to a question, an Outbox draft or a secret request; nothing else is answered here. A question takes `answer` (`text`); a draft `approve`, `edit` (`body`) or `reject` (`reason`); a secret `save` (`value`) or `dismiss`. Approving signs `approve` with detail `-`; editing signs `edit` with the detail BASE64URL(SHA-256(UTF-8 `body`)), no padding.",
         "properties": {
           "action": {
             "type": "string",
-            "description": "One of the item's `actions`.",
+            "description": "One of the item's `actions` this operation takes: `answer`, `approve`, `edit`, `reject`, `save`, `dismiss`.",
             "x-extensible-enum": [
               "allow",
               "deny",

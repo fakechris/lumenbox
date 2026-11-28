@@ -320,7 +320,7 @@ export const SERVER_ERRORS = {
   "err.api-cursor-invalid": ["这个游标不是这个列表给出的，或属于别的筛选条件。请不带游标重新开始。", "This cursor is not one this list gave, or it was given for other filters. Start the list again without it."],
   "err.api-not-found": ["没有找到。", "Not found."],
   "err.api-idempotency-key-invalid": ["Idempotency-Key 应为 8 到 128 个字母、数字或 _ . : - 字符。", "Idempotency-Key must be 8 to 128 letters, digits or _ . : - characters."],
-  "err.api-idempotency-conflict": ["这个 Idempotency-Key 在 24 小时内已用于另一个请求。请换一个。", "This Idempotency-Key was used for a different request within 24 hours. Use a new one."],
+  "err.api-idempotency-conflict": ["这个 Idempotency-Key 已用于另一个请求。请换一个。", "This Idempotency-Key was used for a different request. Use a new one."],
   "err.api-rate-limited": ["请求太多。请{seconds}秒后再试。", "Too many requests. Try again in {seconds}s."],
   "err.client-token-invalid": ["令牌未签发：{why}。", "Token not minted: {why}."],
   "err.api-internal": ["服务器出错了。请求编号：{requestId}。", "The server failed. Request id: {requestId}."],

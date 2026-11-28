@@ -62,7 +62,8 @@ export async function decisionsFor(world: DecisionWorld, viewer: Viewer): Promis
     unanswered: world.unanswered(),
     workOf: world.workOf,
     personIds: world.personIds(),
-    paused: world.paused(),
+    // A chain is shown to whoever reaches either of its two agents: names and turns of agents nobody may see stay unseen.
+    paused: world.paused().filter(chain => all || sees.agent(chain.fromId) || sees.agent(chain.toId)),
     agentIds: world.agentIds(),
     approvals: world.approvals().filter(item => agentOk(item.agentId)),
     outbox: world.drafts().filter(draft => agentOk(draft.agentId)),
