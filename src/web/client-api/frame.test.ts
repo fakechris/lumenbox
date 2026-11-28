@@ -11,7 +11,7 @@ import { createServer } from "node:http";
 import { IdempotencyStore } from "../idempotency.ts";
 import type { ClientCredential } from "../mcp-tokens.ts";
 import { clientApi, refuse, Window, type Handler } from "./frame.ts";
-import { matchRoute, readParams } from "./routes.ts";
+import { matchRoute, readBody, readParams } from "./routes.ts";
 import { OPERATIONS, type Operation } from "./schema.ts";
 
 const credential: ClientCredential = { id: "tok_1", kind: "personal", principalId: "dee", label: "t", scopes: ["work:read"], createdAt: "2026-11-28T00:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z" };
@@ -24,11 +24,13 @@ const OPS: Operation[] = [
       { name: "state", description: "", schema: { type: "string", "x-extensible-enum": ["open", "done"] } },
     ] },
   { operationId: "getThing", method: "GET", path: "/things/{id}", auth: "credential", tier: "stable", response: "Meta", summary: "", description: "", pathParams: [{ name: "id", description: "", schema: { type: "string" } }] },
-  { operationId: "makeThing", method: "POST", path: "/things", auth: "credential", tier: "stable", response: "Meta", summary: "", description: "" },
+  // A body of a real schema's shape (one string field), so the frame's body check runs as for real operations.
+  { operationId: "makeThing", method: "POST", path: "/things", auth: "credential", tier: "stable", response: "Meta", requestBody: "TokenRefresh", summary: "", description: "" },
+  { operationId: "mintThing", method: "POST", path: "/secrets", auth: "credential", tier: "stable", response: "Meta", requestBody: "TokenRefresh", secret: true, summary: "", description: "" },
   { operationId: "breakThing", method: "GET", path: "/broken", auth: "none", tier: "stable", response: "Meta", summary: "", description: "" },
 ];
 
-async function frame(t: TestContext, handlers: Record<string, Handler>) {
+async function frame(t: TestContext, handlers: Record<string, Handler>, clock: { ms: number } = { ms: Date.now() }) {
   const logs: string[] = [];
   const api = clientApi({
     world: { reachOf: () => ({ box: () => true, agent: () => true, task: () => true }), agents: () => [], tasks: () => [], attention: () => ({ mine: [], theirs: [] }), actor: () => undefined,
@@ -36,8 +38,8 @@ async function frame(t: TestContext, handlers: Record<string, Handler>) {
     tokens: { clientFor: presented => (presented === "lbxp_good" ? { credential } : { refused: "invalid" }), touch: () => "2026-11-28T00:00:00.000Z" },
     person: id => (id === "dee" ? { id, name: "Dee", role: "driver" } : undefined),
     installationMode: () => "organisation", version: "0.0.0", homeAgentOf: () => undefined,
-    signIns: { blocked: () => undefined, failed: () => {} }, address: () => "127.0.0.1",
-    idempotency: new IdempotencyStore({ ttlMs: 24 * 60 * 60_000 }), log: line => logs.push(line),
+    signIns: { blocked: () => undefined, failed: () => {}, succeeded: () => {} }, address: () => "127.0.0.1", devices: {} as never,
+    idempotency: new IdempotencyStore({ ttlMs: 24 * 60 * 60_000 }), secretIdempotency: new IdempotencyStore({ ttlMs: 30_000, now: () => clock.ms }), log: line => logs.push(line),
   }, { operations: OPS, handlers });
   const server = createServer((req, res) => { void api.handle(req, res, new URL(req.url ?? "/", "http://localhost")); });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -67,29 +69,51 @@ test("parameters are read against their schema: unknown, repeated, out of range,
   assert.deepEqual(read("limit=1.5"), { code: "api-param-invalid", vars: { name: "limit", why: "a whole number" } });
   assert.deepEqual(read("mine=yes"), { code: "api-param-invalid", vars: { name: "mine", why: "true or false" } });
   assert.deepEqual(read("state=lost"), { code: "api-param-invalid", vars: { name: "state", why: "one of open, done" } });
+  // A body likewise: a field the operation does not take is refused, null is absent, a required one must be there.
+  const body = (raw: unknown) => readBody(OPS[2]!, raw);
+  assert.deepEqual(body({ refreshToken: "r" }), { values: { refreshToken: "r" } });
+  assert.deepEqual(body({ refreshToken: "r", extra: 1 }), { code: "api-param-unknown", vars: { name: "extra" } });
+  assert.deepEqual(body({ refreshToken: null }), { code: "api-param-invalid", vars: { name: "refreshToken", why: "required" } });
+  assert.deepEqual(body({ refreshToken: 7 }), { code: "api-param-invalid", vars: { name: "refreshToken", why: "a string" } });
+  assert.deepEqual(body([]), { code: "api-param-invalid", vars: { name: "body", why: "a JSON object" } });
+  assert.deepEqual(readBody(OPS[1]!, { anything: true }), { code: "api-param-unknown", vars: { name: "anything" } }, "an operation that declares no body takes none");
+  assert.deepEqual(body(JSON.parse('{"__proto__":{"refreshToken":7}}')), { code: "api-param-unknown", vars: { name: "__proto__" } }, "__proto__ is a field like any other, and not one it takes");
+  assert.deepEqual(body({ refreshToken: "😀".repeat(200) }), { values: { refreshToken: "😀".repeat(200) } }, "a length counts characters, not UTF-16 units");
+  assert.equal((body({ refreshToken: "😀".repeat(201) }) as { code: string }).code, "api-param-invalid");
 });
 
-test("a POST with an Idempotency-Key answers its first answer on a repeat, refuses the key on another body, and refuses a key not worth storing", async t => {
+test("a POST with an Idempotency-Key answers its first answer on a repeat, refuses the key on another body, and refuses a key not worth storing; an answer holding a secret is replayed for 30 seconds only, and never stored", async t => {
   let made = 0;
-  const box = await frame(t, { makeThing: () => { made += 1; return { made }; } });
-  const post = (body: unknown, key?: string) => fetch(`${box.base}/things`, { method: "POST", headers: { ...box.auth, "content-type": "application/json", ...(key ? { "idempotency-key": key } : {}) }, body: JSON.stringify(body) });
-  const first = await post({ name: "a" }, "key-0000001");
+  const clock = { ms: Date.now() };
+  const box = await frame(t, { makeThing: () => { made += 1; return { made }; }, mintThing: () => { made += 1; return { made }; } }, clock);
+  const post = (body: unknown, key?: string, path = "/things") => fetch(`${box.base}${path}`, { method: "POST", headers: { ...box.auth, "content-type": "application/json", ...(key ? { "idempotency-key": key } : {}) }, body: JSON.stringify(body) });
+  const first = await post({ refreshToken: "a" }, "key-0000001");
   assert.deepEqual(await first.json(), { made: 1 });
-  const repeat = await post({ name: "a" }, "key-0000001");
+  assert.equal(first.headers.get("cache-control"), "private, no-cache");
+  const repeat = await post({ refreshToken: "a" }, "key-0000001");
   assert.deepEqual(await repeat.json(), { made: 1 }, "the first answer, not a second thing made");
   assert.equal(repeat.headers.get("idempotent-replayed"), "true");
   assert.equal(made, 1);
-  const other = await post({ name: "b" }, "key-0000001");
+  const other = await post({ refreshToken: "b" }, "key-0000001");
   assert.equal(other.status, 409);
   assert.equal(((await other.json()) as { code: string }).code, "api-idempotency-conflict");
-  const short = await post({ name: "a" }, "short");
+  const short = await post({ refreshToken: "a" }, "short");
   assert.equal(((await short.json()) as { code: string }).code, "api-idempotency-key-invalid");
-  assert.deepEqual(await (await post({ name: "a" })).json(), { made: 2 }, "no key, no memory");
+  assert.deepEqual(await (await post({ refreshToken: "a" })).json(), { made: 2 }, "no key, no memory");
+  assert.equal((await post({ refreshToken: "a", name: "x" })).status, 400, "a field the body does not declare");
+
+  const secret = await post({ refreshToken: "s" }, "key-0000009", "/secrets");
+  assert.deepEqual(await secret.json(), { made: 3 });
+  assert.equal(secret.headers.get("cache-control"), "no-store", "a token in an answer is not cached anywhere");
+  clock.ms += 29_000;
+  assert.deepEqual(await (await post({ refreshToken: "s" }, "key-0000009", "/secrets")).json(), { made: 3 }, "a retry within 30 seconds: the same answer");
+  clock.ms += 2_000;
+  assert.deepEqual(await (await post({ refreshToken: "s" }, "key-0000009", "/secrets")).json(), { made: 4 }, "after 30 seconds the key is forgotten: the request is judged again");
 });
 
 test("a refused POST is refused again on its repeat; a handler that throws answers 500 with the request id and the log has why", async t => {
   const box = await frame(t, { makeThing: () => refuse("api-scope-needed", { scope: "work:decide" }), breakThing: () => { throw new Error("boom"); }, listThings: () => ({}), getThing: () => ({}) });
-  const post = () => fetch(`${box.base}/things`, { method: "POST", headers: { ...box.auth, "idempotency-key": "key-0000002" }, body: "{}" });
+  const post = () => fetch(`${box.base}/things`, { method: "POST", headers: { ...box.auth, "idempotency-key": "key-0000002" }, body: JSON.stringify({ refreshToken: "r" }) });
   const first = await (await post()).json() as { code: string; requestId: string };
   const again = await (await post()).json() as { code: string; requestId: string };
   assert.equal(again.code, "api-scope-needed");

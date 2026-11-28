@@ -112,7 +112,7 @@ test("the roster keeps an admin; a code says who it is for; a person's own code 
       },
       signOut: () => 0, usableSignIns: person => person.identities, retiredSignIn: () => false,
       planRemoval: () => async () => {}, boxesOf: () => ({ held: 0, quota: null }),
-      lastActive: () => new Map(), doorType: () => undefined, log() {},
+      lastActive: () => new Map(), doorType: () => undefined, log() {}, freshSignIn: () => ({ ok: true }), recordInvite: () => {}, signInEnded: () => {},
     });
     assert.equal(authorityChecks, 2);
     assert.equal(pendingRevocation?.status, 0);

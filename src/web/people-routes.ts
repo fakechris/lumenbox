@@ -8,7 +8,7 @@
  * one out everywhere is refused here rather than trusted to the page, because one click on the wrong row cannot
  * be undone — a signed-out last admin has nobody left to make them a code (INV-2082).
  */
-import { apiError } from "./api-error.ts";
+import { type ApiError, apiError } from "./api-error.ts";
 import { invitationLink } from "./sign-in.ts";
 import { isInviteBrowserIdentity } from "./session.ts";
 import { soleAdmin, type Principal, type Principals, type Role } from "../host/principals.ts";
@@ -52,6 +52,15 @@ export interface PeopleDeps {
   publicUrl: string | undefined;
   callerId: () => string | undefined;
   log: (line: string) => void;
+  /**
+   * Whether this request's sign-in is recent enough to make an invite (recent-sign-in.ts, INV-2214): an invite is a
+   * credential — redeemed, it is a fresh sign-in — so a stale session must not be able to make one and launder itself.
+   */
+  freshSignIn: () => { ok: true; signedInAt?: string } | { ok: false; error: ApiError };
+  /** An invite made, for `tokens.jsonl` (never the code). */
+  recordInvite: (invite: { for?: string; role: Role; expiresAt: string; signedInAt?: string }) => void;
+  /** One sign-in taken from a person: what it signed in (devices, their open streams) ends now (INV-2214). */
+  signInEnded: (identity: string) => void;
   now?: () => number;
 }
 
@@ -68,6 +77,8 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
   if (!removing && !revoking) invites.dropWhere(invite => invite.expiresAt < now);
 
   if (route === "GET /api/people") {
+    // A live invite's code is a sign-in waiting to happen: shown only to a recent sign-in, as making one is.
+    const showCodes = deps.freshSignIn().ok;
     const people = principals.list(), active = deps.lastActive(people), admins = people.filter(person => person.role === "admin").length;
     const me = deps.callerId(), self = me === undefined || !principals.isKnown(me) ? undefined : principals.resolve(me).id;
     return {
@@ -83,7 +94,7 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
           self: person.id === self,
         })),
         invites: invites.list().map(invite => ({
-          ...(invite.code !== undefined ? { code: invite.code } : {}), role: invite.role, expiresAt: invite.expiresAt,
+          ...(invite.code !== undefined && showCodes ? { code: invite.code } : {}), role: invite.role, expiresAt: invite.expiresAt,
           ...(invite.principalId !== undefined ? { principalId: invite.principalId, name: principals.byId(invite.principalId)?.name } : {}),
           ...(invite.note !== undefined ? { note: invite.note } : {}),
         })),
@@ -112,6 +123,7 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
           return { status: 409, body: apiError("sign-in-last-admin") };
       }
       principals.save(roster.map(entry => entry.id === person.id ? { ...entry, identities } : entry));
+      deps.signInEnded(identity);
       return { status: 200, body: { principals: principals.list() } };
     }
     const kept = roster.filter(entry => entry.id !== person.id);
@@ -142,6 +154,8 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
 
   // A code for somebody on the roster links a new door to them: same human, another phone, or back after
   // being signed out. Without a principalId it admits a new person at the named role (an organisation only, INV-1689).
+  const fresh = deps.freshSignIn();
+  if (!fresh.ok) return { status: 403, body: fresh.error };
   const principalId = typeof body.principalId === "string" && body.principalId !== "" ? body.principalId : undefined;
   const person = principalId === undefined ? undefined : principals.byId(principalId);
   if (principalId === undefined) principals.requireOrganisation();
@@ -153,6 +167,7 @@ export async function peopleRoute(route: string, deps: PeopleDeps): Promise<Repl
   const invite: PendingInvite = { role, ...(person ? { principalId: person.id } : {}), ...(note ? { note } : {}), expiresAt: now + minutes * 60_000 };
   invites.set(code, invite);
   deps.log(`channel invite: ${person ? `for ${person.name}` : role}, ${minutes} min, created`); // never the code: a log reader could redeem it
+  deps.recordInvite({ ...(person ? { for: person.id } : {}), role, expiresAt: new Date(invite.expiresAt).toISOString(), ...(fresh.signedInAt !== undefined ? { signedInAt: fresh.signedInAt } : {}) });
   const forPerson = person ? { principalId: person.id, name: person.name } : {};
   return { status: 200, body: { code, ...invite, ...forPerson, minutes, ...invitationLink(deps.publicUrl, code) } }; // the link the app accepts (INV-1701)
 }

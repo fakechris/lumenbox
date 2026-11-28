@@ -206,11 +206,19 @@ test("an Admin activates a person or a department and they are on the roster at 
   assert.equal((await api("/api/mcp/tokens", { label: "for her", principalId: "ding:cat" })).status, 200);
   const tokensOf = async (id: string) => (await api("/api/mcp")).data.tokens.filter((token: { principalId: string }) => token.principalId === id).length;
   assert.equal(await tokensOf("ding:cat"), 2);
+  // And a phone she paired from her signed-in page (INV-2214).
+  const pairing = (await api("/api/devices/pairing", {}, cat.cookie!)).data as { link: string };
+  const paired = await fetch(`${base}/api/v1/auth/pair`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code: new URLSearchParams(new URL(pairing.link).hash.slice(1)).get("code"), deviceName: "Cat's phone", platform: "ios" }) });
+  const phone = ((await paired.json()) as { tokens: { accessToken: string } }).tokens.accessToken;
+  const phoneMe = () => fetch(`${base}/api/v1/me`, { headers: { authorization: `Bearer ${phone}` } });
+  assert.equal((await phoneMe()).status, 200);
   // No longer listed, and still able to prove who she is (moved out of what the app may see): the harder case than DingTalk refusing her itself.
   org.people.delete("cat"); org.employees.add("cat");
   assert.deepEqual((await api("/api/directories/sync", { channelId: "ding" })).data, { ok: true, left: 1, held: 0 });
   assert.equal((await me(cat.cookie!)).status, 401, "her session stops");
   assert.equal(await tokensOf("ding:cat"), 0, "and her tokens");
+  const phoneAfter = await phoneMe();
+  assert.deepEqual([phoneAfter.status, ((await phoneAfter.json()) as { code: string }).code], [401, "access-removed"], "and her phone, told to wipe what it kept");
   const after = (await api("/api/activations")).data;
   assert.deepEqual(after.left.map((person: { subject: string; principalId: string; boxes: number }) => [person.subject, person.principalId, person.boxes]), [["cat", "ding:cat", 1]], "left, with what she holds shown to the Admins");
   assert.deepEqual(new AgentRegistry(join(home, "agents")).boxById("cat-box")?.members, ["ding:cat"], "her computer's record is untouched");

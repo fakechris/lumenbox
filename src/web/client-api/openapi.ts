@@ -39,7 +39,10 @@ function operationOf(operation: Operation): Json {
     ...(operation.stream === true ? [{ name: "Last-Event-ID", in: "header", required: false, description: "The `id` of the last event this client read: the stream replays what changed since.", schema: { type: "string" } }] : []),
     ...(operation.method === "GET" && operation.stream !== true ? [{ name: "If-None-Match", in: "header", required: false, description: "An `ETag` this client holds: 304 when it still matches.", schema: { type: "string" } }] : []),
     ...(operation.method === "POST" ? [{
-      name: "Idempotency-Key", in: "header", required: false, description: "A key the client keeps for this request: a repeat within 24 hours answers the first answer.", schema: { type: "string" },
+      name: "Idempotency-Key", in: "header", required: false, schema: { type: "string" },
+      description: operation.secret === true
+        ? "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer holds a token)."
+        : "A key the client keeps for this request: a repeat within 24 hours answers the first answer.",
     }] : []),
   ];
   const scope = operation.scope === undefined ? (operation.auth === "none" ? "No credential needed." : "Any credential.") : `Scope \`${operation.scope}\`.`;
@@ -52,6 +55,8 @@ function operationOf(operation: Operation): Json {
     "x-scope": operation.scope ?? (operation.auth === "none" ? "none" : "any"),
     "x-tier": operation.tier,
     ...(params.length > 0 ? { parameters: params } : {}),
+    ...(operation.requestBody !== undefined ? { requestBody: { required: true, content: { "application/json": { schema: { $ref: `#/components/schemas/${operation.requestBody}` } } } } } : {}),
+    ...(operation.secret === true ? { "x-secret-answer": true } : {}),
     responses: {
       200: operation.stream === true ? {
         description: `Server-sent events; each \`change\` event's data is a \`${operation.response}\`.`,
@@ -60,7 +65,10 @@ function operationOf(operation: Operation): Json {
         "x-event-data": { $ref: `#/components/schemas/${operation.response}` },
       } : {
         description: SCHEMAS[operation.response].description,
-        headers: { ...requestIdHeader, ...(operation.method === "GET" ? { ETag: { description: "Send it back as `If-None-Match`.", schema: { type: "string" } } } : {}) },
+        headers: {
+          ...requestIdHeader, ...(operation.method === "GET" ? { ETag: { description: "Send it back as `If-None-Match`.", schema: { type: "string" } } } : {}),
+          ...(operation.secret === true ? { "Cache-Control": { description: "`no-store`: the answer holds a token.", schema: { type: "string" } } } : {}),
+        },
         content: { "application/json": { schema: { $ref: `#/components/schemas/${operation.response}` } } },
       },
       ...(operation.method === "GET" && operation.stream !== true ? { 304: { description: "Unchanged since the `ETag` in `If-None-Match`.", headers: requestIdHeader } } : {}),
@@ -85,7 +93,7 @@ export function openApiDocument(): Json {
       securitySchemes: {
         bearer: {
           type: "http", scheme: "bearer",
-          description: `A personal token (\`lbxp_…\`) or a service token (\`lbxs_…\`). Scopes:\n${Object.entries(SCOPES).map(([scope, what]) => `- \`${scope}\`: ${what}`).join("\n")}`,
+          description: `A personal token (\`lbxp_…\`), a service token (\`lbxs_…\`) or a device's access token (\`lbxd_…\`). Scopes:\n${Object.entries(SCOPES).map(([scope, what]) => `- \`${scope}\`: ${what}`).join("\n")}`,
         },
       },
       schemas: SCHEMAS,

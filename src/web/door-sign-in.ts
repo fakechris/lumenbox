@@ -19,9 +19,16 @@
  *   unionId it does not know — or knows as an external contact — is not a member and is refused.
  *
  * WeCom joins when it has a door.
+ *
+ * A phone's sign-in (INV-2214) comes through the same door: `/auth/<door>?device=<id>`, which the app
+ * opened from `POST /api/v1/auth/oauth/start` (device-sign-in.ts). The same state, binding and admission
+ * rule apply; what differs is the end. Nobody gets a session: the browser is sent back to the app's own
+ * address with a one-time code — for a person let in, and for one whose request now waits for an Admin
+ * (the exchange answers `asked_to_join`) — or with `error=access_denied` and why.
  */
 
 import { randomBytes } from "node:crypto";
+import type { DoorOutcome } from "./device-sign-in.ts";
 import type { ServerResponse } from "node:http";
 import { apiError } from "./api-error.ts";
 import { safeNext } from "./auth.ts";
@@ -172,9 +179,11 @@ export interface DoorSignInDeps {
    * callback that did not sign anyone in, and counts it unless `counts` is false.
    */
   attempts?: { blocked(res: ServerResponse): number | undefined; failed(res: ServerResponse, reason: string, account?: string, counts?: boolean): void; succeeded?(res: ServerResponse, account: string): void };
+  /** A device's sign-in (device-sign-in.ts): the entry takes its start once; the callback asks where the browser goes back to. */
+  device?: { take(id: string): { providerId: string } | undefined; finish(id: string, outcome: DoorOutcome): string | undefined };
 }
 
-interface PendingSignIn { channelId: string; next: string; at: number; appId: string; incarnation: number; binding: string; bootstrapCode?: string }
+interface PendingSignIn { channelId: string; next: string; at: number; appId: string; incarnation: number; binding: string; bootstrapCode?: string; device?: string }
 
 /** The handler for `/auth/<door>` and `/auth/<door>/callback`; `bootstrapCode` is the first Admin's (POST). */
 export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerResponse, bootstrapCode?: string) => Promise<void> {
@@ -212,11 +221,17 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
       }
       // Entry: remember where they were going, hand them to the vendor.
       for (const [key, pending] of states) if (expired(pending)) states.delete(key);
+      // A device's sign-in, started from the app: taken once, for the door it was started for, never with the first Admin's code.
+      const device = url.searchParams.get("device") ?? undefined;
+      if (device !== undefined && (bootstrapCode !== undefined || deps.device?.take(device)?.providerId !== channelId)) {
+        send(res, 400, signInRecoveryPage("sign-in-expired", localeOf(res.req, url), { setup: deps.setupPending() }), "text/html");
+        return;
+      }
       // A path on this origin only: anything else would make this an open redirect (INV-724).
       const next = safeNext(url.searchParams.get("next")) ?? "/";
       const state = randomBytes(16).toString("hex");
       const binding = bindingOf(res.req.headers.cookie) ?? randomBytes(16).toString("hex");
-      states.set(state, { channelId, next, at: Date.now(), appId, incarnation: record.incarnation, binding, ...(bootstrapCode !== undefined ? { bootstrapCode } : {}) });
+      states.set(state, { channelId, next, at: Date.now(), appId, incarnation: record.incarnation, binding, ...(bootstrapCode !== undefined ? { bootstrapCode } : {}), ...(device !== undefined ? { device } : {}) });
       const target = door.authorizeUrl({ appId, redirectUri }, state);
       const bound = `${BINDING_COOKIE}=${binding}; Path=/auth; ${deps.secureCookies?.() === true ? "Secure; " : ""}Max-Age=${STATE_TTL_MS / 1000}; HttpOnly; SameSite=Lax`;
       // The first Admin's page asks by fetch and then navigates: the cookie rides the fetch's reply.
@@ -248,13 +263,22 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
       return;
     }
     const channelName = record.name || record.id;
+    /** Back to the app that started this sign-in, with a code or with why not; false when this is the page's own sign-in. */
+    const backToApp = (outcome: DoorOutcome): boolean => {
+      if (pending.device === undefined) return false;
+      const location = deps.device?.finish(pending.device, outcome);
+      if (location === undefined) send(res, 400, signInRecoveryPage("sign-in-expired", localeOf(res.req, url), { setup: deps.setupPending() }), "text/html");
+      else { res.writeHead(302, { location, "cache-control": "no-store" }); res.end(); }
+      return true;
+    };
     try {
       const vouched = await door.vouch(code, { appId, appSecret, redirectUri, fetch: deps.fetch });
       if ("notMember" in vouched) {
+        deps.attempts?.failed(res, "not-a-member", undefined, false);
+        if (backToApp({ kind: "refused", why: "not-a-member" })) return;
         res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
         res.end(notMemberPage(channelName, requestLocaleOf(res.req)));
         deps.log(`web login refused: signed in via ${channelId} as somebody outside the door's organisation`);
-        deps.attempts?.failed(res, "not-a-member", undefined, false);
         return;
       }
       const identity = `${channelId}:${vouched.subject}`;
@@ -277,6 +301,12 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
       // docs/107): activated, they become a person on the roster here; otherwise they have asked to join.
       // Since INV-2220 the activation made the person when it was pressed: `admit` only finds them, and makes nobody.
       const admitted = deps.admit(channelId, vouched.subject, vouched.name ?? vouched.subject);
+      if (admitted !== "admitted" && pending.device !== undefined) {
+        deps.log(`device sign-in: ${identity} via ${channelId} is not ${admitted === "asked" ? "activated" : "linked"}`);
+        deps.attempts?.failed(res, admitted === "asked" ? "not-activated" : "not-linked", identity, false);
+        backToApp(admitted === "asked" ? { kind: "asked", name: vouched.name ?? vouched.subject } : { kind: "refused", why: "not-linked" });
+        return;
+      }
       if (admitted !== "admitted") {
         const locale = requestLocaleOf(res.req);
         res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
@@ -288,6 +318,11 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
       // The session, and only the session: a credential issued to *this person*, not the
       // installation's token.
       const person = deps.principals.resolve(identity);
+      if (backToApp({ kind: "person", principalId: person.id, identity })) {
+        deps.log(`device sign-in: ${identity} via ${record.type} door ${channelId} (${person.name}); the code goes back to the app`);
+        deps.attempts?.succeeded?.(res, person.id);
+        return;
+      }
       res.writeHead(302, { "set-cookie": [deps.sessionCookie(identity, person.id)], location: pending.next });
       res.end();
       deps.log(`web login: ${identity} via ${record.type} door ${channelId} (${person.name})`);
@@ -296,6 +331,7 @@ export function doorSignInHandler(deps: DoorSignInDeps): (url: URL, res: ServerR
       const detail = error instanceof Error ? error.message : String(error);
       deps.log(`${record.type} sign-in via ${channelId} failed: ${detail}`);
       deps.attempts?.failed(res, "vendor-refused");
+      if (backToApp({ kind: "refused", why: "vendor-refused" })) return;
       send(res, 502, apiError("sign-in-failed", { detail }));
     }
   };

@@ -4,8 +4,8 @@
  * a documented resource with `ETag`, or `{ code, error, requestId }`. A handler returns a resource
  * built from internal objects (docs/106 §4.1) or throws `refuse(code)`; it never writes a response.
  *
- * The credential is the client API's own (personal and service tokens, `McpTokenStore`): the page's
- * cookie and the installation token are not accepted here. Mounted before the page's gate, like the
+ * The credential is the client API's own (personal and service tokens, `McpTokenStore`; a device's
+ * access token, `DeviceStore`): the page's cookie and the installation token are not accepted here. Mounted before the page's gate, like the
  * side door; the Origin check exempts a request with a bearer credential (browser-guard.ts, R5).
  */
 
@@ -21,7 +21,8 @@ import type { ChangeLedger } from "./change-ledger.ts";
 import { apiError, localizedBody } from "../api-error.ts";
 import { type IdempotencyStore, KEY_PATTERN } from "../idempotency.ts";
 import type { ClientCredential, McpTokenStore } from "../mcp-tokens.ts";
-import { matchRoute, readParams, type ParamValue } from "./routes.ts";
+import type { DeviceAuth } from "./auth.ts";
+import { matchRoute, readBody, readParams, type ParamValue } from "./routes.ts";
 import { HANDLERS } from "./handlers.ts";
 import { API_PREFIX, ERRORS, OPERATIONS, type ApiErrorCode, type Operation, type OperationId } from "./schema.ts";
 
@@ -70,7 +71,13 @@ export interface ClientWorld {
 
 export interface ClientApiDeps {
   world: ClientWorld;
-  tokens: Pick<McpTokenStore, "clientFor" | "touch">;
+  /** Every credential `/api/v1` takes: personal and service tokens, and devices' access tokens (`removed`: a device that was ended). */
+  tokens: {
+    clientFor(presented: string | undefined, now: Date): ReturnType<McpTokenStore["clientFor"]> | { refused: "removed" };
+    touch(id: string, now: Date): string;
+  };
+  /** Device sign-in, refresh and the person's devices (auth.ts, devices.ts). */
+  devices: DeviceAuth;
   /** The roster person with this id, now; undefined once they are gone. */
   person(id: string): ClientPerson | undefined;
   installationMode(): "single-machine" | "organisation";
@@ -79,10 +86,12 @@ export interface ClientApiDeps {
   /** The agent a direct message from this person reaches, if any. */
   homeAgentOf(personId: string): string | undefined;
   /** The sign-in limiter (R4): how long this address must wait, and a try that did not get in. */
-  signIns: { blocked(req: IncomingMessage): number | undefined; failed(req: IncomingMessage, reason: string): void };
+  signIns: { blocked(req: IncomingMessage): number | undefined; failed(req: IncomingMessage, reason: string): void; succeeded(req: IncomingMessage, account: string): void };
   /** The address a request came from, as the sign-in limiter reads it. */
   address(req: IncomingMessage): string;
   idempotency: IdempotencyStore;
+  /** For answers that hold a token: memory only, 30 seconds (schema.ts `secret`). */
+  secretIdempotency: IdempotencyStore;
   log(line: string): void;
   now?: () => Date;
   /** Requests a credential, or an address with none, may make per window. */
@@ -92,6 +101,8 @@ export interface ClientApiDeps {
 export interface Call {
   operation: Operation;
   params: Record<string, ParamValue>;
+  /** A `POST`'s body, checked against the operation's `requestBody`; empty for any other. */
+  body: Record<string, unknown>;
   /** Absent only for an operation answered without a credential. */
   caller?: Caller;
   deps: ClientApiDeps;
@@ -100,6 +111,12 @@ export interface Call {
   locale: Locale;
   /** Whether the credential still works and its person still has access: what a long-lived stream asks before each event. */
   stillValid(): boolean;
+  /** A stream says how it ends; `recheckStreams` ends it the moment its credential stops being valid. Returns the undo, for when it ends on its own. */
+  track(end: () => void): () => void;
+  /** A credential tried in the body did not work (`signIn` operations): a sign-in try, limited and on the record (R4). */
+  signInFailed(reason: string): void;
+  /** One that worked, for `account` (a person's id): on the record, and that account's count cleared. */
+  signInSucceeded(account: string): void;
 }
 
 /** What a stream operation's handler answers: it writes the response itself, after the frame has said yes. */
@@ -160,6 +177,8 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const window = new Window(limits.windowMs);
   const now = () => (deps.now ?? (() => new Date()))();
+  /** Streams open now, each with how to tell whether it may go on and how to end it. */
+  const streams = new Set<{ stillValid(): boolean; end(): void }>();
 
   function write(res: ServerResponse, status: number, requestId: string, payload: string | undefined, headers: Record<string, string> = {}): void {
     res.writeHead(status, {
@@ -180,6 +199,8 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
     const found = deps.tokens.clientFor(bearer, now());
     if ("refused" in found) {
       if (found.refused === "invalid") { deps.signIns.failed(req, "unknown-token"); throw new Refused("api-credential-invalid"); }
+      // A device that was ended: told so, never counted as a guess — it is the device's own token.
+      if (found.refused === "removed") throw new Refused("access-removed");
       throw new Refused("api-credential-expired");
     }
     const person = deps.person(found.credential.principalId);
@@ -202,7 +223,7 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
     if (wait !== undefined) throw new Refused("api-rate-limited", { seconds: wait }, { "retry-after": String(wait) });
   }
 
-  async function readBody(req: IncomingMessage): Promise<unknown> {
+  async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     const chunks: Buffer[] = [];
     let total = 0;
     for await (const chunk of req) {
@@ -218,7 +239,7 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
   async function handle(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
     if (url.pathname !== API_PREFIX && !url.pathname.startsWith(`${API_PREFIX}/`)) return false;
     const requestId = randomUUID();
-    let idempotencyKey: string | undefined;
+    let idempotencyKey: string | undefined, settleIn: IdempotencyStore = deps.idempotency;
     try {
       const match = matchRoute(req.method ?? "GET", url.pathname, table.operations);
       if (match.kind === "unknown") throw new Refused("api-operation-unknown", { route: `${req.method ?? ""} ${url.pathname}` });
@@ -230,12 +251,21 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
       if (caller !== undefined && operation.scope !== undefined && !caller.credential.scopes.includes(operation.scope)) throw new Refused("api-scope-needed", { scope: operation.scope });
       const read = readParams(operation, match.pathParams, url.searchParams);
       if ("code" in read) throw new Refused(read.code, { name: read.vars.name, why: read.vars.why ?? "" });
+      // A credential in the body is a sign-in try: an address that is waiting is refused before it is looked at (R4).
+      if (operation.signIn === true) { const wait = deps.signIns.blocked(req); if (wait !== undefined) throw new Refused("sign-in-limited", { seconds: wait }, { "retry-after": String(wait) }); }
+      const raw = operation.method === "POST" ? await readJsonBody(req) : {};
+      const body = readBody(operation, raw);
+      if ("code" in body) throw new Refused(body.code, { name: body.vars.name, why: body.vars.why ?? "" });
       // This request is a use: what it answers already says so.
       if (caller !== undefined) caller = { ...caller, credential: { ...caller.credential, lastUsedAt: deps.tokens.touch(caller.credential.id, now()) } };
       const handler = table.handlers[operation.operationId];
       if (handler === undefined) throw new Error(`no handler for ${operation.operationId}`);
       const stillValid = (): boolean => { try { return caller === undefined || recheck(req, caller); } catch { return false; } };
-      const call: Call = { operation, params: read.values, ...(caller !== undefined ? { caller } : {}), deps, requestId, locale: requestLocaleOf(req), stillValid };
+      const track = (end: () => void) => { const entry = { stillValid, end }; streams.add(entry); return () => { streams.delete(entry); }; };
+      const call: Call = {
+        operation, params: read.values, body: body.values, ...(caller !== undefined ? { caller } : {}), deps, requestId, locale: requestLocaleOf(req), stillValid, track,
+        signInFailed: reason => deps.signIns.failed(req, reason), signInSucceeded: account => deps.signIns.succeeded(req, account),
+      };
       if (operation.stream === true) {
         const opened = await handler(call);
         if (!isStream(opened)) throw new Error(`${operation.operationId} is a stream and answered something else`);
@@ -245,24 +275,28 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
 
       if (operation.method === "POST") {
         // A repeat of a POST within 24 hours answers the first answer; the key is the credential's own.
-        const body = await readBody(req);
+        // An answer that holds a token is kept in memory for 30 seconds, never in the file (schema.ts `secret`).
+        const store = operation.secret === true ? deps.secretIdempotency : deps.idempotency;
+        const noStore: Record<string, string> = operation.secret === true ? { "cache-control": "no-store" } : {};
         const header = req.headers["idempotency-key"];
         const key = typeof header === "string" ? header : undefined;
         if (key !== undefined && !KEY_PATTERN.test(key)) throw new Refused("api-idempotency-key-invalid");
         // One credential's key is not another's: the stored key is the key with whose and which operation, hashed to a fixed length.
         const scoped = key === undefined ? undefined : createHash("sha256").update(`${caller?.credential.id ?? "anyone"}\n${operation.operationId}\n${key}`).digest("hex");
-        const claim = deps.idempotency.claim(scoped, body);
+        const claim = store.claim(scoped, raw);
         if (claim.kind === "invalid") throw new Refused("api-idempotency-key-invalid");
         if (claim.kind === "conflict") throw new Refused("api-idempotency-conflict");
-        if (claim.kind === "replay") { const reply = await claim.reply; write(res, reply.status, requestId, JSON.stringify(reply.body), { "idempotent-replayed": "true" }); return true; }
-        if (claim.kind === "fresh") idempotencyKey = scoped;
+        if (claim.kind === "replay") { const reply = await claim.reply; write(res, reply.status, requestId, JSON.stringify(reply.body), { "idempotent-replayed": "true", ...noStore }); return true; }
+        if (claim.kind === "fresh") { idempotencyKey = scoped; settleIn = store; }
         const answer = await handler(call);
-        deps.idempotency.settle(idempotencyKey, { status: 200, body: answer });
+        store.settle(idempotencyKey, { status: 200, body: answer });
         idempotencyKey = undefined;
-        write(res, 200, requestId, JSON.stringify(answer));
+        write(res, 200, requestId, JSON.stringify(answer), noStore);
         return true;
       }
 
+      // Only a read has a validator: a DELETE answers what it did, once.
+      if (operation.method !== "GET") { write(res, 200, requestId, JSON.stringify(await handler(call))); return true; }
       const payload = JSON.stringify(await handler(call));
       const etag = etagOf(payload);
       if (matches(req.headers["if-none-match"], etag)) { write(res, 304, requestId, undefined, { etag }); return true; }
@@ -272,11 +306,16 @@ export function clientApi(deps: ClientApiDeps, table: { operations: readonly Ope
       if (!(error instanceof Refused)) deps.log(`client api ${requestId}: ${req.method} ${url.pathname}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
       const status = ERRORS[refusal.code].status, body = errorBody(req, requestId, refusal);
       // A refused POST is refused again on a repeat, with the same words: the first answer is the answer.
-      if (idempotencyKey !== undefined) deps.idempotency.settle(idempotencyKey, { status, body });
+      if (idempotencyKey !== undefined) settleIn.settle(idempotencyKey, { status, body });
       if (!res.headersSent) write(res, status, requestId, JSON.stringify(body), refusal.headers);
     }
     return true;
   }
 
-  return { handle };
+  /** Ends every open stream whose credential no longer works: called the moment a device or a person's access ends. */
+  function recheckStreams(): void {
+    for (const entry of [...streams]) if (!entry.stillValid()) { streams.delete(entry); entry.end(); }
+  }
+
+  return { handle, recheckStreams };
 }

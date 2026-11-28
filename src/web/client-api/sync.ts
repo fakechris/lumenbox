@@ -3,6 +3,8 @@
  * (change-ledger.ts), so a phone that slept, a server that restarted, and a stream that dropped all
  * catch up the same way. A change is shown only when the caller's sight allows it (visibility.ts),
  * and a thing changed many times since is shown once, at its newest change: the client fetches it.
+ * A stream ends when its credential stops working: at the next event or ping, and at once when a device
+ * or a person's access is ended (frame.ts `recheckStreams`).
  */
 
 import type { ServerResponse } from "node:http";
@@ -61,12 +63,14 @@ export function streamEvents(call: Call) {
     }
     write(`${opening}id: ${changes.latest}\nevent: ready\ndata: {}\n\n`);
 
-    const end = (target: ServerResponse) => { stop(); closed(); clearInterval(ping); if (!target.writableEnded) target.end(); };
+    const end = (target: ServerResponse) => { stop(); closed(); untrack(); clearInterval(ping); if (!target.writableEnded) target.end(); };
     const stop = changes.onAppend(line => {
       if (!call.stillValid()) { end(res); return; }
       if (sightOf(call).change(line) && !write(event(line))) end(res);
     });
     const closed = changes.onClose(() => end(res));
+    // A device ended or a person's access gone ends the stream at once, not at the next event or ping.
+    const untrack = call.track(() => end(res));
     const ping = setInterval(() => { if (!call.stillValid() || !write(": ping\n\n")) end(res); }, PING_MS);
     ping.unref();
     res.on("close", () => end(res));

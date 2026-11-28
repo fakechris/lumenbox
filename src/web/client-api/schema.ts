@@ -19,7 +19,7 @@
 import type { ErrorCode } from "../../i18n/server-errors.ts";
 
 /** "1.<revision>": raised by every addition (docs/106 §4.1). The surface ratchet refuses an addition that leaves it. */
-export const API_REVISION = 2;
+export const API_REVISION = 3;
 export const API_VERSION = `1.${API_REVISION}`;
 export const API_PREFIX = "/api/v1";
 
@@ -36,10 +36,13 @@ export interface Schema {
   items?: Schema;
   minimum?: number;
   maximum?: number;
+  minLength?: number;
   maxLength?: number;
   pattern?: string;
   /** Known values of an open enumeration: a reader treats any other value as "other". */
   "x-extensible-enum"?: string[];
+  /** On a request body only: a field it does not declare is refused (`api-param-unknown`). Answers stay open. */
+  additionalProperties?: false;
 }
 
 const text = (description: string, extra: Partial<Schema> = {}): Schema => ({ type: "string", description, ...extra });
@@ -54,6 +57,8 @@ const ref = (name: string): Schema => ({ $ref: `#/components/schemas/${name}` })
 const object = (description: string, fields: Record<string, Schema>, required: readonly string[]): Schema => ({
   type: "object", description, properties: fields, required: [...required],
 });
+/** A request body: an object that takes no field it does not declare. Never an answer, which stays open for new fields. */
+const request = (description: string, fields: Record<string, Schema>, required: readonly string[]): Schema => ({ ...object(description, fields, required), additionalProperties: false });
 
 // --- scopes and credentials (docs/106 §4.3) ----------------------------------------------------
 
@@ -78,6 +83,8 @@ export const CREDENTIAL_KINDS = ["personal", "service", "device"] as const;
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 /** The kinds a token store mints; a device credential arrives with sign-in from a phone (INV-2214). */
 export type ClientTokenKind = Exclude<CredentialKind, "device">;
+/** What a device credential carries: everything a person's own client does, except driving a desktop, which v1 leaves to the page (docs/110 §4). */
+export const DEVICE_SCOPES: readonly Scope[] = SCOPE_NAMES.filter(scope => scope !== "desktop:control");
 /** A service token's view, as `SCHEMAS.ServiceView` documents it. */
 export interface ServiceView {
   allAgents: boolean;
@@ -98,6 +105,11 @@ export const AGENT_STATUSES = ["working", "idle"] as const;
 export const ACTOR_KINDS = ["person", "agent", "system"] as const;
 export const CHANGE_TYPES = ["work", "agent"] as const;
 export const CHANGE_OPS = ["upsert", "delete"] as const;
+/** The organisation sign-in channels a device signs in through (docs/109): the door types with a web sign-in (src/web/sign-in.ts). */
+export const PROVIDER_TYPES = ["dingtalk", "feishu"] as const;
+export const SIGN_IN_STATUSES = ["authenticated", "asked_to_join"] as const;
+export const DEVICE_PLATFORMS = ["ios", "android", "macos", "windows", "linux"] as const;
+export const DEVICE_SIGN_IN_METHODS = ["oauth", "pairing"] as const;
 
 // --- errors -----------------------------------------------------------------------------------
 
@@ -108,17 +120,26 @@ export const ERRORS = {
   "api-credential-needed": { status: 401, meaning: "The operation needs `Authorization: Bearer <token>`." },
   "api-credential-invalid": { status: 401, meaning: "The token is not one this installation issued, or it was revoked." },
   "api-credential-expired": { status: 401, meaning: "The token's lifetime is over." },
-  "access-removed": { status: 401, meaning: "The person the token acts for no longer has access. A client drops what it stored for this installation." },
+  "access-removed": { status: 401, meaning: "The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation." },
   "api-scope-needed": { status: 403, meaning: "The token does not carry the scope the operation needs." },
   "api-param-invalid": { status: 400, meaning: "A parameter has a value the operation does not take." },
   "api-param-unknown": { status: 400, meaning: "The operation takes no parameter of this name." },
   "api-cursor-invalid": { status: 400, meaning: "The cursor is not one this list gave, or was given for other filters. Start the list again without it." },
   "api-not-found": { status: 404, meaning: "No such resource, or none the credential may read: the two are one answer." },
   "api-idempotency-key-invalid": { status: 400, meaning: "`Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`." },
-  "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used within 24 hours for a different request." },
+  "api-idempotency-conflict": { status: 409, meaning: "This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token)." },
   "api-rate-limited": { status: 429, meaning: "Too many requests; wait the seconds `Retry-After` names." },
   "sign-in-limited": { status: 429, meaning: "Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names." },
   "api-internal": { status: 500, meaning: "The server failed; `requestId` names the failure in its log." },
+  "auth-provider-unknown": { status: 400, meaning: "No sign-in channel of this id signs a device in here; `GET /auth/providers` lists those that do." },
+  "auth-redirect-invalid": { status: 400, meaning: "`redirectUri` is not an app's own address: a `lumenbox:` address, or for a desktop client `http://127.0.0.1:<port>/…`." },
+  "auth-code-invalid": { status: 400, meaning: "The code is not one this server gave, was used, is over a minute old, or `codeVerifier` does not match the challenge. Start the sign-in again." },
+  "pairing-code-invalid": { status: 400, meaning: "The pairing code is not one this server showed, was used, or is over two minutes old. Show a new one on the page." },
+  "refresh-superseded": {
+    status: 409,
+    meaning: "This refresh token was used in the last 30 seconds, and nothing was ended: the device holds the new pair where it keeps them, and a retry with the first request's `Idempotency-Key` answers it again.",
+  },
+  "device-credential-needed": { status: 403, meaning: "Only a device credential signs itself out; a personal or service token is revoked on the page." },
 } as const satisfies Record<string, { status: number; meaning: string }>;
 export type ApiErrorCode = keyof typeof ERRORS & ErrorCode;
 
@@ -249,6 +270,88 @@ export const SCHEMAS = {
     hasMore: flag("Whether more changes follow `durableSeq` now: ask again at once."),
     reset: flag("Whether the client must reload instead (see above)."),
   }, ["items", "durableSeq", "hasMore", "reset"]),
+  AuthProvider: object("A sign-in channel a device can sign in through: an organisation's DingTalk or Feishu, as the page's sign-in offers it.", {
+    id: text("What `POST /auth/oauth/start` names as `provider`."),
+    type: known("Which vendor.", PROVIDER_TYPES),
+    displayName: text("Its name for a person, in the request's language."),
+  }, ["id", "type", "displayName"]),
+  AuthProviderList: object("The channels a device can sign in through here; empty when none is set up (no public address, or no channel's app).", {
+    items: list(ref("AuthProvider"), "The channels."),
+  }, ["items"]),
+  OAuthStart: request("Starting a device's sign-in (OAuth 2.0 authorization code with PKCE, RFC 7636).", {
+    provider: text("An `AuthProvider.id`.", { maxLength: 200 }),
+    codeChallenge: text("BASE64URL(SHA-256(code verifier)), without padding: 43 characters.", { pattern: "^[A-Za-z0-9_-]{43}$" }),
+    codeChallengeMethod: known("`S256`; nothing else is accepted.", ["S256"]),
+    redirectUri: text("Where the browser goes back to the app: a `lumenbox:` address, or for a desktop client `http://127.0.0.1:<port>/…`. The code and `state` are added to it.", { maxLength: 512 }),
+    state: text("Given back unchanged on `redirectUri`: the app checks it is its own.", { maxLength: 512 }),
+  }, ["provider", "codeChallenge", "codeChallengeMethod", "redirectUri"]),
+  OAuthStarted: object("Where to send the person: open `authorizationUrl` in the system's authentication browser.", {
+    authorizationUrl: text("An address on this server that hands the person to the vendor's sign-in and back."),
+    state: text("The `state` that was given."),
+    expiresAt: time("When this sign-in can no longer be finished (ten minutes)."),
+  }, ["authorizationUrl", "expiresAt"]),
+  OAuthExchange: request("The code the app's `redirectUri` received, for a device credential.", {
+    code: text("From `redirectUri`'s `code`.", { maxLength: 200 }),
+    codeVerifier: text("The PKCE code verifier (RFC 7636 §4.1).", { pattern: "^[A-Za-z0-9._~-]{43,128}$" }),
+    provider: text("When given, it must be the one the sign-in started with.", { maxLength: 200 }),
+    redirectUri: text("The `redirectUri` the sign-in started with, exactly (RFC 6749 §4.1.3).", { maxLength: 512 }),
+    deviceName: text("What the person calls this device, shown in their list of devices.", { maxLength: 60 }),
+    platform: known("The device's system.", DEVICE_PLATFORMS),
+    stepUpKeyId: text("The device's own id for its step-up signing key (docs/110 §4); with `stepUpPublicKey`.", { maxLength: 100, pattern: "^[A-Za-z0-9._:-]{1,100}$" }),
+    stepUpPublicKey: text("That key's public half: a P-256 key, SubjectPublicKeyInfo DER, base64url without padding.", { maxLength: 400, pattern: "^[A-Za-z0-9_-]+$" }),
+  }, ["code", "codeVerifier", "redirectUri", "deviceName", "platform"]),
+  DevicePairing: request("A pairing code a signed-in page showed (its QR code), for a device credential.", {
+    code: text("The code from the QR code.", { maxLength: 200 }),
+    deviceName: text("What the person calls this device.", { maxLength: 60 }),
+    platform: known("The device's system.", DEVICE_PLATFORMS),
+    stepUpKeyId: text("As in `OAuthExchange`.", { maxLength: 100, pattern: "^[A-Za-z0-9._:-]{1,100}$" }),
+    stepUpPublicKey: text("As in `OAuthExchange`.", { maxLength: 400, pattern: "^[A-Za-z0-9_-]+$" }),
+  }, ["code", "deviceName", "platform"]),
+  TokenRefresh: request("A device's refresh token, for a new pair.", {
+    refreshToken: text("The refresh token (`lbxr_…`) the device holds now.", { maxLength: 200 }),
+  }, ["refreshToken"]),
+  DeviceTokens: object([
+    "A device's tokens. The access token goes in `Authorization: Bearer` and is kept in memory only; the refresh token is kept in the device's",
+    "hardware-held keychain and is spent by the next `POST /auth/refresh`, which answers a new pair.",
+  ].join(" "), {
+    deviceId: text("The device: what `DELETE /devices/{id}` names."),
+    tokenType: known("`Bearer`.", ["Bearer"]),
+    accessToken: text("`lbxd_…`, for fifteen minutes."),
+    expiresInSeconds: { type: "integer", description: "Seconds the access token works for, counted when it was issued (a replayed answer repeats it): schedule the next refresh from `accessTokenExpiresAt`." },
+    accessTokenExpiresAt: time("When the access token stops."),
+    refreshToken: text("`lbxr_…`: used once."),
+    refreshTokenExpiresAt: time("When the refresh token stops if it is not used: thirty days, and never past a year from the sign-in."),
+    scopes: list(known("A scope.", SCOPE_NAMES), "What the credential may be used for."),
+  }, ["deviceId", "tokenType", "accessToken", "expiresInSeconds", "accessTokenExpiresAt", "refreshToken", "refreshTokenExpiresAt", "scopes"]),
+  DeviceSignIn: object([
+    "The end of a device's sign-in. `authenticated`: `tokens` and `me` are present, and the person's own computer is on its way if they have none yet.",
+    "`asked_to_join`: the person is not let in yet; their request is with the organisation's Admins, `message` says so, and no credential is issued.",
+  ].join(" "), {
+    status: known("`authenticated` or `asked_to_join`.", SIGN_IN_STATUSES),
+    tokens: ref("DeviceTokens"),
+    me: ref("Me"),
+    message: text("For `asked_to_join`: what to tell the person, in the request's language."),
+  }, ["status"]),
+  Device: object("One of the person's signed-in devices.", {
+    id: text("The device's id."),
+    name: text("What it was called when it signed in."),
+    platform: known("Its system.", DEVICE_PLATFORMS),
+    signInMethod: known("`oauth`: signed in through a channel. `pairing`: scanned a code a signed-in page showed.", DEVICE_SIGN_IN_METHODS),
+    providerId: text("The channel, for `oauth`."),
+    scopes: list(known("A scope.", SCOPE_NAMES), "What its credential may be used for."),
+    createdAt: time("When it signed in."),
+    lastUsedAt: time("When it was last used, to the minute."),
+    current: flag("Whether it is the device making this request."),
+    stepUpKey: flag("Whether it registered a step-up signing key."),
+  }, ["id", "name", "platform", "signInMethod", "scopes", "createdAt", "current", "stepUpKey"]),
+  DevicePage: object("A page of the person's devices, newest first.", {
+    items: list(ref("Device"), "The devices on this page."),
+    nextCursor: text("The next page's cursor; absent on the last page."),
+  }, ["items"]),
+  DeviceEnded: object("A device signed out: its tokens stopped working, its open streams closed. Calling with them now answers `access-removed`.", {
+    id: text("The device."),
+    endedAt: time("When."),
+  }, ["id", "endedAt"]),
 } as const satisfies Record<string, Schema>;
 export type SchemaName = keyof typeof SCHEMAS;
 
@@ -281,6 +384,15 @@ export interface Operation {
   pathParams?: Param[];
   query?: Param[];
   response: SchemaName;
+  /** A `POST`'s body: a resource of `SCHEMAS`, checked before the handler runs (routes.ts `readBody`). */
+  requestBody?: SchemaName;
+  /**
+   * The answer holds a secret (a token): it is sent with `Cache-Control: no-store`, and an `Idempotency-Key`
+   * repeat is answered from memory only, for 30 seconds — never from a file.
+   */
+  secret?: true;
+  /** A credential is tried in the body: tries that do not work count against the sign-in limiter (docs/106 §5 R4). */
+  signIn?: true;
   /** Codes this operation answers beyond those every operation of its kind may (`commonErrors`). */
   errors?: ApiErrorCode[];
   /** Server-sent events: `response` is the schema of each event's data; no `ETag`. */
@@ -369,6 +481,73 @@ export const OPERATIONS = [
       "The stream ends when the credential stops being valid. What a credential may be told of is as for `/changes`.",
     ].join(" "),
   },
+  {
+    operationId: "listAuthProviders", method: "GET", path: "/auth/providers", auth: "none", tier: "stable", response: "AuthProviderList",
+    summary: "The channels a device can sign in through",
+    description: "An organisation's DingTalk or Feishu channels whose sign-in is set up, as the page's sign-in offers them. Read before signing in.",
+  },
+  {
+    operationId: "startOAuth", method: "POST", path: "/auth/oauth/start", auth: "none", tier: "stable", response: "OAuthStarted", requestBody: "OAuthStart",
+    errors: ["auth-provider-unknown", "auth-redirect-invalid"],
+    summary: "Start a device's sign-in through a channel (PKCE)",
+    description: [
+      "OAuth 2.0 authorization code with PKCE `S256` (RFC 7636), with this server as the authorization server: open `authorizationUrl` in the system's",
+      "authentication browser (`ASWebAuthenticationSession`, Custom Tabs). The person signs in at the vendor and comes back to this server, which sends",
+      "the browser to `redirectUri` with `code` (one use, one minute) and `state` — or with `error=access_denied` and `error_description`",
+      "(`not-a-member`, `not-linked`, `vendor-refused`) when the vendor's answer lets nobody in. Then `POST /auth/oauth/exchange`.",
+    ].join(" "),
+  },
+  {
+    operationId: "exchangeOAuthCode", method: "POST", path: "/auth/oauth/exchange", auth: "none", tier: "stable", response: "DeviceSignIn", requestBody: "OAuthExchange",
+    secret: true, signIn: true, errors: ["auth-code-invalid", "access-removed", "sign-in-limited"],
+    summary: "Finish a device's sign-in: the code for a device credential",
+    description: [
+      "The code and the PKCE verifier for a device credential. An activated person is `authenticated`: the answer has the device's tokens and `me`, and",
+      "their own computer is made now if they are owed one and have none. A person the organisation has not let in yet is `asked_to_join`:",
+      "their request waits for an Admin and no credential is issued. A code that does not work counts as a sign-in try.",
+    ].join(" "),
+  },
+  {
+    operationId: "pairDevice", method: "POST", path: "/auth/pair", auth: "none", tier: "stable", response: "DeviceSignIn", requestBody: "DevicePairing",
+    secret: true, signIn: true, errors: ["pairing-code-invalid", "access-removed", "sign-in-limited"],
+    summary: "Sign a device in with a pairing code a signed-in page shows",
+    description: [
+      "A signed-in page (Settings → Mine → Phones) shows a QR code: `lumenbox://pair#server=<origin>&code=<code>`. The code works once, for two minutes,",
+      "and is shown only after a sign-in in the last ten minutes. It signs the device in as the person who showed it. A code that does not work counts as a sign-in try.",
+    ].join(" "),
+  },
+  {
+    operationId: "refreshDeviceToken", method: "POST", path: "/auth/refresh", auth: "none", tier: "stable", response: "DeviceTokens", requestBody: "TokenRefresh",
+    secret: true, signIn: true, errors: ["api-credential-invalid", "api-credential-expired", "access-removed", "refresh-superseded", "sign-in-limited"],
+    summary: "A new pair for a device's refresh token",
+    description: [
+      "Spends the refresh token and answers a new access token and a new refresh token. A refresh token is used once: presented again more than",
+      "30 seconds after it was spent, the device is ended — for whoever holds its tokens — and the answer is `access-removed`; within those 30 seconds the",
+      "answer is `refresh-superseded` and nothing ends. Send an `Idempotency-Key` kept for the attempt: a retry with it within 30 seconds answers the same pair.",
+      "A device that sent no key, or retries later, and cannot find the newer pair where it keeps its tokens, signs in again.",
+    ].join(" "),
+  },
+  {
+    operationId: "signOutDevice", method: "POST", path: "/auth/logout", auth: "credential", tier: "stable", response: "DeviceEnded",
+    errors: ["device-credential-needed"],
+    summary: "Sign this device out",
+    description: [
+      "Ends the calling device: its access and refresh tokens stop at once and its open streams close. A device credential only.",
+      "A retry after a lost answer cannot be replayed — the token it would carry is ended — and answers `access-removed`: that is the confirmation.",
+    ].join(" "),
+  },
+  {
+    operationId: "listDevices", method: "GET", path: "/devices", auth: "credential", scope: "devices:manage", tier: "stable", response: "DevicePage",
+    query: [limit("How many devices.", 50), cursor], errors: ["api-cursor-invalid"],
+    summary: "The person's signed-in devices",
+    description: "Every device signed in as the person, newest first; `current` marks the one asking.",
+  },
+  {
+    operationId: "deleteDevice", method: "DELETE", path: "/devices/{id}", auth: "credential", scope: "devices:manage", tier: "stable", response: "DeviceEnded",
+    pathParams: [idParam("device")], errors: ["api-not-found"],
+    summary: "Sign one of the person's devices out",
+    description: "Ends the device: its tokens stop at once, its open streams and desktops close, and it is told `access-removed`. Another person's device answers 404.",
+  },
 ] as const satisfies readonly Operation[];
 export type OperationId = (typeof OPERATIONS)[number]["operationId"];
 
@@ -377,9 +556,11 @@ export function commonErrors(operation: Operation): ApiErrorCode[] {
   const codes: ApiErrorCode[] = [];
   if (operation.auth === "credential") codes.push("api-credential-needed", "api-credential-invalid", "api-credential-expired", "access-removed", "sign-in-limited");
   if (operation.scope !== undefined) codes.push("api-scope-needed");
-  if ((operation.query ?? []).length > 0 || (operation.pathParams ?? []).length > 0) codes.push("api-param-invalid");
+  // Every POST reads a body, and a body that is not a JSON object (or not JSON) is refused with this code.
+  if ((operation.query ?? []).length > 0 || (operation.pathParams ?? []).length > 0 || operation.method === "POST") codes.push("api-param-invalid");
   codes.push("api-param-unknown", "api-rate-limited", "api-internal");
-  if (operation.method === "POST") codes.push("api-idempotency-key-invalid", "api-idempotency-conflict");
+  // A conflict is the same key on another body: an operation that takes no body cannot have one.
+  if (operation.method === "POST") codes.push("api-idempotency-key-invalid", ...(operation.requestBody !== undefined ? ["api-idempotency-conflict" as const] : []));
   return [...codes, ...(operation.errors ?? [])];
 }
 
@@ -396,11 +577,13 @@ export const CONVENTIONS = [
   "- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.",
   "- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.",
   "- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.",
-  "- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer.",
+  "- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer — within 30 seconds, from memory only, for an answer that holds a token (`x-secret-answer`).",
   "- 429 carries `Retry-After` in seconds.",
   "- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.",
   "",
-  "Credentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view.",
+  "Credentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view;",
+  "a device credential (`lbxd_…`, fifteen minutes, renewed with its refresh token `lbxr_…` at `POST /auth/refresh`) is a person's phone or desktop client.",
+  "A request body is JSON: a field the operation does not take is refused (`api-param-unknown`), and `null` is the same as absent.",
   "What a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.",
   "Cross-origin browser calls are not answered with CORS headers.",
 ].join("\n");

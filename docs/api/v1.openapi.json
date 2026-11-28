@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LumenBox client API",
-    "version": "1.2",
-    "description": "LumenBox client API, v1 (docs/106 §4). Additions only inside v1: a new operation, a new optional field, a new known value — each raises the revision `GET /api/v1/meta` reports.\n\nConventions, the same for every operation:\n- JSON, camelCase. Ids are opaque strings: compare them, never parse them. Times are RFC 3339 in UTC, to the second (`2026-11-28T10:00:00Z`).\n- A field with no value is absent, never null.\n- A client ignores fields it does not know.\n- A string listed with `x-extensible-enum` is an open enumeration: a client treats a value it does not know as \"other\", shows the item's plain words, and offers to open it on the page or the desktop app when it cannot act on it.\n- Lists take `?limit=` (1–100) and `?cursor=` and answer `{ items, nextCursor }`; `nextCursor` is absent on the last page.\n- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.\n- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.\n- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.\n- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer.\n- 429 carries `Retry-After` in seconds.\n- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.\n\nCredentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view.\nWhat a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.\nCross-origin browser calls are not answered with CORS headers.",
+    "version": "1.3",
+    "description": "LumenBox client API, v1 (docs/106 §4). Additions only inside v1: a new operation, a new optional field, a new known value — each raises the revision `GET /api/v1/meta` reports.\n\nConventions, the same for every operation:\n- JSON, camelCase. Ids are opaque strings: compare them, never parse them. Times are RFC 3339 in UTC, to the second (`2026-11-28T10:00:00Z`).\n- A field with no value is absent, never null.\n- A client ignores fields it does not know.\n- A string listed with `x-extensible-enum` is an open enumeration: a client treats a value it does not know as \"other\", shows the item's plain words, and offers to open it on the page or the desktop app when it cannot act on it.\n- Lists take `?limit=` (1–100) and `?cursor=` and answer `{ items, nextCursor }`; `nextCursor` is absent on the last page.\n- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.\n- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.\n- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.\n- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer — within 30 seconds, from memory only, for an answer that holds a token (`x-secret-answer`).\n- 429 carries `Retry-After` in seconds.\n- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.\n\nCredentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view;\na device credential (`lbxd_…`, fifteen minutes, renewed with its refresh token `lbxr_…` at `POST /auth/refresh`) is a person's phone or desktop client.\nA request body is JSON: a field the operation does not take is refused (`api-param-unknown`), and `null` is the same as absent.\nWhat a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.\nCross-origin browser calls are not answered with CORS headers.",
     "license": {
       "name": "GPL-3.0-only",
       "identifier": "GPL-3.0-only"
@@ -234,7 +234,7 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
@@ -416,7 +416,7 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
@@ -607,7 +607,7 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
@@ -877,7 +877,7 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
@@ -1068,7 +1068,7 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
@@ -1302,7 +1302,7 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
@@ -1515,7 +1515,7 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
@@ -1718,7 +1718,7 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
@@ -1863,12 +1863,1374 @@
             }
           },
           "401": {
-            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access. A client drops what it stored for this installation.",
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
             "x-error-codes": [
               "api-credential-needed",
               "api-credential-invalid",
               "api-credential-expired",
               "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/providers": {
+      "get": {
+        "operationId": "listAuthProviders",
+        "summary": "The channels a device can sign in through",
+        "description": "An organisation's DingTalk or Feishu channels whose sign-in is set up, as the page's sign-in offers them. Read before signing in.\n\nNo credential needed.",
+        "tags": [
+          "stable"
+        ],
+        "security": [],
+        "x-scope": "none",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The channels a device can sign in through here; empty when none is set up (no public address, or no channel's app).",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthProviderList"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oauth/start": {
+      "post": {
+        "operationId": "startOAuth",
+        "summary": "Start a device's sign-in through a channel (PKCE)",
+        "description": "OAuth 2.0 authorization code with PKCE `S256` (RFC 7636), with this server as the authorization server: open `authorizationUrl` in the system's authentication browser (`ASWebAuthenticationSession`, Custom Tabs). The person signs in at the vendor and comes back to this server, which sends the browser to `redirectUri` with `code` (one use, one minute) and `state` — or with `error=access_denied` and `error_description` (`not-a-member`, `not-linked`, `vendor-refused`) when the vendor's answer lets nobody in. Then `POST /auth/oauth/exchange`.\n\nNo credential needed.",
+        "tags": [
+          "stable"
+        ],
+        "security": [],
+        "x-scope": "none",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 24 hours answers the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Where to send the person: open `authorizationUrl` in the system's authentication browser.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthStarted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.\n`auth-provider-unknown`: No sign-in channel of this id signs a device in here; `GET /auth/providers` lists those that do.\n`auth-redirect-invalid`: `redirectUri` is not an app's own address: a `lumenbox:` address, or for a desktop client `http://127.0.0.1:<port>/…`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid",
+              "auth-provider-unknown",
+              "auth-redirect-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "x-error-codes": [
+              "api-idempotency-conflict"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oauth/exchange": {
+      "post": {
+        "operationId": "exchangeOAuthCode",
+        "summary": "Finish a device's sign-in: the code for a device credential",
+        "description": "The code and the PKCE verifier for a device credential. An activated person is `authenticated`: the answer has the device's tokens and `me`, and their own computer is made now if they are owed one and have none. A person the organisation has not let in yet is `asked_to_join`: their request waits for an Admin and no credential is issued. A code that does not work counts as a sign-in try.\n\nNo credential needed.",
+        "tags": [
+          "stable"
+        ],
+        "security": [],
+        "x-scope": "none",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer holds a token)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthExchange"
+              }
+            }
+          }
+        },
+        "x-secret-answer": true,
+        "responses": {
+          "200": {
+            "description": "The end of a device's sign-in. `authenticated`: `tokens` and `me` are present, and the person's own computer is on its way if they have none yet. `asked_to_join`: the person is not let in yet; their request is with the organisation's Admins, `message` says so, and no credential is issued.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: the answer holds a token.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceSignIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.\n`auth-code-invalid`: The code is not one this server gave, was used, is over a minute old, or `codeVerifier` does not match the challenge. Start the sign-in again.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid",
+              "auth-code-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "x-error-codes": [
+              "api-idempotency-conflict"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.\n`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "api-rate-limited",
+              "sign-in-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/pair": {
+      "post": {
+        "operationId": "pairDevice",
+        "summary": "Sign a device in with a pairing code a signed-in page shows",
+        "description": "A signed-in page (Settings → Mine → Phones) shows a QR code: `lumenbox://pair#server=<origin>&code=<code>`. The code works once, for two minutes, and is shown only after a sign-in in the last ten minutes. It signs the device in as the person who showed it. A code that does not work counts as a sign-in try.\n\nNo credential needed.",
+        "tags": [
+          "stable"
+        ],
+        "security": [],
+        "x-scope": "none",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer holds a token)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevicePairing"
+              }
+            }
+          }
+        },
+        "x-secret-answer": true,
+        "responses": {
+          "200": {
+            "description": "The end of a device's sign-in. `authenticated`: `tokens` and `me` are present, and the person's own computer is on its way if they have none yet. `asked_to_join`: the person is not let in yet; their request is with the organisation's Admins, `message` says so, and no credential is issued.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: the answer holds a token.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceSignIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.\n`pairing-code-invalid`: The pairing code is not one this server showed, was used, or is over two minutes old. Show a new one on the page.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid",
+              "pairing-code-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).",
+            "x-error-codes": [
+              "api-idempotency-conflict"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.\n`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "api-rate-limited",
+              "sign-in-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "refreshDeviceToken",
+        "summary": "A new pair for a device's refresh token",
+        "description": "Spends the refresh token and answers a new access token and a new refresh token. A refresh token is used once: presented again more than 30 seconds after it was spent, the device is ended — for whoever holds its tokens — and the answer is `access-removed`; within those 30 seconds the answer is `refresh-superseded` and nothing ends. Send an `Idempotency-Key` kept for the attempt: a retry with it within 30 seconds answers the same pair. A device that sent no key, or retries later, and cannot find the newer pair where it keeps its tokens, signs in again.\n\nNo credential needed.",
+        "tags": [
+          "stable"
+        ],
+        "security": [],
+        "x-scope": "none",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 30 seconds answers the first answer (held in memory only: the answer holds a token)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRefresh"
+              }
+            }
+          }
+        },
+        "x-secret-answer": true,
+        "responses": {
+          "200": {
+            "description": "A device's tokens. The access token goes in `Authorization: Bearer` and is kept in memory only; the refresh token is kept in the device's hardware-held keychain and is spent by the next `POST /auth/refresh`, which answers a new pair.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: the answer holds a token.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceTokens"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request within its replay window (24 hours; 30 seconds for an answer that holds a token).\n`refresh-superseded`: This refresh token was used in the last 30 seconds, and nothing was ended: the device holds the new pair where it keeps them, and a retry with the first request's `Idempotency-Key` answers it again.",
+            "x-error-codes": [
+              "api-idempotency-conflict",
+              "refresh-superseded"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.\n`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "api-rate-limited",
+              "sign-in-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "signOutDevice",
+        "summary": "Sign this device out",
+        "description": "Ends the calling device: its access and refresh tokens stop at once and its open streams close. A device credential only. A retry after a lost answer cannot be replayed — the token it would carry is ended — and answers `access-removed`: that is the confirmation.\n\nAny credential.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "any",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 24 hours answers the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A device signed out: its tokens stopped working, its open streams closed. Calling with them now answers `access-removed`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceEnded"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`device-credential-needed`: Only a device credential signs itself out; a personal or service token is revoked on the page.",
+            "x-error-codes": [
+              "device-credential-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices": {
+      "get": {
+        "operationId": "listDevices",
+        "summary": "The person's signed-in devices",
+        "description": "Every device signed in as the person, newest first; `current` marks the one asking.\n\nScope `devices:manage`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "devices:manage",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many devices. 1 to 100; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "`nextCursor` from the page before.",
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the person's devices, newest first.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicePage"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-cursor-invalid`: The cursor is not one this list gave, or was given for other filters. Start the list again without it.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-cursor-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{id}": {
+      "delete": {
+        "operationId": "deleteDevice",
+        "summary": "Sign one of the person's devices out",
+        "description": "Ends the device: its tokens stop at once, its open streams and desktops close, and it is told `access-removed`. Another person's device answers 404.\n\nScope `devices:manage`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "devices:manage",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The device's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A device signed out: its tokens stopped working, its open streams closed. Calling with them now answers `access-removed`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceEnded"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
             ],
             "headers": {
               "X-Request-Id": {
@@ -1944,7 +3306,7 @@
       "bearer": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A personal token (`lbxp_…`) or a service token (`lbxs_…`). Scopes:\n- `agents:read`: Read the agents the person may reach.\n- `work:read`: Read work, its history and the board.\n- `work:decide`: Answer what waits on the person: count work as done, put it off, stop it, approve or deny.\n- `chat:read`: Read conversations the person may read.\n- `chat:write`: Send messages and card actions in conversations the person may drive.\n- `files:read`: Read deliverables.\n- `devices:manage`: List and remove the person's own devices.\n- `desktop:view`: Watch an agent's desktop.\n- `desktop:control`: Drive an agent's desktop."
+        "description": "A personal token (`lbxp_…`), a service token (`lbxs_…`) or a device's access token (`lbxd_…`). Scopes:\n- `agents:read`: Read the agents the person may reach.\n- `work:read`: Read work, its history and the board.\n- `work:decide`: Answer what waits on the person: count work as done, put it off, stop it, approve or deny.\n- `chat:read`: Read conversations the person may read.\n- `chat:write`: Send messages and card actions in conversations the person may drive.\n- `files:read`: Read deliverables.\n- `devices:manage`: List and remove the person's own devices.\n- `desktop:view`: Watch an agent's desktop.\n- `desktop:control`: Drive an agent's desktop."
       }
     },
     "schemas": {
@@ -1971,7 +3333,13 @@
               "api-idempotency-conflict",
               "api-rate-limited",
               "sign-in-limited",
-              "api-internal"
+              "api-internal",
+              "auth-provider-unknown",
+              "auth-redirect-invalid",
+              "auth-code-invalid",
+              "pairing-code-invalid",
+              "refresh-superseded",
+              "device-credential-needed"
             ]
           },
           "error": {
@@ -2593,6 +3961,452 @@
           "durableSeq",
           "hasMore",
           "reset"
+        ]
+      },
+      "AuthProvider": {
+        "type": "object",
+        "description": "A sign-in channel a device can sign in through: an organisation's DingTalk or Feishu, as the page's sign-in offers it.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "What `POST /auth/oauth/start` names as `provider`."
+          },
+          "type": {
+            "type": "string",
+            "description": "Which vendor.",
+            "x-extensible-enum": [
+              "dingtalk",
+              "feishu"
+            ]
+          },
+          "displayName": {
+            "type": "string",
+            "description": "Its name for a person, in the request's language."
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "displayName"
+        ]
+      },
+      "AuthProviderList": {
+        "type": "object",
+        "description": "The channels a device can sign in through here; empty when none is set up (no public address, or no channel's app).",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthProvider"
+            },
+            "description": "The channels."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "OAuthStart": {
+        "type": "object",
+        "description": "Starting a device's sign-in (OAuth 2.0 authorization code with PKCE, RFC 7636).",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "An `AuthProvider.id`.",
+            "maxLength": 200
+          },
+          "codeChallenge": {
+            "type": "string",
+            "description": "BASE64URL(SHA-256(code verifier)), without padding: 43 characters.",
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "codeChallengeMethod": {
+            "type": "string",
+            "description": "`S256`; nothing else is accepted.",
+            "x-extensible-enum": [
+              "S256"
+            ]
+          },
+          "redirectUri": {
+            "type": "string",
+            "description": "Where the browser goes back to the app: a `lumenbox:` address, or for a desktop client `http://127.0.0.1:<port>/…`. The code and `state` are added to it.",
+            "maxLength": 512
+          },
+          "state": {
+            "type": "string",
+            "description": "Given back unchanged on `redirectUri`: the app checks it is its own.",
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "provider",
+          "codeChallenge",
+          "codeChallengeMethod",
+          "redirectUri"
+        ],
+        "additionalProperties": false
+      },
+      "OAuthStarted": {
+        "type": "object",
+        "description": "Where to send the person: open `authorizationUrl` in the system's authentication browser.",
+        "properties": {
+          "authorizationUrl": {
+            "type": "string",
+            "description": "An address on this server that hands the person to the vendor's sign-in and back."
+          },
+          "state": {
+            "type": "string",
+            "description": "The `state` that was given."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this sign-in can no longer be finished (ten minutes)."
+          }
+        },
+        "required": [
+          "authorizationUrl",
+          "expiresAt"
+        ]
+      },
+      "OAuthExchange": {
+        "type": "object",
+        "description": "The code the app's `redirectUri` received, for a device credential.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "From `redirectUri`'s `code`.",
+            "maxLength": 200
+          },
+          "codeVerifier": {
+            "type": "string",
+            "description": "The PKCE code verifier (RFC 7636 §4.1).",
+            "pattern": "^[A-Za-z0-9._~-]{43,128}$"
+          },
+          "provider": {
+            "type": "string",
+            "description": "When given, it must be the one the sign-in started with.",
+            "maxLength": 200
+          },
+          "redirectUri": {
+            "type": "string",
+            "description": "The `redirectUri` the sign-in started with, exactly (RFC 6749 §4.1.3).",
+            "maxLength": 512
+          },
+          "deviceName": {
+            "type": "string",
+            "description": "What the person calls this device, shown in their list of devices.",
+            "maxLength": 60
+          },
+          "platform": {
+            "type": "string",
+            "description": "The device's system.",
+            "x-extensible-enum": [
+              "ios",
+              "android",
+              "macos",
+              "windows",
+              "linux"
+            ]
+          },
+          "stepUpKeyId": {
+            "type": "string",
+            "description": "The device's own id for its step-up signing key (docs/110 §4); with `stepUpPublicKey`.",
+            "maxLength": 100,
+            "pattern": "^[A-Za-z0-9._:-]{1,100}$"
+          },
+          "stepUpPublicKey": {
+            "type": "string",
+            "description": "That key's public half: a P-256 key, SubjectPublicKeyInfo DER, base64url without padding.",
+            "maxLength": 400,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        },
+        "required": [
+          "code",
+          "codeVerifier",
+          "redirectUri",
+          "deviceName",
+          "platform"
+        ],
+        "additionalProperties": false
+      },
+      "DevicePairing": {
+        "type": "object",
+        "description": "A pairing code a signed-in page showed (its QR code), for a device credential.",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code from the QR code.",
+            "maxLength": 200
+          },
+          "deviceName": {
+            "type": "string",
+            "description": "What the person calls this device.",
+            "maxLength": 60
+          },
+          "platform": {
+            "type": "string",
+            "description": "The device's system.",
+            "x-extensible-enum": [
+              "ios",
+              "android",
+              "macos",
+              "windows",
+              "linux"
+            ]
+          },
+          "stepUpKeyId": {
+            "type": "string",
+            "description": "As in `OAuthExchange`.",
+            "maxLength": 100,
+            "pattern": "^[A-Za-z0-9._:-]{1,100}$"
+          },
+          "stepUpPublicKey": {
+            "type": "string",
+            "description": "As in `OAuthExchange`.",
+            "maxLength": 400,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        },
+        "required": [
+          "code",
+          "deviceName",
+          "platform"
+        ],
+        "additionalProperties": false
+      },
+      "TokenRefresh": {
+        "type": "object",
+        "description": "A device's refresh token, for a new pair.",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "description": "The refresh token (`lbxr_…`) the device holds now.",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "refreshToken"
+        ],
+        "additionalProperties": false
+      },
+      "DeviceTokens": {
+        "type": "object",
+        "description": "A device's tokens. The access token goes in `Authorization: Bearer` and is kept in memory only; the refresh token is kept in the device's hardware-held keychain and is spent by the next `POST /auth/refresh`, which answers a new pair.",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "The device: what `DELETE /devices/{id}` names."
+          },
+          "tokenType": {
+            "type": "string",
+            "description": "`Bearer`.",
+            "x-extensible-enum": [
+              "Bearer"
+            ]
+          },
+          "accessToken": {
+            "type": "string",
+            "description": "`lbxd_…`, for fifteen minutes."
+          },
+          "expiresInSeconds": {
+            "type": "integer",
+            "description": "Seconds the access token works for, counted when it was issued (a replayed answer repeats it): schedule the next refresh from `accessTokenExpiresAt`."
+          },
+          "accessTokenExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the access token stops."
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "`lbxr_…`: used once."
+          },
+          "refreshTokenExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the refresh token stops if it is not used: thirty days, and never past a year from the sign-in."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A scope.",
+              "x-extensible-enum": [
+                "agents:read",
+                "work:read",
+                "work:decide",
+                "chat:read",
+                "chat:write",
+                "files:read",
+                "devices:manage",
+                "desktop:view",
+                "desktop:control"
+              ]
+            },
+            "description": "What the credential may be used for."
+          }
+        },
+        "required": [
+          "deviceId",
+          "tokenType",
+          "accessToken",
+          "expiresInSeconds",
+          "accessTokenExpiresAt",
+          "refreshToken",
+          "refreshTokenExpiresAt",
+          "scopes"
+        ]
+      },
+      "DeviceSignIn": {
+        "type": "object",
+        "description": "The end of a device's sign-in. `authenticated`: `tokens` and `me` are present, and the person's own computer is on its way if they have none yet. `asked_to_join`: the person is not let in yet; their request is with the organisation's Admins, `message` says so, and no credential is issued.",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`authenticated` or `asked_to_join`.",
+            "x-extensible-enum": [
+              "authenticated",
+              "asked_to_join"
+            ]
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/DeviceTokens"
+          },
+          "me": {
+            "$ref": "#/components/schemas/Me"
+          },
+          "message": {
+            "type": "string",
+            "description": "For `asked_to_join`: what to tell the person, in the request's language."
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "Device": {
+        "type": "object",
+        "description": "One of the person's signed-in devices.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The device's id."
+          },
+          "name": {
+            "type": "string",
+            "description": "What it was called when it signed in."
+          },
+          "platform": {
+            "type": "string",
+            "description": "Its system.",
+            "x-extensible-enum": [
+              "ios",
+              "android",
+              "macos",
+              "windows",
+              "linux"
+            ]
+          },
+          "signInMethod": {
+            "type": "string",
+            "description": "`oauth`: signed in through a channel. `pairing`: scanned a code a signed-in page showed.",
+            "x-extensible-enum": [
+              "oauth",
+              "pairing"
+            ]
+          },
+          "providerId": {
+            "type": "string",
+            "description": "The channel, for `oauth`."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A scope.",
+              "x-extensible-enum": [
+                "agents:read",
+                "work:read",
+                "work:decide",
+                "chat:read",
+                "chat:write",
+                "files:read",
+                "devices:manage",
+                "desktop:view",
+                "desktop:control"
+              ]
+            },
+            "description": "What its credential may be used for."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it signed in."
+          },
+          "lastUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was last used, to the minute."
+          },
+          "current": {
+            "type": "boolean",
+            "description": "Whether it is the device making this request."
+          },
+          "stepUpKey": {
+            "type": "boolean",
+            "description": "Whether it registered a step-up signing key."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "platform",
+          "signInMethod",
+          "scopes",
+          "createdAt",
+          "current",
+          "stepUpKey"
+        ]
+      },
+      "DevicePage": {
+        "type": "object",
+        "description": "A page of the person's devices, newest first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Device"
+            },
+            "description": "The devices on this page."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "The next page's cursor; absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "DeviceEnded": {
+        "type": "object",
+        "description": "A device signed out: its tokens stopped working, its open streams closed. Calling with them now answers `access-removed`.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The device."
+          },
+          "endedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When."
+          }
+        },
+        "required": [
+          "id",
+          "endedAt"
         ]
       }
     }

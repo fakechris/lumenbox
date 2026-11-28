@@ -275,8 +275,8 @@ first delivery; the client API is needed only when they show the board on a scre
 | 1. Stable line | §2 branch and release process; §6 home format, migrations, upgrade fixture; §7 snapshot and deprecation list; single-engine image gate | Not built. `BOXD_PROTOCOL`, the template format check and the update/rollback path exist |
 | 2. Organisation onboarding | docs/109: DingTalk sign-in, activation that makes the person, their box and their agent, the first chat, organisation skills | Not built. Feishu sign-in, the directory sync, roles, quotas and personal boxes on Kubernetes exist |
 | 3. Remote access, private level | §5 R1–R8 at **private**, and R9's part for that level (S-2 of docs/10 closed); a cluster rerun of what 0.4.8 fixed (sessions across a restart, Admins managing every member's box) | Part built (INV-2204 parts 1–3): the declared level and its start-up check, R1, R2, R4, R5 (except a strict `script-src`), R6, R7, R8, and S-2 closed for private. Not done: the kind pass through a TLS Ingress. Role-chosen view-only stream, per-person hashed MCP tokens and the audit export exist |
-| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Built (INV-2213, three parts): `/meta`, `/me`, `/agents`, `/work` (with history), `/board`, `/changes`, `/events`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. The page has no form for the tokens yet (INV-2316); minting asks for a session, not a recent sign-in (INV-2318) |
-| 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Not built |
+| 4. Client API, read slice | `/meta`, `/me`, `/agents`, `/work`, `/board`, `/events`, `/changes`; pure default-deny route table; service and personal tokens with scopes and views; OpenAPI + contract tests | Built (INV-2213, three parts): `/meta`, `/me`, `/agents`, `/work` (with history), `/board`, `/changes`, `/events`, the route table, personal and service tokens, the OpenAPI document on the surface ratchet, the contract tests and the Swift and Kotlin generation check — §8.1. The page has no form for the tokens yet (INV-2316); minting asks for a sign-in in the last ten minutes (INV-2318, §8.1) |
+| 5. Client API, the rest; remote access, public level | Auth & device credentials, polymorphic decisions, conversations & uploads, deliverables, desktop tickets; R9–R10 | Part built (INV-2214 part 1): auth and device credentials, §8.1. Decisions, conversations, uploads, deliverables and desktop tickets, R9–R10: not built |
 | 6. Shared storage for an organisation; mobile apps | Shared storage: a design of its own. Native iOS and Android clients, encrypted relay and wake-only push: docs/110 | Decided in docs/110; not built |
 
 ### 8.1 The client API as built (INV-2213)
@@ -380,6 +380,78 @@ project (openapi-generator, `kotlinx.serialization`, as lumenbox-android uses) t
 the document and decode answers from a newer server (`clients/codegen/fixtures`: an unknown field
 and an unknown value in each). CI's `client-codegen` workflow runs both when the document, the
 schema or the check changes; the contract test holds the fixtures to the schema.
+
+**Device credentials (INV-2214, part 1).** `src/web/device-credentials.ts` (the store, `devices.json`),
+`src/web/device-sign-in.ts` (starts, codes and pairing codes, in memory), `client-api/auth.ts` (the
+operations), `src/web/device-routes.ts` and Settings → Mine → Phones (the page's half). Operations:
+`GET /auth/providers`, `POST /auth/oauth/start`, `POST /auth/oauth/exchange`, `POST /auth/pair`,
+`POST /auth/refresh` (no credential; the last three take one in the body), `POST /auth/logout` (a
+device credential), `GET /devices` and `DELETE /devices/{id}` (`devices:manage`). What was decided here
+that §4 and docs/110 left open:
+
+- **This server is the authorization server the app talks to.** The app sends its PKCE challenge and
+  its own `redirectUri`; it opens `/auth/<door>?device=<id>` on this server — the page's own door
+  (door-sign-in.ts), with the same state, browser binding and admission rule — and the vendor sends the
+  person back to this server, which holds the vendor's secret. The app is then sent a code of ours:
+  one use, one minute, only with the verifier and the exact `redirectUri` the sign-in started with
+  (RFC 6749 §4.1.3). The vendor's own code never reaches the phone.
+- **Only an app's own address is sent a code**: a `lumenbox:` address, or `http://127.0.0.1:<port>`
+  / `[::1]` for a desktop client (RFC 8252). A web address would let somebody start a sign-in, send its
+  link to a colleague, and collect the colleague's code — PKCE does not stop the one who made the
+  challenge. A white-label app's own scheme needs a config key, which is not added here. A custom
+  scheme can be claimed by another app on the same phone; docs/110 §4 asks the apps to move to
+  verified https app links before general availability.
+- **Not let in is an answer, not an error**: `200 { status: "asked_to_join", message }` (docs/110's
+  word), with no credential; their request is with the Admins as on the page. Outside the
+  organisation, not linked, or the vendor failing: the browser goes back to the app with
+  `error=access_denied` and `error_description` (`not-a-member`, `not-linked`, `vendor-refused`).
+- **Pairing**: Settings → Mine → Phones shows a QR code holding
+  `lumenbox://pair#server=<public origin>&code=<code>` (the fragment, so nothing on the way logs it):
+  two minutes, once, signing the phone in as the person who showed it. Showing one needs a recent
+  sign-in (below) and the public address; it is recorded (`pairing-shown`).
+- **Tokens**: an access token `lbxd_` + 64 hex, fifteen minutes; a refresh token `lbxr_` + 64 hex,
+  thirty days from its issue, and never past a year from the device's sign-in. **One family per
+  device sign-in**: a family revoked is the device ended. Stored as SHA-256 only (`devices.json`,
+  docs/05). A device's scopes are fixed, not chosen by the app: everything but `desktop:control`
+  (docs/110 §4: v1 watches, it does not drive).
+- **The 30-second window** (docs/110 §4) is not a second live token: a spent refresh token presented
+  within 30 seconds answers `409 refresh-superseded` and ends nothing — the device's other process
+  holds the new pair — and a retry with the first request's `Idempotency-Key` within those 30 seconds
+  answers the same pair. Past 30 seconds the device ends, for whoever holds its tokens, with
+  `access-removed`, and `tokens.jsonl` says `refresh-reuse`.
+- **An answer that holds a token** (`x-secret-answer`: exchange, pair, refresh) is sent with
+  `Cache-Control: no-store`, and its `Idempotency-Key` replay lives in memory for 30 seconds, never in
+  `client-api-idempotency.jsonl`: a day-long replay of a refresh would let whoever has the spent token
+  and the key take the live pair without the reuse being seen.
+- **A device ends** when it is deleted (`DELETE /devices/{id}`, or Phones on the page — an Admin may
+  remove anyone's), signs itself out (`/auth/logout`), its refresh token is reused, its person leaves
+  in a directory sync (only the devices of that sign-in when they keep another), is removed by an
+  Admin, or is signed out everywhere; and a device whose sign-in an Admin took from the person is
+  refused as ended. Every ended device's calls answer `401 access-removed` — not counted as a sign-in
+  try — until its last token's time is over; its open `/events` streams close at once (not at the
+  next ping) and open desktops are rechecked.
+- **Tries count**: a code, pairing code or refresh token that does not work is a sign-in try (R4, door
+  `client-api`, reasons `auth-code`, `pairing-code`, `unknown-refresh-token`); a waiting address is
+  refused before its body is looked at.
+- **A request body** is checked against its schema: a field it does not take is refused
+  (`api-param-unknown`), `null` is the same as absent (a generated client may send it), and a known
+  value of an open enumeration is not enforced on input — an older server takes a newer app's
+  platform. A `DELETE` answers what it did, with no `ETag`.
+- **The step-up key is registered at sign-in** (`stepUpKeyId` + `stepUpPublicKey`, a P-256
+  SubjectPublicKeyInfo, both or neither), so a device enrolled now can make the proofs part 2 checks.
+- A person's first sign-in on a device asks for their own computer, as the page's first visit does
+  (INV-2203). `PUT`/`DELETE /devices/self/push` are INV-2215's.
+
+**A recent sign-in to mint (INV-2318).** The session cookie now signs `identity|epoch|signedAt`.
+Minting a personal, service or side-door token, showing a pairing code, making an invite (redeemed, an
+invite is a fresh sign-in, so a stale session could otherwise launder itself through one — for itself or
+a new Admin) and making a box's connection code need a sign-in in the last ten minutes (`src/web/recent-sign-in.ts`); otherwise `403 sign-in-again`, and the page offers to sign
+in again. A cookie from before the field still reads the page and mints nothing — kept valid rather
+than signing every organisation out at an upgrade, since only minting depends on the time. Not asked:
+the local level, the installation's own credential (the operator), and a person a gateway vouches for
+on each request. Each mint's record names the sign-in it relied on (`signedInAt`); invites and connection
+codes are recorded in `tokens.jsonl` too (`kind: invite`, `connect-code`), never the code. Taking one
+sign-in from a person ends the devices made from it and closes their open streams at once.
 
 Step 4 is what a company needs to show the work board to its customers. Steps 5 and 6 can follow
 without changing anything a step-4 client relies on — which is the test of whether the design
