@@ -549,8 +549,8 @@ async function phaseNoDocker(run) {
     });
     await run.step("nodocker: Settings says what to do", async () => {
       const state = await app.waitFor("a docker diagnosis", async () => (await app.api("/api/state")).box?.docker, 60_000);
-      // The rebuilt page says it beside the agents, where the silence is: the notice above the list.
-      const text = await app.waitFor("the box notice", () => app.inPage("(function(){ var n = document.getElementById('box-notice'); return n && !n.hidden && n.innerText.length > 0 ? n.innerText : undefined; })()"), 30_000);
+      // The page says it under the sandbox's heading in the sidebar (INV-2311): why it failed, in plain words.
+      const text = await app.waitFor("the sandbox's reason", () => app.inPage("(function(){ var n = document.querySelector('.sandbox-why[data-state=\"failed\"]'); return n && n.innerText.length > 0 ? n.innerText : undefined; })()"), 30_000);
       await app.shot("02-box-without-docker");
       if (state.state !== "no-engine") throw new Error(`diagnosis is ${state.state}, expected no-engine`);
       if (!/docker|orbstack/i.test(text ?? "")) throw new Error(`the Box section does not mention Docker: "${text}"`);
@@ -605,10 +605,12 @@ async function firstUse(run, app, label) {
   let pullSeconds;
   if (!(await run.step(`${label}: Start the box`, async () => {
     await app.inPage("openChat(Object.keys(next.agents)[0] || ''), true");
-    await app.waitFor("the Start button", () => app.inPage("!!document.getElementById('box-start')"), 30_000);
+    // The sandbox's one button sits on its heading line in the sidebar (INV-2311): Start it.
+    const press = "document.querySelector('.sandbox-line button.act')";
+    await app.waitFor("the Start button", () => app.inPage(`!!${press}`), 30_000);
     await app.shot("03-box-before-start");
     const started = Date.now();
-    await app.inPage("document.getElementById('box-start').click(), true");
+    await app.inPage(`${press}.click(), true`);
     let lastLog = "";
     try {
       await app.waitFor("the box to connect", async () => {
@@ -627,8 +629,8 @@ async function firstUse(run, app, label) {
     return `connected after ${pullSeconds}s (${cached ? "image was cached" : "including the first pull"})`;
   }))) return false;
   if (!(await run.step(`${label}: green dot`, async () => {
-    // The rebuilt page has no dot: a computer that is up says nothing, and the notice that it is not goes away.
-    const dot = await app.waitFor("the box notice to go", () => app.inPage("document.getElementById('box-notice').hidden === true ? 'no notice: the box is up' : undefined"), 60_000);
+    // A sandbox that is up says so on its heading, with no button and no reason under it.
+    const dot = await app.waitFor("the sandbox to say Ready", () => app.inPage("(function(){ var s = document.querySelector('.sandbox-state[data-state=\"ready\"]'); return s && !document.querySelector('.sandbox-line button.act') && !document.querySelector('.sandbox-why') ? 'Ready, no button, no reason' : undefined; })()"), 60_000);
     await app.shot("05-green-dot");
     return dot;
   }))) return false;
