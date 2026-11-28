@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "id": "t12",
+      "title": "Plan the December issue",
+      "state": "paused",
+      "topLevelId": "t12",
+      "agentId": "a7",
+      "agentName": "Writer",
+      "waitsOnMe": true,
+      "waitKind": "sign-off",
+      "summary": "The plan is in the shared folder.",
+      "deliverableIds": ["d1"],
+      "createdAt": "2026-11-25T09:00:00Z",
+      "updatedAt": "2026-11-28T10:00:00Z",
+      "priority": "high"
+    }
+  ],
+  "nextCursor": "eyJwIjpbIjIwMjYtMTEtMjhUMTA6MDA6MDBaIiwidDEyIl19",
+  "total": 41
+}

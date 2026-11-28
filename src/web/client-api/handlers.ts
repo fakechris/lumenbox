@@ -4,7 +4,10 @@
  * name never reaches a client, and the contract tests check that on every answer.
  */
 
+import { getAgent, listAgents } from "./agents.ts";
 import type { Call, Handlers } from "./frame.ts";
+import { apiTime } from "./times.ts";
+import { getBoard, getWork, listWork, listWorkHistory } from "./work.ts";
 import { API_VERSION, OPERATIONS } from "./schema.ts";
 
 /** Whether a service token's view lets it read an agent; a personal token is held by its person's reach alone. */
@@ -14,12 +17,9 @@ export function viewAllowsAgent(call: Call, agentId: string): boolean {
   return view !== undefined && (view.allAgents || view.agentIds.includes(agentId));
 }
 
-/** A stored time as v1 writes times: RFC 3339, UTC, to the second (a fraction is what some generated clients cannot read). */
-export function apiTime(stored: string): string {
-  return new Date(stored).toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-
 export const HANDLERS: Handlers = {
+  listAgents, getAgent, listWork, getWork, listWorkHistory, getBoard,
+
   getMeta: ({ deps }) => ({
     api: API_VERSION,
     server: deps.version,

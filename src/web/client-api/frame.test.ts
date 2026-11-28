@@ -31,6 +31,7 @@ const OPS: Operation[] = [
 async function frame(t: TestContext, handlers: Record<string, Handler>) {
   const logs: string[] = [];
   const api = clientApi({
+    world: { reachOf: () => ({ box: () => true, agent: () => true, task: () => true }), agents: () => [], tasks: () => [], attention: () => ({ mine: [], theirs: [] }), actor: () => undefined },
     tokens: { clientFor: presented => (presented === "lbxp_good" ? { credential } : { refused: "invalid" }), touch: () => "2026-11-28T00:00:00.000Z" },
     person: id => (id === "dee" ? { id, name: "Dee", role: "driver" } : undefined),
     installationMode: () => "organisation", version: "0.0.0", homeAgentOf: () => undefined,

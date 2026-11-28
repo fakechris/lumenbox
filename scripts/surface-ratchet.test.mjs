@@ -106,12 +106,13 @@ test("the client API's document is on the surface: a field, a known value or an 
   assert.match(verify(held, apiItems(optional)).problems.join("\n"), /api\/schema\/Me\/role changed from "string, required" to "string"/, "always present, then not: a change a client breaks on");
 
   const added = copy(); added.components.schemas.Me.properties.team = { type: "string" };
-  assert.match(verify(held, apiItems(added)).problems.join("\n"), /gained items and its revision is still 1\.0: raise API_REVISION/);
-  added.info.version = "1.1";
+  const now = document.info.version, raised = `1.${Number(now.split(".")[1]) + 1}`;
+  assert.ok(verify(held, apiItems(added)).problems.join("\n").includes(`gained items and its revision is still ${now}: raise API_REVISION`));
+  added.info.version = raised;
   const next = written(held, apiItems(added));
-  assert.equal(next["api/revision"], "1.1", "--write-baseline records the higher revision");
+  assert.equal(next["api/revision"], raised, "--write-baseline records the higher revision");
   assert.deepEqual(verify(next, apiItems(added)), { problems: [], due: [] });
-  assert.match(verify(next, apiItems(document)).problems.join("\n"), /api\/revision went down from 1\.1 to 1\.0/);
+  assert.ok(verify(next, apiItems(document)).problems.join("\n").includes(`api/revision went down from ${raised} to ${now}`));
 
   const preview = copy(); preview.paths["/api/v1/me"].get["x-tier"] = "preview";
   assert.equal(apiItems(preview)["api/op/GET /api/v1/me"], undefined, "a preview operation is no promise");

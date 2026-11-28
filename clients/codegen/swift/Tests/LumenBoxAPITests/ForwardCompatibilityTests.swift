@@ -42,6 +42,14 @@ final class ForwardCompatibilityTests: XCTestCase {
         XCTAssertNotNil(me.credential.lastUsedAt, "a time to the second decodes with the default transcoder")
     }
 
+    func testWorkWithAStateThisClientDoesNotKnow() async throws {
+        let page = try await client(.ok, "work-page.json").listWork().ok.body.json
+        XCTAssertEqual(page.items.first?.state, "paused", "a state added after this client was built arrives as itself, for .other")
+        XCTAssertEqual(page.items.first?.waitKind, "sign-off")
+        XCTAssertEqual(page.items.first?.waitsOnMe, true)
+        XCTAssertNotNil(page.nextCursor)
+    }
+
     func testAnErrorWithAnUnknownCode() async throws {
         let answer = try await client(.unauthorized, "error.json").getMe()
         guard case .unauthorized(let refusal) = answer else { return XCTFail("401 is the documented refusal: \(answer)") }

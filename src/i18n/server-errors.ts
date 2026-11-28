@@ -317,6 +317,8 @@ export const SERVER_ERRORS = {
   "err.api-scope-needed": ["这个令牌没有{scope}权限范围。", "This token does not carry the {scope} scope."],
   "err.api-param-invalid": ["参数{name}的值不对，应为：{why}。", "Parameter {name} has a value this operation does not take; it must be {why}."],
   "err.api-param-unknown": ["这个操作没有名为{name}的参数。", "This operation takes no parameter named {name}."],
+  "err.api-cursor-invalid": ["这个游标不是这个列表给出的，或属于别的筛选条件。请不带游标重新开始。", "This cursor is not one this list gave, or it was given for other filters. Start the list again without it."],
+  "err.api-not-found": ["没有找到。", "Not found."],
   "err.api-idempotency-key-invalid": ["Idempotency-Key 应为 8 到 128 个字母、数字或 _ . : - 字符。", "Idempotency-Key must be 8 to 128 letters, digits or _ . : - characters."],
   "err.api-idempotency-conflict": ["这个 Idempotency-Key 在 24 小时内已用于另一个请求。请换一个。", "This Idempotency-Key was used for a different request within 24 hours. Use a new one."],
   "err.api-rate-limited": ["请求太多。请{seconds}秒后再试。", "Too many requests. Try again in {seconds}s."],
