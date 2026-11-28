@@ -21,7 +21,11 @@
  *   node scripts/onboarding-e2e.mjs --version 0.3.8 [--phases nodocker,full] [--provider minimax]
  *        [--key-env MINIMAX_API_KEY] [--port 7796] [--cdp-port 9341] [--run-dir DIR] [--dmg FILE]
  *        [--box-timeout-min 40] [--reply-timeout-min 6] [--allow-unnotarized]
+ *   node scripts/onboarding-e2e.mjs --version 0.4.12 --dmg FILE --sums FILE --upgrade-from 0.4.11 [--downgrade-check] …
  *   node scripts/onboarding-e2e.mjs --cleanup DIR [--yes] [--remove-image]
+ *
+ * `--upgrade-from` walks an upgrade instead of a first run: the previous release used, then the
+ * candidate (`--version`, `--dmg`) started on what it wrote (scripts/onboarding-upgrade.mjs, INV-2209).
  *
  * Runbook: docs/86-onboarding-acceptance.md.
  */
@@ -33,6 +37,7 @@ import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { assess } from "./notarization.mjs";
+import { compareVersions, phaseUpgrade, requiredFreeGb } from "./onboarding-upgrade.mjs";
 
 export const REPO = "fakechris/lumenbox";
 export const IMAGE_REPO = "fakechris/lumenbox";
@@ -40,7 +45,8 @@ export const IMAGE_REPO = "fakechris/lumenbox";
 // ── pure parts (tested) ───────────────────────────────────────────────────────────────
 
 export function parseArgs(argv) {
-  const out = { phases: ["nodocker", "full"], provider: "minimax", port: 7796, cdpPort: 9341, boxTimeoutMin: 40, replyTimeoutMin: 6, yes: false, removeImage: false, allowUnnotarized: false };
+  const out = { phases: ["nodocker", "full"], provider: "minimax", port: 7796, cdpPort: 9341, boxTimeoutMin: 40, replyTimeoutMin: 6, yes: false, removeImage: false, allowUnnotarized: false, downgradeCheck: false };
+  let phasesGiven = false;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = () => {
@@ -51,7 +57,9 @@ export function parseArgs(argv) {
     };
     switch (arg) {
       case "--version": out.version = next(); break;
-      case "--phases": out.phases = next().split(",").map(p => p.trim()).filter(Boolean); break;
+      case "--phases": out.phases = next().split(",").map(p => p.trim()).filter(Boolean); phasesGiven = true; break;
+      case "--upgrade-from": out.upgradeFrom = next(); break;
+      case "--downgrade-check": out.downgradeCheck = true; break;
       case "--provider": out.provider = next(); break;
       case "--key-env": out.keyEnv = next(); break;
       case "--port": out.port = Number(next()); break;
@@ -73,6 +81,15 @@ export function parseArgs(argv) {
     for (const phase of out.phases) if (!["nodocker", "full"].includes(phase)) throw new Error(`unknown phase ${phase}`);
     for (const [name, value] of [["--port", out.port], ["--cdp-port", out.cdpPort]]) if (!Number.isInteger(value) || value < 1024 || value > 65535) throw new Error(`${name} must be a port above 1023`);
     if (out.port === 7777) throw new Error("--port 7777 is the default app's port; pick another so a running LumenBox is never touched");
+    if (out.downgradeCheck && out.upgradeFrom === undefined) throw new Error("--downgrade-check starts the previous app on the upgraded home; it needs --upgrade-from");
+    if (out.upgradeFrom !== undefined) {
+      if (!/^\d+\.\d+\.\d+$/.test(out.upgradeFrom)) throw new Error("--upgrade-from X.Y.Z names the previous release");
+      if (phasesGiven) throw new Error("--upgrade-from walks its own phases (previous, candidate); leave out --phases");
+      const order = compareVersions(out.upgradeFrom, out.version);
+      if (order > 0) throw new Error(`--upgrade-from ${out.upgradeFrom} is newer than --version ${out.version}; that is a downgrade`);
+      if (order === 0 && out.dmg === undefined) throw new Error(`--upgrade-from ${out.upgradeFrom} is the published ${out.version}; an upgrade to the same release needs a candidate --dmg`);
+      out.phases = ["upgrade"];
+    }
   }
   return out;
 }
@@ -148,6 +165,15 @@ function containers() {
   }
 }
 
+/** Processes whose command line runs from this bundle; never this script itself. */
+function processesOf(bundle) {
+  try {
+    return sh("pgrep", ["-f", bundle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")]).split("\n").map(Number).filter(pid => pid > 0 && pid !== process.pid);
+  } catch {
+    return [];
+  }
+}
+
 function portInUse(port) {
   return new Promise(done => {
     const socket = createConnection({ host: "127.0.0.1", port });
@@ -161,10 +187,10 @@ class Run {
   constructor(options) {
     this.options = options;
     const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    this.dir = resolve(options.runDir ?? join(homedir(), "lumenbox-onboarding", `${options.version}-${stamp}`));
+    this.dir = resolve(options.runDir ?? join(homedir(), "lumenbox-onboarding", `${options.upgradeFrom !== undefined ? `${options.upgradeFrom}-to-` : ""}${options.version}-${stamp}`));
     this.container = `lumenbox-onboard-${stamp.slice(5, 16).replace(/[-T]/g, "").toLowerCase()}`;
     this.steps = [];
-    this.manifest = { createdAt: new Date().toISOString(), version: options.version, runDir: this.dir, box: boxResources(this.container), image: `${IMAGE_REPO}:${options.version}`, imageWasCached: undefined, appProcesses: [] };
+    this.manifest = { createdAt: new Date().toISOString(), version: options.version, runDir: this.dir, box: boxResources(this.container), image: `${IMAGE_REPO}:${options.version}`, imageWasCached: undefined, appProcesses: [], ...(options.upgradeFrom !== undefined ? { upgradeFrom: options.upgradeFrom, previousImage: `${IMAGE_REPO}:${options.upgradeFrom}`, previousImageWasCached: undefined } : {}) };
   }
 
   async step(name, fn) {
@@ -193,7 +219,7 @@ class Run {
     const summary = summarize(this.steps);
     writeFileSync(join(this.dir, "report.json"), JSON.stringify({ ...summary, version: this.options.version, steps: this.steps }, null, 2));
     const md = [
-      `# Onboarding acceptance — LumenBox ${this.options.version}`,
+      `# ${this.options.upgradeFrom !== undefined ? `Upgrade acceptance — LumenBox ${this.options.upgradeFrom} → ${this.options.version}` : `Onboarding acceptance — LumenBox ${this.options.version}`}`,
       "",
       `Machine: ${sh("sw_vers", ["-productVersion"])} ${sh("uname", ["-m"])} · run ${this.dir}`,
       `Result: **${summary.passed ? "PASS" : `FAIL (${summary.failed.join(", ")})`}**`,
@@ -205,6 +231,7 @@ class Run {
       "Created (nothing was deleted; see the runbook before running --cleanup):",
       `- box container ${this.manifest.box.container}, volumes ${this.manifest.box.volumes.join(", ")}, network ${this.manifest.box.network}`,
       `- image ${this.manifest.image} (${this.manifest.imageWasCached ? "was already on this machine" : "pulled by this run"})`,
+      ...(this.manifest.previousImage !== undefined && this.manifest.previousImage !== this.manifest.image ? [`- image ${this.manifest.previousImage} (${this.manifest.previousImageWasCached ? "was already on this machine" : "pulled by this run"})`] : []),
       `- run directory ${this.dir}`,
     ].join("\n");
     writeFileSync(join(this.dir, "report.md"), `${md}\n`);
@@ -214,19 +241,22 @@ class Run {
 
 /** A launched app and the window's DevTools session. */
 class App {
-  constructor(run, phase, extraEnv) {
+  /** `where`: which installed app (`appRoot`, default the run dir) and, for an upgrade, the home and user-data it shares with another. */
+  constructor(run, phase, extraEnv, where = {}) {
     this.run = run;
     this.phase = phase;
     this.extraEnv = extraEnv;
-    this.home = join(run.dir, phase, "home");
-    this.userData = join(run.dir, phase, "user-data");
+    this.appRoot = where.appRoot ?? run.dir;
+    this.home = where.home ?? join(run.dir, phase, "home");
+    this.userData = where.userData ?? join(run.dir, phase, "user-data");
     mkdirSync(this.home, { recursive: true });
     mkdirSync(this.userData, { recursive: true });
+    mkdirSync(join(run.dir, phase), { recursive: true });
   }
 
   start() {
     const { options } = this.run;
-    const binary = join(this.run.dir, "LumenBox.app", "Contents", "MacOS", "LumenBox");
+    const binary = join(this.appRoot, "LumenBox.app", "Contents", "MacOS", "LumenBox");
     const env = cleanEnv(process.env, { AGENTBOX_HOME: this.home, LUMENBOX_PORT: String(options.port), AGENTBOX_CONTAINER: this.run.container, ...this.extraEnv });
     const log = join(this.run.dir, this.phase, "app.log");
     this.child = spawn(binary, [`--user-data-dir=${this.userData}`, `--remote-debugging-port=${options.cdpPort}`], { env, stdio: ["ignore", "pipe", "pipe"], detached: false });
@@ -236,6 +266,7 @@ class App {
     this.child.stderr.on("data", chunk => out.push(chunk));
     this.child.on("exit", () => writeFileSync(log, Buffer.concat(out)));
     this.flushLog = () => writeFileSync(log, Buffer.concat(out));
+    this.output = () => Buffer.concat(out).toString("utf8");
   }
 
   token() {
@@ -342,6 +373,15 @@ class App {
       if (this.child.exitCode === null) this.child.kill("SIGKILL");
     }
     this.flushLog?.();
+    // The shell's server is its own process. An upgrade starts the next app on the same port, so
+    // what this app left running is stopped — only processes of this run's own installed app.
+    const bundle = join(this.appRoot, "LumenBox.app", "Contents");
+    for (let i = 0; i < 20; i += 1) {
+      const left = processesOf(bundle);
+      if (left.length === 0) break;
+      for (const pid of left) { try { process.kill(pid, i < 10 ? "SIGTERM" : "SIGKILL"); } catch {} }
+      await sleep(500);
+    }
   }
 }
 
@@ -352,63 +392,73 @@ async function preflight(run) {
     if (existsSync(run.dir)) throw new Error(`${run.dir} already exists; pass a new --run-dir`);
     for (const port of [options.port, options.cdpPort]) if (await portInUse(port)) throw new Error(`port ${port} is in use; pick another`);
     if (shOk("docker", ["inspect", run.container])) throw new Error(`a container named ${run.container} exists`);
-    if (options.phases.includes("full")) {
+    if (options.phases.includes("full") || options.phases.includes("upgrade")) {
       if (options.keyEnv === undefined) throw new Error("--key-env names the variable holding the provider key the run types into Settings");
       if ((process.env[options.keyEnv] ?? "").trim() === "") throw new Error(`${options.keyEnv} is empty in this shell`);
     }
     mkdirSync(run.dir, { recursive: true });
     const free = statfsSync(run.dir);
     const freeGb = (free.bavail * free.bsize) / 1e9;
-    if (freeGb < 8) throw new Error(`only ${freeGb.toFixed(1)} GB free; a first pull needs about 4 GB plus room`);
+    const needGb = requiredFreeGb(options);
+    if (freeGb < needGb) throw new Error(`only ${freeGb.toFixed(1)} GB free; ${options.upgradeFrom !== undefined ? `an upgrade run holds two apps, the home's copies and maybe a second image: ${needGb} GB` : "a first pull needs about 4 GB plus room"}`);
     run.before = containers();
     run.manifest.containersBefore = run.before.map(c => c.name);
     run.manifest.imageWasCached = shOk("docker", ["image", "inspect", run.manifest.image]);
+    if (run.manifest.previousImage !== undefined) run.manifest.previousImageWasCached = shOk("docker", ["image", "inspect", run.manifest.previousImage]);
     return `${freeGb.toFixed(0)} GB free; ${run.manifest.image} ${run.manifest.imageWasCached ? "IS already on this machine — the pull will not be a first pull" : "is not on this machine — Start the box pulls it"}`;
   });
 }
 
-async function fetchArtifacts(run) {
+/**
+ * Downloads (or takes `--dmg`), checks against SHA256SUMS and installs one release into `into`.
+ * `which`: `{ version, dmg, sums, into, label }` — the label prefixes the step names ("previous: download").
+ */
+async function fetchArtifacts(run, which = { version: run.options.version, dmg: run.options.dmg, sums: run.options.sums, into: run.dir, label: "" }) {
   const { options } = run;
+  const { version, into } = which;
+  const named = step => (which.label ? `${which.label}: ${step}` : step);
+  mkdirSync(into, { recursive: true });
   const arch = sh("uname", ["-m"]) === "arm64" ? "arm64" : "x64";
-  const dmg = options.dmg ? resolve(options.dmg) : join(run.dir, dmgName(options.version, arch));
-  await run.step("download", async () => {
-    const base = `https://github.com/${REPO}/releases/download/v${options.version}`;
+  const dmg = which.dmg ? resolve(which.dmg) : join(into, dmgName(version, arch));
+  if (!(await run.step(named("download"), async () => {
+    const base = `https://github.com/${REPO}/releases/download/v${version}`;
     // Before publishing there are no published sums: --sums FILE checks a candidate DMG against the ones about to be published.
-    if (options.sums) writeFileSync(join(run.dir, "SHA256SUMS"), readFileSync(resolve(options.sums)));
-    else sh("curl", ["-fsSL", "--retry", "3", "-o", join(run.dir, "SHA256SUMS"), `${base}/SHA256SUMS`]);
-    if (!options.dmg) sh("curl", ["-fsSL", "--retry", "3", "-o", dmg, `${base}/${dmgName(options.version, arch)}`], { timeout: 1_800_000 });
-    const want = expectedDigest(readFileSync(join(run.dir, "SHA256SUMS"), "utf8"), dmgName(options.version, arch));
-    if (want === undefined) throw new Error(`SHA256SUMS does not list ${dmgName(options.version, arch)}`);
+    if (which.sums) writeFileSync(join(into, "SHA256SUMS"), readFileSync(resolve(which.sums)));
+    else sh("curl", ["-fsSL", "--retry", "3", "-o", join(into, "SHA256SUMS"), `${base}/SHA256SUMS`]);
+    if (!which.dmg) sh("curl", ["-fsSL", "--retry", "3", "-o", dmg, `${base}/${dmgName(version, arch)}`], { timeout: 1_800_000 });
+    const want = expectedDigest(readFileSync(join(into, "SHA256SUMS"), "utf8"), dmgName(version, arch));
+    if (want === undefined) throw new Error(`SHA256SUMS does not list ${dmgName(version, arch)}`);
     const got = createHash("sha256").update(readFileSync(dmg)).digest("hex");
-    if (got !== want) throw new Error(`${dmgName(options.version, arch)} sha256 ${got} is not the published ${want}`);
-    return `${dmgName(options.version, arch)} matches SHA256SUMS`;
-  });
-  await run.step("install", async () => {
-    const mount = join(run.dir, "mnt");
+    if (got !== want) throw new Error(`${dmgName(version, arch)} sha256 ${got} is not the published ${want}`);
+    return `${dmgName(version, arch)} matches SHA256SUMS`;
+  }))) return false;
+  if (!(await run.step(named("install"), async () => {
+    const mount = join(into, "mnt");
     mkdirSync(mount, { recursive: true });
     sh("hdiutil", ["attach", dmg, "-nobrowse", "-readonly", "-mountpoint", mount]);
     try {
-      sh("ditto", [join(mount, "LumenBox.app"), join(run.dir, "LumenBox.app")]);
+      sh("ditto", [join(mount, "LumenBox.app"), join(into, "LumenBox.app")]);
     } finally {
       sh("hdiutil", ["detach", mount]);
     }
-    sh("codesign", ["--verify", "--deep", "--strict", join(run.dir, "LumenBox.app")]);
-    const stamped = JSON.parse(readFileSync(join(run.dir, "LumenBox.app", "Contents", "Resources", "app", "package.json"), "utf8"));
-    if (stamped.version !== options.version) throw new Error(`the app says ${stamped.version}, not ${options.version}`);
+    sh("codesign", ["--verify", "--deep", "--strict", join(into, "LumenBox.app")]);
+    const stamped = JSON.parse(readFileSync(join(into, "LumenBox.app", "Contents", "Resources", "app", "package.json"), "utf8"));
+    if (stamped.version !== version) throw new Error(`the app says ${stamped.version}, not ${version}`);
     return `signed; version ${stamped.version}, build ${stamped.buildCommit ?? "unknown"}`;
-  });
+  }))) return false;
   // A browser download is quarantined, and Gatekeeper opens it only if Apple notarized it
   // (INV-1450); stapled, so it opens offline too. Releases through 0.3.8 were not.
-  const verdicts = [["dmg", dmg], ["app", join(run.dir, "LumenBox.app")]].map(([kind, path]) => [kind, assess({ kind, path })]);
+  const verdicts = [["dmg", dmg], ["app", join(into, "LumenBox.app")]].map(([kind, path]) => [kind, assess({ kind, path })]);
   const refused = verdicts.filter(([, v]) => !v.ok).map(([kind, v]) => `${kind}: ${v.problems.join("; ")}`);
   if (options.allowUnnotarized) {
-    run.note("gatekeeper", refused.length === 0 ? "dmg and app notarized and stapled" : `${refused.join(" · ")} — allowed by --allow-unnotarized; a browser download of this release is blocked on first open`);
+    run.note(named("gatekeeper"), refused.length === 0 ? "dmg and app notarized and stapled" : `${refused.join(" · ")} — allowed by --allow-unnotarized; a browser download of this release is blocked on first open`);
   } else {
-    await run.step("gatekeeper opens a downloaded copy", async () => {
+    await run.step(named("gatekeeper opens a downloaded copy"), async () => {
       if (refused.length > 0) throw new Error(`${refused.join(" · ")}. A browser download is blocked on first open (pass --allow-unnotarized to check a release from before notarization)`);
       return "dmg and app notarized and stapled";
     });
   }
+  return true;
 }
 
 async function phaseNoDocker(run) {
@@ -437,78 +487,88 @@ async function phaseNoDocker(run) {
 }
 
 async function phaseFull(run) {
-  const { options } = run;
   const app = new App(run, "full", {});
   try {
     app.start();
-    if (!(await run.step("full: first launch shows the set-up card", async () => {
-      await app.firstRun();
-      await app.waitFor("the server", async () => (await app.api("/api/setup")) !== undefined, 120_000);
-      await app.connect();
-      const setup = await app.api("/api/setup");
-      const visible = await app.waitFor("the set-up card", () => app.inPage("document.querySelectorAll('#view .card-plain .setup-step').length > 0"), 30_000);
-      await app.shot("01-first-launch");
-      if (setup.key || setup.box) throw new Error(`a fresh home already has ${setup.key ? "a key" : ""} ${setup.box ? "a box" : ""}`);
-      return `card shown (${visible}); key=${setup.key} box=${setup.box}`;
-    }))) return;
-    if (!(await run.step("full: key saved in Settings", async () => {
-      const key = process.env[options.keyEnv];
-      await app.openSettings("model");
-      const chosen = await app.inPage(`(function(){ var p = document.getElementById('set-provider'); p.value = ${JSON.stringify(options.provider)}; p.dispatchEvent(new Event('change')); return p.value; })()`);
-      if (chosen !== options.provider) throw new Error(`Settings has no provider ${options.provider}`);
-      await app.inPage(`(function(){ var k = document.getElementById('set-key'); k.value = ${JSON.stringify(key)}; k.dispatchEvent(new Event('input')); return true; })()`);
-      await app.inPage("document.getElementById('set-save').click(), true");
-      await app.waitFor("the key to count", async () => (await app.api("/api/setup")).key === true, 30_000);
-      await app.shot("02-key-saved");
-      // The pane is redrawn from what the server holds: the key field comes back empty, which is checked rather than done.
-      const leftBehind = await app.waitFor("the key field to be cleared", () => app.inPage("(function(){ var k = document.getElementById('set-key'); return k && k.value === '' ? 'cleared' : undefined; })()"), 15_000);
-      const status = (await app.inPage("(document.getElementById('set-note') || {}).innerText")) + " · key field " + leftBehind;
-      return `provider ${options.provider}; ${(status ?? "").replace(/\s+/g, " ").slice(0, 120)}`;
-    }))) return;
-    let pullSeconds;
-    if (!(await run.step("full: Start the box", async () => {
-      await app.inPage("openChat(Object.keys(next.agents)[0] || ''), true");
-      await app.waitFor("the Start button", () => app.inPage("!!document.getElementById('box-start')"), 30_000);
-      await app.shot("03-box-before-start");
-      const started = Date.now();
-      await app.inPage("document.getElementById('box-start').click(), true");
-      let lastLog = "";
-      try {
-        await app.waitFor("the box to connect", async () => {
-          lastLog = (await app.inPage("boxes.log.join(String.fromCharCode(10))")) || lastLog;
-          return (await app.api("/api/state")).box?.ok === true;
-        }, options.boxTimeoutMin * 60_000, 5000);
-      } catch (error) {
-        writeFileSync(join(run.dir, "full", "box-start.log"), lastLog);
-        await app.shot("04-box-failed");
-        throw new Error(`${error.message}; the page shows: ${lastLog.trim().split("\n").pop()?.slice(0, 240) ?? ""}`);
-      }
-      pullSeconds = Math.round((Date.now() - started) / 1000);
-      writeFileSync(join(run.dir, "full", "box-start.log"), lastLog);
-      await app.shot("04-box-started");
-      return `connected after ${pullSeconds}s (${run.manifest.imageWasCached ? "image was cached" : "including the first pull"})`;
-    }))) return;
-    if (!(await run.step("full: green dot", async () => {
-      // The rebuilt page has no dot: a computer that is up says nothing, and the notice that it is not goes away.
-      const dot = await app.waitFor("the box notice to go", () => app.inPage("document.getElementById('box-notice').hidden === true ? 'no notice: the box is up' : undefined"), 60_000);
-      await app.shot("05-green-dot");
-      return dot;
-    }))) return;
-    if (!(await run.step("full: first message answered", async () => {
-      const text = "你好，请用一句话介绍你自己。Hello — one sentence about yourself, please.";
-      await app.inPage(`(function(){ var i = document.getElementById('composer-text'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); document.getElementById('composer-send').click(); return true; })()`);
-      const reply = await app.waitFor("a reply from the agent", async () => {
-        const setup = await app.api("/api/setup");
-        if (!setup.agentTurn) return undefined;
-        // An agent's words are the bubbles of class "msg" in the thread (a person's are "msg-me").
-        return app.inPage("(function(){ var all = document.querySelectorAll('#view .thread .msg'); var last = all[all.length - 1]; return last && last.innerText.trim().length > 0 ? last.innerText.trim() : undefined; })()");
-      }, options.replyTimeoutMin * 60_000, 3000);
-      await app.shot("06-first-reply");
-      return `reply: ${reply.replace(/\s+/g, " ").slice(0, 160)}`;
-    }))) return;
+    await firstUse(run, app, "full");
   } finally {
     await app.stop();
   }
+}
+
+/**
+ * A new person's first use, on a started app: set-up card, key in Settings, Start the box, the
+ * notice gone, a first reply. Step names begin with `label`. True when every step passed; the
+ * app is left running for whatever comes next.
+ */
+async function firstUse(run, app, label) {
+  const { options } = run;
+  if (!(await run.step(`${label}: first launch shows the set-up card`, async () => {
+    await app.firstRun();
+    await app.waitFor("the server", async () => (await app.api("/api/setup")) !== undefined, 120_000);
+    await app.connect();
+    const setup = await app.api("/api/setup");
+    const visible = await app.waitFor("the set-up card", () => app.inPage("document.querySelectorAll('#view .card-plain .setup-step').length > 0"), 30_000);
+    await app.shot("01-first-launch");
+    if (setup.key || setup.box) throw new Error(`a fresh home already has ${setup.key ? "a key" : ""} ${setup.box ? "a box" : ""}`);
+    return `card shown (${visible}); key=${setup.key} box=${setup.box}`;
+  }))) return false;
+  if (!(await run.step(`${label}: key saved in Settings`, async () => {
+    const key = process.env[options.keyEnv];
+    await app.openSettings("model");
+    const chosen = await app.inPage(`(function(){ var p = document.getElementById('set-provider'); p.value = ${JSON.stringify(options.provider)}; p.dispatchEvent(new Event('change')); return p.value; })()`);
+    if (chosen !== options.provider) throw new Error(`Settings has no provider ${options.provider}`);
+    await app.inPage(`(function(){ var k = document.getElementById('set-key'); k.value = ${JSON.stringify(key)}; k.dispatchEvent(new Event('input')); return true; })()`);
+    await app.inPage("document.getElementById('set-save').click(), true");
+    await app.waitFor("the key to count", async () => (await app.api("/api/setup")).key === true, 30_000);
+    await app.shot("02-key-saved");
+    // The pane is redrawn from what the server holds: the key field comes back empty, which is checked rather than done.
+    const leftBehind = await app.waitFor("the key field to be cleared", () => app.inPage("(function(){ var k = document.getElementById('set-key'); return k && k.value === '' ? 'cleared' : undefined; })()"), 15_000);
+    const status = (await app.inPage("(document.getElementById('set-note') || {}).innerText")) + " · key field " + leftBehind;
+    return `provider ${options.provider}; ${(status ?? "").replace(/\s+/g, " ").slice(0, 120)}`;
+  }))) return false;
+  let pullSeconds;
+  if (!(await run.step(`${label}: Start the box`, async () => {
+    await app.inPage("openChat(Object.keys(next.agents)[0] || ''), true");
+    await app.waitFor("the Start button", () => app.inPage("!!document.getElementById('box-start')"), 30_000);
+    await app.shot("03-box-before-start");
+    const started = Date.now();
+    await app.inPage("document.getElementById('box-start').click(), true");
+    let lastLog = "";
+    try {
+      await app.waitFor("the box to connect", async () => {
+        lastLog = (await app.inPage("boxes.log.join(String.fromCharCode(10))")) || lastLog;
+        return (await app.api("/api/state")).box?.ok === true;
+      }, options.boxTimeoutMin * 60_000, 5000);
+    } catch (error) {
+      writeFileSync(join(run.dir, label, "box-start.log"), lastLog);
+      await app.shot("04-box-failed");
+      throw new Error(`${error.message}; the page shows: ${lastLog.trim().split("\n").pop()?.slice(0, 240) ?? ""}`);
+    }
+    pullSeconds = Math.round((Date.now() - started) / 1000);
+    writeFileSync(join(run.dir, label, "box-start.log"), lastLog);
+    await app.shot("04-box-started");
+    return `connected after ${pullSeconds}s (${run.manifest.imageWasCached ? "image was cached" : "including the first pull"})`;
+  }))) return false;
+  if (!(await run.step(`${label}: green dot`, async () => {
+    // The rebuilt page has no dot: a computer that is up says nothing, and the notice that it is not goes away.
+    const dot = await app.waitFor("the box notice to go", () => app.inPage("document.getElementById('box-notice').hidden === true ? 'no notice: the box is up' : undefined"), 60_000);
+    await app.shot("05-green-dot");
+    return dot;
+  }))) return false;
+  if (!(await run.step(`${label}: first message answered`, async () => {
+    const text = "你好，请用一句话介绍你自己。Hello — one sentence about yourself, please.";
+    await app.inPage(`(function(){ var i = document.getElementById('composer-text'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input')); document.getElementById('composer-send').click(); return true; })()`);
+    const reply = await app.waitFor("a reply from the agent", async () => {
+      const setup = await app.api("/api/setup");
+      if (!setup.agentTurn) return undefined;
+      // An agent's words are the bubbles of class "msg" in the thread (a person's are "msg-me").
+      return app.inPage("(function(){ var all = document.querySelectorAll('#view .thread .msg'); var last = all[all.length - 1]; return last && last.innerText.trim().length > 0 ? last.innerText.trim() : undefined; })()");
+    }, options.replyTimeoutMin * 60_000, 3000);
+    await app.shot("06-first-reply");
+    return `reply: ${reply.replace(/\s+/g, " ").slice(0, 160)}`;
+  }))) return false;
+  return true;
 }
 
 async function cleanup(options) {
@@ -520,6 +580,7 @@ async function cleanup(options) {
     ...volumes.map(v => `volume    ${v}${shOk("docker", ["volume", "inspect", v]) ? "" : " (absent)"}`),
     `network   ${network}${shOk("docker", ["network", "inspect", network]) ? "" : " (absent)"}`,
     ...(options.removeImage ? [`image     ${manifest.image}${manifest.imageWasCached ? " — WAS ALREADY ON THIS MACHINE before the run; it is not this run's to remove" : ""}`] : []),
+    ...(options.removeImage && manifest.previousImage !== undefined && manifest.previousImage !== manifest.image ? [`image     ${manifest.previousImage}${manifest.previousImageWasCached ? " — WAS ALREADY ON THIS MACHINE before the run; it is not this run's to remove" : ""}`] : []),
     `directory ${dir}`,
   ];
   console.log(`This run created:\n  ${list.join("\n  ")}`);
@@ -534,6 +595,7 @@ async function cleanup(options) {
   for (const volume of volumes) if (shOk("docker", ["volume", "inspect", volume])) sh("docker", ["volume", "rm", volume]);
   if (shOk("docker", ["network", "inspect", network])) sh("docker", ["network", "rm", network]);
   if (options.removeImage && !manifest.imageWasCached) sh("docker", ["image", "rm", manifest.image]);
+  if (options.removeImage && manifest.previousImage !== undefined && manifest.previousImage !== manifest.image && !manifest.previousImageWasCached && shOk("docker", ["image", "inspect", manifest.previousImage])) sh("docker", ["image", "rm", manifest.previousImage]);
   console.log("Removed the run's box resources. The run directory is kept; delete it yourself once the report is filed.");
   return 0;
 }
@@ -548,11 +610,13 @@ async function main() {
     return 1;
   }
   try {
-    await fetchArtifacts(run);
+    // Both apps are fetched first, so a missing or tampered DMG fails before half an hour of use.
+    const previousReady = options.upgradeFrom === undefined || (await fetchArtifacts(run, { version: options.upgradeFrom, into: join(run.dir, "previous"), label: "previous" }));
     // Gatekeeper refusing the download does not stop the walk: what happens after it is still worth knowing.
-    if (!run.steps.some(step => step.status === "fail" && (step.name === "download" || step.name === "install"))) {
+    if (previousReady && (await fetchArtifacts(run))) {
       if (options.phases.includes("nodocker")) await phaseNoDocker(run);
       if (options.phases.includes("full")) await phaseFull(run);
+      if (options.phases.includes("upgrade")) await phaseUpgrade({ run, App, firstUse, sh, cleanEnv });
     }
   } finally {
     await run.step("nothing else touched", async () => {
