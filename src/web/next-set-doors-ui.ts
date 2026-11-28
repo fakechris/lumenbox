@@ -93,7 +93,7 @@ function channelsBlock() {
       var remove = el("button", "act", t("ui.next.doors.remove"));
       remove.addEventListener("click", function () {
         var sure = el("button", "act-danger", t("ui.next.doors.removeSure"));
-        sure.addEventListener("click", function () { postJson("/api/channels/records/remove", { id: record.id }).then(function () { doors.note = t("ui.next.doors.restart"); loadDoors(); }, failed); });
+        sure.addEventListener("click", function () { postJson("/api/channels/records/remove", { id: record.id }).then(function () { doors.note = t("ui.next.doors.restart"); loadDoors(); refresh(); }, failed); });
         remove.replaceWith(sure);
       });
       acts.appendChild(remove);
@@ -121,7 +121,8 @@ function channelsBlock() {
     if (idVal) body.appId = idVal;
     if (secVal) body.appSecret = secVal;
     save.disabled = true;
-    postJson("/api/channels/records", body).then(function (got) { doors.adding = false; doors.editing = null; doors.note = doorSaved(got); loadDoors(); }, function (error) { save.disabled = false; failed(error); });
+    // Credentials decide Getting started's channel step, which reads /api/setup again only in refresh() (INV-2323).
+    postJson("/api/channels/records", body).then(function (got) { doors.adding = false; doors.editing = null; doors.note = doorSaved(got); loadDoors(); refresh(); }, function (error) { save.disabled = false; failed(error); });
   });
   cancel.addEventListener("click", function () { doors.adding = false; doors.editing = null; render(); });
   [labelled(t("ui.next.doors.type"), type), labelled(t("ui.next.doors.id"), id), labelled(t("ui.next.member.name"), name), labelled(t("ui.next.doors.appId"), appId),

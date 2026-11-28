@@ -547,6 +547,31 @@ test("welcome setup uses the latest box result even when setup is the last respo
   assert.deepEqual(drawn, [["✓", "ui.first.step.sandbox · ui.first.state.ready"]], "the refresh redraws the card from the new boxes and setup");
 });
 
+test("saving a model key takes the model step off Getting started without reloading the page (INV-2323)", async () => {
+  const screen = drawFirstScreen({ state: { agents: [{ id: "ada", name: "Ada", boxId: "b1" }], box: {} }, computers: { boxes: [{ id: "b1", name: "Default", connected: true }], own: "b1" },
+    setup: { installationId: "fresh", edition: "personal", key: false }, me: { role: "admin", identity: null } });
+  const modelStep = () => texts(screen.page.setupCard!()).filter(text => text.startsWith("ui.first.model"));
+  assert.deepEqual(modelStep(), ["ui.first.model.none", "ui.first.model.choose"]);
+  let saved = false;
+  Object.assign(screen.globals, {
+    model: { config: { presets: [{ name: "minimax", label: "MiniMax", model: "MiniMax-M2", keyPresent: false }], config: {}, settings: {}, effective: {} } },
+    panel: {}, rereadRole() {}, loadModel() {}, toast() {}, failed: (error: unknown) => { throw error; },
+    postJson: (path: string) => { assert.equal(path, "/api/config"); saved = true; return Promise.resolve({ note: "Saved and in force" }); },
+    // What the server answers once the key is saved; before, /api/setup said key: false.
+    getJson: (path: string) => Promise.resolve(path === "/api/setup" ? { installationId: "fresh", edition: "personal", key: saved }
+      : path.startsWith("/api/boxes") ? { boxes: [{ id: "b1", name: "Default", connected: true }], own: "b1" } : { agents: [{ id: "ada", name: "Ada", boxId: "b1" }], box: {} }),
+  });
+  const page = pageFunctions(["modelForm", "modelBody", "selectOf", "labelled", "modelKeySource", "refresh"], screen.globals);
+  const all = (node: PageFake): PageFake[] => [node, ...node.kids.flatMap(all)];
+  const form = all(page.modelForm!() as PageFake) as (PageFake & { id?: string; value?: string })[];
+  for (const input of form) if (input.value === undefined) input.value = "";
+  form.find(node => node.id === "set-key")!.value = "sk-test";
+  form.find(node => node.id === "set-save")!.press!();
+  for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(saved, true);
+  assert.deepEqual(modelStep(), [], "back in the conversation, the list no longer asks for a model");
+});
+
 test("reopening Boxes settings refreshes its status and preserves the settings route", () => {
   const boxSet = { config: null as object | null };
   const writes: unknown[][] = [];

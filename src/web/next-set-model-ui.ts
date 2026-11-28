@@ -82,9 +82,10 @@ function modelForm() {
   save.addEventListener("click", function () {
     if (searchKey.value.trim() && !searchProvider.value) { toast(t("ui.next.model.searchNeedsProvider")); searchProvider.focus(); return; }
     save.disabled = true;
-    postJson("/api/config", modelBody(form())).then(function (got) { model.note = got.note || t("ui.next.settings.saved2"); model.test = ""; loadModel(); }, function (error) {
+    // Getting started reads /api/setup, which only refresh() reads again: without it the list kept asking for a model (INV-2323).
+    postJson("/api/config", modelBody(form())).then(function (got) { model.note = got.note || t("ui.next.settings.saved2"); model.test = ""; loadModel(); refresh(); }, function (error) {
       // "Saved, but not in effect" is still a save: what the server holds is read again.
-      save.disabled = false; failed(error); loadModel();
+      save.disabled = false; failed(error); loadModel(); refresh();
     });
   });
   test.addEventListener("click", function () {
