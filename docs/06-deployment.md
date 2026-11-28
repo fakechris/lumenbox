@@ -573,6 +573,40 @@ was ever pressed — read from the stream as it passes and kept as one yes/no, n
 `sign-ins.jsonl` now also records sign-ins that worked, at every level. Fields are in docs/05
 §2.4.1; `audit export` includes both files.
 
+### The host and its boxes: who is answering, and changing a box's token (INV-2204 part 4)
+
+**Who is answering.** The box daemon speaks plain HTTP. On this machine's Docker box, a
+personal box, a pod on a ClusterIP and an attached box over a tailnet or an SSH forward, the
+network is what says which box answers (loopback; the NetworkPolicy; WireGuard; SSH), and nothing
+changes. An attached box reached at an `https://` address — a terminator in front of it — has its
+certificate checked on every connection, the desktop's included: one an authority vouches for is
+verified, and renews without anyone being asked; any other has its public key pinned the first
+time it is seen (`<home>/box-pins.json`, said in the log), and a different key is refused before
+anything is sent, with a sentence naming the box and `agentbox box attach <name> <url>
+--token-file <file> --replace`, which forgets the pin. Attaching a box, or moving one with
+`--replace`, pins afresh.
+
+**Changing a box's token.** Settings → Computers → a computer → **Rotate token** (an Admin), or
+`agentbox box rotate-token <name>` while LumenBox runs. The box keeps running and nothing is
+re-attached. The box accepts the new token from the moment the host names it, and the old one
+until five minutes after the host has saved the new one and told it so — the overlap is for
+requests already on their way and for other processes on this machine still holding the old file.
+A crash on either side at any step leaves the box accepting the token the host holds. A box
+restarted during the overlap comes back with the new token (it is kept in the box's config
+volume); a box whose `BOXD_TOKEN` was changed on purpose since uses that one. A box whose daemon
+predates this answers that it must be re-created from the current image first. This machine's
+own box is refused when its token comes from `AGENTBOX_TOKEN` rather than a file the
+installation keeps.
+
+For an **attached box**, the new token is in the file it was attached with. Any other copy of the
+old one — including what that machine's `BOXD_TOKEN` is set from, which a script like
+`attach-grok.sh` reads — no longer opens the box: attach it from elsewhere with the new file, or
+set a fresh `BOXD_TOKEN` there and re-attach with `--replace`. For that reason a box's token is
+not rotated automatically on attach or detach.
+
+Every token minted, revoked or rotated goes to `<home>/tokens.jsonl` (who, for whom, which
+box; never the token), and `audit export` includes it.
+
 ## The token key belongs outside the directory it protects (INV-579, 2026-09-16)
 
 Box tokens are stored encrypted. Unset, the key is minted `0600` beside `control.db` — encryption

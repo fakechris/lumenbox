@@ -11,6 +11,7 @@
  * and compared in constant time. The file is 0600 and replaced whole on every change.
  */
 
+import type { TokenRecord } from "./token-ledger.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Principals } from "../host/principals.ts";
@@ -35,8 +36,11 @@ function sameHash(a: string, b: string): boolean {
 export class McpTokenStore {
   private tokens: StoredToken[] = [];
 
-  /** `path` undefined: memory only, as the tests and a home-less run want. */
-  constructor(private readonly path?: string, warn: (line: string) => void = () => {}) {
+  /**
+   * `path` undefined: memory only, as the tests and a home-less run want. `record` is told of each
+   * token minted and revoked — who for, which label, who did it — never the secret (token-ledger.ts).
+   */
+  constructor(private readonly path?: string, warn: (line: string) => void = () => {}, private readonly record: (record: TokenRecord) => void = () => {}) {
     if (path === undefined || !existsSync(path)) return;
     try {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as { tokens?: StoredToken[] };
@@ -60,11 +64,12 @@ export class McpTokenStore {
   }
 
   /** A new token for a person; the secret is in the answer and nowhere else. */
-  mint(principalId: string, label: string, now: Date = new Date(), via: "sign-in" | "person" = "sign-in"): { token: string; label: string; createdAt: string } {
+  mint(principalId: string, label: string, now: Date = new Date(), via: "sign-in" | "person" = "sign-in", by?: string): { token: string; label: string; createdAt: string } {
     const token = `lmbx_${randomBytes(24).toString("hex")}`;
     const entry: StoredToken = { hash: hashOf(token), principalId, via, label: label.trim().slice(0, 60) || "unnamed", createdAt: now.toISOString() };
     this.tokens.push(entry);
     this.save();
+    this.record({ at: entry.createdAt, event: "minted", kind: "side-door", for: principalId, label: entry.label, via, by: by ?? principalId });
     return { token, label: entry.label, createdAt: entry.createdAt };
   }
 
@@ -94,11 +99,12 @@ export class McpTokenStore {
   }
 
   /** Revoke the one made at `createdAt` that `may` allows; false when none matches. */
-  revoke(createdAt: string, may: (entry: StoredToken) => boolean): boolean {
+  revoke(createdAt: string, may: (entry: StoredToken) => boolean, by = "operator"): boolean {
     const at = this.tokens.findIndex(entry => entry.createdAt === createdAt && may(entry));
     if (at < 0) return false;
-    this.tokens.splice(at, 1);
+    const [gone] = this.tokens.splice(at, 1);
     this.save();
+    this.record({ at: new Date().toISOString(), event: "revoked", kind: "side-door", for: gone!.principalId, label: gone!.label, by, reason: "revoked" });
     return true;
   }
 
@@ -106,10 +112,13 @@ export class McpTokenStore {
    * Tokens that end when the directory says somebody left (INV-2202). `signInOnly`: only those made from
    * that sign-in, for a person who keeps another way in; otherwise every token of these ids, whoever made it.
    */
-  revokeFor(ids: readonly string[], signInOnly = false): number {
-    const before = this.tokens.length;
-    this.tokens = this.tokens.filter(entry => !ids.includes(entry.principalId) || (signInOnly && entry.via === "person"));
+  revokeFor(ids: readonly string[], signInOnly = false, by = "directory"): number {
+    const before = this.tokens.length, at = new Date().toISOString();
+    const ends = (entry: StoredToken) => ids.includes(entry.principalId) && !(signInOnly && entry.via === "person");
+    const gone = this.tokens.filter(ends);
+    this.tokens = this.tokens.filter(entry => !ends(entry));
     if (this.tokens.length !== before) this.save();
+    for (const entry of gone) this.record({ at, event: "revoked", kind: "side-door", for: entry.principalId, label: entry.label, by, reason: "access-ended" });
     return before - this.tokens.length;
   }
 

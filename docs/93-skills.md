@@ -90,8 +90,19 @@ it in every box. A personal installation has none of this: no library, no direct
   described (13,144 used); at fourteen, three of the organisation's that are not required are
   named only and all 42 shipped keep their description. With no organisation skill the index is
   byte for byte what it was (the prompt ratchet's ceilings did not move).
-- **Not yet:** a member offering one of their own for promotion, and a skill declaring a tool
-  it installs or a sign-in only the member can do (docs/109 §5).
+- **A member offers a skill of their own** from a box they may enter (`POST /api/org-skills/offer`,
+  a driver or an Admin). It waits, held: placed in no box and read by no agent. The Admins see its
+  files, what the publish checks say of them now and the warnings of §2a, and approve — published as
+  that Admin's own act, exactly as offered — or decline with a reason the member is given. What a
+  publish refuses is refused at the offer, so a credential never waits on the server's disk.
+- **The sweep, at size.** Every minute each connected box is looked at: a box that was current is
+  asked for one file, `.placed.json`, and compared with the library — one request, nothing hashed in
+  the box. A box that was not current, that just connected, or every box after the library changed,
+  is read back whole, which is where drift is found. Eight boxes at a time, a minute each at most: a
+  slow or dead box is marked behind with the reason and holds up nobody. Measured 2026-11-28 at 300
+  boxes over loopback HTTP through the real box client: an unchanged sweep is 300 requests, ~55 ms,
+  17 KB sent and 334 KB received; a full check of every box with ten skills is 19,200 requests in
+  ~3.9 s.
 
 ## 2. The SKILL.md contract
 
@@ -140,6 +151,11 @@ refused, because the description is the only thing read when choosing a skill.
 | `allowed-tools` | The tools the skill needs, comma- or space-separated, optionally in `[…]`. Claude Code names map through `engine-tools.ts`; `mcp__server__tool` is our `server__tool`. When the skill runs unattended, the turn is offered only tools the agent already had **and** the skill named — a narrowing, never a grant. A turn a person drives is not narrowed. | No narrowing. | — (an unknown name is reported in a note and contributes nothing). |
 | `connectors` | The connectors the skill's work needs, comma- or space-separated: an OAuth connection (`github`, kept in the vault as `oauth:github`) or an MCP door / configured server (`mcp:notion`). Read before a run, a task or a template's setup starts (`credential-coverage.ts`, INV-1666): a routine missing one is skipped and paused with `missing_credentials`, a task waits with a "before this can start" card. A statement, never a grant. | Nothing is checked. | — |
 | `secrets` | The vault secret ids its host commands name (`RunOnHost`'s `secrets`), same list form. Checked the same way: the secret must exist and a live grant (or the box's bundle) must cover the agent. | Nothing is checked. | — |
+| `install` | A shell line, run in the skill's own directory, that installs the tool the skill needs into the box's kept volumes (§2a). Kept as written: quotes and `#` are the shell's. | — | Without `installed`. |
+| `installed` | A shell line that exits 0 once the tool is installed (§2a). | — | Without `install`. |
+| `sign_in` | The name of what the person signs in to themselves, e.g. `DingTalk` (§2a). | — | Without `sign_in_start` and `signed_in`. |
+| `sign_in_start` | A shell line that starts the sign-in and prints its link or code for the person (§2a). | — | Without `sign_in`. |
+| `signed_in` | A shell line that exits 0 once the person has signed in (§2a). | — | Without `sign_in`. |
 
 Advice that never refuses (`authoringHints`, shown for a skill with `authored_by`): a
 description that says what but not when, and an unattended skill whose body points at "the
@@ -147,6 +163,58 @@ above" — a run sees none of the conversation it was written in.
 
 `skill.yaml` beside `SKILL.md` is a separate, optional contract on which parts of a skill an
 agent may rewrite (`skill-contract.ts`); a skill without it is unaffected.
+
+## 2a. A tool to install and a sign-in only the person can do (INV-2222, docs/109 §5)
+
+The image does not carry every tool an organisation uses. A skill that needs one says so with the
+five keys above: two shell lines for the tool (`install`, `installed`) and a name and two shell lines
+for the sign-in (`sign_in`, `sign_in_start`, `signed_in`). Each line is run in the skill's own
+directory with `LUMENBOX_WORK` exported as the box's work directory — `/home/box/work` on the
+image, the box's own on a host box — so one skill names a kept place on every kind of box.
+
+- **What survives an image update** is the work volume and `~/.config` (docs/12 §1; both are
+  volumes in `src/box/docker.ts` and in the Kubernetes pod, `src/control/kube-box.ts`). A host box
+  has only its work directory. An install goes under `$LUMENBOX_WORK` (`$LUMENBOX_WORK/.tools/` by
+  convention), and so do the tool's credentials, or `~/.config`.
+- **Checked at publish, not refused.** An install line, or the script it runs, that uses `sudo`, a
+  system package manager, a global npm or a pip install with no target, a system directory, or a
+  place in the home directory that is neither `work` nor `.config` is published with a warning the
+  Admin sees (`setupWarnings`, `src/host/org-skill-setup.ts`). A line of shell cannot be read for
+  certain, so it is never a refusal.
+- **Nothing runs in a box until its person agrees** (decided 2026-11-28). A personal box holds its
+  member's own sign-ins, and an Admin cannot enter it; a required skill whose lines ran there by
+  themselves would be an Admin's code over everybody's credentials. So, per box and per skill, the
+  host keeps a consent to one *digest of the lines* (`install`, `installed`, `sign_in`,
+  `sign_in_start`, `signed_in`). A new version whose lines changed needs a new yes; one that changed
+  only its text does not. Before a yes, neither the host's checks nor the agent runs any of it.
+- **Who answers.** For a personal box, its owner and nobody else — an Admin included. For a box
+  several people share, an Admin who may enter it: their yes is the organisation's own decision
+  there. The answer is the person's own message `agree <slug>` / `decline <slug>` (also `同意` /
+  `拒绝`) — read from the message as admitted, with its authenticated principal; a synthetic message,
+  a routine's, an agent's or anybody else's is not an answer — or the buttons on Settings → Mine,
+  which show the exact lines, who published which version, and where it stands.
+- **Asked once per version.** Until an answer, the box's skills index shows what the skill would
+  run, who published which version, and how to answer, and says nothing of it runs before that.
+  Once a turn a person opened has carried the question, it is not asked again for those lines; the
+  person can answer later in Settings → Mine. A no is remembered and nothing more is done about it;
+  the Admin's page counts who agreed and who waits, and names who declined.
+- **What is owed, and said once.** After a yes — at once, in the turn that said it, and after every
+  sync — the host runs that skill's `installed` and `signed_in` there. What is not done is added to
+  that box's index with the exact lines to run, until a turn a person opened has carried it; then it
+  is not said again in that box, done or not.
+- **The record.** `org-skill-setup.jsonl`: each yes and no (who, box, skill, version, digest, by
+  chat or page), each question asked and each set-up told. `agentbox audit export` carries a box's.
+- **Who does what.** The agent runs an install. A sign-in is the person's act: the agent starts it
+  and gives the person the link or code it prints, or hands over the desktop, and never asks for or
+  types a password (docs/15). The index says that in the sentence that introduces what is owed.
+- **Delegated engines** read the box's own skills directory (each engine's skills directory is a
+  link to it, in the image). So each organisation skill is also linked into it as
+  `<skills>/<slug>` → `../.lumenbox/org-skills/<slug>`, wherever the box has no skill of that name,
+  and the links go when the skill is withdrawn. An engine reads it through the link and cannot
+  write it: the modes are the target's. LumenBox's own loader lists directories, not links, so it
+  meets each skill once, where it really is.
+- Only an organisation's required skills ask, and are offered, this way. A box's own skill may carry the same
+  keys; they document it, and nothing is run for it.
 
 ## 3. Where skills come from
 

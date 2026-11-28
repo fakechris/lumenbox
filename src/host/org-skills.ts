@@ -20,6 +20,12 @@
  *   box carries one), or a value the vault holds; `scope: agent`, which names one box's agent;
  *   and a schedule or a trigger — published to everybody it would be a routine started in every
  *   box, and switching one on is each person's act (docs/29).
+ * - **A member offers one of their own** (docs/109 §6, as knowledge is promoted — org-promotion.ts):
+ *   `offer` keeps the files under `org-skills/.offers/<id>/` and writes an `offer` line. Held: it
+ *   is placed in no box and read by no agent. An Admin sees the files and what the checks say, and
+ *   decides: approved is a `decide` line and then an ordinary `publish` or `update` by that Admin,
+ *   naming the offer; declined is a `decide` line with the reason. What is refused at publish is
+ *   refused at the offer, so a credential never reaches the server's disk to wait for review.
  * - **A personal installation has none** (docs/95 §5): every write is refused there, and nothing
  *   is placed in its boxes.
  */
@@ -39,6 +45,8 @@ export const LEDGER_KIND: LedgerKind = "record";
 /** The library's directory and its ledger, under the installation's home. */
 export const ORG_SKILLS_DIR = "org-skills";
 export const ORG_SKILLS_LEDGER = "org-skills.jsonl";
+/** Under the library's directory: what members offered, each as it was offered. A leading dot, which no slug has. */
+const OFFERS_DIR = ".offers";
 
 /** A skill as it is carried: the shape a template's skill has (`TemplateSkill.files`). Relative path → text. */
 export type SkillFiles = Readonly<Record<string, string>>;
@@ -46,7 +54,7 @@ export type SkillFiles = Readonly<Record<string, string>>;
 /** One line of the ledger. */
 export interface OrgSkillAct {
   at: string;
-  act: "publish" | "update" | "withdraw" | "require";
+  act: "publish" | "update" | "withdraw" | "require" | "offer" | "decide";
   slug: string;
   /** The principal who did it (or the operator's key). */
   by: string;
@@ -60,6 +68,30 @@ export interface OrgSkillAct {
   source?: string;
   /** `require`: on or off. */
   required?: boolean;
+  /** `offer`, its `decide`, and the `publish`/`update` an approval made: the offer's id. */
+  offer?: string;
+  /** `decide`: what the Admin decided, and why when it was declined. */
+  decision?: "approved" | "declined";
+  reason?: string;
+}
+
+/** A member's skill offered to the organisation, and where it stands. */
+export interface OrgSkillOffer {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  digest: string;
+  files: string[];
+  /** The member who offered it, when, and from where (`box:<box id>/<slug>`). */
+  by: string;
+  at: string;
+  source: string;
+  state: "waiting" | "approved" | "declined";
+  /** Who decided, when, and the reason a declined one was given. */
+  decidedBy?: string;
+  decidedAt?: string;
+  reason?: string;
 }
 
 /** A skill the organisation has now. */
@@ -78,6 +110,7 @@ export interface OrgSkill {
 }
 
 export type OrgSkillRefusal = "personal" | "invalid" | "credential" | "unknown" | "unchanged";
+export type OrgOfferResult = { ok: true; offer: OrgSkillOffer; skill?: OrgSkill } | { ok: false; code: OrgSkillRefusal; why: string };
 export type OrgSkillResult = { ok: true; skill: OrgSkill } | { ok: false; code: OrgSkillRefusal; why: string };
 
 const SAFE_PATH = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
@@ -207,7 +240,10 @@ export class OrgSkills {
 
   /** The files of a standing skill's current version, read from its directory; undefined when the directory is not what the ledger says. */
   filesOf(skill: Pick<OrgSkill, "slug" | "version" | "digest">): SkillFiles | undefined {
-    const dir = this.versionDir(skill.slug, skill.version);
+    return this.readDir(this.versionDir(skill.slug, skill.version), skill.digest);
+  }
+
+  private readDir(dir: string, digest: string): SkillFiles | undefined {
     if (!existsSync(dir)) return undefined;
     const files: Record<string, string> = {};
     const walk = (at: string, prefix: string) => {
@@ -218,14 +254,14 @@ export class OrgSkills {
       }
     };
     walk(dir, "");
-    return digestOf(files) === skill.digest ? files : undefined;
+    return digestOf(files) === digest ? files : undefined;
   }
 
   /**
    * Publishes `files` as `slug`: the first version, or a new one over the one standing. Refused
    * when it would change nothing, so the ledger has no version that is the one before it.
    */
-  publish(slug: string, files: SkillFiles, by: string, source: string): OrgSkillResult {
+  publish(slug: string, files: SkillFiles, by: string, source: string, offer?: string): OrgSkillResult {
     if (this.mode() === "single-machine") return { ok: false, code: "personal", why: PERSONAL };
     const refusal = publishRefusal(slug, files, this.held());
     if (refusal !== undefined) return { ok: false, ...refusal };
@@ -238,8 +274,69 @@ export class OrgSkills {
     this.append({
       at: this.now(), act: standing === undefined ? "publish" : "update", slug, by, version, digest,
       name: parsed.meta.name?.trim() || slug.replace(/-/g, " "), description: (parsed.meta.description ?? "").trim(), files: Object.keys(files).sort(), source,
+      ...(offer !== undefined ? { offer } : {}),
     });
     return { ok: true, skill: this.get(slug)! };
+  }
+
+  /** Every offer made, oldest first, with where it stands. */
+  offers(): OrgSkillOffer[] {
+    const offers = new Map<string, OrgSkillOffer>();
+    for (const line of this.log) {
+      if (line.act === "offer" && line.offer !== undefined && line.digest !== undefined) {
+        const { offer: id, slug, digest, by, at } = line;
+        offers.set(id, { id, slug, name: line.name ?? slug, description: line.description ?? "", digest, files: line.files ?? [], by, at, source: line.source ?? "", state: "waiting" });
+      } else if (line.act === "decide" && line.offer !== undefined && line.decision !== undefined) {
+        const offer = offers.get(line.offer);
+        if (offer !== undefined) offers.set(line.offer, { ...offer, state: line.decision, decidedBy: line.by, decidedAt: line.at, ...(line.reason !== undefined ? { reason: line.reason } : {}) });
+      }
+    }
+    return [...offers.values()];
+  }
+
+  /** An offer's files, as they were offered; undefined when they are not what the ledger says. */
+  offerFiles(offer: Pick<OrgSkillOffer, "id" | "digest">): SkillFiles | undefined {
+    return this.readDir(join(this.home, ORG_SKILLS_DIR, OFFERS_DIR, offer.id), offer.digest);
+  }
+
+  /** A member offers a skill of theirs: held for an Admin, placed nowhere. Refused for what a publish is refused for. */
+  offer(slug: string, files: SkillFiles, by: string, source: string): OrgOfferResult {
+    if (this.mode() === "single-machine") return { ok: false, code: "personal", why: PERSONAL };
+    const refusal = publishRefusal(slug, files, this.held());
+    if (refusal !== undefined) return { ok: false, ...refusal };
+    const digest = digestOf(files);
+    if (this.get(slug)?.digest === digest) return { ok: false, code: "unchanged", why: `${slug} is already an organisation skill, exactly so.` };
+    if (this.offers().some(offer => offer.state === "waiting" && offer.slug === slug && offer.digest === digest)) return { ok: false, code: "unchanged", why: `${slug} is already waiting for an Admin, exactly so.` };
+    const id = `o${this.log.filter(line => line.act === "offer").length + 1}-${digest.slice(0, 8)}`;
+    this.writeDir(join(this.home, ORG_SKILLS_DIR, OFFERS_DIR, id), files);
+    const parsed = parseSkillFile(files[SKILL_FILENAME]!);
+    this.append({
+      at: this.now(), act: "offer", slug, by, offer: id, digest, source,
+      name: parsed.meta.name?.trim() || slug.replace(/-/g, " "), description: (parsed.meta.description ?? "").trim(), files: Object.keys(files).sort(),
+    });
+    return { ok: true, offer: this.offers().find(offer => offer.id === id)! };
+  }
+
+  /**
+   * An Admin decides an offer that waits. Approved: it is published as that Admin's act, exactly
+   * as offered, and the decision is recorded only when the publish stood. Declined: with a reason
+   * the member is given.
+   */
+  decideOffer(id: string, decision: "approved" | "declined", by: string, reason = ""): OrgOfferResult {
+    if (this.mode() === "single-machine") return { ok: false, code: "personal", why: PERSONAL };
+    const offer = this.offers().find(candidate => candidate.id === id && candidate.state === "waiting");
+    if (offer === undefined) return { ok: false, code: "unknown", why: "That offer is not waiting: it was decided already, or never made." };
+    if (decision === "declined") {
+      if (reason.trim() === "") return { ok: false, code: "invalid", why: "Say why it is declined: the member who offered it is told." };
+      this.append({ at: this.now(), act: "decide", slug: offer.slug, by, offer: id, decision, reason: reason.trim() });
+      return { ok: true, offer: this.offers().find(candidate => candidate.id === id)! };
+    }
+    const files = this.offerFiles(offer);
+    if (files === undefined) return { ok: false, code: "invalid", why: "The offer's files are not what was offered any more; ask for it again." };
+    const published = this.publish(offer.slug, files, by, `offer:${id} from ${offer.by} (${offer.source})`, id);
+    if (!published.ok) return published;
+    this.append({ at: this.now(), act: "decide", slug: offer.slug, by, offer: id, decision });
+    return { ok: true, offer: this.offers().find(candidate => candidate.id === id)!, skill: published.skill };
   }
 
   /** Withdraws a skill: it leaves every box at the next sync. Its versions stay here. */
@@ -271,10 +368,13 @@ export class OrgSkills {
 
   /** The version's directory, whole or not at all: written beside itself and renamed into place. */
   private writeVersion(slug: string, version: number, files: SkillFiles): void {
-    const dir = this.versionDir(slug, version);
+    this.writeDir(this.versionDir(slug, version), files);
+  }
+
+  private writeDir(dir: string, files: SkillFiles): void {
     const staging = `${dir}.writing`;
     rmSync(staging, { recursive: true, force: true });
-    rmSync(dir, { recursive: true, force: true }); // a directory with no line: a publish that did not finish
+    rmSync(dir, { recursive: true, force: true }); // a directory with no line: a write that did not finish
     for (const [path, content] of Object.entries(files)) {
       mkdirSync(dirname(join(staging, path)), { recursive: true, mode: 0o700 });
       writeFileSync(join(staging, path), content, { mode: 0o600 });
@@ -286,12 +386,13 @@ export class OrgSkills {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     appendLineDurably(join(this.home, ORG_SKILLS_LEDGER), JSON.stringify(line));
     this.log.push(line);
-    this.changed();
+    // An offer and its decision change nothing a box holds; the publish an approval makes does.
+    if (line.act !== "offer" && line.act !== "decide") this.changed();
   }
 }
 
 function readable(line: unknown): line is OrgSkillAct {
   if (typeof line !== "object" || line === null) return false;
   const act = line as Partial<OrgSkillAct>;
-  return typeof act.at === "string" && typeof act.slug === "string" && typeof act.by === "string" && (act.act === "publish" || act.act === "update" || act.act === "withdraw" || act.act === "require");
+  return typeof act.at === "string" && typeof act.slug === "string" && typeof act.by === "string" && ["publish", "update", "withdraw", "require", "offer", "decide"].includes(act.act ?? "");
 }
