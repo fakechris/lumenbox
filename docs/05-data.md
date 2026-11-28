@@ -580,6 +580,12 @@ once, and the ledger wins: a version directory with no line is a publish that di
 | `update` | `by` published a new `version` over the one standing; the same fields |
 | `withdraw` | `by` withdrew `slug`: it leaves every box at the next sync. The version directories stay |
 | `require` | `by` marked `slug` `required` true or false (docs/93 §1a's one rule) |
+| `offer` | a member (`by`) offered `slug` from `source` (`box:<box id>/<slug>`): `offer` (its id), `digest`, `name`, `description`, `files`. Its files are under `org-skills/.offers/<id>/`. Held: placed nowhere |
+| `decide` | an Admin (`by`) decided `offer`: `decision` `approved` (a `publish`/`update` naming the same `offer` is written just before) or `declined` with a `reason` the member reads |
+
+`org-skill-setup.jsonl` beside it (a `record` ledger, `src/host/org-skill-setup.ts`): one line,
+`{ at, box, slug, agent }`, each time a box's agents were told in a turn a person opened what a
+required skill's install and sign-in ask of that box (docs/93 §2a); it is not said there again.
 
 What a box holds of it is §3.1a′. Which boxes are behind is not stored: it is asked of the
 boxes, and a restart asks again.

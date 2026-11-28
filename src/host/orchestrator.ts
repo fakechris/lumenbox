@@ -291,8 +291,8 @@ export class Orchestrator {
   private readonly boxAccesses = new Map<string, BoxClass>();
   /** One skills directory per box; the prompt shows an agent its own box's. */
   private readonly skillCaches = new Map<string, SkillCache>();
-  /** Set by `attachOrgSkills` (INV-2222): the organisation's skills in a box, and the sync a connecting box is due. */
-  orgSkillRoot: (boxId: string) => OrgSkillRoot | undefined = () => undefined; boxConnected: (boxId: string) => void = () => {};
+  /** Set by `attachOrgSkills` (INV-2222): the organisation's skills in a box, the sync a connecting box is due, and a turn's end (what was said once is said). */
+  orgSkillRoot: (boxId: string) => OrgSkillRoot | undefined = () => undefined; boxConnected: (boxId: string) => void = () => {}; busNoted: (event: BusEvent) => void = () => {};
   private readonly memoryMirror: MemoryMirror;
 
   /** Pushes an agent's standing files to its box after a person edited them on the host (INV-777). */
@@ -1094,7 +1094,7 @@ export class Orchestrator {
       this.registry,
       (agent, inbound, signal, conversation, acknowledge) => this.executeTurn(agent, inbound, signal, conversation, acknowledge),
       event => {
-        options.onBusEvent?.(event);
+        options.onBusEvent?.(event); this.busNoted(event);
         if (event.type === "turn_finished") this.goalLoop?.onTurnFinished(event.agentId); // a turn ending is what lets a goal consider its next continuation (INV-770)
       },
       inbox,

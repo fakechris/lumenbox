@@ -6,6 +6,9 @@ import { ResultChecks } from "./result-check-policy.ts";
 import { Claims } from "./claims.ts";
 import { PolicyGate } from "./policy.ts";
 import { planCards } from "./plan-cards.ts";
+import { orgSkillsDir } from "./box-paths.ts";
+import { OrgSkillSetup } from "./org-skill-setup.ts";
+import type { Skill } from "./skills.ts";
 /**
  * The episodes that went wrong, as tests.
  *
@@ -6112,4 +6115,71 @@ test("an agent nobody wrote to from a chat asks its own person there, and takes 
     assert.equal(episode.score.questions, 1);
     assert.deepEqual(episode.score.said.map(line => line.text), ["Waiting for the answer.", "Preparing the Q4 report."], "Ana's agent asked, waited, and went on with her answer; no other agent said anything");
   } finally { episode.cleanup(); rmSync(home, { recursive: true, force: true }); }
+
+test("a member's first conversation in a box with a required organisation skill that installs a tool and needs their sign-in: the agent installs, offers the sign-in once, never asks for a password, and does not offer it again (INV-2222)", async () => {
+  const fixture = join(import.meta.dirname, "fixtures", "org-skill-hello");
+  const text = readFileSync(join(fixture, "SKILL.md"), "utf8");
+  const root = orgSkillsDir(undefined);
+  const parsed = skillFrom("hello-tool", parseSkillFile(text), ["scripts"], root);
+  assert.ok("skill" in parsed);
+  const skill: Skill = { ...parsed.skill, origin: "organisation", required: true };
+  // The box answers the skill's checks: not installed, not signed in, until the agent runs the install.
+  let installed = false;
+  let registryOf: AgentRegistry | undefined;
+  const setup = new OrgSkillSetup(undefined, {
+    client: () => ({ exec: async (command: string) => ({ exit_code: command.includes(".tools/bin/hello\"") && command.includes("test -x") && installed ? 0 : 1 }) }),
+    place: () => ({ work: "/home/box/work", root }),
+    personOpened: (agentId, conversation) => {
+      const said = (registryOf?.readTranscript(agentId, conversation) ?? []) as { role?: string; kind?: string; fromPerson?: boolean }[];
+      return said.filter(entry => entry.role === "user" && entry.kind === undefined).at(-1)?.fromPerson === true;
+    },
+    boxOf: () => "box",
+    log: () => {},
+  });
+  await setup.check("box", [skill]);
+
+  const systems: string[] = [];
+  const result = await runEpisode({
+    team: [{ name: "Ada" }],
+    says: [],
+    skills: () => [{ ...skill, ...(setup.due("box", skill) !== undefined ? { setupDue: setup.due("box", skill)! } : {}) }],
+    onBusEvent: event => { if (event.type === "turn_finished") setup.noteTurn(event); },
+    drive: async ({ registry, say }) => {
+      registryOf = registry;
+      await say("good morning — what can you do for me?");
+      await say("what is on my plate today?");
+    },
+    // A model that follows what it is told: what is owed is done first, and the sign-in's code is handed to the person.
+    script: ({ system, messages }) => {
+      // A turn's first call ends on what the person said; the next ends on a tool's result.
+      const fresh = !JSON.stringify(messages.at(-1)?.content ?? "").includes("tool_result");
+      if (fresh) systems.push(system);
+      const owed = /install it with `([^`]+)`/.exec(system)?.[1];
+      if (owed !== undefined && fresh) {
+        return { call: "bash", input: { command: owed }, saying: "First, the Hello tool the organisation uses." };
+      }
+      if (owed !== undefined) {
+        installed = true;
+        return { say: "I installed the Hello tool. To use it as you, sign in: open https://hello.example.invalid/device and enter the code HELLO-1234. Tell me when it is done, or later if you prefer." };
+      }
+      return { say: "Here is today: two meetings and one report due." };
+    },
+  });
+  try {
+    assert.equal(systems.length, 2);
+    // First conversation: the index says what is owed, with the line to run, and the rule about passwords.
+    assert.match(systems[0]!, /\*\*Set-up the organisation asks for, not done in this box yet\.\*\*/);
+    assert.match(systems[0]!, /Never ask for a password and never type one\./);
+    const ran = result.observations.filter(entry => entry.kind === "call" && entry.name === "bash").map(entry => String(entry.input?.command));
+    assert.deepEqual(ran, [`cd '${root}/hello-tool' && export LUMENBOX_WORK='/home/box/work' && sh scripts/install.sh`], "the agent ran the skill's own install, as written");
+    const said = result.observations.filter(entry => entry.kind === "say").map(entry => entry.text ?? "");
+    assert.ok(said.some(line => /enter the code HELLO-1234/.test(line)), "the sign-in's code was given to the person");
+    assert.equal(said.some(line => /password/i.test(line)), false, "and nobody was asked for a password");
+    // The next conversation: not offered again, though the person has not signed in yet; the skill is still listed.
+    assert.doesNotMatch(systems[1]!, /Set-up the organisation asks for/);
+    assert.match(systems[1]!, /\*\*Hello tool\*\*/);
+    assert.equal(said.filter(line => /HELLO-1234/.test(line)).length, 1, "offered once");
+  } finally {
+    result.cleanup();
+  }
 });

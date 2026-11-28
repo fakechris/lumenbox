@@ -1,0 +1,21 @@
+#!/bin/sh
+# hello: a stand-in for a vendor's command-line tool that works only for a signed-in person.
+state="${LUMENBOX_WORK:?LUMENBOX_WORK is not set}/.tools/hello"
+case "$1" in
+  login)
+    # A real tool asks its vendor for these; the person finishes on the vendor's page.
+    echo "Open https://hello.example.invalid/device and enter the code HELLO-1234"
+    ;;
+  confirm)
+    # What the vendor's page does when the person has finished: only ever run by a test.
+    mkdir -p "$state"
+    echo "signed in" > "$state/session"
+    ;;
+  whoami)
+    if [ -s "$state/session" ]; then echo "signed in"; else echo "not signed in"; exit 1; fi
+    ;;
+  *)
+    echo "usage: hello login | whoami"
+    exit 2
+    ;;
+esac

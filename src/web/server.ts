@@ -5582,6 +5582,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const orgSkillAnswer = await orgSkillRoute(route, {
           ...orgSkills, box: id => orchestrator.boxClientById(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, params: url.searchParams,
           boxes: () => registry.listBoxes().filter(entry => caller.userId === undefined || mayEnterBox(entry, principals.resolve(caller.userId).id)).map(entry => ({ id: entry.id, name: entry.name, skills: skillsDir(entry) })),
+          refusedDriver: () => refusedRole("driver"), tell: (id, outcome) => log(`organisation skills: ${id} is to be told their offer of ${outcome.name} was ${outcome.decision}`), // joined to the chat sending path by INV-2221
           refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? orchestrator.people.operator, nameOf: id => (principals.byId(id) ?? principals.resolve(id)).name ?? id, log,
         });
         if (orgSkillAnswer !== undefined) { if (orgSkillAnswer.status !== 0) send(res, orgSkillAnswer.status, orgSkillAnswer.body); return; } // INV-2222

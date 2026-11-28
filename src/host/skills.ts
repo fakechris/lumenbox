@@ -153,6 +153,34 @@ export interface Skill {
   required?: true;
   /** The SKILL.md of the same name that is not read because this one is, when one of the two is the organisation's. */
   shadows?: string;
+  /** What the skill says must be installed and signed in to before it works (INV-2222, docs/93 §2a). A statement; the agent does the work. */
+  setup?: SkillSetup;
+  /** What of that set-up this box still owes and has not been told of yet, as the sentence the index carries; set by the loader for an organisation's required skill. */
+  setupDue?: string;
+}
+
+/**
+ * A tool a skill installs and a sign-in only the person can do (docs/109 §5). Each is two shell
+ * lines run in the skill's own directory: one that does it, one that exits 0 when it is done.
+ */
+export interface SkillSetup {
+  install?: { run: string; check: string };
+  signIn?: { name: string; start: string; check: string };
+}
+
+/** `install:`/`installed:` and `sign_in:`/`sign_in_start:`/`signed_in:` read into a set-up, or why they cannot be. */
+export function skillSetupFrom(slug: string, meta: Record<string, string>): { setup?: SkillSetup } | { problem: string } {
+  const value = (key: string) => meta[key]?.trim() || undefined;
+  const [run, installed, name, start, signedIn] = [value("install"), value("installed"), value("sign_in"), value("sign_in_start"), value("signed_in")];
+  if ((run === undefined) !== (installed === undefined)) {
+    return { problem: `${slug}: install: (the line that installs the tool) and installed: (a line that exits 0 once it is installed) go together; one is missing.` };
+  }
+  if (name === undefined && (start !== undefined || signedIn !== undefined)) return { problem: `${slug}: sign_in_start: and signed_in: need sign_in: — the name of what the person signs in to.` };
+  if (name !== undefined && (start === undefined || signedIn === undefined)) {
+    return { problem: `${slug}: sign_in: needs sign_in_start: (the line that starts the sign-in and prints its link or code) and signed_in: (a line that exits 0 once the person is signed in).` };
+  }
+  if (run === undefined && name === undefined) return {};
+  return { setup: { ...(run !== undefined ? { install: { run, check: installed! } } : {}), ...(name !== undefined ? { signIn: { name, start: start!, check: signedIn! } } : {}) } };
 }
 
 /**
@@ -162,6 +190,8 @@ export interface Skill {
 export interface OrgSkillRoot {
   root: string;
   required: ReadonlySet<string>;
+  /** What this box still owes of a required skill's set-up and has not been told of (`org-skill-setup.ts`), or undefined. */
+  due?: (skill: Skill) => string | undefined;
 }
 
 /** What a skill says it needs to run, from `connectors:` and `secrets:` (docs/93 §2). */
@@ -259,7 +289,15 @@ export const SKILL_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
   "allowed-tools",
   "connectors",
   "secrets",
+  "install",
+  "installed",
+  "sign_in",
+  "sign_in_start",
+  "signed_in",
 ]);
+
+/** The frontmatter keys whose value is a shell line (docs/93 §2a). */
+const SHELL_LINE_KEYS: ReadonlySet<string> = new Set(["install", "installed", "sign_in_start", "signed_in"]);
 
 export interface ParsedSkill {
   meta: Record<string, string>;
@@ -292,6 +330,11 @@ export function parseSkillFile(text: string): ParsedSkill {
     // Hub skills (WorkBuddy / skill-hub) use YAML `|` blocks for description; fold them
     // into one line so the prompt index still has something to match on.
     let value = line.slice(at + 1).trim();
+    // A set-up key is a line of shell, kept as written: its quotes and its # are the shell's.
+    if (SHELL_LINE_KEYS.has(key)) {
+      meta[key] = value;
+      continue;
+    }
     if (value === "|" || value === "|-" || value === ">" || value === ">-") {
       const block: string[] = [];
       while (index + 1 < lines.length && /^(?: {2}|\t)/.test(lines[index + 1]!)) {
@@ -468,6 +511,9 @@ export function skillFrom(
     return { problem: `${slug}: when_idle must be "run" or "pause", not "${whenIdle}".` };
   }
 
+  const setup = skillSetupFrom(slug, parsed.meta);
+  if ("problem" in setup) return { problem: setup.problem };
+
   return {
     skill: {
       slug,
@@ -491,6 +537,7 @@ export function skillFrom(
       ...(mode !== undefined ? { mode } : {}),
       ...(allowed !== undefined ? { allowedTools: allowed.tools } : {}),
       ...(skillNeedsFrom(parsed.meta) !== undefined ? { needs: skillNeedsFrom(parsed.meta)! } : {}),
+      ...(setup.setup !== undefined ? { setup: setup.setup } : {}),
     },
     ...(note === undefined ? {} : { note }),
   };
@@ -562,6 +609,9 @@ export function renderSkills(skills: readonly Skill[]): string {
         `${rest.map(skill => skill.slug).join(", ")}; each is at \`${root}/<slug>/${SKILL_FILENAME}\`)`
     );
   }
+  // Said while it is owed and not yet said (org-skill-setup.ts): nothing for a box that owes nothing.
+  const due = skills.filter(skill => skill.setupDue !== undefined);
+  if (due.length > 0) lines.push("", SETUP_DUE_HEAD, ...due.map(skill => `- **${skill.name}** (\`${skill.path}\`): ${skill.setupDue}`));
   const organisation = skills.find(skill => skill.origin === "organisation");
   if (organisation !== undefined) {
     lines.push("", `Skills under \`${posix.dirname(posix.dirname(organisation.path))}\` are the organisation's: the same in every box and read-only here. Use them as written; an Admin changes them.`);
@@ -626,6 +676,12 @@ export function renderSkills(skills: readonly Skill[]): string {
     "pocket: if a routine of yours is what is exhausting it, that is the one to stop.",
   ].join("\n");
 }
+
+/** What opens the set-up an organisation's required skills declare (docs/109 §5). The rule about passwords is docs/15's, said where it applies. */
+export const SETUP_DUE_HEAD =
+  "**Set-up the organisation asks for, not done in this box yet.** Run an install now, before the person's request, and say in one line that you did. " +
+  "A sign-in is the person's own act: offer it once, in this reply — start it, and give them the link or code it prints in the conversation, or hand over the desktop. " +
+  "Never ask for a password and never type one. If they would rather do it later, leave it; you will not be reminded.";
 
 /** What the index says of whose a skill is: nothing for a box's own with no namesake, which is every skill of an installation with no organisation skills. */
 function whoseOf(skill: Skill): string {
@@ -743,7 +799,9 @@ export async function loadSkills(
       }
       const result = skillFrom(entry.name, parseSkillFile(text), helpers, root);
       if ("skill" in result) {
-        skills.push(fromOrg(root) ? { ...result.skill, origin: "organisation", ...(org!.required.has(entry.name) ? { required: true as const } : {}) } : result.skill);
+        const mine: Skill = fromOrg(root) ? { ...result.skill, origin: "organisation", ...(org!.required.has(entry.name) ? { required: true as const } : {}) } : result.skill;
+        const due = mine.required === true ? org?.due?.(mine) : undefined;
+        skills.push(due === undefined ? mine : { ...mine, setupDue: due });
         seen.set(entry.name, root);
         if (result.note !== undefined) problems.push(result.note);
       } else problems.push(result.problem);

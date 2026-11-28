@@ -384,8 +384,8 @@ export interface EpisodeOptions {
   display?: number;
   /** A credential vault, so `browser_fill_secret` and host secrets resolve (INV-1309). */
   vault?: Vault;
-  /** Skills the agents are offered, as the prompt would list them (INV-481). */
-  skills?: readonly Skill[];
+  /** Skills the agents are offered, as the prompt would list them (INV-481); a function is read at each turn, as the host's cache is (INV-2222). */
+  skills?: readonly Skill[] | (() => readonly Skill[]);
   /** Persisted history before the episode, including legacy compaction records. */
   history?: readonly HistoryEntry[];
   /** Script only the relevance decision, while retaining the production projection path. */
@@ -544,7 +544,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.selectMemory !== undefined ? { selectMemory: options.selectMemory } : {}),
       ...(options.display !== undefined ? { displayIndex: options.display } : {}),
       ...(options.vault !== undefined ? { vault: options.vault } : {}),
-      ...(options.skills !== undefined ? { skills: options.skills } : {}),
+      ...(options.skills !== undefined ? { skills: typeof options.skills === "function" ? options.skills() : options.skills } : {}),
       conversation,
       syncStanding: (agentId: string) => mirror.sync(agentId),
       ...(rememberer !== undefined
