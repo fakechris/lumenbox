@@ -787,7 +787,15 @@ R8). `audit export` includes both.
 | file | a line is | fields |
 |---|---|---|
 | `sign-ins.jsonl` | a sign-in that worked (every level), or off local a try that did not get in and the wait it earned | `at`, `door` (`invite-code`, `bootstrap`, `door`, `side-door`, `installation-token`, `gateway`), `outcome` (`signed-in`, `failed`, `limited`), `address`, `peer` when it differs from `address`, `account` when the way in names one (for `signed-in`, the person's roster id), `reason` on `failed`, `seconds` on `limited`. Never the code, password or token |
+| `tokens.jsonl` | a credential minted, revoked or rotated (INV-2204 part 4, R8) | `at`, `event` (`minted`, `revoked`, `rotated`, `rotation-refused`), `kind` (`side-door`, `box`); for a side-door token `for` (the person), `label`, `via` on `minted`, `reason` on `revoked` (`revoked`, `access-ended`); for a box `box`, `boxName`, `confirmed`, `overlapUntil`, `reason` on a refusal; always `by`. Never a token or its hash |
 | `desktop-sessions.jsonl` | a desktop stream opening, or closing | `at`, `event` (`opened`, `closed`), `stream` (ties the two), `person` (roster id, the gateway's user id, or `operator` for the installation's own credential), `box`, `display`, `agent` when one owns that display, `mode` (`control` is the driving stream, `view` the view-only one), `by` (`ticket`, or `session` at local); on `closed` also `reason` (`left`, `idle`, `revoked`, `box-gone`), `seconds`, and for a driving stream `input` — whether a key or a pointer button was pressed (`true`, `false`, or `unknown` when the stream could not be read). Never what was typed, clicked or shown |
+
+Two more files the host keeps for its boxes are state, not records: `box-pins.json` — for each
+box reached over HTTPS with a certificate no authority vouches for, the SHA-256 of the public key
+it presented first and when (`src/box/box-tls.ts`) — and, beside each box token file, a short-lived
+`<file>.next` while a rotation is between its two steps. Inside a box, `~/.config/lumenbox/boxd-token.json`
+(mode 0600) holds the token a rotation put in place of `BOXD_TOKEN`, with a digest of the
+`BOXD_TOKEN` it replaced (`src/boxd/token-store.ts`).
 
 `policy.jsonl` became a `record` in INV-812. A grant given once and used once is an audit fact, and
 as a `feed` it went past twenty thousand events. Compaction now moves everything it does not keep

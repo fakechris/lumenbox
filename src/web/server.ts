@@ -44,7 +44,7 @@ import { taskExportRoute } from "./task-export-routes.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "../egress/events.ts";
 import { request as httpsRequest } from "node:https";
-import { connect as tlsConnect } from "node:tls";
+import { boxPins, boxRequestOptions, connectToBox } from "../box/box-tls.ts";
 import {
   createServer,
   request as httpRequest,
@@ -92,6 +92,7 @@ import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, parsePublicUrlInput, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import { originRefusal, securityHeaders } from "./browser-guard.ts";
+import { TOKENS_LEDGER, tokenLedger } from "./token-ledger.ts"; import { boxTokenRoute } from "./box-token-routes.ts"; // R7, R8 (docs/106 §5)
 import {
   DESKTOP_IDLE_MS, DESKTOP_SESSIONS_LEDGER, DesktopStreams, DesktopTickets, REVOKED_CLOSE_CODE, closeFrame, desktopSessionLedger, grantedMode, pageAddressWith, ticketIn,
   withReopenNotice, withoutTicket, type HeldStream, type ReopenWords, type StreamEnd, type StreamOpen,
@@ -882,7 +883,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // memory on purpose: one lost to a restart costs the person one more message. Codes
   // are kept as hashes, because a week-long code must outlive a restart (INV-2082, invite-store.ts).
   // Side-door tokens, one per person per client, kept across restarts as hashes (INV-1520, mcp-tokens.ts).
-  const mcpTokens = new McpTokenStore(join(agentboxHome(), "mcp-tokens.json"), line => log(line));
+  const recordToken = tokenLedger(join(agentboxHome(), TOKENS_LEDGER), log); // every credential minted, revoked or rotated (R8)
+  const mcpTokens = new McpTokenStore(join(agentboxHome(), "mcp-tokens.json"), line => log(line), recordToken);
 
   const knocks = new Map<
     string,
@@ -2737,7 +2739,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         port: origin.port,
         method: req.method,
         path,
-        rejectUnauthorized: false,
+        ...(origin.protocol === "https:" ? boxRequestOptions(`https://${origin.host}:${origin.port}`) : {}), // its certificate checked or pinned (box-tls.ts)
         headers: {
           ...req.headers,
           host: `${origin.host}:${origin.port}`,
@@ -4539,7 +4541,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, apiError("token-needs-person", { admins: principals.list().filter(person => person.role === "admin").length }));
             return;
           }
-          const minted = mcpTokens.mint(owner, String(body.label ?? ""), new Date(), caller.userId === undefined ? "person" : "sign-in");
+          const minted = mcpTokens.mint(owner, String(body.label ?? ""), new Date(), caller.userId === undefined ? "person" : "sign-in", caller.userId ?? "operator");
           log(`mcp token issued to ${owner} (${minted.label})`);
           send(res, 200, { token: minted.token, label: minted.label, createdAt: minted.createdAt });
           return;
@@ -4550,7 +4552,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           // A driver may only revoke their own; an admin may revoke anyone's.
           const isAdmin = roleAtLeast(caller.userId === undefined ? "admin" : principals.roleOf(caller.userId), "admin");
-          if (!mcpTokens.revoke(String(body.createdAt ?? ""), entry => entry.principalId === caller.userId || isAdmin)) {
+          if (!mcpTokens.revoke(String(body.createdAt ?? ""), entry => entry.principalId === caller.userId || isAdmin, caller.userId ?? "operator")) {
             send(res, 404, apiError("token-not-yours"));
             return;
           }
@@ -5334,10 +5336,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
           const waiting = orchestrator.policy.pending().find(item => item.id === id), parked = orchestrator.approvalIsParked(id);
           if (waiting && !seesAgent(waiting.agentId)) { send(res, 403, apiError("role-needed", { need: "admin", role: callerRole })); return; } // another box's approval (INV-2083)
+          const decider = caller.userId === undefined ? "user" : `user:${caller.userId}`; // who answered, on the record (R8)
           const answered =
             route === "POST /api/approve"
-              ? orchestrator.policy.grant(id, "user", scope)
-              : orchestrator.policy.deny(id, "user", String(body.reason ?? "") || undefined);
+              ? orchestrator.policy.grant(id, decider, scope)
+              : orchestrator.policy.deny(id, decider, String(body.reason ?? "") || undefined);
           // 404 rather than an error for an unknown id: the usual cause is a second click or a page
           // left open, and neither deserves a failure.
           if (!answered) {
@@ -6041,6 +6044,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, { pending: connectCodes.listPending() });
           return;
         }
+        const rotated = await boxTokenRoute(route, { boxes: () => registry.listBoxes(), ownBoxId: registry.box.id, clientFor: id => orchestrator.boxClientById(id), provisioner, // a box's new token (R7)
+          home: agentboxHome(), readJson: () => readJson(req), refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? "operator", record: recordToken, log });
+        if (rotated !== undefined) { if (rotated.status !== 0) send(res, rotated.status, rotated.body); return; }
         if (route === "POST /api/boxes/revoke") {
           if (refusedRole("admin")) return;
           const body = await readJson(req);
@@ -6090,6 +6096,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
+            boxPins().forget(baseUrl); // attaching is saying which box this address is: its certificate is pinned afresh (box-tls.ts)
             const result = await orchestrator.attachBox(entry);
             log(`attached box ${entry.name} (${entry.id}) at ${baseUrl}: ${result.detail}`);
             send(res, 200, { box: entry, ...result });
@@ -6133,6 +6140,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               tokenFile = join(dir, `${name}.token`);
               writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
             }
+            if (baseUrl !== "") boxPins().forget(baseUrl); // moved on purpose: the box at the new address is pinned afresh (box-tls.ts)
             const result = await orchestrator.updateBox(name, {
               ...(baseUrl !== "" ? { endpoint: { baseUrl, tokenFile: tokenFile !== "" ? tokenFile : (existing.endpoint?.tokenFile ?? "") } } : {}),
               ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
@@ -6800,7 +6808,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    const connectUpstream = origin.protocol === "https:" ? (cb: () => void) => tlsConnect({ host: origin.host, port: origin.port, rejectUnauthorized: false }, cb) : (cb: () => void) => netConnect(origin.port, origin.host, cb);
+    const connectUpstream = origin.protocol === "https:" ? (cb: () => void) => connectToBox(`https://${origin.host}:${origin.port}`, {}, cb) : (cb: () => void) => netConnect(origin.port, origin.host, cb);
     const upstream = connectUpstream(() => {
       const headers = Object.entries(req.headers)
         // The browser's own Authorization, if any, is dropped in favour of the box
