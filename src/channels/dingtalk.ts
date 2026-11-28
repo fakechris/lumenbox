@@ -60,6 +60,7 @@ import type {
 import { acquireConsumerLock } from "./single-consumer.ts";
 import { looksLikeMarkdown } from "./markdown.ts";
 import { roomFactsOf, type RoomFacts } from "./dingtalk-room.ts";
+import { personOfChatKey, writingFirst } from "./person-chat.ts";
 
 const GATEWAY = "https://api.dingtalk.com/v1.0/gateway/connections/open";
 /**
@@ -1084,7 +1085,7 @@ export class DingTalkChannel implements ChannelAdapter {
         conversationId: conversationId ?? "",
         // The user id inside the identity: what oToMessages addresses when the
         // webhook has expired and the route turns out to be a direct session.
-        ...(identity.startsWith("dingtalk:") ? { userId: identity.slice("dingtalk:".length) } : {}),
+        ...(identity.startsWith(`${this.name}:`) ? { userId: identity.slice(this.name.length + 1) } : {}),
       },
       "text",
       text
@@ -1109,11 +1110,10 @@ export class DingTalkChannel implements ChannelAdapter {
   async sendToChat(chatKey: string, text: string, options?: { replyTo?: string }): Promise<void> {
     void options; // see doc comment: anchoring is not expressible on this wire
     const { conversationId } = parseChatKey(chatKey);
-    if (conversationId === "") return;
-    const target: ChatTarget = {
-      route: outboundRoute(this.conversations.get(conversationId)?.conversationType),
-      conversationId,
-    };
+    if (conversationId === "") return; const person = personOfChatKey(chatKey); // a person's key (INV-2221): the robot's one-to-one send by user id, which needs no conversation and lets the bot write first
+    if (person !== undefined) return writingFirst(async () => { for (const chunk of chunkText(text, CHUNK_CHARS)) await this.transmit({ route: "direct", conversationId: "", userId: person }, "text", chunk); });
+    const known = this.conversations.get(conversationId); // a direct one carries its user id, the road once its webhook has expired (INV-2221)
+    const target: ChatTarget = { route: outboundRoute(known?.conversationType), conversationId, ...(known?.userId !== undefined ? { userId: known.userId } : {}) };
     // Decided once for the whole message: per-chunk verdicts would render a long
     // message's plain halves with literal ** markers.
     const markdown = looksLikeMarkdown(text);
@@ -1390,7 +1390,7 @@ export class DingTalkChannel implements ChannelAdapter {
     const target = {
       route,
       conversationId: conversationId ?? "",
-      ...(identity.startsWith("dingtalk:") ? { userId: identity.slice("dingtalk:".length) } : {}),
+      ...(identity.startsWith(`${this.name}:`) ? { userId: identity.slice(this.name.length + 1) } : {}),
     };
     const approvalId = card.approvalId;
     const instanceId = await this.createAndDeliverCard(
@@ -1434,7 +1434,7 @@ export class DingTalkChannel implements ChannelAdapter {
     const target = {
       route,
       conversationId,
-      ...(asker?.startsWith("dingtalk:") ? { userId: asker.slice("dingtalk:".length) } : {}),
+      ...(asker?.startsWith(`${this.name}:`) ? { userId: asker.slice(this.name.length + 1) } : {}),
     };
     return this.createAndDeliverCard(target, this.taskCardTemplateId, taskVarsFor(card));
   }

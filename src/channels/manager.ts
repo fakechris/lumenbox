@@ -33,7 +33,7 @@ import type { Locale } from "../i18n/locale.ts";
 import { claimsReference, contextMode, isContextCommand, isGoalCommand, isPlainRetry, isRecoveryCommand, isRetryCommand, parseAcceptance, parseAddress, parseApprovalReply, parseBind, parseBoardRequest, parseContinuation, parseDesktopRequest, parseDigestRequest, parseHelpRequest, parseMeetingJoinRequest, parseRecoveryCommand, parseRosterRequest, parseSchedulesRequest, parseScopeRequest, parseScreenRequest, parseStopRequest, parseUpgradeApproval, renderHelp, chatCommand } from "./commands.ts";
 export { parseAcceptance, parseAddress, parseApprovalReply, parseBind, parseBoardRequest, parseDesktopRequest, parseDigestRequest, parseMeetingJoinRequest, parseRosterRequest, parseSchedulesRequest, parseScopeRequest, parseScreenRequest, parseStopRequest, parseUpgradeApproval, type ApprovalReply, type DigestRequest, type ScopeRequest } from "./commands.ts";
 import type { ApprovalReply } from "./commands.ts";
-import { roomDecision } from "./identity.ts";
+import { roomDecision } from "./identity.ts"; import { personChatKey } from "./person-chat.ts";
 import type { Ingress } from "./ingress.ts";
 import type { Messages } from "./messages.ts";
 import { randomUUID } from "node:crypto";
@@ -392,6 +392,10 @@ export interface ChannelManagerDeps {
    * or the answer when this person can reach none by that name (`say`); who answers when it names nobody (`fallback`), or what they are told when a turn would have run (`none`).
    * Agents come back as ids, which is what every dependency below is then given. Absent: a name is passed on as written and the door's default answers.
    */
+  /** Where an agent's own person is reached when no chat asked it anything (INV-2221, src/host/reach-person.ts): its questions and approvals go there, as words. Undefined: it is nobody's, so nowhere. */
+  personFor?: (agentId: string) => { adapterName: string; identity: string; chatKey: string } | undefined;
+  /** A direct message from somebody not on the roster, on a door with a directory (INV-2221): what they are told — their request is with the Admins, or they are not listed. Undefined: no directory here, so they knock as before. */
+  joinRequest?: (adapterName: string, message: InboundMessage) => string | undefined;
   route?: (adapterName: string, message: InboundMessage, name: string | undefined) => { agent?: { id: string; name: string }; say?: string; fallback?: { id: string; name: string }; none?: () => string | undefined };
   /** The door's group-message rule (identity.ts `groupMessages`). Absent means `all`. */
   groupMessagesFor?: (adapterName: string) => "all" | "addressed" | undefined;
@@ -657,7 +661,7 @@ export interface ChannelManagerDeps {
    * refusal then says the owner was told, instead of handing the person an id to
    * copy around — the refusal is the registration page.
    */
-  knock?: (request: { identity: string; senderLabel: string; channel: string }) => void;
+  knock?: (request: { identity: string; senderLabel: string; channel: string; privateChat?: boolean }) => void;
   log: (line: string) => void;
   /**
    * Where every arrival and its fate is recorded. Absent means no ledger, which is what
@@ -886,6 +890,13 @@ export class ChannelManager {
     }
   }
 
+  /** An agent nobody wrote to from a chat reaches its own person (INV-2221): by words in their direct chat, so no card method is offered. */
+  private ownersChat(agentId: string): { adapter: ChannelAdapter; identity: string; chatKey?: string } | undefined {
+    const at = this.deps.personFor?.(agentId), door = at === undefined ? undefined : this.adapters.find(a => a.name === at.adapterName);
+    if (at === undefined || door?.sendToChat === undefined) return undefined;
+    return { adapter: { name: door.name, start: async () => {}, stop() {}, send: (identity, text) => door.send(identity, text), sendToChat: (key, text) => door.sendToChat!(key, text) }, identity: at.identity, chatKey: at.chatKey };
+  }
+
   /**
    * Puts an agent's question to whoever last drove it from a chat.
    *
@@ -906,9 +917,9 @@ export class ChannelManager {
     fallback?: string; recommended?: string; // which answer the agent leans to, in its words (INV-1651)
     expiresAt?: number;
   }): string | undefined {
-    const asker = input.conversation !== undefined
+    const asker = (input.conversation !== undefined
       ? this.questionAskers.get(JSON.stringify([input.agentId, input.conversation, input.principalId]))
-      : this.lastAsker.get(input.agentId);
+      : this.lastAsker.get(input.agentId)) ?? this.ownersChat(input.agentId);
     if (asker === undefined) return undefined;
     const questionId = input.questionId ?? randomUUID();
     const conversationKey = asker.chatKey ?? asker.identity;
@@ -955,13 +966,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     const text = questionText(input.agentName, `${input.question}${terms}${input.recommended !== undefined ? `\n（${input.agentName} 倾向：${input.recommended}）` : ""}`, choices) + `\n\n回复：/answer ${questionId} 你的答案`;
     // Into the thread that asked, where the adapter can address one: a question with
     // no surrounding context is a question about everything at once.
-    const push =
-      asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined
-        ? asker.adapter.sendToChat(asker.chatKey, text)
-        : asker.adapter.send(asker.identity, text);
-    void push.catch(() => {
-      // The web page shows it too; a failed push is not a lost question.
-    });
+    const push = asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined ? asker.adapter.sendToChat(asker.chatKey, text) : asker.adapter.send(asker.identity, text);
+    void push.catch(() => { /* The web page shows it too; a failed push is not a lost question. */ });
     return asker.identity;
   }
 
@@ -1007,7 +1013,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
    * not driven from a channel — the web page covers that.
    */
   notifyApproval(agentId: string, approvalId: string, agentName: string, description: string, action?: string, agentCase?: string): void { // agentCase (INV-1651): the agent's labelled claim, shown apart from the verbatim action
-    const asker = this.lastAsker.get(agentId);
+    const asker = this.lastAsker.get(agentId) ?? this.ownersChat(agentId);
     if (asker === undefined) return;
     this.awaitingApproval.set(asker.identity, { approvalId, description });
     // Buttons where the wire has them; the word path stays open either way, because a
@@ -1032,13 +1038,8 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     }
     const message = `${action !== undefined ? `${action}\n` : ""}${consentFallbackText(agentName, description)}${agentCase !== undefined ? `\n${agentCase}` : ""}`;
     // Same thread-first routing as a question, for the same reason.
-    const push =
-      asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined
-        ? asker.adapter.sendToChat(asker.chatKey, message)
-        : asker.adapter.send(asker.identity, message);
-    void push.catch(() => {
-      // The web UI still shows it; a failed push is not a lost approval.
-    });
+    const push = asker.chatKey !== undefined && asker.adapter.sendToChat !== undefined ? asker.adapter.sendToChat(asker.chatKey, message) : asker.adapter.send(asker.identity, message);
+    void push.catch(() => { /* The web UI still shows it; a failed push is not a lost approval. */ });
   }
 
   private setStatus(name: string, patch: { running: boolean; line: StatusLine | string }): void {
@@ -1322,6 +1323,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       if (message.messageId !== undefined) this.deps.ingress?.decided(message.messageId, "refused", message.identity);
       this.deps.log(`channel ${adapter.name}: refused ${message.identity} (${message.senderLabel})`);
       if (this.deps.known?.(message.identity) === true) return viewerOnly(); // a viewer is not a stranger: no knock, no guest turn (INV-2226)
+      const asked = message.privateChat === true ? this.deps.joinRequest?.(adapter.name, message) : undefined; if (asked !== undefined) return asked;
       // A door with guests turned off does not collect knocks: in a room of strangers every
       // knock is noise for whoever would have to triage it (INV-429).
       if (this.deps.guestFor?.(adapter.name) === "off") {
@@ -1330,7 +1332,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       }
       const guest = message.chatKey !== undefined && message.privateChat !== true && message.addressed !== false ? await this.deps.guestTurn?.(adapter.name, message).catch(() => undefined) : undefined; if (guest !== undefined) return guest.reply; // a guest turn, not a knock (INV-1708, docs/97): returned before the command table, so nothing a guest writes is a verb
       if (this.deps.knock !== undefined) {
-        this.deps.knock({ identity: message.identity, senderLabel: message.senderLabel, channel: adapter.name });
+        this.deps.knock({ identity: message.identity, senderLabel: message.senderLabel, channel: adapter.name, privateChat: message.privateChat === true });
         return knockRefusal(message.identity);
       }
       return refusal(message.identity);
@@ -1627,7 +1629,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       const question = this.awaitingAnswer.get(questionId);
       if (question === undefined || question.expiresAt <= Date.now() ||
           question.identity !== message.identity || question.adapterName !== adapter.name ||
-          question.conversationKey !== conversationKey ||
+          (question.conversationKey !== conversationKey && !(message.privateChat === true && question.conversationKey === personChatKey(message.identity))) ||
           (agentName !== undefined && agentName !== question.agentName && agentName !== question.agentId)) {
         return "这个问题已失效，或不属于你、当前会话和指定的 agent。请重新发起请求。";
       }

@@ -606,7 +606,7 @@ test("a one-word reply answers the approval that was pushed to that chat", async
 
 test("a stranger's knock is recorded, and the refusal says the owner was told; a viewer on the roster is told they are a viewer (INV-2226)", async () => {
   const adapter = testAdapter();
-  const knocks: { identity: string; senderLabel: string; channel: string }[] = [];
+  const knocks: { identity: string; senderLabel: string; channel: string; privateChat?: boolean }[] = [];
   const guests: string[] = [];
   const manager = new ChannelManager({
     mayDrive: () => false,
@@ -625,7 +625,7 @@ test("a stranger's knock is recorded, and the refusal says the owner was told; a
     text: "hello?",
   });
   assert.deepEqual(knocks, [
-    { identity: "feishu:ou_9", senderLabel: "newcomer", channel: "telegram" },
+    { identity: "feishu:ou_9", senderLabel: "newcomer", channel: "telegram", privateChat: false }, // whether it was a direct message: only one asks to join where a directory lists them (INV-2221)
   ]);
   assert.match(reply ?? "", /owner has been notified/);
   assert.match(reply ?? "", /feishu:ou_9/, "the manual path still shows the id");

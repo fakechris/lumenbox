@@ -25,6 +25,8 @@ import type { Principal, Principals, Role } from "../host/principals.ts";
 import { enrol, type Enrolled } from "../host/enrolment.ts";
 import type { DirectoryCredentials } from "../channels/directory-sources.ts";
 import { apiError } from "./api-error.ts";
+import type { Locale } from "../i18n/locale.ts";
+import { tr } from "../i18n/messages.ts";
 
 export interface AdmissionDeps {
   activations: Activations;
@@ -45,6 +47,11 @@ export interface AdmissionDeps {
 }
 
 const PAGE = 50;
+
+/** What somebody not on the roster is told in a direct message to the bot (INV-2221); undefined where the door's own knock answers. */
+export function joinRequestWords(verdict: "asked" | "unlisted" | "no-directory" | undefined, locale: Locale): string | undefined {
+  return verdict === "asked" ? tr("access.asked", locale) : verdict === "unlisted" ? tr("access.unlisted", locale) : undefined;
+}
 const identityOf = (source: DirectorySource, subject: string) => `${source.channelId}:${subject}`;
 
 export function admission(deps: AdmissionDeps) {
@@ -72,6 +79,53 @@ export function admission(deps: AdmissionDeps) {
     if (source === undefined || principals.installation().mode === "single-machine") return "refused";
     if (activations.request(source, { subject, name })) deps.log(`asked to join: ${identity} (${name}) signed in via ${channelId} and is not activated`);
     return "asked";
+  }
+
+  /**
+   * Somebody not on the roster wrote to the door's bot (INV-2221, docs/109 §2 step c). `asked`: the
+   * directory lists them, and their request is with the Admins — the request a sign-in makes, one
+   * per person however often they write. `unlisted`: the directory does not list them, and nothing
+   * is written. `no-directory`: there is no directory to ask — a door with no app credentials for
+   * one, one never synced or whose app changed since, a single-machine installation — and the
+   * door's own knock applies, as before.
+   */
+  function knocked(channelId: string, subject: string, name: string): "asked" | "unlisted" | "no-directory" {
+    const source = deps.credentials(channelId)?.source, snapshot = source === undefined ? undefined : snapshotOf(source);
+    if (source === undefined || snapshot === undefined || principals.installation().mode === "single-machine") return "no-directory";
+    const row = snapshot.people.find(person => person.vendorSubject === subject);
+    if (row === undefined) return "unlisted";
+    if (activations.request(source, { subject, name: row.name })) deps.log(`asked to join: ${identityOf(source, subject)} (${row.name}, writing as ${name}) wrote to ${channelId} and is not activated`);
+    return "asked";
+  }
+
+  /**
+   * An Admin activates one person: somebody the directory lists, or somebody who asked — never a
+   * subject typed from nowhere (undefined). The one path for it: the People page's press, and the
+   * approval of a request that came from a chat.
+   */
+  function activatePerson(source: DirectorySource, subject: string, role: Role, by: string): { state: "active"; already: boolean } | undefined {
+    const row = snapshotOf(source)?.people.find(person => person.vendorSubject === subject);
+    const asked = activations.requests(source).find(request => request.subject === subject);
+    if (row === undefined && asked === undefined) return undefined;
+    const already = stateOf(source, subject) === "active";
+    if (!already) {
+      activations.activatePerson(source, { subject, name: row?.name ?? asked!.name }, role, by, row !== undefined);
+      deps.log(`activated: ${identityOf(source, subject)} (${row?.name ?? asked!.name}) as ${role} by ${by}`);
+      activated(source, by);
+    }
+    return { state: "active", already };
+  }
+  /**
+   * Approving somebody who wrote to the bot, `<door>:<subject>`: an activation whenever this door's
+   * directory can make one — they have a request waiting, or they knocked (`knocked`) and the
+   * directory lists them. Undefined when it cannot, and the door's own knock decides instead.
+   */
+  function approveRequest(identity: string, role: Role, by: string, knocked = false): { state: "active"; already: boolean } | undefined {
+    const at = identity.indexOf(":"), source = at <= 0 ? undefined : deps.credentials(identity.slice(0, at))?.source, subject = identity.slice(at + 1);
+    if (source === undefined || principals.installation().mode === "single-machine") return undefined;
+    const asked = activations.requests(source).some(request => request.subject === subject);
+    const listed = knocked && snapshotOf(source)?.people.some(person => person.vendorSubject === subject) === true;
+    return asked || listed ? activatePerson(source, subject, role, by) : undefined;
   }
 
   /**
@@ -198,7 +252,7 @@ export function admission(deps: AdmissionDeps) {
     }
   }
 
-  return { admit, activated, catchUp, applySync, confirmHeld, sync, refreshStale, stateOf, snapshotOf, onRoster };
+  return { admit, knocked, activatePerson, approveRequest, activated, catchUp, applySync, confirmHeld, sync, refreshStale, stateOf, snapshotOf, onRoster };
 }
 
 export interface ActivationRouteDeps extends AdmissionDeps {
@@ -314,18 +368,8 @@ export async function activationRoute(route: string, query: URLSearchParams, dep
   if (role === undefined) return { status: 400, body: apiError("activation-role-invalid") };
 
   if (route === "POST /api/activations/person") {
-    const subject = String(body.subject ?? "");
-    const row = snapshot?.people.find(person => person.vendorSubject === subject);
-    const asked = activations.requests(source).find(request => request.subject === subject);
-    // Somebody the directory lists, or somebody who asked: never a subject typed from nowhere.
-    if (row === undefined && asked === undefined) return { status: 404, body: apiError("directory-person-unknown") };
-    const already = stateOf(source, subject) === "active";
-    if (!already) {
-      activations.activatePerson(source, { subject, name: row?.name ?? asked!.name }, role, by, row !== undefined);
-      deps.log(`activated: ${identityOf(source, subject)} (${row?.name ?? asked!.name}) as ${role} by ${by}`);
-      deps.admission.activated(source, by);
-    }
-    return { status: 200, body: { state: "active", already } };
+    const done = deps.admission.activatePerson(source, String(body.subject ?? ""), role, by);
+    return done === undefined ? { status: 404, body: apiError("directory-person-unknown") } : { status: 200, body: done };
   }
 
   // A department: everybody it lists now, once. Who joins it later is listed, and asks like anybody else.

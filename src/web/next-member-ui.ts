@@ -84,6 +84,16 @@ function renderMember() {
     });
     acts.replaceChildren(el("span", "", t("ui.next.member.deleteNote")), confirm);
   });
+  // Which agent answers this person's direct messages in a chat channel, and the press that makes it this one (INV-2221).
+  var isHome = settings.me && settings.me.homeAgentId === member.id, home = el("button", "", t("ui.next.member.makeHome"));
+  home.addEventListener("click", function () {
+    home.disabled = true; // one choice at a time; what is shown is then read back from the server
+    postJson("/api/me/home-agent", { agentId: member.id }).then(function () { return getJson("/api/me"); }).then(function (got) {
+      settings.me.homeAgentId = got.homeAgentId; toast(t("ui.next.member.homeSet")); renderMember(); renderSide();
+    }, function (error) { home.disabled = false; failed(error); });
+  });
+  if (isHome) inner.appendChild(el("div", "note", t("ui.next.member.isHome")));
+  else if (settings.me) acts.appendChild(home);
   acts.appendChild(pause); acts.appendChild(remove);
   if (isPaused) inner.appendChild(el("div", "needbox", t("ui.next.member.pausedNote", { reason: member.paused[member.id].reason || "" })));
   inner.appendChild(acts);

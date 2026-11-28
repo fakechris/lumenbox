@@ -246,7 +246,7 @@ import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { OpenDesktops } from "./open-desktops.ts";
 import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
-import { Directories } from "../host/directory.ts"; import { Activations } from "../host/activations.ts"; import { admission, activationRoute } from "./activation-routes.ts";
+import { Directories } from "../host/directory.ts"; import { Activations, activationRole } from "../host/activations.ts"; import { admission, activationRoute, joinRequestWords } from "./activation-routes.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
@@ -272,7 +272,7 @@ import { QuestionWatch } from "../host/question-expiry.ts";
 import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
-import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts";
+import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts"; import { PersonReach } from "../host/reach-person.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
@@ -1095,7 +1095,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Who a chat message reaches, by who wrote it (INV-2221, docs/109 §4): the one place that decides it.
   const chatRoute = new ChatRoute({ registry, principals, log, door: adapterName => channelRecords.find(record => record.id === adapterName),
     preparing: id => autoBoxes.view(id)?.state === "preparing", firstAgent: () => orchestrator.ensureDefaultAgent() });
+  // An agent reaches its own person, and one path sends to a person through a door they hold (INV-2221, reach-person.ts).
+  const reach = new PersonReach({ registry, principals, budget: pushBudget, log, push: (chatKey, text, purpose) => chats?.tryPushToChat(chatKey, text, purpose),
+    writesFirst: door => ["dingtalk", "feishu"].includes(channelRecords.find(record => record.id === door)?.type ?? "") && chats?.adapterFor(`${door}:`) !== undefined });
+  let chatDesk: ReturnType<typeof admission> | undefined; // set once the admission below exists; until then a stranger knocks as before
+  const doorLocale = (door: string) => resolveLocale({ channelType: channelRecords.find(record => record.id === door)?.type });
   const channels = new ChannelManager({
+    personFor: agentId => reach.addressFor(agentId),
+    joinRequest: (adapterName, message) => joinRequestWords(chatDesk?.knocked(adapterName, message.identity.slice(adapterName.length + 1), message.senderLabel), doorLocale(adapterName)),
     interactionTask: (message, name) => { const agent = registry.resolve(name ?? ""), parsed = parseActionText(message.text); const result = surfaceActionWork({ action: parsed ? { surface: parsed.surfaceId, name: parsed.name } : undefined, text: message.text, agentId: agent.id, conversation: conversationIdFor(message.threadKey ?? message.chatKey ?? message.identity), surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }); if ("error" in result) throw new Error(result.error); return result.taskBinding.taskId; },
     outbox: unprompted.door(outboxSender), sent: sentLedger, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
     // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
@@ -1250,7 +1257,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     cards,
     incarnationOf,
     defaultAgentFor: adapterName => channelRecords.find(record => record.id === adapterName)?.defaultAgent,
-    route: (adapterName, message, name) => chatRoute.route(adapterName, message, name), // who a message reaches, by who wrote it (INV-2221, src/host/chat-route.ts)
+    // Who a message reaches, by who wrote it (INV-2221, src/host/chat-route.ts); a direct chat seen here is where that person is written to afterwards.
+    route: (adapterName, message, name) => { if (message.privateChat === true) reach.noteDirect(message.identity, message.chatKey); return chatRoute.route(adapterName, message, name); },
     // The door's room rules and guest switch (INV-429), read per message so an edit in
     // Settings takes effect without a restart — the same rule the roster follows.
     roomRulesFor: adapterName => channelRecords.find(record => record.id === adapterName)?.autoJoin,
@@ -1407,6 +1415,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       },
     },
     knock: request => {
+      // A door with a directory keeps no knock of its own (INV-2221): somebody it lists is asking to join, the durable request; somebody it does not list is nobody's to let in.
+      // Only a direct message asks; in a group a listed person is a stranger who knocks, as before, and approving that knock is the same activation.
+      if (request.privateChat === true && (chatDesk?.knocked(request.channel, request.identity.slice(request.channel.length + 1), request.senderLabel) ?? "no-directory") !== "no-directory") return;
       // The incarnation is observed *now*, at the knock, and compared again at the
       // approval (docs/22 §4's CAS): a knock from a door that has since been
       // replaced must not stamp the old tenant's subject into the new one.
@@ -1502,7 +1513,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       const principal = principals.resolve(identity).id, theirBox = registry.boxOf(agent.id); // entered: `asked` above is the membership check (INV-538)
       // Only an explicitly bound answer can settle a question. New requests do not.
-      if (origin?.questionId !== undefined) questions.noteReply(agent.id, identity, origin.questionId, conversation);
+      // A question asked with no chat went to the agent's own person (INV-2221); the door already checked that this reply is theirs to it.
+      if (origin?.questionId !== undefined && questions.noteReply(agent.id, identity, origin.questionId, conversation).length === 0) questions.noteReply(agent.id, identity, origin.questionId, "main");
 
       // Made before the turn, because the prompt states the path as a fact — "its
       // directory on the box is X/" — while the directory was created lazily, on the first
@@ -1895,9 +1907,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (blockedAnnounced.has(task.id)) return;
       blockedAnnounced.add(task.id);
       const line = blockedAnnouncement(task);
-      if (line === undefined || task.conversation === undefined) return;
-      const chatKey = conversations.chatKeyFor(task.conversation);
-      if (chatKey === undefined) return;
+      if (line === undefined) return;
+      const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation);
+      // No chat asked for this work: its agent's own person is told, in words (INV-2221).
+      if (chatKey === undefined) { if (task.assigneeId !== undefined) void reach.tellOwner(task.assigneeId, line, { about: `board: ${task.id} ${task.status}`, exempt: true }); return; }
       // A blocker with answers to choose from is a question card, not a line: the person
       // taps one and the answer lands back in the room the task came from.
       const last = task.history.at(-1);
@@ -3049,7 +3062,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     progressAccess: progressAccessForPrincipal,
     registry, orchestrator, principals, workDir: workRootOf(registry.defaultBox()), log, redact: text => outboundRedactor(vault.heldValues())(text), mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
     stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
-    notifyTask: (task, text) => { const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation); if (chatKey !== undefined) void channels.pushToChat(chatKey, text, { kind: "notice", about: `supervisor flag on ${task.id}` }).catch((error: unknown) => log(`supervisor flag ${task.id}: notice not sent (${error instanceof Error ? error.message : String(error)})`)); }, // INV-1509
+    notifyTask: (task, text) => { const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation); if (chatKey !== undefined) void channels.pushToChat(chatKey, text, { kind: "notice", about: `supervisor flag on ${task.id}` }).catch((error: unknown) => log(`supervisor flag ${task.id}: notice not sent (${error instanceof Error ? error.message : String(error)})`));
+      else if (task.assigneeId !== undefined) void reach.tellOwner(task.assigneeId, text, { about: `supervisor flag on ${task.id}`, exempt: true }); }, // INV-1509; with no chat, the agent's own person (INV-2221)
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
@@ -3058,7 +3072,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
     signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log,
     boxes: (people: readonly { id: string; name: string }[]) => autoBoxes.activated(people, person => tr("ui.personal.defaultName", localeOfPerson(person.id), { name: person.name })) };
-  const orgAdmission = admission(admissionDeps);
+  const orgAdmission = admission(admissionDeps); chatDesk = orgAdmission;
   orgAdmission.catchUp(channelRecords.map(record => record.id)); // an activation a crash interrupted is finished, and boxes owed from before are queued (INV-2220)
   const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
@@ -4839,10 +4853,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const identity = String(body.identity ?? "");
           const knock = knocks.get(identity);
-          if (knock === undefined) {
-            send(res, 404, apiError("knock-unknown"));
-            return;
+          // Through a door whose directory covers them it is an activation: the person, their box and their agent as any activation makes them (INV-2221, INV-2220).
+          const role0 = activationRole(body.role ?? "driver"), door0 = identity.split(":")[0] ?? "";
+          const activated = role0 === undefined ? undefined : orgAdmission.approveRequest(identity, role0, caller.userId ?? "operator", knock !== undefined);
+          if (activated !== undefined) {
+            knocks.delete(identity); void channels.push(door0, identity, tr("access.activated", doorLocale(door0)));
+            send(res, 200, { principals: principals.list(), knocks: [...knocks.values()] }); return;
           }
+          if (knock === undefined) { send(res, 404, apiError("knock-unknown")); return; }
           // The CAS half of the knock: commit only if the world the knock was
           // observed in is still the world now. A replaced door or an identity that
           // got linked some other way in the meantime makes this approval stale —
