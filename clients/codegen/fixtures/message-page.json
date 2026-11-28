@@ -1,0 +1,9 @@
+{
+  "items": [
+    { "id": "m1", "conversationId": "c1", "kind": "person", "at": "2026-11-28T10:00:00Z", "text": "Make it blue.", "sentIds": ["v1-abc"] },
+    { "id": "m2", "conversationId": "c1", "kind": "card", "card": { "surfaceId": "pick", "title": "Pick a cover", "a2ui": "[]", "layout": "wide" } },
+    { "id": "m3", "conversationId": "c1", "kind": "poll", "text": "Red or blue?", "poll": { "choices": 2 } },
+    { "id": "m4", "conversationId": "c1", "kind": "steps", "steps": ["running a command (ls)"] }
+  ],
+  "nextCursor": "abc"
+}

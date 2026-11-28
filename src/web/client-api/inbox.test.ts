@@ -43,7 +43,7 @@ async function api(t: TestContext) {
     tokens: { clientFor: presented => (presented === "lbxd_ann" ? { credential: credential("dev_ann") } : presented === "lbxp_dee" ? { credential: credential("tok_dee") } : { refused: "invalid" }), touch: () => "2026-11-28T00:00:00.000Z" },
     person: id => (id === "ann" ? { id, name: "Ann", role: "admin" } : id === "dee" ? { id, name: "Dee", role: "driver" } : undefined),
     installationMode: () => "organisation", version: "0.0.0", homeAgentOf: () => undefined,
-    signIns: { blocked: () => undefined, failed: () => {}, succeeded: () => {} }, address: () => "127.0.0.1", devices: {} as never, decisions,
+    signIns: { blocked: () => undefined, failed: () => {}, succeeded: () => {} }, address: () => "127.0.0.1", devices: {} as never, chat: {} as never, decisions,
     idempotency: new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: persisted }), secretIdempotency: new IdempotencyStore({ ttlMs: 30_000 }), log: line => logs.push(line),
   });
   const server = createServer((req, res) => { void frame.handle(req, res, new URL(req.url ?? "/", "http://localhost")); });

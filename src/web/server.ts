@@ -235,7 +235,7 @@ import {
   handleMcpRequest,
   type McpServerTool,
 } from "./mcp-server.ts";
-import { McpTokenStore } from "./mcp-tokens.ts"; import { mountClientApi } from "./client-api/mount.ts"; import { reachOf } from "./reach.ts"; import { clientTokenRoute } from "./client-token-routes.ts"; // docs/106 §4
+import { McpTokenStore } from "./mcp-tokens.ts"; import { mountClientApi } from "./client-api/mount.ts"; import { type SendMessageDeps, sendMessage } from "./send-message.ts"; import { reachOf } from "./reach.ts"; import { clientTokenRoute } from "./client-token-routes.ts"; // docs/106 §4
 import { Vault, type Grant } from "../host/vault.ts";
 import { setRedactionSource, redactText } from "../host/secret-redaction.ts";
 import { OAuthGate } from "../host/oauth.ts";
@@ -462,9 +462,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     activity.add(event as unknown as Record<string, unknown> & { type: string });
   };
 
+  let tellClients: (event: OutboundEvent) => void = () => {}; // /api/v1: a conversation's live stream and its change records (client-api/chat-access.ts)
   const broadcast = (event: OutboundEvent) => {
     remember(event);
     events.publish(event);
+    tellClients(event);
   };
 
   const provisioner = (() => {
@@ -2995,6 +2997,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   };
   const approvalAnswers: ApprovalAnswerDeps = { policy: orchestrator.policy, parked: id => orchestrator.approvalIsParked(id), broadcast, deliverSystem: (...args) => { orchestrator.bus.deliverSystem(...args); } };
   const secretAnswers: SecretAnswerDeps = { pending: pendingSecrets, vault, log, deliverSystem: (...args) => { orchestrator.bus.deliverSystem(...args); } };
+  /** What the page draws of a conversation (transcript.ts): `GET /api/transcript` and `/api/v1` read the same. */
+  const displayOf = (id: string, conversation: string) => toDisplayEntries(registry.readTranscript(id, conversation), registry.list().map(record => ({ id: record.id, name: record.profile.name })),
+    callId => orchestrator.policy.verdicts.get(callId), conversations.chatKeyFor(conversation) !== undefined, messageId => orchestrator.bus.heard?.get(id, messageId), turn => orchestrator.bus.heard?.saidIn(id, turn) ?? []);
+  const sendDeps: SendMessageDeps = { has: id => registry.has(id), modelReady: id => modelReady(registry, orchestrator.provider, id), log, settle: () => orchestrator.settle(), // a person's message (send-message.ts)
+    surfaceWork: input => surfaceActionWork({ ...input, surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }), chatKeyFor: id => conversations.chatKeyFor(id),
+    pushToChat: (chatKey, text, about) => { void channels.pushToChat(chatKey, text, { kind: "notice", about }); }, turn: (...args) => orchestrator.prompt(...args),
+    transcriptLength: (id, conversation) => registry.readTranscript(id, conversation).length, replySince: (id, from, conversation) => orchestrator.replySince(id, from, conversation),
+    admitted: event => broadcast({ type: "prompt", ...event }), failed: (agentId, message) => broadcast({ type: "error", agentId, message }) };
   const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log, // /api/v1
     registry, tasks: () => orchestrator.tasks?.list() ?? [], working: id => orchestrator.bus.isActive(id), unavailable: unavailableHere, taskActive, checkPending,
     onTask: listener => { orchestrator.tasks?.onChange(listener); orchestrator.tasks?.onCreate(listener); }, // the change ledger hears the board (change-ledger.ts)
@@ -3005,7 +3015,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       running: taskActive, message: (agentId, text, personId, conversation, onAdmitted) =>
         orchestrator.prompt(agentId, text, { userId: personId }, { conversation, messageId: randomUUID(), ...(onAdmitted ? { onAdmitted } : {}) }).then(() => orchestrator.settle()),
       identitiesOf: id => [id, ...(principals.byId(id)?.identities ?? [])] }),
-      drafts: { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }) } } });
+      drafts: { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }) } },
+    chat: { send: input => sendMessage(sendDeps, input), stop: (id, by) => orchestrator.policy.stop(id, by), active: (id, conversation) => orchestrator.bus.isActive(id, conversation), display: displayOf, // conversations (INV-2214)
+      chatKeyFor: id => conversations.chatKeyFor(id), boxOf: id => chatBoxOf(id), ...chatFiles({ boxOf: chatBoxOf, workRoot: workRootOf, log, mayEnter: (box, identity) => mayEnterBox(box, principals.resolve(identity).id) }) } });
+  tellClients = v1.live;
 
   const phoneRelay = phoneRelayFor(principals.installation().mode, mobileRelayAddress(), { home: agentboxHome(), devices: v1.relayDevices, handle: v1.handle, record: recordToken, log, // phones through the relay (INV-2327)
     connection: socket => server.emit("connection", socket) });
@@ -5731,11 +5744,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           // Mapped for reading, not replayed raw: the stored form is written for the
           // model, and the roster is what lets a wake prompt be split back into the
           // messages that caused it.
-          const roster = registry.list().map(record => ({
-            id: record.id,
-            name: record.profile.name,
-          }));
-          const shown = toDisplayEntries(registry.readTranscript(id, conversation), roster, callId => orchestrator.policy.verdicts.get(callId), conversations.chatKeyFor(conversation) !== undefined, messageId => orchestrator.bus.heard?.get(id, messageId), turn => orchestrator.bus.heard?.saidIn(id, turn) ?? []), span = /^(\d+)-(\d+)$/.exec(url.searchParams.get("span") ?? ""), asked = url.searchParams.get("requests") === "1" ? asRequests(shown) : shown, drawn = url.searchParams.get("sent") === "1" ? withSent(asked, sentLedger.in(conversation)) : asked; send(res, 200, span ? spanOf(shown, Number(span[1]), Number(span[2])) : url.searchParams.get("all") === "1" ? drawn : latestForDisplay(drawn, Math.min(Math.max(Number(url.searchParams.get("tail")) || DISPLAY_TAIL, 1), 5000))); // the newest part only, unless asked (INV-1624); what the chat was sent beside it, when asked (INV-1841)
+          const shown = displayOf(id, conversation), span = /^(\d+)-(\d+)$/.exec(url.searchParams.get("span") ?? ""), asked = url.searchParams.get("requests") === "1" ? asRequests(shown) : shown, drawn = url.searchParams.get("sent") === "1" ? withSent(asked, sentLedger.in(conversation)) : asked; send(res, 200, span ? spanOf(shown, Number(span[1]), Number(span[2])) : url.searchParams.get("all") === "1" ? drawn : latestForDisplay(drawn, Math.min(Math.max(Number(url.searchParams.get("tail")) || DISPLAY_TAIL, 1), 5000))); // the newest part only, unless asked (INV-1624); what the chat was sent beside it, when asked (INV-1841)
           return;
         }
 
@@ -6514,82 +6523,13 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
         if (await modelReadinessRoute(route, url, registry, orchestrator.provider, refused, body => send(res, 200, body))) return;
-        if (route === "POST /api/prompt") {
-          const body = await readJson(req);
-          const agentId = String(body.agent ?? "");
+        if (route === "POST /api/prompt") { // one path with a phone's message (send-message.ts)
+          const body = await readJson(req), agentId = String(body.agent ?? "");
           if (refused(agentId)) return;
-          const text = String(body.text ?? "").trim();
-          if (isContextCommand(text) || isRecoveryCommand(text) || isRetryCommand(text) || isGoalCommand(text)) {
-            send(res, 409, apiError("console-context-command"));
-            return;
-          }
-          if (!registry.has(agentId)) {
-            send(res, 404, apiError("agent-unknown", { agent: agentId }));
-            return;
-          }
-          if (!text) {
-            send(res, 400, apiError("text-required"));
-            return;
-          }
-          const conversation =
-            typeof body.conversation === "string" && body.conversation !== ""
-              ? body.conversation
-              : MAIN_CONVERSATION; if (isForkChild(conversation)) { send(res, 409, apiError("fork-read-only")); return; } // INV-1667
-          if (!await modelReady(registry, orchestrator.provider, agentId)) {
-            send(res, 409, apiError("model-not-configured")); return;
-          }
-          const surfaceWork = body.surfaceAction ? surfaceActionWork({ action: body.surfaceAction, text, agentId, conversation, surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }) : undefined;
-          if (surfaceWork && "error" in surfaceWork) { send(res, 409, apiError("surface-work-unavailable", { reason: surfaceWork.error })); return; }
-          // Without this, an operator's interjection and the agent's answer were visible
-          // only on the web page: the chat's members saw the agent's behaviour change
-          // with no visible cause, and the thread history the agent reasons over
-          // contained an exchange they never witnessed. Context that two readers see
-          // differently is the distributed-system failure everything else here is built
-          // to avoid, so the interjection goes to the chat, marked as coming from the
-          // console, and the reply follows it.
-          const chatKey =
-            conversation === MAIN_CONVERSATION
-              ? undefined
-              : conversations.chatKeyFor(conversation);
-          if (conversation !== MAIN_CONVERSATION && chatKey === undefined) {
-            // A thread from before the directory existed; addressable again on its next
-            // inbound message. Said out loud, because a message that quietly goes
-            // nowhere is the failure this codebase keeps finding.
-            log(`console message to ${conversation} stays on the web: no chat recorded for it`);
-          }
-          if (chatKey !== undefined) {
-            void channels.pushToChat(chatKey, `〔控制台〕${text}`, { kind: "notice", about: "console" });
-          }
-          const promptMessageId = typeof body.messageId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(body.messageId) ? body.messageId : randomUUID();
-          const before = registry.readTranscript(agentId, conversation).length;
-          void orchestrator
-            .prompt(agentId, text, caller, { conversation, messageId: promptMessageId, ...(surfaceWork && "taskBinding" in surfaceWork ? { ...(surfaceWork.work ? { work: surfaceWork.work, workRelation: "continue" as const } : {}), taskBinding: surfaceWork.taskBinding, steerable: false } : body.workRelation === "new" || body.workRelation === "continue" ? {workRelation:body.workRelation} : {}), onAdmitted:()=>{          broadcast({
-            type: "prompt", messageId: promptMessageId,
-            agentId,
-            text,
-            conversation,
-            ...(caller.userId !== undefined ? { userId: caller.userId } : {}),
-          });
-          send(res, 202, { accepted: true });
-
-          } })
-            .then(() => {
-              // The reply belongs to the same room the interjection went to. Read back
-              // from the transcript, the same way the channel path recovers an answer.
-              if (chatKey !== undefined) {
-                const said = orchestrator.replySince(agentId, before, conversation);
-                if (said !== "") void channels.pushToChat(chatKey, said, { kind: "notice", about: "console reply" });
-              }
-            })
-            // Teammates woken by this turn are still working; let them finish so
-            // their messages and turns show up before the page looks idle.
-            .then(() => orchestrator.settle())
-            .catch((error: unknown) => {
-              const message = error instanceof Error ? error.message : String(error);
-              if (!res.headersSent) send(res, 500, { error: message });
-              log(`turn failed: ${message}`);
-              broadcast({ type: "error", agentId, message });
-            });
+          const messageId = typeof body.messageId === "string" && /^[a-zA-Z0-9_-]{1,128}$/.test(body.messageId) ? body.messageId : randomUUID();
+          const sent = await sendMessage(sendDeps, { agentId, text: String(body.text ?? ""), conversation: typeof body.conversation === "string" ? body.conversation : undefined,
+            ...(caller.userId !== undefined ? { userId: caller.userId } : {}), messageId, surfaceAction: body.surfaceAction, workRelation: body.workRelation });
+          if ("refused" in sent) send(res, sent.status, apiError(sent.refused, sent.vars)); else if ("failed" in sent) send(res, 500, { error: sent.failed }); else send(res, 202, { accepted: true });
           return;
         }
 

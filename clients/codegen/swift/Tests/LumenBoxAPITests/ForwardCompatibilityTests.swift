@@ -100,6 +100,34 @@ final class ForwardCompatibilityTests: XCTestCase {
         XCTAssertEqual(ack.outcome, "escalated")
     }
 
+    // Conversations (INV-2214): a message, a conversation, a live event and an upload of a kind this client does not know arrive as themselves.
+    func testMessagesOfAKindThisClientDoesNotKnow() async throws {
+        let page = try await client(.ok, "message-page.json").listMessages(path: .init(id: "c1")).ok.body.json
+        XCTAssertEqual(page.items.map(\.kind), ["person", "card", "poll", "steps"])
+        XCTAssertEqual(page.items[2].text, "Red or blue?", "an unknown kind still has its words")
+        XCTAssertEqual(page.items[1].card?.surfaceId, "pick")
+        XCTAssertEqual(page.items[0].sentIds, ["v1-abc"])
+    }
+
+    func testConversationsOfAKindThisClientDoesNotKnow() async throws {
+        let page = try await client(.ok, "conversation-page.json").listConversations().ok.body.json
+        XCTAssertEqual(page.items.map(\.kind), ["group", "main"])
+        XCTAssertEqual(page.items[0].canWrite, false)
+    }
+
+    func testALiveEventOfAKindThisClientDoesNotKnow() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../fixtures/conversation-event.json").standardized
+        let event = try JSONDecoder().decode(Components.Schemas.ConversationEvent.self, from: Data(contentsOf: url))
+        XCTAssertEqual(event.kind, "thinking", "skipped by the app, never a decoding failure")
+        XCTAssertNil(event.text)
+    }
+
+    func testAnUploadOfAKindThisClientDoesNotKnow() async throws {
+        let upload = try await client(.ok, "upload.json").uploadFile(query: .init(conversationId: "c1", name: "clip.mov"), body: .binary(HTTPBody("bytes"))).ok.body.json
+        XCTAssertEqual(upload.kind, "video")
+        XCTAssertEqual(upload.sizeBytes, 5000000000, "a size past 2^32 decodes")
+    }
+
     func testAnErrorWithAnUnknownCode() async throws {
         let answer = try await client(.unauthorized, "error.json").getMe()
         guard case .unauthorized(let refusal) = answer else { return XCTFail("401 is the documented refusal: \(answer)") }

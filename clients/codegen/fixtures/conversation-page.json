@@ -1,0 +1,6 @@
+{
+  "items": [
+    { "id": "c1", "agentId": "a7", "agentName": "Writer", "kind": "group", "title": "Launch room", "updatedAt": "2026-11-28T10:00:00Z", "running": true, "canWrite": false, "pinned": true },
+    { "id": "c2", "agentId": "a7", "agentName": "Writer", "kind": "main", "title": "Writer", "running": false, "canWrite": true }
+  ]
+}

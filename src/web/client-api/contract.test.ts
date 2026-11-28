@@ -19,15 +19,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openApiDocument } from "./openapi.ts";
 import { problemsOf } from "./routes.ts";
+import { fakeBox, scriptedModel } from "./testing/fakes.ts";
+import { conversationIdOf } from "./conversations.ts";
 import { ERRORS, OPERATIONS, SCHEMAS, SCOPE_NAMES, type ApiErrorCode, type Operation, type Schema } from "./schema.ts";
 
-const KEYS = ["AGENTBOX_HOME", "AGENTBOX_UI_TOKEN", "AGENTBOX_NO_TOKEN", "AGENTBOX_PUBLIC_URL", "AGENTBOX_INSECURE", "AGENTBOX_EXPOSURE", "AGENTBOX_TRUSTED_PROXIES"] as const;
+const KEYS = [
+  "AGENTBOX_HOME", "AGENTBOX_UI_TOKEN", "AGENTBOX_NO_TOKEN", "AGENTBOX_PUBLIC_URL", "AGENTBOX_INSECURE", "AGENTBOX_EXPOSURE", "AGENTBOX_TRUSTED_PROXIES",
+  "AGENTBOX_PROVIDER", "AGENTBOX_BASE_URL", "AGENTBOX_API_KEY",
+] as const;
 
 type Doc = { paths: Record<string, Record<string, { operationId: string; responses: Record<string, { "x-error-codes"?: ApiErrorCode[] }> }>> };
 
 /** The codes a real server cannot be made to answer from outside, and where each is proved instead. */
 const PROVED_ELSEWHERE: Partial<Record<ApiErrorCode, string>> = {
   "api-internal": "frame.test.ts: a handler that throws answers 500 with the request id, and the log has the stack",
+  "model-not-configured": "conversations.test.ts: a message to an agent whose model has no credential here is refused before it is taken",
+  "box-not-running": "chat.test.ts: an upload to a conversation whose sandbox is not running",
 };
 
 /** `door`: an organisation's DingTalk door a phone signs in through (INV-2214); off, the installation has none, as the read slice's tests were written for. */
@@ -38,7 +45,9 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
   const home = mkdtempSync(join(tmpdir(), "client-api-contract-"));
   const previous = Object.fromEntries(KEYS.map(key => [key, process.env[key]]));
   for (const key of KEYS) delete process.env[key];
-  Object.assign(process.env, { AGENTBOX_HOME: home, AGENTBOX_PUBLIC_URL: "https://box.example.test" });
+  // The agents' model and sandbox, on loopback (testing/fakes.ts): a turn a message starts runs and ends, and a file has somewhere to go.
+  const model = await scriptedModel(t), sandbox = await fakeBox(t);
+  Object.assign(process.env, { AGENTBOX_HOME: home, AGENTBOX_PUBLIC_URL: "https://box.example.test", AGENTBOX_PROVIDER: "custom", AGENTBOX_BASE_URL: model.url, AGENTBOX_API_KEY: "fixture-not-real" });
   mkdirSync(join(home, "agents"), { recursive: true });
   // An organisation's DingTalk door: what a phone signs in through (INV-2214), faked below as the vendor.
   if (options.door === true) {
@@ -120,7 +129,8 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
   }) as typeof fetch;
   let base = "";
   const logs: string[] = [];
-  const start = () => startWebServer({ port: 0, host: "0.0.0.0", token: "t0k", useBox: false, loginFetch, onLog: line => logs.push(line), onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); } });
+  const { AttachedBoxProvisioner } = await import("../../box/provisioner.ts");
+  const start = () => startWebServer({ port: 0, host: "0.0.0.0", token: "t0k", boxProvisioner: new AttachedBoxProvisioner({ baseUrl: `http://127.0.0.1:${sandbox.port}`, token: "daemon" }), loginFetch, onLog: line => logs.push(line), onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); } });
   let stop = await start();
   /** The server stops and another starts on the same home: what a client finds after a restart. */
   const restart = async () => { stop(); stop = await start(); };
@@ -137,12 +147,28 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
     assert.equal(answer.status, 200, JSON.stringify(json));
     return json;
   };
+  /** The Writer's own conversation: what `{id}` names for a conversation's operations. */
+  const main = conversationIdOf(writer.id, "main");
+  /** Until no turn runs and nothing is written in the Writer's conversations: a read then answers the same twice. */
+  const quiet = async (token: string) => {
+    let last = "";
+    for (let tries = 0; tries < 100; tries += 1) {
+      const now = await (await call(OPERATIONS.find(operation => operation.operationId === "listConversations") as Operation, { token })).text();
+      if (now === last && !now.includes('"running":true')) return;
+      last = now;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  };
+  /** A file's bytes to `/uploads`, for this conversation. */
+  const upload = (token: string, bytes: Buffer, type: string, init: { query?: string; headers?: Record<string, string> } = {}) => fetch(`${base}/api/v1/uploads${init.query ?? `?conversationId=${encodeURIComponent(main)}&name=cover.png`}`, {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": type, "x-forwarded-for": fresh(), ...init.headers }, body: new Uint8Array(bytes),
+  });
   let address = 0;
   /** An address nobody else in this file uses: a limit tripped from it trips nothing else. */
-  const fresh = () => { address += 1; return `203.0.113.${address}`; };
+  const fresh = () => { address += 1; return `198.18.${Math.floor(address / 250)}.${(address % 250) + 1}`; };
   /** A request for an operation; `{id}` is an agent the caller reaches, or work they may read, unless `id` says which. */
   const call = (operation: Operation, init: { token?: string; query?: string; headers?: Record<string, string>; from?: string; id?: string; body?: unknown } = {}) =>
-    fetch(`${base}/api/v1${operation.path.replace(/\{(id|seq)\}/, encodeURIComponent(init.id ?? (operation.path.startsWith("/agents") ? writer.id : t1.id)))}${init.query ?? ""}`, { method: operation.method, headers: {
+    fetch(`${base}/api/v1${operation.path.replace(/\{(id|seq)\}/, encodeURIComponent(init.id ?? (operation.path.startsWith("/agents") ? writer.id : operation.path.startsWith("/conversations") ? main : t1.id)))}${init.query ?? ""}`, { method: operation.method, headers: {
       "x-forwarded-for": init.from ?? fresh(), ...(init.token !== undefined ? { authorization: `Bearer ${init.token}` } : {}), ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...init.headers,
     }, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) });
   const op = (id: string) => OPERATIONS.find(operation => operation.operationId === id) as Operation;
@@ -200,7 +226,7 @@ async function server(t: TestContext, options: { door?: boolean } = {}) {
     assert.ok(line !== undefined, `an inbox change for ${itemId}: ${JSON.stringify(changes.items.filter(item => item.type === "inbox"))}`);
     return line.seq;
   };
-  return { base, home, logs, expired, staleRefresh, reused, questionId, keyedPhone, inboxSeq, roster, mint, fresh, call, op, operator, Principals, ids, restart, url: () => base, session, doorCode, phone, pairingCode };
+  return { base, home, logs, expired, staleRefresh, reused, questionId, keyedPhone, inboxSeq, roster, mint, fresh, call, op, operator, Principals, ids, restart, url: () => base, session, doorCode, phone, pairingCode, main, quiet, upload, model };
 }
 
 /** A body each operation that takes one accepts as well-formed (what it then finds in it is another matter). */
@@ -215,7 +241,11 @@ const WELL_FORMED: Record<string, Record<string, unknown>> = {
   decideApproval: { decision: "deny", reason: "no" },
   answerInboxItem: { action: "reject", reason: "no" },
   decideWork: { decision: "keep-open", note: "no" },
+  sendMessage: { clientMessageId: "contract-message-0001", text: "hello" },
+  sendCardAction: { clientMessageId: "contract-press-0001", surfaceId: "no-such-card", action: "go" },
 };
+/** An image's first bytes: what `/uploads` checks an image by. */
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 1)]);
 
 type Box = Awaited<ReturnType<typeof server>>;
 /** Each operation that changes something, made to answer 200 on a real server (`token`: Dee's personal token with every scope). */
@@ -232,6 +262,17 @@ const SUCCEED: Record<string, (box: Box, token: string) => Promise<Response>> = 
   decideApproval: (box, token) => box.call(box.op("decideApproval"), { token, id: "ap-self", body: { decision: "deny", reason: "not now" } }),
   answerInboxItem: (box, token) => box.call(box.op("answerInboxItem"), { token, id: `question:${box.questionId}`, body: { action: "answer", text: "The blue one." } }),
   decideWork: (box, token) => box.call(box.op("decideWork"), { token, body: { decision: "keep-open", note: "Not yet: the photographs are missing." } }),
+  sendMessage: (box, token) => box.call(box.op("sendMessage"), { token, body: { clientMessageId: "contract-sent-0001", text: "Please check the cover." } }),
+  // A card drawn in a turn still open (the scripted model holds it): its press reaches that work.
+  sendCardAction: async (box, token) => {
+    await (await box.call(box.op("sendMessage"), { token, body: { clientMessageId: "contract-draw-0001", text: "Draw a card." } })).body?.cancel();
+    for (let tries = 0; tries < 100 && !box.model.requests.some(request => /"tu-card"/.test(request.last)); tries += 1) await new Promise(resolve => setTimeout(resolve, 50));
+    const pressed = await box.call(box.op("sendCardAction"), { token, body: { clientMessageId: "contract-press-0002", surfaceId: "pick", action: "pick", contextJson: "{\"choice\":\"blue\"}" } });
+    box.model.release();
+    return pressed;
+  },
+  stopTurn: (box, token) => box.call(box.op("stopTurn"), { token }),
+  uploadFile: (box, token) => box.upload(token, PNG, "image/png"),
 };
 
 /** An error answer is the documented shape, with the code asked for and the request id of its header. */
@@ -273,6 +314,8 @@ test("every operation in the document answers its resource — every field docum
       continue;
     }
     const required = operation.operationId === "getChanges" ? "?since=0" : "";
+    // What a turn writes in a conversation would change the answer between two reads.
+    if (operation.path.startsWith("/conversations")) await box.quiet(all.token);
     // A notification names the change record of something waiting on the caller.
     const seq = operation.operationId === "getNotification" ? { id: String(await box.inboxSeq(all.token, "outbox:dr-1")) } : {};
     const answer = await box.call(operation, { ...(token === undefined ? {} : { token }), query: required, ...seq });
@@ -346,7 +389,10 @@ test("every error the document lists for an operation is provoked on it, and an 
     try { return await finish(); } finally { new box.Principals().save(staying); }
   };
   const bodyOf = (operation: Operation) => (operation.requestBody !== undefined ? { body: WELL_FORMED[operation.operationId] } : {});
-  const CONFLICT_FIELD: Record<string, string> = { startOAuth: "state", exchangeOAuthCode: "code", pairDevice: "code", refreshDeviceToken: "refreshToken", decideApproval: "reason", answerInboxItem: "reason", decideWork: "note" };
+  const CONFLICT_FIELD: Record<string, string> = {
+    startOAuth: "state", exchangeOAuthCode: "code", pairDevice: "code", refreshDeviceToken: "refreshToken", decideApproval: "reason", answerInboxItem: "reason", decideWork: "note",
+    sendMessage: "text", sendCardAction: "action",
+  };
   /** Where an operation is made to answer a code its own way: a credential in the body, not in `Authorization`. */
   const special: Record<string, Partial<Record<ApiErrorCode, () => Promise<Response>>>> = {
     refreshDeviceToken: {
@@ -382,6 +428,26 @@ test("every error the document lists for an operation is provoked on it, and an 
       "api-role-needed": () => box.call(box.op("decideWork"), { token: viewer, id: box.ids.t2, body: { decision: "done" } }),
       "decision-refused": () => box.call(box.op("decideWork"), { token: dee, id: box.ids.t2, body: { decision: "keep-open" } }),
       "inbox-answer-invalid": () => box.call(box.op("decideWork"), { token: dee, id: box.ids.t2, body: { decision: "put-off" } }),
+    },
+    sendMessage: {
+      "api-role-needed": () => box.call(box.op("sendMessage"), { token: viewer, body: WELL_FORMED.sendMessage }),
+      "console-context-command": () => box.call(box.op("sendMessage"), { token: dee, body: { clientMessageId: "contract-new-0001", text: "/new" } }),
+      "upload-unknown": () => box.call(box.op("sendMessage"), { token: dee, body: { ...WELL_FORMED.sendMessage, clientMessageId: "contract-file-0001", attachmentIds: ["up_nope"] } }),
+    },
+    sendCardAction: { "api-role-needed": () => box.call(box.op("sendCardAction"), { token: viewer, body: WELL_FORMED.sendCardAction }) },
+    stopTurn: { "api-role-needed": () => box.call(box.op("stopTurn"), { token: viewer }) },
+    streamConversation: { "api-param-invalid": () => box.call(box.op("streamConversation"), { token: dee, id: "x".repeat(401) }) },
+    uploadFile: {
+      "api-not-found": () => box.upload(dee, PNG, "image/png", { query: "?conversationId=no-such-thing&name=a.png" }),
+      "api-param-invalid": () => box.upload(dee, PNG, "image/png", { query: "?name=a.png" }),
+      "api-role-needed": () => box.upload(viewer, PNG, "image/png"),
+      "upload-too-large": () => box.upload(dee, Buffer.concat([PNG, Buffer.alloc(10 * 1024 * 1024)]), "image/png"),
+      "upload-type-refused": () => box.upload(dee, Buffer.from("<svg/>"), "image/svg+xml"),
+      "api-idempotency-key-invalid": () => box.upload(dee, PNG, "image/png", { headers: { "idempotency-key": "short" } }),
+      "api-idempotency-conflict": async () => {
+        await (await box.upload(dee, PNG, "image/png", { headers: { "idempotency-key": "upload-key-0001" } })).body?.cancel();
+        return box.upload(dee, Buffer.concat([PNG, Buffer.from("x")]), "image/png", { headers: { "idempotency-key": "upload-key-0001" } });
+      },
     },
     getNotification: {
       "api-not-found": () => box.call(box.op("getNotification"), { token: dee, id: "999999999" }),
@@ -458,6 +524,9 @@ test("every error the document lists for an operation is provoked on it, and an 
     "device-credential-needed": () => box.call(box.op("signOutDevice"), { token: dee }),
     // Each answered on the operation it belongs to (`special`, above).
     "api-role-needed": undefined, "approval-always-refused": undefined, "step-up-required": undefined, "step-up-invalid": undefined, "inbox-answer-invalid": undefined, "decision-refused": undefined,
+    "console-context-command": undefined, "upload-unknown": undefined, "upload-too-large": undefined, "upload-type-refused": undefined, "model-not-configured": undefined, "box-not-running": undefined,
+    // No card is drawn under this name: the press does nothing and makes no work.
+    "surface-work-unavailable": () => box.call(box.op("sendCardAction"), { token: dee, body: WELL_FORMED.sendCardAction }),
   };
 
   for (const operation of OPERATIONS as readonly Operation[]) {
@@ -535,6 +604,8 @@ test("the generation check's fixtures stand for a newer server: each fits its sc
     ["auth-providers.json", "AuthProviderList"], ["device-sign-in.json", "DeviceSignIn"], ["device-sign-in-other.json", "DeviceSignIn"], ["device-page.json", "DevicePage"],
     // Decisions (INV-2214): an inbox kind, an action, a tier, a draft kind and an outcome added later.
     ["inbox-page.json", "InboxPage"], ["decision-ack.json", "DecisionAck"],
+    // Conversations (INV-2214): a message, a conversation, a live event and an upload of a kind added later, each with a field added later.
+    ["message-page.json", "MessagePage"], ["conversation-page.json", "ConversationPage"], ["conversation-event.json", "ConversationEvent"], ["upload.json", "Upload"],
   ];
   for (const [file, name] of fixtures) {
     const body = JSON.parse(readFileSync(new URL(`../../../clients/codegen/fixtures/${file}`, import.meta.url), "utf8")) as unknown;
@@ -647,7 +718,8 @@ test("a phone away for more than the page's 512 live events, and across a restar
   const box = await server(t);
   const { ids } = box;
   const op = (id: string) => OPERATIONS.find(operation => operation.operationId === id) as Operation;
-  const dee = (await box.mint({ principalId: "dee", label: "phone", scopes: SCOPE_NAMES })).token;
+  // Without `chat:read`: the agents' own turns (a note on their work wakes them) write in their conversations, which is not this test's.
+  const dee = (await box.mint({ principalId: "dee", label: "phone", scopes: SCOPE_NAMES.filter(scope => scope !== "chat:read") })).token;
   type Changes = { items: { seq: number; type: string; id: string; op: string }[]; durableSeq: number; hasMore: boolean; reset: boolean };
   const changes = async (since: number, limit?: number): Promise<Changes> => {
     const answer = await box.call(op("getChanges"), { token: dee, query: `?since=${since}${limit !== undefined ? `&limit=${limit}` : ""}` });

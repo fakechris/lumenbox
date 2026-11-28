@@ -26,6 +26,7 @@ import { type DecisionWorld, decisionsFor } from "../decisions.ts";
 import { type OutboxAnswerDeps, answerDraft } from "../outbox-answer.ts";
 import { type SecretAnswerDeps, answerSecret, dismissSecret } from "../secret-requests.ts";
 import { type DecisionAccess, inboxChanges, inboxRouting } from "./inbox.ts";
+import { type ChatWorld, chatAccess } from "./chat-access.ts";
 import { CHANGES_LEDGER, ChangeLedger } from "./change-ledger.ts";
 import { type ClientWorld, clientApi } from "./frame.ts";
 
@@ -72,6 +73,8 @@ export function mountClientApi(server: {
     /** A decision on work as the page's buttons make it. */
     work(personId: string, taskId: string, decision: "done" | "keep-open" | "put-off" | "stop", until?: string, note?: string): Promise<{ ok: true } | { ok: false; why: string }>;
   };
+  /** Conversations: what the page draws of them, its send path and Stop, a chat's files (chat-access.ts). */
+  chat: ChatWorld;
 }) {
   const { registry, principals } = server;
   // What changed, on disk, for a client that comes back later (change-ledger.ts).
@@ -162,7 +165,7 @@ export function mountClientApi(server: {
     const viewer = { principalId: person.id, identities: roster?.identities ?? [], all: false, sees: { agent: reach.agent, box: reach.box, task: reach.task } };
     return {
       items: (await decisionsFor(decisions.world, viewer)).mine, approvals: decisions.world.approvals(), drafts: decisions.world.drafts(), tasks: decisions.world.tasks(),
-      secrets: [...decisions.secrets.pending.values()].filter(request => reach.agent(request.agentId)),
+      secrets: [...decisions.secrets.pending.values()].filter(request => reach.agent(request.agentId)), paused: decisions.world.paused(),
     };
   };
   // What waits on anybody, diffed against what the ledger last said: a change record per item that came or went, routed, never its words.
@@ -185,9 +188,11 @@ export function mountClientApi(server: {
     stepUpKeyOf: id => devices.stepUpKeyOf(id),
     noteInbox,
   };
+  const chat = chatAccess(server.chat, registry, changes, server.log);
   const api = clientApi({
     world,
     decisions: decisionAccess,
+    chat: chat.access,
     // A device's access token to the device store, any other to the token store: each prefix has one home.
     tokens: {
       clientFor: (presented, now) => (presented?.startsWith(ACCESS_PREFIX) === true ? devices.clientFor(presented, holds) : server.tokens.clientFor(presented, now)),
@@ -218,6 +223,8 @@ export function mountClientApi(server: {
   }
   return {
     ...api,
+    /** Everything the page is sent, as it happens: a conversation's live stream, and what its change records are written from. */
+    live: chat.live,
     /** The door's half of a device's sign-in (door-sign-in.ts). */
     doorSignIn: { take: (id: string) => signIns.take(id), finish: (id: string, outcome: Parameters<DeviceSignIns["finish"]>[1]) => signIns.finish(id, outcome) },
     /** The page's half (device-routes.ts): a pairing code to show, a person's devices, and ending one. */
@@ -245,6 +252,6 @@ export function mountClientApi(server: {
       ended();
     },
     /** When the server stops: no agent diff of an old registry beside a new one, and no stream left open. */
-    close: () => { clearInterval(agentWatch); clearInterval(inboxWatch); changes.close(); },
+    close: () => { clearInterval(agentWatch); clearInterval(inboxWatch); chat.close(); changes.close(); },
   };
 }

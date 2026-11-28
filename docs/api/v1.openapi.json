@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LumenBox client API",
-    "version": "1.4",
+    "version": "1.5",
     "description": "LumenBox client API, v1 (docs/106 §4). Additions only inside v1: a new operation, a new optional field, a new known value — each raises the revision `GET /api/v1/meta` reports.\n\nConventions, the same for every operation:\n- JSON, camelCase. Ids are opaque strings: compare them, never parse them. Times are RFC 3339 in UTC, to the second (`2026-11-28T10:00:00Z`).\n- A field with no value is absent, never null.\n- A client ignores fields it does not know.\n- A string listed with `x-extensible-enum` is an open enumeration: a client treats a value it does not know as \"other\", shows the item's plain words, and offers to open it on the page or the desktop app when it cannot act on it.\n- Lists take `?limit=` (1–100) and `?cursor=` and answer `{ items, nextCursor }`; `nextCursor` is absent on the last page.\n- Errors are `{ code, error, requestId }`: `code` is stable and is what a program reads; `error` is a sentence in the request's language (`Accept-Language`). Every answer carries `X-Request-Id`.\n- An unknown path answers 404 `api-operation-unknown`; a known path with a method it does not take, 405 `api-method-not-allowed`. A resource the caller may not see answers 404 exactly as one that does not exist.\n- Reads carry `ETag`; a request with a matching `If-None-Match` answers 304 with no body.\n- Every `POST` accepts `Idempotency-Key`: a repeat within 24 hours with the same body answers the first answer —\n  within 30 seconds, from memory only, for an operation whose answer or request holds a secret (`x-secret-answer`: a token, or a secret for the vault).\n- 429 carries `Retry-After` in seconds.\n- A deprecated operation answers with `Deprecation` and `Sunset` headers for a full release line before it goes. Operations listed in `meta.preview` may change in any release.\n\nCredentials (`Authorization: Bearer`): a personal token (`lbxp_…`) is a person's own script; a service token (`lbxs_…`) is an integration an Admin named, limited to its view;\na device credential (`lbxd_…`, fifteen minutes, renewed with its refresh token `lbxr_…` at `POST /auth/refresh`) is a person's phone or desktop client.\nA request body is JSON: a field the operation does not take is refused (`api-param-unknown`), and `null` is the same as absent.\nWhat a call may do is the person's role, intersected with the token's scopes, intersected with what that person may see; a token never raises anything.\nCross-origin browser calls are not answered with CORS headers.",
     "license": {
       "name": "GPL-3.0-only",
@@ -1615,7 +1615,7 @@
       "get": {
         "operationId": "getChanges",
         "summary": "What changed since a position, durably",
-        "description": "For a client waking from sleep, starting, or reconnecting: what changed since `since`, read from a ledger on the server's disk that survives restarts and is kept 30 days. A change is listed only when the caller may read the thing now (or, gone, could have read it); its words are fetched, not sent. Changes are of work, agents and the inbox; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs — `work:read` for work, `agents:read` for agents, `work:decide` for the inbox — and a credential without that scope is not told of it.\n\nAny credential.",
+        "description": "For a client waking from sleep, starting, or reconnecting: what changed since `since`, read from a ledger on the server's disk that survives restarts and is kept 30 days. A change is listed only when the caller may read the thing now (or, gone, could have read it); its words are fetched, not sent. Changes are of work, agents, the inbox, conversations and messages; an agent's `status` (working or idle) is not a change. Any credential: each change is shown by the scope its type needs — `work:read` for work, `agents:read` for agents, `work:decide` for the inbox, `chat:read` for conversations and messages (and a service token's view with conversation text) — and a credential without it is not told of it.\n\nAny credential.",
         "tags": [
           "stable"
         ],
@@ -1661,7 +1661,7 @@
         ],
         "responses": {
           "200": {
-            "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`, and `/inbox` with `work:decide`), then go on from `durableSeq`.",
+            "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`, `/inbox` with `work:decide`, `/conversations` with `chat:read`), then go on from `durableSeq`.",
             "headers": {
               "X-Request-Id": {
                 "description": "Names this request in the server's log.",
@@ -4415,6 +4415,1610 @@
           }
         }
       }
+    },
+    "/api/v1/conversations": {
+      "get": {
+        "operationId": "listConversations",
+        "summary": "The conversations the caller may read",
+        "description": "Every conversation with an agent the person may reach — each agent's `main` first among equals by time — most recently written first. An agent hidden from listings is left out.\n\nScope `chat:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "chat:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "agentId",
+            "in": "query",
+            "required": false,
+            "description": "Only this agent's.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many conversations. 1 to 100; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "`nextCursor` from the page before.",
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversations, most recently written first.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationPage"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-cursor-invalid`: The cursor is not one this list gave, or was given for other filters. Start the list again without it.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-cursor-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{id}/messages": {
+      "get": {
+        "operationId": "listMessages",
+        "summary": "What was said in a conversation",
+        "description": "As the page draws it, in its current context. A message the person sent appears once the agent starts on it.\n\nScope `chat:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "chat:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 400
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "A `Message.id`: only what came after it. One from an earlier context (`/new`) starts at the first message of this one.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "How many messages. 1 to 100; 50 when absent.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "`nextCursor` from the page before.",
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "An `ETag` this client holds: 304 when it still matches.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages, oldest first. Without `after`, the newest ones, and `nextCursor` goes back to older ones; with `after`, those after it, and `nextCursor` goes on.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Send it back as `If-None-Match`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagePage"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Unchanged since the `ETag` in `If-None-Match`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-cursor-invalid`: The cursor is not one this list gave, or was given for other filters. Start the list again without it.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-cursor-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "sendMessage",
+        "summary": "Send the agent a message",
+        "description": "The person's message, as the page sends one: it reaches the agent through the same path, and a conversation of an outside chat hears it there too. `clientMessageId` makes a retry safe: the same one (or the same `Idempotency-Key`) within 24 hours answers the first answer and starts no second turn. No step-up: what the agent then does outside the box is asked for on its own (`/inbox`).\n\nScope `chat:write`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "chat:write",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 400
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 24 hours answers the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The message is in the agent's queue. It appears in `/messages` once the agent starts on it, with `messageId` in its `sentIds`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.\n`upload-unknown`: An `attachmentIds` entry is not an upload this person made to this conversation in the last 24 hours.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid",
+              "upload-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.\n`api-role-needed`: The person's role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin.",
+            "x-error-codes": [
+              "api-scope-needed",
+              "api-role-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).\n`console-context-command`: A context command (`/new`, a recovery, a retry, a goal) is not a message: it is given in a connected private chat.\n`model-not-configured`: No model is set up for this agent: an Owner or Admin chooses one on the page.",
+            "x-error-codes": [
+              "api-idempotency-conflict",
+              "console-context-command",
+              "model-not-configured"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{id}/card-actions": {
+      "post": {
+        "operationId": "sendCardAction",
+        "summary": "Press a card's action",
+        "description": "Reaches the agent as the page's press does: one line naming the card and the action, which continues the work the card was drawn for, or is refused.\n\nScope `chat:write`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "chat:write",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 400
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 24 hours answers the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardAction"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The message is in the agent's queue. It appears in `/messages` once the agent starts on it, with `messageId` in its `sentIds`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageSent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.\n`api-role-needed`: The person's role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin.",
+            "x-error-codes": [
+              "api-scope-needed",
+              "api-role-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).\n`model-not-configured`: No model is set up for this agent: an Owner or Admin chooses one on the page.\n`surface-work-unavailable`: The card's work has ended or changed, so the press did nothing and made no new work; `error` says why.",
+            "x-error-codes": [
+              "api-idempotency-conflict",
+              "model-not-configured",
+              "surface-work-unavailable"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{id}/stop": {
+      "post": {
+        "operationId": "stopTurn",
+        "summary": "Stop the agent's turn",
+        "description": "When the agent is in a turn in this conversation, it is stopped as the page's Stop stops it (the agent's turn, wherever it runs); otherwise nothing happens and `stopped` is false.\n\nScope `chat:write`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "chat:write",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 400
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 24 hours answers the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A stop asked for. A stop ends the agent's turn as the page's Stop does; work it was doing stays on the board.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnStop"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.\n`api-role-needed`: The person's role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin.",
+            "x-error-codes": [
+              "api-scope-needed",
+              "api-role-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversations/{id}/stream": {
+      "get": {
+        "operationId": "streamConversation",
+        "summary": "A conversation as it happens (server-sent events)",
+        "description": "`text/event-stream` while a conversation is on screen: each event's name is its `kind` and its data a `ConversationEvent`. Nothing is replayed — what is kept is read from `/messages` — and `Last-Event-ID` is not read. A `: ping` comment comes every 20 seconds. The stream ends when the credential stops being valid or the person can no longer reach the agent.\n\nScope `chat:read`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "chat:read",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The conversation's id.",
+            "schema": {
+              "type": "string",
+              "maxLength": 400
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-sent events; each event's data is a `ConversationEvent`.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "x-event-data": {
+              "$ref": "#/components/schemas/ConversationEvent"
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.",
+            "x-error-codes": [
+              "api-scope-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/uploads": {
+      "post": {
+        "operationId": "uploadFile",
+        "summary": "Upload an image, a voice note or a file",
+        "description": "The body is the file's bytes and `Content-Type` its type: an image (`image/png`, `jpeg`, `gif`, `webp`, `heic`, at most 10 MB, its bytes checked), a voice note (`audio/…`, at most 20 MB) or another file (at most 20 MB). It goes where a file sent in a chat goes: the conversation's `inbox` in the agent's sandbox, which the person must be able to enter. Then send it with a message (`attachmentIds`); the agent is told where it is.\n\nScope `chat:write`.",
+        "tags": [
+          "stable"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "x-scope": "chat:write",
+        "x-tier": "stable",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "query",
+            "required": true,
+            "description": "The conversation it is for: it is put in that conversation's files in the agent's sandbox.",
+            "schema": {
+              "type": "string",
+              "maxLength": 400
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "description": "The file's name.",
+            "schema": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A key the client keeps for this request: a repeat within 24 hours answers the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A file put in the conversation's sandbox, to send with a message by `id` within 24 hours.",
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Upload"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`api-param-invalid`: A parameter has a value the operation does not take.\n`api-param-unknown`: The operation takes no parameter of this name.\n`api-idempotency-key-invalid`: `Idempotency-Key` is 8 to 128 of A–Z, a–z, 0–9, `_ . : -`.",
+            "x-error-codes": [
+              "api-param-invalid",
+              "api-param-unknown",
+              "api-idempotency-key-invalid"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`api-credential-needed`: The operation needs `Authorization: Bearer <token>`.\n`api-credential-invalid`: The token is not one this installation issued, or it was revoked.\n`api-credential-expired`: The token's lifetime is over.\n`access-removed`: The person the token acts for no longer has access, or this device was removed or signed out. A client drops what it stored for this installation.",
+            "x-error-codes": [
+              "api-credential-needed",
+              "api-credential-invalid",
+              "api-credential-expired",
+              "access-removed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`api-scope-needed`: The token does not carry the scope the operation needs.\n`api-role-needed`: The person's role does not allow this answer: answering for an agent takes a driver, saving a secret an Admin.",
+            "x-error-codes": [
+              "api-scope-needed",
+              "api-role-needed"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`api-not-found`: No such resource, or none the credential may read: the two are one answer.",
+            "x-error-codes": [
+              "api-not-found"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`api-idempotency-conflict`: This `Idempotency-Key` was used for a different request — another body or another target — within the operation's replay window (its `Idempotency-Key` says how long).",
+            "x-error-codes": [
+              "api-idempotency-conflict"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`upload-too-large`: Larger than this kind of file may be: an image 10 MB, a voice note or another file 20 MB.",
+            "x-error-codes": [
+              "upload-too-large"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`upload-type-refused`: `Content-Type` is not one taken here, or an image's bytes are not the image type it names.",
+            "x-error-codes": [
+              "upload-type-refused"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`sign-in-limited`: Too many tries with tokens that did not work from this address; wait the seconds `Retry-After` names.\n`api-rate-limited`: Too many requests; wait the seconds `Retry-After` names.",
+            "x-error-codes": [
+              "sign-in-limited",
+              "api-rate-limited"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`api-internal`: The server failed; `requestId` names the failure in its log.",
+            "x-error-codes": [
+              "api-internal"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`box-not-running`: The agent's sandbox is not running, so a file cannot be put there now.",
+            "x-error-codes": [
+              "box-not-running"
+            ],
+            "headers": {
+              "X-Request-Id": {
+                "description": "Names this request in the server's log.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4461,7 +6065,14 @@
               "step-up-required",
               "step-up-invalid",
               "inbox-answer-invalid",
-              "decision-refused"
+              "decision-refused",
+              "console-context-command",
+              "model-not-configured",
+              "surface-work-unavailable",
+              "box-not-running",
+              "upload-too-large",
+              "upload-type-refused",
+              "upload-unknown"
             ]
           },
           "error": {
@@ -5026,11 +6637,13 @@
           },
           "type": {
             "type": "string",
-            "description": "What changed: `work`, `agent`, or `inbox` (something now waits on a person, or no longer does: `GET /inbox`; `upsert` is also what a wake-only push names).",
+            "description": "What changed: `work`, `agent`, `inbox` (something now waits on a person, or no longer does: `GET /inbox`; `upsert` is also what a wake-only push names), `conversation` (it is new, or something was sent in it) or `message` (a new one in `conversationId`: `GET /conversations/{conversationId}/messages?after=`).",
             "x-extensible-enum": [
               "work",
               "agent",
-              "inbox"
+              "inbox",
+              "conversation",
+              "message"
             ]
           },
           "id": {
@@ -5044,6 +6657,10 @@
               "upsert",
               "delete"
             ]
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "For a `message`: the conversation it is in."
           }
         },
         "required": [
@@ -5056,7 +6673,7 @@
       },
       "Changes": {
         "type": "object",
-        "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`, and `/inbox` with `work:decide`), then go on from `durableSeq`.",
+        "description": "What changed since `since`, oldest first, each thing once (its newest change). When `reset` is true the gap is older than what the server keeps (30 days), or `since` is from another installation's history: drop what is cached, read it again (`/work`, `/agents`, `/board`, `/inbox` with `work:decide`, `/conversations` with `chat:read`), then go on from `durableSeq`.",
         "properties": {
           "items": {
             "type": "array",
@@ -5599,6 +7216,10 @@
             "type": "string",
             "description": "The work it is about, when it is about work."
           },
+          "conversationId": {
+            "type": "string",
+            "description": "The conversation an `answer` goes into (a question, a paused chain), when the caller may read it."
+          },
           "approval": {
             "$ref": "#/components/schemas/InboxApproval"
           },
@@ -6037,6 +7658,505 @@
           "title",
           "body",
           "at"
+        ]
+      },
+      "Conversation": {
+        "type": "object",
+        "description": "A conversation with an agent the caller may reach, as the page's chat lists it. A service token reads none unless its view includes conversation text.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The conversation: what `/conversations/{id}/…` names. Opaque."
+          },
+          "agentId": {
+            "type": "string",
+            "description": "The agent it is with."
+          },
+          "agentName": {
+            "type": "string",
+            "description": "That agent's name."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`main`: the agent's own, the page's chat. `chat`: an outside chat's (DingTalk, Feishu). `other`: another thread.",
+            "x-extensible-enum": [
+              "main",
+              "chat",
+              "other"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "Its first line, or the agent's name for `main`."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When something was last written in it."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "Whether the agent is in a turn in it now."
+          },
+          "canWrite": {
+            "type": "boolean",
+            "description": "Whether the caller may send in it: a driver's credential with `chat:write`."
+          }
+        },
+        "required": [
+          "id",
+          "agentId",
+          "agentName",
+          "kind",
+          "title",
+          "running",
+          "canWrite"
+        ]
+      },
+      "ConversationPage": {
+        "type": "object",
+        "description": "Conversations, most recently written first.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conversation"
+            },
+            "description": "The conversations on this page."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "The next page's cursor; absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "Message": {
+        "type": "object",
+        "description": "One entry of a conversation, as the page draws it: never a prompt, a tool's input or a host note's words. The payload of `kind` is in the field of that name where it has one (`card`, `question`, `steps`). A kind a client does not know is shown by `text` when there is one, else skipped.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The message. Opaque; ids rise in the order of the conversation."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "The conversation."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`person`: what a person said. `agent`: what the agent said. `teammate`: another agent's message. `notice`: a turn nobody typed (a timer, a webhook, a restart), by `label` only. `status`: how a turn ended. `card`: a card the agent drew. `question`: a question it asked. `steps`: what it did, in words.",
+            "x-extensible-enum": [
+              "person",
+              "agent",
+              "teammate",
+              "notice",
+              "status",
+              "card",
+              "question",
+              "steps"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was written, when the record kept the time."
+          },
+          "text": {
+            "type": "string",
+            "description": "The words, for `person`, `agent`, `teammate` and `status`."
+          },
+          "from": {
+            "type": "string",
+            "description": "Who it is from: a teammate's name, or the chat a person wrote in (`dingtalk`, `feishu`, `telegram`, `routine`)."
+          },
+          "aside": {
+            "type": "boolean",
+            "description": "An agent's words beside its steps: commentary rather than its answer."
+          },
+          "label": {
+            "type": "string",
+            "description": "For a `notice`: what started the turn."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A file's name."
+            },
+            "description": "Files the agent sent with these words."
+          },
+          "sentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A `messageId`."
+            },
+            "description": "For `person`: the `messageId`s of what was sent and is answered here (`POST …/messages` answers one)."
+          },
+          "card": {
+            "$ref": "#/components/schemas/MessageCard"
+          },
+          "question": {
+            "$ref": "#/components/schemas/MessageQuestion"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A step, in the request's language."
+            },
+            "description": "For `steps`: what the agent did, one line each."
+          }
+        },
+        "required": [
+          "id",
+          "conversationId",
+          "kind"
+        ]
+      },
+      "MessageCard": {
+        "type": "object",
+        "description": "A card the agent drew (ShowUI). A later card with the same `surfaceId` replaces it. A client that does not draw A2UI shows `title` and opens the page.",
+        "properties": {
+          "surfaceId": {
+            "type": "string",
+            "description": "The card: what `POST …/card-actions` names."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title."
+          },
+          "a2ui": {
+            "type": "string",
+            "description": "The card as A2UI v0.9 messages, a JSON array in a string, as the page draws it."
+          },
+          "closed": {
+            "type": "boolean",
+            "description": "The agent took the card away."
+          }
+        },
+        "required": [
+          "surfaceId",
+          "a2ui"
+        ]
+      },
+      "MessageQuestion": {
+        "type": "object",
+        "description": "A question the agent asked: answered with a message, or at `POST /inbox/{id}/answer` while it waits.",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question."
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "A choice."
+            },
+            "description": "The answers it offered."
+          },
+          "fallback": {
+            "type": "string",
+            "description": "What it does with no answer."
+          }
+        },
+        "required": [
+          "question"
+        ]
+      },
+      "MessagePage": {
+        "type": "object",
+        "description": "Messages, oldest first. Without `after`, the newest ones, and `nextCursor` goes back to older ones; with `after`, those after it, and `nextCursor` goes on.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "description": "The messages on this page."
+          },
+          "nextCursor": {
+            "type": "string",
+            "description": "The next page's cursor; absent on the last page."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "SendMessage": {
+        "type": "object",
+        "description": "A person's message to the agent. Sent twice with one `clientMessageId` (or one `Idempotency-Key`) within 24 hours, it reaches the agent once.",
+        "properties": {
+          "clientMessageId": {
+            "type": "string",
+            "description": "The client's own id for this message, kept across retries: a UUID.",
+            "pattern": "^[A-Za-z0-9_-]{8,128}$"
+          },
+          "text": {
+            "type": "string",
+            "description": "The words.",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "attachmentIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "An `Upload.id`."
+            },
+            "description": "Files uploaded to this conversation to send with it (`POST /uploads`), at most 10."
+          }
+        },
+        "required": [
+          "clientMessageId",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "CardAction": {
+        "type": "object",
+        "description": "A press on a card the agent drew (ShowUI): it reaches the agent as the page's press does, and continues the work the card was drawn for.",
+        "properties": {
+          "clientMessageId": {
+            "type": "string",
+            "description": "As in `SendMessage`.",
+            "pattern": "^[A-Za-z0-9_-]{8,128}$"
+          },
+          "surfaceId": {
+            "type": "string",
+            "description": "The card's `surfaceId`.",
+            "maxLength": 200
+          },
+          "action": {
+            "type": "string",
+            "description": "The action's name, as the card's A2UI names it.",
+            "maxLength": 200
+          },
+          "contextJson": {
+            "type": "string",
+            "description": "The action's context, a JSON object in a string, when the card gives one.",
+            "maxLength": 4000
+          }
+        },
+        "required": [
+          "clientMessageId",
+          "surfaceId",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "MessageSent": {
+        "type": "object",
+        "description": "The message is in the agent's queue. It appears in `/messages` once the agent starts on it, with `messageId` in its `sentIds`.",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The message's id on the record."
+          },
+          "clientMessageId": {
+            "type": "string",
+            "description": "The `clientMessageId` that was sent."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "The conversation."
+          },
+          "acceptedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was taken."
+          }
+        },
+        "required": [
+          "messageId",
+          "clientMessageId",
+          "conversationId",
+          "acceptedAt"
+        ]
+      },
+      "TurnStop": {
+        "type": "object",
+        "description": "A stop asked for. A stop ends the agent's turn as the page's Stop does; work it was doing stays on the board.",
+        "properties": {
+          "conversationId": {
+            "type": "string",
+            "description": "The conversation."
+          },
+          "stopped": {
+            "type": "boolean",
+            "description": "Whether a turn was running in it to stop."
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When."
+          }
+        },
+        "required": [
+          "conversationId",
+          "stopped",
+          "at"
+        ]
+      },
+      "Upload": {
+        "type": "object",
+        "description": "A file put in the conversation's sandbox, to send with a message by `id` within 24 hours.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "What `SendMessage.attachmentIds` names."
+          },
+          "conversationId": {
+            "type": "string",
+            "description": "The conversation it was uploaded to: only a message there sends it."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name in the sandbox, which may differ from the one given when a file of that name was there."
+          },
+          "mimeType": {
+            "type": "string",
+            "description": "The `Content-Type` it was sent with."
+          },
+          "kind": {
+            "type": "string",
+            "description": "What it is, by `Content-Type`.",
+            "x-extensible-enum": [
+              "image",
+              "voice",
+              "file"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its size."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When `id` stops naming it; the file stays in the sandbox."
+          }
+        },
+        "required": [
+          "id",
+          "conversationId",
+          "name",
+          "mimeType",
+          "kind",
+          "sizeBytes",
+          "expiresAt"
+        ]
+      },
+      "ConversationEvent": {
+        "type": "object",
+        "description": "One event of a conversation's live stream: `kind` and its payload in the field of that name. A kind a client does not know is skipped.",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`text`: the agent's words as they come. `step`: a step starting or ending. `turn`: a turn starting or ending. `sent`: a person's message taken. `message`: a message kept.",
+            "x-extensible-enum": [
+              "text",
+              "step",
+              "turn",
+              "sent",
+              "message"
+            ]
+          },
+          "text": {
+            "$ref": "#/components/schemas/StreamText"
+          },
+          "step": {
+            "$ref": "#/components/schemas/StreamStep"
+          },
+          "turn": {
+            "$ref": "#/components/schemas/StreamTurn"
+          },
+          "sent": {
+            "$ref": "#/components/schemas/StreamMessage"
+          },
+          "message": {
+            "$ref": "#/components/schemas/StreamMessage"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "StreamText": {
+        "type": "object",
+        "description": "Words the agent is writing now; the message that keeps them follows as `message`.",
+        "properties": {
+          "delta": {
+            "type": "string",
+            "description": "The next words."
+          }
+        },
+        "required": [
+          "delta"
+        ]
+      },
+      "StreamStep": {
+        "type": "object",
+        "description": "A step the agent takes.",
+        "properties": {
+          "phrase": {
+            "type": "string",
+            "description": "What it is doing, in the request's language."
+          },
+          "state": {
+            "type": "string",
+            "description": "`started` or `ended`.",
+            "x-extensible-enum": [
+              "started",
+              "ended"
+            ]
+          },
+          "ok": {
+            "type": "boolean",
+            "description": "For `ended`: whether it worked."
+          }
+        },
+        "required": [
+          "phrase",
+          "state"
+        ]
+      },
+      "StreamTurn": {
+        "type": "object",
+        "description": "A turn in this conversation.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "`started`, `ended`, `failed`, or `stopped`.",
+            "x-extensible-enum": [
+              "started",
+              "ended",
+              "failed",
+              "stopped"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "StreamMessage": {
+        "type": "object",
+        "description": "A message: for `sent`, the `messageId` a send answered; for `message`, a `Message.id` to read with `after`.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The id."
+          }
+        },
+        "required": [
+          "id"
         ]
       },
       "DeviceEnded": {
