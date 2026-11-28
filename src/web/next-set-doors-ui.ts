@@ -6,6 +6,17 @@
  */
 import { CHANNEL_SETUP_JS } from "./channel-setup-ui.ts";
 
+/**
+ * A channel row: its name and status, then who answers, when it answers in groups and Set credentials. The words wrap
+ * and the controls move under them when the card is too narrow for one line (INV-2322): on one unwrapped line the
+ * Set credentials button sat past the right edge of the desktop app's default window.
+ */
+export const NEXT_SET_DOORS_CSS = `
+.setting .fact.channel-row { flex-wrap: wrap; row-gap: 8px; }
+.channel-row > span:first-child { flex: 1 1 260px; min-width: 0; } .channel-row .why { white-space: normal; }
+.setting .channel-row > .acts { flex: 0 1 auto; max-width: 100%; justify-content: flex-start; }
+`;
+
 export const NEXT_SET_DOORS_JS = `
 ${CHANNEL_SETUP_JS}
 var doors = { data: null, connectors: null, error: "", adding: false, editing: null, note: "" };
@@ -63,7 +74,7 @@ function channelsBlock() {
     postJson("/api/channels/records", Object.assign({ id: record.id, type: record.type }, extra)).then(function (got) { doors.note = doorSaved(got); loadDoors(); }, failed);
   };
   (data.records || []).forEach(function (record) {
-    var state = running[record.id] || running[record.name] || {}, line = el("div", "fact"), text = el("span", ""), acts = el("span", "acts");
+    var state = running[record.id] || running[record.name] || {}, line = el("div", "fact channel-row"), text = el("span", ""), acts = el("span", "acts");
     var status = state.running ? t("ui.next.doors.on") : record.credentialsSet ? t("ui.next.doors.off") : t("ui.next.doors.noCredentials");
     var detail = record.credentialsSet ? state.detail : t(record.type === "telegram" ? "ui.channels.telegram-setup" : "ui.channels.add-credentials");
     text.appendChild(el("b", "", record.name || record.id)); text.appendChild(el("div", "why", record.type + " · " + status + (detail ? " · " + detail : "")));
