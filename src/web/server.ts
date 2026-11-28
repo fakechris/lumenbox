@@ -2983,7 +2983,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
     signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log,
     boxes: (people: readonly { id: string; name: string }[]) => autoBoxes.activated(people, person => tr("ui.personal.defaultName", localeOfPerson(person.id), { name: person.name })) };
-  const onboarding = members.attach({ activations: admissionDeps.activations, reach, autoBoxes, publicUrl: () => process.env.AGENTBOX_PUBLIC_URL, sourceOf: door => directoryCredentials(door)?.source,
+  const onboarding = members.attach({ activations: admissionDeps.activations, reach, autoBoxes, publicUrl: () => configuredPublicUrl(), sourceOf: door => directoryCredentials(door)?.source,
     quotaOf: id => personalQuotaFor(id, loadConfig(), directories.membership([id], directorySources())) }); // estimate, progress, telling people (INV-2220)
   const orgAdmission = admission(admissionDeps); chatDesk = orgAdmission;
   orgAdmission.catchUp(channelRecords.map(record => record.id)); // an activation a crash interrupted is finished, and boxes owed from before are queued (INV-2220)
