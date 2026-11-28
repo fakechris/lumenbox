@@ -48,7 +48,7 @@ docker/box/xwatchdog-arm64
 src/xwatchdog/xwatchdog
 
 # Runtime scratch space — anything a developer creates while testing locally that
-# should not enter the repo. The TLS feature (src/boxd/main.ts, src/box/client.ts)
-# uses .runtime/tls/ to stage a self-signed cert and key for AGENTBOX_BOXD_TLS_CERT
-# / AGENTBOX_BOXD_TLS_KEY without retyping paths every time.
+# should not enter the repo. (The box daemon speaks plain HTTP; an attached box reached over
+# HTTPS has a terminator in front of it, whose certificate the host checks or pins —
+# src/box/box-tls.ts. A self-signed pair for trying that may be staged under .runtime/tls/.)
 /.runtime/

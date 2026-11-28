@@ -69,6 +69,8 @@ export class AutoPersonalBoxes {
   private readonly path: string;
   private readonly queue: Array<{ person: { id: string; name: string }; name: string }> = [];
   private starting = 0;
+  /** People whose box has started and whose `ready` step has not ended. */
+  private readonly finishing = new Set<string>();
   constructor(private readonly options: Options) {
     mkdirSync(options.home, { recursive: true, mode: 0o700 });
     this.path = join(options.home, "auto-personal-box.sqlite");
@@ -150,7 +152,8 @@ export class AutoPersonalBoxes {
     return pending.then(
       (row) => {
         options.log(`personal box for ${person.id}: created ${when}, ${row.status}${row.stateReason ? ` (${row.stateReason})` : ""}`);
-        if (row.status === "ready") return options.ready(row.id);
+        // Up, and what follows is still being done (reconnecting it, making the person's agent): being prepared until that has ended (INV-2221).
+        if (row.status === "ready") { this.finishing.add(person.id); return options.ready(row.id); }
       },
       (error: unknown) => {
         // Refused before anything was reserved: a quota taken meanwhile is said like any other; any other refusal is looked at again next time.
@@ -158,14 +161,15 @@ export class AutoPersonalBoxes {
         this.write(person.id, full ? "quota" : undefined);
         options.log(`personal box for ${person.id}: not created ${when}: ${error instanceof Error ? error.message : String(error)}`);
       },
-    ).catch((error: unknown) => options.log(`personal box for ${person.id}: reconnect failed: ${error instanceof Error ? error.message : String(error)}`));
+    ).catch((error: unknown) => options.log(`personal box for ${person.id}: reconnect failed: ${error instanceof Error ? error.message : String(error)}`))
+      .finally(() => { this.finishing.delete(person.id); });
   }
 
   /** What the page says about it while it matters: being prepared, why it failed, or out of quota. */
   view(owner: string): AutoPersonalBoxView | undefined {
     if (this.options.when() === "never") return;
     // Waiting in the queue here is being prepared too: the page and the chat (INV-2221) say so before a box record exists.
-    if (this.queue.some(entry => entry.person.id === owner)) return { state: "preparing" };
+    if (this.queue.some(entry => entry.person.id === owner) || this.finishing.has(owner)) return { state: "preparing" };
     const outcome = this.outcome(owner), box = this.options.boxes.list(owner)[0];
     // Out of quota stops mattering once the person has a box, however they got it.
     if (outcome === "quota") return box ? undefined : { state: "quota" };

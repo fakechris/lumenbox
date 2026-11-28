@@ -9,12 +9,21 @@
  * published is an update: a new version. The boxes are synced by the library's own change
  * (`attachOrgSkills`), not by the request: with hundreds of boxes the answer does not wait for
  * them, and the page shows who is behind until they are not.
+ *
+ * Three routes are a member's too, not only an Admin's: `POST /api/org-skills/offer` (a driver
+ * offers a skill from a box they may enter), `GET /api/org-skills/offers/mine` (what became of
+ * their offers, and the boxes they may offer from) and `GET /api/org-skills/box` (that box's skills).
+ * An Admin reads what waits with its files and what the checks say of them
+ * (`GET /api/org-skills/offers`), and approves or declines with a reason (`POST …/offers/decide`).
  */
 
+import type { BoxEntry } from "../box/boxes.ts";
 import type { ErrorCode } from "../i18n/server-errors.ts";
+import { join } from "node:path";
 import type { InstallationMode } from "../host/installation.ts";
+import { ORG_SKILL_SETUP_LEDGER, type OrgSkillSetup, setupWarnings } from "../host/org-skill-setup.ts";
 import { attachOrgSkills, type BoxSyncStatus, type OrgSkillSync, type OrgSkillsHost } from "../host/org-skill-sync.ts";
-import { type OrgSkillRefusal, OrgSkills, type SkillFiles, slugFor } from "../host/org-skills.ts";
+import { type OrgSkillOffer, type OrgSkillRefusal, OrgSkills, publishRefusal, type SkillFiles, slugFor } from "../host/org-skills.ts";
 import { IMPORT_MAX_FILES } from "../host/skill-import.ts";
 import { parseSkillFile, SKILL_FILENAME } from "../host/skills.ts";
 import { parseTemplate } from "../host/template.ts";
@@ -44,6 +53,17 @@ export interface OrgSkillRouteDeps {
   params: URLSearchParams;
   /** Answers the refusal itself and returns true when the caller is not an Admin. */
   refusedAdmin: () => boolean;
+  /** The same for somebody who may not drive: a viewer offers nothing. */
+  refusedDriver: () => boolean;
+  /** What the organisation's required skills would run, and each box's person's answer (org-skill-setup.ts). */
+  setup: Pick<OrgSkillSetup, "forBox" | "answer">;
+  /** Whether a person may agree for this box (`consentRule`). */
+  mayConsent: (boxId: string, principalId: string) => boolean;
+  boxName: (boxId: string) => string;
+  /** Whom a box answers for, by name: its owner, or the box's name for a shared one. */
+  boxOwnerName: (boxId: string) => string;
+  /** Tells a member what became of their offer, where they are reached. The page shows it either way. */
+  tell: (principalId: string, outcome: { decision: "approved" | "declined"; name: string; reason?: string }) => void;
   /** The signed-in person's principal id, or the operator's key. */
   by: () => string;
   nameOf: (principalId: string) => string;
@@ -77,14 +97,53 @@ async function readBoxSkill(box: SkillBox, dir: string): Promise<SkillFiles | st
 
 export async function orgSkillRoute(route: string, deps: OrgSkillRouteDeps): Promise<{ status: number; body: unknown } | undefined> {
   if (!/^(GET|POST) \/api\/org-skills(\/|$)/.test(route)) return undefined;
-  if (deps.refusedAdmin()) return { status: 0, body: null };
+  const members = ["POST /api/org-skills/offer", "GET /api/org-skills/offers/mine", "GET /api/org-skills/box", "GET /api/org-skills/consents/mine", "POST /api/org-skills/consent"].includes(route);
+  if (members ? deps.refusedDriver() : deps.refusedAdmin()) return { status: 0, body: null };
   if (deps.library.mode() === "single-machine") return { status: 409, body: apiError("org-skill-personal") };
+  const refused = (result: { code: OrgSkillRefusal; why: string }) => ({ status: REFUSAL[result.code].status, body: apiError(REFUSAL[result.code].code, { why: result.why }) });
+  const offerView = (offer: OrgSkillOffer) => ({ ...offer, byName: deps.nameOf(offer.by), ...(offer.decidedBy !== undefined ? { decidedByName: deps.nameOf(offer.decidedBy) } : {}) });
+  // What the organisation's required skills would run in the boxes this person answers for, and their answer.
+  const mineToAnswer = () => deps.sync.status().filter(box => deps.mayConsent(box.boxId, deps.by())).map(box => ({ boxId: box.boxId, name: deps.boxName(box.boxId), skills: deps.setup.forBox(box.boxId) }));
+  if (route === "GET /api/org-skills/consents/mine") return { status: 200, body: { boxes: mineToAnswer() } };
+  if (route === "POST /api/org-skills/consent") {
+    const body = await deps.readJson();
+    const boxId = String(body.box ?? ""), slug = String(body.slug ?? "");
+    if (!deps.mayConsent(boxId, deps.by())) return { status: 403, body: apiError("org-skill-consent") };
+    if (!(await deps.setup.answer(boxId, slug, body.agree === true, deps.by(), "page"))) return { status: 404, body: apiError("org-skill-unknown") };
+    return { status: 200, body: { boxes: mineToAnswer() } };
+  }
+  if (route === "GET /api/org-skills/offers/mine") {
+    const offers = deps.library.offers().filter(offer => offer.by === deps.by()).map(offerView);
+    return { status: 200, body: { offers, sources: deps.boxes().map(box => ({ id: box.id, name: box.name })) } };
+  }
+  if (route === "GET /api/org-skills/offers") {
+    // What the Admin would be publishing: every file, and what the checks say of them now.
+    const waiting = deps.library.offers().filter(offer => offer.state === "waiting").map(offer => {
+      const files = deps.library.offerFiles(offer) ?? {};
+      const refusal = publishRefusal(offer.slug, files, deps.library.held());
+      const check = refusal === undefined ? { ok: true } : { ok: false, why: refusal.why };
+      return { ...offerView(offer), content: files, check, warnings: setupWarnings(files), replaces: deps.library.get(offer.slug)?.version ?? null };
+    });
+    return { status: 200, body: { offers: waiting } };
+  }
+  // Where each box's person stands on a required skill's lines: counts, and who declined by name. No reminder is sent from here.
+  const consentOf = (slug: string) => {
+    const states = boxes().flatMap(box => deps.setup.forBox(box.boxId).filter(entry => entry.slug === slug).map(entry => ({ box: box.boxId, state: entry.state })));
+    if (states.length === 0) return undefined;
+    return {
+      agreed: states.filter(entry => entry.state === "agreed").length,
+      waiting: states.filter(entry => entry.state === "waiting").length,
+      declined: states.filter(entry => entry.state === "declined").map(entry => deps.boxOwnerName(entry.box)),
+    };
+  };
+  const boxes = () => deps.sync.status();
   const view = () => {
     const boxes = deps.sync.status();
     const names = new Map(deps.boxes().map(box => [box.id, box.name]));
     const count = (state: BoxSyncStatus["state"]) => boxes.filter(box => box.state === state).length;
     return {
-      skills: deps.library.list().map(skill => ({ ...skill, byName: deps.nameOf(skill.by) })),
+      skills: deps.library.list().map(skill => ({ ...skill, byName: deps.nameOf(skill.by), warnings: setupWarnings(deps.library.filesOf(skill) ?? {}), consent: consentOf(skill.slug) })),
+      waiting: deps.library.offers().filter(offer => offer.state === "waiting").length,
       // A box holds every skill or is behind on the library as a whole: the counts are of boxes.
       boxes: { current: count("current"), behind: count("behind"), offline: count("offline"), each: boxes.map(box => ({ ...box, name: names.get(box.boxId) ?? box.boxId })) },
       sources: deps.boxes().map(box => ({ id: box.id, name: box.name })),
@@ -103,7 +162,27 @@ export async function orgSkillRoute(route: string, deps: OrgSkillRouteDeps): Pro
   }
   const body = await deps.readJson();
   const slug = typeof body.slug === "string" ? body.slug.trim() : "";
-  const refused = (result: { code: OrgSkillRefusal; why: string }) => ({ status: REFUSAL[result.code].status, body: apiError(REFUSAL[result.code].code, { why: result.why }) });
+  if (route === "POST /api/org-skills/offer") {
+    const skill = typeof body.skill === "string" ? body.skill : "";
+    const from = deps.boxes().find(box => box.id === body.box);
+    const client = from === undefined ? undefined : deps.box(from.id);
+    if (from === undefined || client === undefined || !/^[A-Za-z0-9._-]+$/.test(skill) || skill.startsWith(".")) return { status: 404, body: apiError("org-skill-box") };
+    const read = await readBoxSkill(client, `${from.skills}/${skill}`);
+    if (typeof read === "string") return { status: 400, body: apiError("org-skill-invalid", { why: `${skill} could not be read from ${from.name}: ${read}` }) };
+    const result = deps.library.offer(/^[a-z0-9][a-z0-9._-]*$/.test(skill) ? skill : slugFor(read), read, deps.by(), `box:${from.id}/${skill}`);
+    if (!result.ok) return refused(result);
+    deps.log(`organisation skills: ${deps.by()} offered ${result.offer.slug} (${result.offer.id}) from ${from.name}`);
+    return { status: 200, body: { offer: offerView(result.offer) } };
+  }
+  if (route === "POST /api/org-skills/offers/decide") {
+    const decision = body.decision === "approved" || body.decision === "declined" ? body.decision : undefined;
+    if (decision === undefined) return { status: 400, body: apiError("memory-review-decision") };
+    const result = deps.library.decideOffer(String(body.id ?? ""), decision, deps.by(), typeof body.reason === "string" ? body.reason : "");
+    if (!result.ok) return refused(result);
+    deps.log(`organisation skills: ${deps.by()} ${decision} the offer ${result.offer.id} (${result.offer.slug}) from ${result.offer.by}`);
+    deps.tell(result.offer.by, { decision, name: result.offer.name, ...(result.offer.reason !== undefined ? { reason: result.offer.reason } : {}) });
+    return { status: 200, body: { ...view(), offer: offerView(result.offer) } };
+  }
   if (route === "POST /api/org-skills/publish") {
     let files: SkillFiles | undefined;
     let source = "upload";
@@ -132,7 +211,8 @@ export async function orgSkillRoute(route: string, deps: OrgSkillRouteDeps): Pro
     const result = deps.library.publish(name, files, deps.by(), source);
     if (!result.ok) return refused(result);
     deps.log(`organisation skills: ${deps.by()} published ${name} v${result.skill.version} (${parseSkillFile(files[SKILL_FILENAME] ?? "").meta.name ?? name}) from ${source}`);
-    return { status: 200, body: { ...view(), published: result.skill.slug } };
+    // Said to the Admin with the publish: where its install looks to be outside what a box keeps (never a refusal).
+    return { status: 200, body: { ...view(), published: result.skill.slug, warnings: setupWarnings(files) } };
   }
   if (route === "POST /api/org-skills/withdraw") {
     const result = deps.library.withdraw(slug, deps.by());
@@ -148,20 +228,55 @@ export async function orgSkillRoute(route: string, deps: OrgSkillRouteDeps): Pro
   }
   if (route === "POST /api/org-skills/sync") {
     // "Look again": every connected box is read and put right, which is also how drift is looked for.
-    await Promise.all(deps.sync.status().filter(box => box.state !== "offline").map(box => deps.sync.syncBox(box.boxId)));
+    await Promise.all(deps.sync.status().filter(box => box.state !== "offline").map(box => deps.sync.syncBox(box.boxId, "full", { waitForRunning: true })));
     return { status: 200, body: view() };
   }
   return { status: 404, body: apiError("route-unknown", { route }) };
 }
 
-/** How often a box that connected unnoticed, or whose sync failed, is looked at again. */
-const SWEEP_MS = 30_000;
+/**
+ * How often every connected box is looked at: a glance at one that was current (one request), a
+ * full sync of one that was not. A minute: connecting and publishing sync at once, so the sweep is
+ * for what those missed, and at three hundred boxes it is five small requests a second on average.
+ */
+const SWEEP_MS = 60_000;
 
 /** The library under `home`, attached to the running host and kept in step with its boxes: what the server starts once. */
-export function startOrgSkills(input: { home: string; host: OrgSkillsHost; mode: () => InstallationMode; held: () => ReadonlyMap<string, string>; log: (line: string) => void }): { library: OrgSkills; sync: OrgSkillSync } {
+export function startOrgSkills(input: {
+  home: string; host: OrgSkillsHost; mode: () => InstallationMode; held: () => ReadonlyMap<string, string>; log: (line: string) => void;
+  nameOf: (principalId: string) => string;
+} & ConsentDeps): Pick<OrgSkillRouteDeps, "library" | "sync" | "setup" | "mayConsent" | "boxName" | "boxOwnerName"> {
   const library = new OrgSkills(input.home, { mode: input.mode, held: input.held });
-  const sync = attachOrgSkills(input.host, library, input.log);
+  const mayConsent = consentRule(input);
+  const { sync, setup } = attachOrgSkills(input.host, library, input.log, { setupLedger: join(input.home, ORG_SKILL_SETUP_LEDGER), mayConsent, nameOf: input.nameOf });
   setInterval(() => { void sync.syncDue(); }, SWEEP_MS).unref();
   void sync.syncDue();
-  return { library, sync };
+  const boxName = (boxId: string) => input.box(boxId)?.name ?? boxId;
+  const boxOwnerName = (boxId: string) => {
+    const members = input.box(boxId)?.members;
+    return Array.isArray(members) && members.length === 1 ? input.nameOf(members[0]!) : boxName(boxId);
+  };
+  return { library, sync, setup, mayConsent, boxName, boxOwnerName };
+}
+
+/**
+ * Who may agree to what an organisation skill runs in a box (decided 2026-11-28): for a personal
+ * box — one member — that member and nobody else, an Admin included; for a box several people
+ * share, an Admin who may enter it, since an Admin's yes is the organisation's own decision there.
+ */
+export interface ConsentDeps {
+  box: (boxId: string) => (BoxEntry & { members: "everyone" | string[] }) | undefined;
+  resolve: (principalId: string) => string;
+  isAdmin: (principalId: string) => boolean;
+  mayEnter: (box: BoxEntry, principalId: string) => boolean;
+}
+
+export function consentRule(deps: ConsentDeps): (boxId: string, principalId: string) => boolean {
+  return (boxId, principalId) => {
+    const box = deps.box(boxId);
+    if (box === undefined) return false;
+    const who = deps.resolve(principalId);
+    if (Array.isArray(box.members) && box.members.length === 1) return box.members[0] === who;
+    return deps.isAdmin(who) && deps.mayEnter(box, who);
+  };
 }

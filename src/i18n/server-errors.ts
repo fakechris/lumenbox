@@ -245,6 +245,7 @@ export const SERVER_ERRORS = {
   "err.org-skill-unknown": ["组织里没有这个 skill。", "The organisation has no such skill."],
   "err.org-skill-unchanged": ["没有变化：{why}", "Nothing changed: {why}"],
   "err.org-skill-source": ["请给出要发布的内容：上传的文件（files）、模板里的 skill（template、skill），或某个 box 里的 skill（box、skill）。", "Say what to publish: uploaded files (files), a template's skill (template, skill), or a skill in a box (box, skill)."],
+  "err.org-skill-consent": ["只有这个 box 的主人（共享 box 则是能进入它的管理员）可以同意或拒绝。", "Only the box's own person (for a shared box, an Admin who may enter it) agrees or declines for it."],
   "err.org-skill-box": ["找不到这个 box 或其中的 skill：它没有连接，或你不能进入。", "No such box or skill in it: the box is not connected, or you may not enter it."],
   "err.org-not-pending": ["这条提议没有在等待审核：已经处理过了，或从未提出。", "That proposal is not waiting for review: it was decided already, or never proposed."],
   "err.org-no-readers": ["它要进入的 box 已不存在，没有人能读到。请拒绝，或为存在的 box 重新提升。", "The box it was proposed for no longer exists, so nobody could read it. Reject it, or promote it again for a box that exists."],

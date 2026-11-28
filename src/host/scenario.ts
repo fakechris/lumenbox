@@ -384,8 +384,12 @@ export interface EpisodeOptions {
   display?: number;
   /** A credential vault, so `browser_fill_secret` and host secrets resolve (INV-1309). */
   vault?: Vault;
-  /** Skills the agents are offered, as the prompt would list them (INV-481). */
-  skills?: readonly Skill[];
+  /** The person's authenticated principal on what they say, as a door or the page stamps it (INV-2222). */
+  principalId?: string;
+  /** Awaited as a turn starts, before its prompt: the orchestrator's `turnOpening` (INV-2222). */
+  turnOpening?: (agentId: string, inbound: readonly import("../agents/admitted-message.ts").InboundMessage[]) => Promise<void>;
+  /** Skills the agents are offered, as the prompt would list them (INV-481); a function is read at each turn, as the host's cache is (INV-2222). */
+  skills?: readonly Skill[] | (() => readonly Skill[]);
   /** Persisted history before the episode, including legacy compaction records. */
   history?: readonly HistoryEntry[];
   /** Script only the relevance decision, while retaining the production projection path. */
@@ -406,6 +410,8 @@ export interface EpisodeOptions {
    * `say` is one line of `says`, with the same after-turn bookkeeping, for a drive that
    * needs to change the world between turns.
    */
+  /** Where a question goes besides the page: a scenario with chat doors passes it to them (INV-2221). */
+  askUser?: (input: { agentId: string; agentName: string; question: string }) => string | undefined;
   drive?: (context: { bus: AgentBus; registry: AgentRegistry; frontId: string; files: Map<string, string>; surfaces: ReadonlyMap<string, SurfaceRecord>; say: (line: string) => Promise<void> ; goalLoop?: GoalLoop }) => Promise<void>;
 }
 
@@ -506,6 +512,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
   if(options.tasks)focus.attach(options.tasks.workRoots);
   const bus: AgentBus = new AgentBus(registry, async (record, inbound, signal, conversation) => {
     if (goalLoop !== undefined && !goalLoop.turnStarting(record.id, conversation, inbound)) return;
+    await options.turnOpening?.(record.id, inbound);
     if (goalLoop === undefined && goalGate?.verifierMayRun(inbound) === false) return;
     for (const inboundMessage of inbound) {
       if (inboundMessage.fromId !== "user") {
@@ -542,15 +549,16 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
       ...(options.selectMemory !== undefined ? { selectMemory: options.selectMemory } : {}),
       ...(options.display !== undefined ? { displayIndex: options.display } : {}),
       ...(options.vault !== undefined ? { vault: options.vault } : {}),
-      ...(options.skills !== undefined ? { skills: options.skills } : {}),
+      ...(options.skills !== undefined ? { skills: typeof options.skills === "function" ? options.skills() : options.skills } : {}),
       conversation,
       syncStanding: (agentId: string) => mirror.sync(agentId),
       ...(rememberer !== undefined
         ? { onSummarised: (agentId: string, conversationId: string, entries: readonly HistoryEntry[]) => { void rememberer.flush(agentId, conversationId, entries).catch(() => {}); } }
         : {}),
-      askUser: async (input: { agentName: string; question: string }) => {
+      askUser: async (input: { agentId: string; agentName: string; question: string }) => {
+        const where = options.askUser?.(input) ?? "in the app"; // counted once it was delivered, not before
         observations.push({ at: clock++, agent: input.agentName, kind: "call", name: "AskUser:delivered", input: { question: input.question } });
-        return "in the app";
+        return where;
       },
       // The host's own validation (docs/79), so a scenario proves what a box would accept.
       showUI: async (input: { agentId: string; agentName: string; conversation?: string; surface: string; components?: unknown; data?: unknown; title?: string; close?: boolean; work?: import("../agents/work-attention.ts").WorkStamp }) => {
@@ -602,7 +610,7 @@ export async function runEpisode(options: EpisodeOptions): Promise<EpisodeResult
 
   const say = async (line: string): Promise<void> => {
     const before = registry.readTranscript(front.id).length;
-    bus.sendFromUser(front.id, line);
+    bus.sendFromUser(front.id, line, options.principalId !== undefined ? { principalId: options.principalId } : {});
     await bus.wake(front.id);
     await bus.idle();
     if (rememberer === undefined) return;

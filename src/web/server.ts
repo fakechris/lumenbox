@@ -1,10 +1,7 @@
 import { WorkGovernance, resourceKey } from "../host/work-governance.ts";
-import { CodeAttempts } from "./code-attempts.ts";
-import { governanceResources } from "./work-governance-resources.ts";
-import { governanceRoute } from "./work-governance-routes.ts";
-import { surfaceActionWork } from "../host/surface-action.ts";
-import { workReading, workReference } from "../host/work-reading.ts";
-import { evidenceDigest } from "../host/review-dispatch.ts";
+import { CodeAttempts } from "./code-attempts.ts"; import { governanceResources } from "./work-governance-resources.ts";
+import { governanceRoute } from "./work-governance-routes.ts"; import { surfaceActionWork } from "../host/surface-action.ts";
+import { workReading, workReference } from "../host/work-reading.ts"; import { evidenceDigest } from "../host/review-dispatch.ts";
 import { resultCheckRoute } from "./result-check-routes.ts";
 import { verificationRoute } from "./verification-routes.ts";
 import { reportAttention, reportsDir, VerificationReports } from "../host/verification-report.ts";
@@ -44,7 +41,7 @@ import { taskExportRoute } from "./task-export-routes.ts";
 import { randomBytes, randomUUID } from "node:crypto";
 import { NetworkEventLog, networkEventsPath, summariseEvents } from "../egress/events.ts";
 import { request as httpsRequest } from "node:https";
-import { connect as tlsConnect } from "node:tls";
+import { boxPins, boxRequestOptions, connectToBox } from "../box/box-tls.ts";
 import {
   createServer,
   request as httpRequest,
@@ -92,6 +89,7 @@ import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, parsePublicUrlInput, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import { originRefusal, securityHeaders } from "./browser-guard.ts";
+import { TOKENS_LEDGER, tokenLedger } from "./token-ledger.ts"; import { boxTokenRoute } from "./box-token-routes.ts"; // R7, R8 (docs/106 §5)
 import {
   DESKTOP_IDLE_MS, DESKTOP_SESSIONS_LEDGER, DesktopStreams, DesktopTickets, REVOKED_CLOSE_CODE, closeFrame, desktopSessionLedger, grantedMode, pageAddressWith, ticketIn,
   withReopenNotice, withoutTicket, type HeldStream, type ReopenWords, type StreamEnd, type StreamOpen,
@@ -246,7 +244,7 @@ import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { OpenDesktops } from "./open-desktops.ts";
 import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
-import { Directories } from "../host/directory.ts"; import { Activations } from "../host/activations.ts"; import { admission, activationRoute } from "./activation-routes.ts";
+import { Directories } from "../host/directory.ts"; import { Activations, activationRole } from "../host/activations.ts"; import { admission, activationRoute, joinRequestWords } from "./activation-routes.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
 import { mayReadScopedEvent } from "./event-visibility.ts";
 import { PersonalBoxes, type PersonalBoxDriver } from "../host/personal-boxes.ts";
@@ -272,7 +270,7 @@ import { QuestionWatch } from "../host/question-expiry.ts";
 import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
-import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts";
+import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts"; import { PersonReach } from "../host/reach-person.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
@@ -882,7 +880,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // memory on purpose: one lost to a restart costs the person one more message. Codes
   // are kept as hashes, because a week-long code must outlive a restart (INV-2082, invite-store.ts).
   // Side-door tokens, one per person per client, kept across restarts as hashes (INV-1520, mcp-tokens.ts).
-  const mcpTokens = new McpTokenStore(join(agentboxHome(), "mcp-tokens.json"), line => log(line));
+  const recordToken = tokenLedger(join(agentboxHome(), TOKENS_LEDGER), log); // every credential minted, revoked or rotated (R8)
+  const mcpTokens = new McpTokenStore(join(agentboxHome(), "mcp-tokens.json"), line => log(line), recordToken);
 
   const knocks = new Map<
     string,
@@ -1095,7 +1094,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   // Who a chat message reaches, by who wrote it (INV-2221, docs/109 §4): the one place that decides it.
   const chatRoute = new ChatRoute({ registry, principals, log, door: adapterName => channelRecords.find(record => record.id === adapterName),
     preparing: id => autoBoxes.view(id)?.state === "preparing", firstAgent: () => orchestrator.ensureDefaultAgent() });
+  // An agent reaches its own person, and one path sends to a person through a door they hold (INV-2221, reach-person.ts).
+  const reach = new PersonReach({ registry, principals, budget: pushBudget, log, push: (chatKey, text, purpose) => chats?.tryPushToChat(chatKey, text, purpose),
+    writesFirst: door => ["dingtalk", "feishu"].includes(channelRecords.find(record => record.id === door)?.type ?? "") && chats?.adapterFor(`${door}:`) !== undefined });
+  let chatDesk: ReturnType<typeof admission> | undefined; // set once the admission below exists; until then a stranger knocks as before
+  const doorLocale = (door: string) => resolveLocale({ channelType: channelRecords.find(record => record.id === door)?.type });
   const channels = new ChannelManager({
+    personFor: agentId => reach.addressFor(agentId),
+    joinRequest: (adapterName, message) => joinRequestWords(chatDesk?.knocked(adapterName, message.identity.slice(adapterName.length + 1), message.senderLabel), doorLocale(adapterName)),
     interactionTask: (message, name) => { const agent = registry.resolve(name ?? ""), parsed = parseActionText(message.text); const result = surfaceActionWork({ action: parsed ? { surface: parsed.surfaceId, name: parsed.name } : undefined, text: message.text, agentId: agent.id, conversation: conversationIdFor(message.threadKey ?? message.chatKey ?? message.identity), surfaces, focus: orchestrator.bus.workAttention, tasks: orchestrator.tasks }); if ("error" in result) throw new Error(result.error); return result.taskBinding.taskId; },
     outbox: unprompted.door(outboxSender), sent: sentLedger, credentials: { gate: (taskId, start) => credentialWaits.gateText(taskId, "channel", start) },
     // The speaking right of a host push (INV-1459): the world each purpose claims, read now; a refusal is audited.
@@ -1250,7 +1256,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     cards,
     incarnationOf,
     defaultAgentFor: adapterName => channelRecords.find(record => record.id === adapterName)?.defaultAgent,
-    route: (adapterName, message, name) => chatRoute.route(adapterName, message, name), // who a message reaches, by who wrote it (INV-2221, src/host/chat-route.ts)
+    // Who a message reaches, by who wrote it (INV-2221, src/host/chat-route.ts); a direct chat seen here is where that person is written to afterwards.
+    route: (adapterName, message, name) => { if (message.privateChat === true) reach.noteDirect(message.identity, message.chatKey); return chatRoute.route(adapterName, message, name); },
     // The door's room rules and guest switch (INV-429), read per message so an edit in
     // Settings takes effect without a restart — the same rule the roster follows.
     roomRulesFor: adapterName => channelRecords.find(record => record.id === adapterName)?.autoJoin,
@@ -1407,6 +1414,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       },
     },
     knock: request => {
+      // A door with a directory keeps no knock of its own (INV-2221): somebody it lists is asking to join, the durable request; somebody it does not list is nobody's to let in.
+      // Only a direct message asks; in a group a listed person is a stranger who knocks, as before, and approving that knock is the same activation.
+      if (request.privateChat === true && (chatDesk?.knocked(request.channel, request.identity.slice(request.channel.length + 1), request.senderLabel) ?? "no-directory") !== "no-directory") return;
       // The incarnation is observed *now*, at the knock, and compared again at the
       // approval (docs/22 §4's CAS): a knock from a door that has since been
       // replaced must not stamp the old tenant's subject into the new one.
@@ -1502,7 +1512,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       }
       const principal = principals.resolve(identity).id, theirBox = registry.boxOf(agent.id); // entered: `asked` above is the membership check (INV-538)
       // Only an explicitly bound answer can settle a question. New requests do not.
-      if (origin?.questionId !== undefined) questions.noteReply(agent.id, identity, origin.questionId, conversation);
+      // A question asked with no chat went to the agent's own person (INV-2221); the door already checked that this reply is theirs to it.
+      if (origin?.questionId !== undefined && questions.noteReply(agent.id, identity, origin.questionId, conversation).length === 0) questions.noteReply(agent.id, identity, origin.questionId, "main");
 
       // Made before the turn, because the prompt states the path as a fact — "its
       // directory on the box is X/" — while the directory was created lazily, on the first
@@ -1895,9 +1906,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       if (blockedAnnounced.has(task.id)) return;
       blockedAnnounced.add(task.id);
       const line = blockedAnnouncement(task);
-      if (line === undefined || task.conversation === undefined) return;
-      const chatKey = conversations.chatKeyFor(task.conversation);
-      if (chatKey === undefined) return;
+      if (line === undefined) return;
+      const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation);
+      // No chat asked for this work: its agent's own person is told, in words (INV-2221).
+      if (chatKey === undefined) { if (task.assigneeId !== undefined) void reach.tellOwner(task.assigneeId, line, { about: `board: ${task.id} ${task.status}`, exempt: true }); return; }
       // A blocker with answers to choose from is a question card, not a line: the person
       // taps one and the answer lands back in the room the task came from.
       const last = task.history.at(-1);
@@ -2421,7 +2433,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const agentPauses = new AgentPauses({ dirFor: id => registry.dirFor(id), wake: id => { void orchestrator.bus.wake(id); }, interrupt: (ids, why) => orchestrator.bus.interruptAgents(ids, why), box: id => orchestrator.boxFor(id), log, tell: async (id, text) => { void orchestrator.prompt(id, text, undefined, { lane: "user", synthetic: true, steerable: false }).catch(error => log(`resume: ${error instanceof Error ? error.message : String(error)}`)); }, receipt: (subject, decision, because) => orchestrator.receipts.write({ at: new Date().toISOString(), by: "host", subject, decision, because }) }); const spendLimits = new SpendLimits({ ledger: () => todaysRows(orchestrator.usage.since(0, Number.MAX_SAFE_INTEGER), new Date()), rates: () => configuredRates(), pause: (id, why) => agentPauses.pause(id, "LumenBox (spend limit)", why), resume: (id, by) => agentPauses.resume(id, by), isPaused: id => agentPauses.pauseOf(id) !== undefined, nameOf: id => registry.tryGet(id)?.profile.name ?? id, log, notify: text => { broadcast({ type: "error", boxId: registry.box.id, message: text }); for (const { adapter, identity } of adminRecipients(principals.list())) void channels.push(adapter, identity, text); } }, join(agentboxHome(), "spend-limits.jsonl")); orchestrator.spendLimits = spendLimits; setInterval(() => { void spendLimits.sweep().catch(error => log(`spend limits: ${error instanceof Error ? error.message : String(error)}`)); }, 60_000).unref(); // INV-1554 // model-text: pause-resume // INV-1615 orchestrator.questionsOpen = () => questions.list(); orchestrator.pausedForSpend = () => spendLimits.pausedForSpend(); orchestrator.personName = id => (principals.byId(id) ?? principals.resolve(id)).name; orchestrator.orgKnowledge.mode = () => boxRegistrationModeAt(principalsPath(), options.desktop === true); // the desktop app with no installation field is personal: it never writes L1 (INV-1726)
   orchestrator.orgKnowledge.isAdmin = id => id === undefined || principals.roleOf(id) === "admin"; orchestrator.orgKnowledge.notify = (owner, notice) => { const text = tr("org.unverified-notice", resolveLocale({}), { ...notice, by: principals.byId(notice.by)?.name ?? notice.by }); log(`organisation knowledge: told ${owner} that ${notice.id} was marked unverified`); for (const identity of principals.byId(owner)?.identities ?? []) { const adapter = identity.split(":")[0] ?? ""; if (adapter !== "" && adapter !== "web") void channels.push(adapter, identity, text); } }; // the roster says who is an Admin; an owner is told on their own channels (INV-1730) // the row's "waiting on you" readers (INV-1625); the person's name for the record (INV-1653)
   // The organisation's skill library, placed in every box (INV-2222, docs/109 §6); nothing on a personal installation.
-  const orgSkills = startOrgSkills({ home: agentboxHome(), host: orchestrator, mode: () => boxRegistrationModeAt(principalsPath(), options.desktop === true), held: () => vault.heldValues(), log });
+  const orgSkills = startOrgSkills({ home: agentboxHome(), host: orchestrator, mode: () => boxRegistrationModeAt(principalsPath(), options.desktop === true), held: () => vault.heldValues(), log,
+    nameOf: id => principals.byId(id)?.name ?? id, box: id => registry.boxById(id), resolve: id => principals.resolve(id).id, isAdmin: id => principals.roleOf(id) === "admin", mayEnter: mayEnterBox });
   if (!kubernetes) void boxUpdate.check();
   // The box's image against the one this app expects (INV-1538, docs/12 §6). Checked every ten minutes; admins are told once per
   // image, in their chats and on the attention page; the update itself is Settings → Boxes → Apply update, or "upgrade" in reply —
@@ -2724,7 +2737,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         port: origin.port,
         method: req.method,
         path,
-        rejectUnauthorized: false,
+        ...(origin.protocol === "https:" ? boxRequestOptions(`https://${origin.host}:${origin.port}`) : {}), // its certificate checked or pinned (box-tls.ts)
         headers: {
           ...req.headers,
           host: `${origin.host}:${origin.port}`,
@@ -3049,7 +3062,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     progressAccess: progressAccessForPrincipal,
     registry, orchestrator, principals, workDir: workRootOf(registry.defaultBox()), log, redact: text => outboundRedactor(vault.heldValues())(text), mayDrive: (agentId, principalId) => mayEnterBox(registry.boxOf(agentId), principalId) && mandateWorld().mayDrive(principalId), mayReadTask: (task, principalId) => (task.assigneeId !== undefined && registry.has(task.assigneeId) ? mayEnterBox(registry.boxOf(task.assigneeId), principalId) : task.requester === principalId), // INV-1668: a deliverable's bytes to whoever may see the task, as the web route has it
     stageWorld: sideDoorStage, changeFeed, listen: listener => { channelTurnListeners.add(listener); return () => channelTurnListeners.delete(listener); },
-    notifyTask: (task, text) => { const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation); if (chatKey !== undefined) void channels.pushToChat(chatKey, text, { kind: "notice", about: `supervisor flag on ${task.id}` }).catch((error: unknown) => log(`supervisor flag ${task.id}: notice not sent (${error instanceof Error ? error.message : String(error)})`)); }, // INV-1509
+    notifyTask: (task, text) => { const chatKey = task.conversation === undefined ? undefined : conversations.chatKeyFor(task.conversation); if (chatKey !== undefined) void channels.pushToChat(chatKey, text, { kind: "notice", about: `supervisor flag on ${task.id}` }).catch((error: unknown) => log(`supervisor flag ${task.id}: notice not sent (${error instanceof Error ? error.message : String(error)})`));
+      else if (task.assigneeId !== undefined) void reach.tellOwner(task.assigneeId, text, { about: `supervisor flag on ${task.id}`, exempt: true }); }, // INV-1509; with no chat, the agent's own person (INV-2221)
   });
   // Retries of a side-door call return the first answer for a day, persisted beside the ledgers.
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
@@ -3058,7 +3072,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
     signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log,
     boxes: (people: readonly { id: string; name: string }[]) => autoBoxes.activated(people, person => tr("ui.personal.defaultName", localeOfPerson(person.id), { name: person.name })) };
-  const orgAdmission = admission(admissionDeps);
+  const orgAdmission = admission(admissionDeps); chatDesk = orgAdmission;
   orgAdmission.catchUp(channelRecords.map(record => record.id)); // an activation a crash interrupted is finished, and boxes owed from before are queued (INV-2220)
   const directoryRefresh = setInterval(() => { void orgAdmission.refreshStale(channelRecords.map(record => record.id)); }, 60 * 60_000); directoryRefresh.unref();
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
@@ -4525,7 +4539,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             send(res, 400, apiError("token-needs-person", { admins: principals.list().filter(person => person.role === "admin").length }));
             return;
           }
-          const minted = mcpTokens.mint(owner, String(body.label ?? ""), new Date(), caller.userId === undefined ? "person" : "sign-in");
+          const minted = mcpTokens.mint(owner, String(body.label ?? ""), new Date(), caller.userId === undefined ? "person" : "sign-in", caller.userId ?? "operator");
           log(`mcp token issued to ${owner} (${minted.label})`);
           send(res, 200, { token: minted.token, label: minted.label, createdAt: minted.createdAt });
           return;
@@ -4536,7 +4550,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           // A driver may only revoke their own; an admin may revoke anyone's.
           const isAdmin = roleAtLeast(caller.userId === undefined ? "admin" : principals.roleOf(caller.userId), "admin");
-          if (!mcpTokens.revoke(String(body.createdAt ?? ""), entry => entry.principalId === caller.userId || isAdmin)) {
+          if (!mcpTokens.revoke(String(body.createdAt ?? ""), entry => entry.principalId === caller.userId || isAdmin, caller.userId ?? "operator")) {
             send(res, 404, apiError("token-not-yours"));
             return;
           }
@@ -4839,10 +4853,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           const body = await readJson(req);
           const identity = String(body.identity ?? "");
           const knock = knocks.get(identity);
-          if (knock === undefined) {
-            send(res, 404, apiError("knock-unknown"));
-            return;
+          // Through a door whose directory covers them it is an activation: the person, their box and their agent as any activation makes them (INV-2221, INV-2220).
+          const role0 = activationRole(body.role ?? "driver"), door0 = identity.split(":")[0] ?? "";
+          const activated = role0 === undefined ? undefined : orgAdmission.approveRequest(identity, role0, caller.userId ?? "operator", knock !== undefined);
+          if (activated !== undefined) {
+            knocks.delete(identity); void channels.push(door0, identity, tr("access.activated", doorLocale(door0)));
+            send(res, 200, { principals: principals.list(), knocks: [...knocks.values()] }); return;
           }
+          if (knock === undefined) { send(res, 404, apiError("knock-unknown")); return; }
           // The CAS half of the knock: commit only if the world the knock was
           // observed in is still the world now. A replaced door or an identity that
           // got linked some other way in the meantime makes this approval stale —
@@ -5316,10 +5334,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             body.scope === "session" || body.scope === "always" ? body.scope : "once";
           const waiting = orchestrator.policy.pending().find(item => item.id === id), parked = orchestrator.approvalIsParked(id);
           if (waiting && !seesAgent(waiting.agentId)) { send(res, 403, apiError("role-needed", { need: "admin", role: callerRole })); return; } // another box's approval (INV-2083)
+          const decider = caller.userId === undefined ? "user" : `user:${caller.userId}`; // who answered, on the record (R8)
           const answered =
             route === "POST /api/approve"
-              ? orchestrator.policy.grant(id, "user", scope)
-              : orchestrator.policy.deny(id, "user", String(body.reason ?? "") || undefined);
+              ? orchestrator.policy.grant(id, decider, scope)
+              : orchestrator.policy.deny(id, decider, String(body.reason ?? "") || undefined);
           // 404 rather than an error for an unknown id: the usual cause is a second click or a page
           // left open, and neither deserves a failure.
           if (!answered) {
@@ -5564,6 +5583,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         const orgSkillAnswer = await orgSkillRoute(route, {
           ...orgSkills, box: id => orchestrator.boxClientById(id), readJson: () => readJson(req) as Promise<Record<string, unknown>>, params: url.searchParams,
           boxes: () => registry.listBoxes().filter(entry => caller.userId === undefined || mayEnterBox(entry, principals.resolve(caller.userId).id)).map(entry => ({ id: entry.id, name: entry.name, skills: skillsDir(entry) })),
+          refusedDriver: () => refusedRole("driver"),
+          tell: (id, outcome) => void reach.tell(id, tr(`org-skills.offer-${outcome.decision}`, resolveLocale({}), { name: outcome.name, reason: outcome.reason ?? "" }), { about: "organisation skill offer", exempt: true }), // INV-2221
           refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? orchestrator.people.operator, nameOf: id => (principals.byId(id) ?? principals.resolve(id)).name ?? id, log,
         });
         if (orgSkillAnswer !== undefined) { if (orgSkillAnswer.status !== 0) send(res, orgSkillAnswer.status, orgSkillAnswer.body); return; } // INV-2222
@@ -6023,6 +6044,9 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           send(res, 200, { pending: connectCodes.listPending() });
           return;
         }
+        const rotated = await boxTokenRoute(route, { boxes: () => registry.listBoxes(), ownBoxId: registry.box.id, clientFor: id => orchestrator.boxClientById(id), provisioner, // a box's new token (R7)
+          home: agentboxHome(), readJson: () => readJson(req), refusedAdmin: () => refusedRole("admin"), by: () => caller.userId ?? "operator", record: recordToken, log });
+        if (rotated !== undefined) { if (rotated.status !== 0) send(res, rotated.status, rotated.body); return; }
         if (route === "POST /api/boxes/revoke") {
           if (refusedRole("admin")) return;
           const body = await readJson(req);
@@ -6072,6 +6096,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             return;
           }
           try {
+            boxPins().forget(baseUrl); // attaching is saying which box this address is: its certificate is pinned afresh (box-tls.ts)
             const result = await orchestrator.attachBox(entry);
             log(`attached box ${entry.name} (${entry.id}) at ${baseUrl}: ${result.detail}`);
             send(res, 200, { box: entry, ...result });
@@ -6115,6 +6140,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
               tokenFile = join(dir, `${name}.token`);
               writeFileSync(tokenFile, `${body.token.trim()}\n`, { mode: 0o600 });
             }
+            if (baseUrl !== "") boxPins().forget(baseUrl); // moved on purpose: the box at the new address is pinned afresh (box-tls.ts)
             const result = await orchestrator.updateBox(name, {
               ...(baseUrl !== "" ? { endpoint: { baseUrl, tokenFile: tokenFile !== "" ? tokenFile : (existing.endpoint?.tokenFile ?? "") } } : {}),
               ...(Number.isInteger(Number(body.displayFloor)) && Number(body.displayFloor) >= 1 ? { displayFloor: Number(body.displayFloor) } : {}),
@@ -6782,7 +6808,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       return;
     }
 
-    const connectUpstream = origin.protocol === "https:" ? (cb: () => void) => tlsConnect({ host: origin.host, port: origin.port, rejectUnauthorized: false }, cb) : (cb: () => void) => netConnect(origin.port, origin.host, cb);
+    const connectUpstream = origin.protocol === "https:" ? (cb: () => void) => connectToBox(`https://${origin.host}:${origin.port}`, {}, cb) : (cb: () => void) => netConnect(origin.port, origin.host, cb);
     const upstream = connectUpstream(() => {
       const headers = Object.entries(req.headers)
         // The browser's own Authorization, if any, is dropped in favour of the box

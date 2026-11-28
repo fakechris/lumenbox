@@ -145,6 +145,16 @@ function attachBlock() {
       open.addEventListener("click", function () { postJson("/api/boxes/update", { name: machine.name, members: "everyone" }).then(loadBoxSet, failed); });
       if (machine.members && machine.members !== "everyone") acts.appendChild(open);
     }
+    if (machine.connected && settings.me && settings.me.role === "admin") { // a new token without re-attaching (docs/106 §5 R7)
+      var rotate = el("button", "act", t("ui.next.boxset.rotate"));
+      rotate.title = t("ui.next.boxset.rotateNote");
+      rotate.addEventListener("click", function () {
+        var sure = el("button", "act", t("ui.next.boxset.rotateSure"));
+        sure.addEventListener("click", function () { sure.disabled = true; postJson("/api/boxes/rotate-token", { box: machine.id }).then(function (answer) { toast(answer.note || t("ui.next.boxset.rotate")); loadBoxSet(); }, failed); });
+        rotate.replaceWith(sure);
+      });
+      acts.appendChild(rotate);
+    }
     if (!machine.personal && machine.id !== own) {
       var detach = el("button", "act", t("ui.next.boxset.detach"));
       detach.disabled = (machine.agents || 0) > 0; detach.title = detach.disabled ? t("ui.next.boxset.detachBusy") : "";

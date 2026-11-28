@@ -4,6 +4,7 @@
  * Everything the agent does inside the box goes through here.
  */
 
+import { boxFetch } from "./box-tls.ts"; // over HTTPS the box's certificate is checked or pinned (docs/106 §5 R7)
 import { BOXD_PROTOCOL, type DisplayInfo, type DesktopResources, type TeachQueueList, type TeachClaimResult, type TeachBinding } from "../protocol/index.ts";
 import { isComputerWrite } from "../cua/execution.ts";
 import { parseSensitiveInput, type SensitiveInput } from "../protocol/sensitive-input.ts";
@@ -112,7 +113,8 @@ export function assertCompatible(health: HealthResult, where: string): void {
 
 export class BoxClient {
   private readonly baseUrl: string;
-  private readonly token: string;
+  /** Changed only by a token rotation (token-rotation.ts); every call after it carries the new one. */
+  private token: string;
   private readonly timeoutMs: number;
   /**
    * Told when a call goes out and when one comes back, so the host can tell a busy box
@@ -137,7 +139,7 @@ export class BoxClient {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     this.watch.asked?.();
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
+      const response = await boxFetch(`${this.baseUrl}${path}`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -211,11 +213,26 @@ export class BoxClient {
     }
   }
 
+  /** Rotation, step one (src/boxd/token-store.ts): names `next`, asked for with the current token. */
+  async rotateToken(next: string): Promise<void> {
+    await this.post("/token/rotate", { token: next });
+  }
+
+  /** From now on this client presents `next`. */
+  useToken(next: string): void {
+    this.token = next;
+  }
+
+  /** Rotation, step two, asked for with the new token: the old one keeps working for `overlapSeconds`. */
+  async confirmToken(overlapSeconds: number): Promise<{ overlap_until?: string; overlapUntil?: string }> {
+    return this.post("/token/confirm", { overlap_seconds: overlapSeconds });
+  }
+
   async health(timeoutMs = 5000): Promise<HealthResult> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
+      const response = await boxFetch(`${this.baseUrl}/health`, {
         signal: controller.signal,
       });
       if (!response.ok) {

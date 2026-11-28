@@ -6,6 +6,9 @@ import { ResultChecks } from "./result-check-policy.ts";
 import { Claims } from "./claims.ts";
 import { PolicyGate } from "./policy.ts";
 import { planCards } from "./plan-cards.ts";
+import { orgSkillsDir } from "./box-paths.ts";
+import { OrgSkillSetup } from "./org-skill-setup.ts";
+import type { Skill } from "./skills.ts";
 /**
  * The episodes that went wrong, as tests.
  *
@@ -40,7 +43,7 @@ import { chatFilesRoot, parseWakePrompt } from "./prompt.ts";
 import { replyForMessage, silenceForMessage } from "./reply.ts";
 import { retryLastAnswer } from "./retry-recovery.ts";
 import { runEpisode, type Script } from "./scenario.ts";
-import { ChatRoute } from "./chat-route.ts"; import { Principals, roleAtLeast } from "./principals.ts"; import { tr } from "../i18n/messages.ts";
+import { ChatRoute } from "./chat-route.ts"; import { PersonReach } from "./reach-person.ts"; import { PushBudget } from "./push-budget.ts"; import { Principals, roleAtLeast } from "./principals.ts"; import { tr } from "../i18n/messages.ts";
 import type Anthropic from "@anthropic-ai/sdk";
 import { answerGuest, GUEST_TOOL_NAMES, guestMessageOf } from "./guest-turn.ts";
 import { GuestDesk } from "./guests.ts";
@@ -6044,4 +6047,157 @@ test("two members, an agent each of the same name: a direct message reaches the 
     assert.deepEqual(heard, ["ANA_ONE", "BOB_ONE", "ANA_TWO", "BOB_TWO", "CAT_ONE", "ANA_ROOM"], "six turns, and no other message was shown to a model");
     assert.deepEqual(episode.score.said.map(line => line.agent), ["Assistant", "Assistant", "Assistant", "Assistant", "Desk", "Desk"]);
   } finally { episode.cleanup(); rmSync(home, { recursive: true, force: true }); }
+});
+
+// INV-2221, part 2 (docs/109 §4). A member's own agent, made for them at activation, was given work from the page and had a
+// question. Nobody had ever written to it from a chat, so the question went nowhere but the page, and the member — who lives in
+// the chat — never saw it. The route to a person is the person: the question goes to their direct chat with the door's bot, their
+// answer from there comes back to that agent, and the other member's chat hears nothing.
+test("an agent nobody wrote to from a chat asks its own person there, and takes their answer; the other member's chat hears nothing", async () => {
+  const home = mkdtempSync(join(tmpdir(), "inv2221-reach-scenario-"));
+  let ask: ((input: { agentId: string; agentName: string; question: string }) => string | undefined) | undefined;
+  const episode = await runEpisode({
+    team: [{ name: "Desk" }], says: [],
+    script: ({ messages }) => {
+      const seen = JSON.stringify(messages);
+      if (/Answer to question/.test(seen)) return { say: `Preparing the ${/Q[34]/.exec(seen.slice(seen.indexOf("Answer to question")))?.[0]} report.` };
+      return seen.includes("WHICH_QUARTER") && !seen.includes("tool_result") ? { call: "AskUser", input: { question: "WHICH_QUARTER should the report cover?", options: ["Q3", "Q4"], default: "Q3" } } : { say: "Waiting for the answer." };
+    },
+    askUser: input => ask?.(input),
+    drive: async ({ registry, bus }) => {
+      const principals = new Principals(join(home, "principals.json"));
+      principals.save(["ana", "bob"].map(id => ({ id, name: id, role: "driver" as const, identities: [`ding:${id}`] })));
+      const own = (owner: string) => registry.create({ name: "Assistant", boxId: registry.attachBox({ id: `${owner}-box`, name: `${owner}-box`, kind: "attached", members: [owner], displayFloor: 1, workDir: "/work", createdAt: new Date().toISOString() }).id });
+      const anas = own("ana"), bobs = own("bob");
+      principals.setHomeAgent("ana", anas.id); principals.setHomeAgent("bob", bobs.id);
+      const route = new ChatRoute({ registry, principals, door: () => ({ type: "dingtalk", defaultAgent: "Desk" }), preparing: () => false, firstAgent: () => { throw new Error("no agent is made here"); }, log: () => {} });
+      const sent: { chatKey: string; text: string }[] = [];
+      let receive!: (message: ChannelMessage) => Promise<string | undefined>, manager!: ChannelManager;
+      const adapter: ChannelAdapter = { name: "ding", start: async handler => { receive = handler; }, stop() {}, send: async () => undefined, sendToChat: async (chatKey, text) => { sent.push({ chatKey, text }); } };
+      const reach = new PersonReach({ registry, principals, budget: new PushBudget(), log: () => {}, writesFirst: door => door === "ding", push: (chatKey, text, purpose) => manager.tryPushToChat(chatKey, text, purpose) });
+      manager = new ChannelManager({
+        log: () => {}, mayDrive: identity => roleAtLeast(principals.roleOf(identity), "driver"),
+        route: (adapterName, message, name) => { if (message.privateChat === true) reach.noteDirect(message.identity, message.chatKey); return route.route(adapterName, message, name); },
+        personFor: agentId => reach.addressFor(agentId),
+        ask: async (token, text, identity, chatKey, _progress, _thread, _task, _interim, _stream, origin) => {
+          const agent = route.asked(token, identity);
+          if (typeof agent === "string") return agent;
+          const conversation = conversationIdFor(chatKey);
+          bus.sendFromUser(agent.id, text, { conversation, steerable: false, messageId: origin!.messageId });
+          await bus.runExclusive(agent.id, { userDriven: true, conversation });
+          return replyForMessage(registry.readTranscript(agent.id, conversation), origin!.messageId);
+        },
+      });
+      manager.register(adapter, true, "test"); manager.start();
+      await new Promise(resolve => setImmediate(resolve));
+      ask = input => manager.askQuestion({ ...input, questionId: "q-quarter" });
+      try {
+        // Work given from the page: no chat has ever named this agent.
+        bus.sendFromUser(anas.id, "Prepare the report. WHICH_QUARTER is up to me.", { steerable: false });
+        await bus.runExclusive(anas.id, { userDriven: true });
+        for (let waited = 0; sent.length === 0 && waited < 200; waited++) await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(sent.map(line => line.chatKey), ["ding:@ana"], "the question went to Ana's direct chat, and to nobody else's");
+        assert.match(sent[0]!.text, /WHICH_QUARTER[\s\S]*\/answer q-quarter/);
+        // Bob cannot answer it; Ana can, from the direct chat the vendor opened for her.
+        assert.match(String(await receive({ identity: "ding:bob", chatKey: "ding:cid_bob", privateChat: true, senderLabel: "bob", text: "/answer q-quarter Q4", messageId: "b1" })), /已失效/);
+        await receive({ identity: "ding:ana", chatKey: "ding:cid_ana", privateChat: true, senderLabel: "ana", text: "/answer q-quarter Q4", messageId: "a1" });
+        await manager.idle();
+        assert.equal(registry.readTranscript(bobs.id, conversationIdFor("ding:cid_bob")).length, 0, "Bob's agent ran nothing");
+        assert.match(JSON.stringify(registry.readTranscript(anas.id, conversationIdFor("ding:cid_ana"))), /Preparing the Q4 report/);
+        // From now on each agent writes to the direct chat its own person wrote in: Ana's to Ana, Bob's to Bob.
+        await reach.tellOwner(anas.id, "The report is in your files.", { about: "report" });
+        await reach.tellOwner(bobs.id, "Nothing new today.", { about: "digest" });
+        assert.deepEqual(sent.filter(line => /report is in|Nothing new/.test(line.text)).map(line => [line.chatKey, line.text]), [["ding:cid_ana", "The report is in your files."], ["ding:cid_bob", "Nothing new today."]]);
+      } finally { manager.stop(); }
+    },
+  });
+  try {
+    assert.equal(episode.score.questions, 1);
+    assert.deepEqual(episode.score.said.map(line => line.text), ["Waiting for the answer.", "Preparing the Q4 report."], "Ana's agent asked, waited, and went on with her answer; no other agent said anything");
+  } finally { episode.cleanup(); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a member's first conversation in a box with a required organisation skill that installs a tool and needs their sign-in: nothing runs until they agree, then the agent installs, offers the sign-in once, never asks for a password, and does not offer it again (INV-2222)", async () => {
+  const fixture = join(import.meta.dirname, "fixtures", "org-skill-hello");
+  const text = readFileSync(join(fixture, "SKILL.md"), "utf8");
+  const root = orgSkillsDir(undefined);
+  const parsed = skillFrom("hello-tool", parseSkillFile(text), ["scripts"], root);
+  assert.ok("skill" in parsed);
+  const skill: Skill = { ...parsed.skill, origin: "organisation", required: true };
+  // The box answers the skill's checks: not installed, not signed in, until the agent runs the install. Every check that reaches it is counted.
+  let installed = false;
+  const checks: string[] = [];
+  let registryOf: AgentRegistry | undefined;
+  const setup = new OrgSkillSetup(undefined, {
+    client: () => ({ exec: async (command: string) => { checks.push(command); return { exit_code: command.includes(".tools/bin/hello\"") && command.includes("test -x") && installed ? 0 : 1 }; } }),
+    place: () => ({ work: "/home/box/work", root }),
+    personOpened: (agentId, conversation) => {
+      const said = (registryOf?.readTranscript(agentId, conversation) ?? []) as { role?: string; kind?: string; fromPerson?: boolean }[];
+      return said.filter(entry => entry.role === "user" && entry.kind === undefined).at(-1)?.fromPerson === true;
+    },
+    boxOf: () => "box",
+    // A personal box: its owner, and nobody else, answers for it.
+    mayConsent: (_box, who) => who === "p-ann",
+    log: () => {},
+  });
+  await setup.check("box", [{ slug: "hello-tool", setup: skill.setup!, version: 1, publishedBy: "Chris" }]);
+  assert.deepEqual(checks, [], "nothing of the skill ran in the box before the person agreed");
+
+  const systems: string[] = [];
+  let checksBeforeYes = -1;
+  const result = await runEpisode({
+    team: [{ name: "Ada" }],
+    says: [],
+    principalId: "p-ann",
+    turnOpening: async (agentId, inbound) => {
+      if (checksBeforeYes < 0 && inbound.some(message => /agree/.test(message.text))) checksBeforeYes = checks.length;
+      await setup.noteInbound(agentId, inbound);
+    },
+    skills: () => [{ ...skill, ...(setup.due("box", skill) !== undefined ? { setupDue: setup.due("box", skill)! } : {}) }],
+    onBusEvent: event => { if (event.type === "turn_finished") setup.noteTurn(event); },
+    drive: async ({ registry, say }) => {
+      registryOf = registry;
+      await say("good morning — what can you do for me?");
+      await say("agree hello-tool");
+      await say("what is on my plate today?");
+    },
+    // A model that follows what it is told: it asks when asked to, runs an install only once it is owed, and hands the sign-in's code to the person.
+    script: ({ system, messages }) => {
+      // A turn's first call ends on what the person said; the next ends on a tool's result.
+      const fresh = !JSON.stringify(messages.at(-1)?.content ?? "").includes("tool_result");
+      if (fresh) systems.push(system);
+      const owed = /install it with `([^`]+)`/.exec(system)?.[1];
+      if (owed !== undefined && fresh) return { call: "bash", input: { command: owed }, saying: "Thank you — installing the Hello tool now." };
+      if (owed !== undefined) {
+        installed = true;
+        return { say: "I installed the Hello tool. To use it as you, sign in: open https://hello.example.invalid/device and enter the code HELLO-1234. Tell me when it is done, or later if you prefer." };
+      }
+      if (/nothing of it runs here until the person agrees/.test(system)) {
+        return { say: "Your organisation asks to set up the Hello tool here: it would run `sh scripts/install.sh`, check `test -x …/hello`, and start a Hello sign-in you finish yourself. Write \"agree hello-tool\" if that is all right." };
+      }
+      return { say: "Here is today: two meetings and one report due." };
+    },
+  });
+  try {
+    assert.equal(systems.length, 3);
+    // First conversation: the agent is told to ask, with the exact lines; nothing of the skill ran, neither the host's checks nor an install.
+    assert.match(systems[0]!, /nothing of it runs here until the person agrees\. Show them exactly what it would run/);
+    assert.doesNotMatch(systems[0]!, /install it with/);
+    assert.equal(checksBeforeYes, 0, "no check line reached the box before the yes");
+    const bash = result.observations.filter(entry => entry.kind === "call" && entry.name === "bash");
+    // The person's own "agree hello-tool": the checks run, and the same turn is told what is owed.
+    assert.ok(checks.length > 0, "after the yes, the check lines ran");
+    assert.match(systems[1]!, /the person agreed; install it with `/);
+    assert.match(systems[1]!, /Never ask for a password and never type one\./);
+    assert.deepEqual(bash.map(entry => String(entry.input?.command)), [`cd '${root}/hello-tool' && export LUMENBOX_WORK='/home/box/work' && sh scripts/install.sh`], "the install ran once, after the yes, as written");
+    const said = result.observations.filter(entry => entry.kind === "say").map(entry => entry.text ?? "");
+    assert.ok(said.some(line => /enter the code HELLO-1234/.test(line)), "the sign-in's code was given to the person");
+    assert.equal(said.some(line => /password/i.test(line)), false, "and nobody was asked for a password");
+    // The next conversation: neither asked nor offered again, though the person has not signed in yet; the skill is still listed.
+    assert.doesNotMatch(systems[2]!, /Set-up the organisation asks for/);
+    assert.match(systems[2]!, /\*\*Hello tool\*\*/);
+    assert.equal(said.filter(line => /HELLO-1234/.test(line)).length, 1, "offered once");
+  } finally {
+    result.cleanup();
+  }
 });
