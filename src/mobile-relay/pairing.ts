@@ -1,6 +1,6 @@
 /**
- * Host identity key, one-time `#fragment` QR pairing offers, per-device `~/.agentbox/paired-devices.json`
- * store, and direct LAN/tailnet candidate probing (docs/109 §3.1–3.2).
+ * Host identity key, one-time `#fragment` QR pairing offers, what the connector needs of the paired
+ * phones, and direct LAN/tailnet candidate probing (docs/109 §3.1–3.2).
  */
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -89,123 +89,29 @@ export interface PairedDeviceRecord {
   readonly scopes: readonly string[];
   readonly pairedAt: string;
   readonly lastSeenAt: string;
+  /** More for the phone in the pairing answer, inside the `Noise_NK` channel: its `/api/v1` credential (src/web/phone-relay.ts). */
+  readonly reply?: Readonly<Record<string, unknown>>;
 }
 
-export const DEFAULT_MOBILE_DEVICE_SCOPES: readonly string[] = [
-  "agents:read",
-  "work:read",
-  "work:decide",
-  "chat:read",
-  "chat:write",
-  "files:read",
-  "desktop:view",
-  "devices:manage",
-];
-
+/**
+ * What the connector needs of the paired phones: the installation keeps them in the client API's
+ * device store (src/web/phone-relay.ts), so a phone paired here is listed, removed and refused as
+ * every other device is (docs/110 §3.2).
+ */
 export interface PairedDeviceStore {
-  list(): PairedDeviceRecord[];
   findByPublicKey(publicKey: Uint8Array): PairedDeviceRecord | undefined;
   touchLastSeen(deviceId: string, at?: string): void;
   register(input: {
     publicKey: Uint8Array;
     deviceName: string;
     platform: "ios" | "android" | "other";
-    scopes?: readonly string[];
-    now?: Date;
+    /** Whom the redeemed offer was minted for (`PairingOfferManager.mintOffer`'s `holder`). */
+    holder?: unknown;
+    /** The phone's whole pairing request, as it sent it inside the channel. */
+    request?: Readonly<Record<string, unknown>>;
   }): PairedDeviceRecord;
-  revoke(deviceId: string): boolean;
+  /** Notes a live session, and how to end it the moment the device is removed. Returns the undo, for when it ends on its own. */
   trackLiveSession(deviceId: string, closeSession: () => void): () => void;
-}
-
-/**
- * Persistent `~/.agentbox/paired-devices.json` (mode `0600`) with instant live-session cut-off when
- * a single phone is revoked (docs/109 §3.2).
- */
-export function createPairedDeviceStore(homeDir: string): PairedDeviceStore {
-  const filePath = path.join(homeDir, "paired-devices.json");
-  const liveSessions = new Map<string, Set<() => void>>();
-
-  const readAll = (): PairedDeviceRecord[] => {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as { devices?: unknown };
-      if (!Array.isArray(parsed.devices)) return [];
-      return parsed.devices as PairedDeviceRecord[];
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw err;
-    }
-  };
-
-  const writeAll = (devices: PairedDeviceRecord[]): void => {
-    writeAtomicJson(filePath, { devices });
-  };
-
-  return {
-    list: () => readAll(),
-    findByPublicKey(publicKey: Uint8Array) {
-      if (!isCanonicalX25519PublicKey(publicKey)) return undefined;
-      const target = toBase64Url(publicKey);
-      return readAll().find((d) => d.publicKey === target);
-    },
-    touchLastSeen(deviceId: string, at = new Date().toISOString()) {
-      const devices = readAll();
-      const idx = devices.findIndex((d) => d.deviceId === deviceId);
-      if (idx < 0) return;
-      const updated = { ...devices[idx]!, lastSeenAt: at };
-      devices[idx] = updated;
-      writeAll(devices);
-    },
-    register(input) {
-      if (!isCanonicalX25519PublicKey(input.publicKey)) {
-        throw new PairingError("invalid_device_key", "Device static public key is invalid");
-      }
-      const pubB64 = toBase64Url(input.publicKey);
-      const nowIso = (input.now ?? new Date()).toISOString();
-      const devices = readAll();
-      const existingIdx = devices.findIndex((d) => d.publicKey === pubB64);
-      const record: PairedDeviceRecord = {
-        deviceId: existingIdx >= 0 ? devices[existingIdx]!.deviceId : `dev_${randomBytes(9).toString("base64url")}`,
-        connId: existingIdx >= 0 ? devices[existingIdx]!.connId : `conn_${randomBytes(9).toString("base64url")}`,
-        publicKey: pubB64,
-        deviceName: String(input.deviceName || "Phone").slice(0, 80),
-        platform: input.platform,
-        scopes: input.scopes ?? DEFAULT_MOBILE_DEVICE_SCOPES,
-        pairedAt: existingIdx >= 0 ? devices[existingIdx]!.pairedAt : nowIso,
-        lastSeenAt: nowIso,
-      };
-      if (existingIdx >= 0) {
-        devices[existingIdx] = record;
-      } else {
-        devices.push(record);
-      }
-      writeAll(devices);
-      return record;
-    },
-    revoke(deviceId: string) {
-      const devices = readAll();
-      const kept = devices.filter((d) => d.deviceId !== deviceId);
-      if (kept.length === devices.length) return false;
-      writeAll(kept);
-      const closers = liveSessions.get(deviceId);
-      if (closers) {
-        liveSessions.delete(deviceId);
-        for (const close of [...closers]) close();
-      }
-      return true;
-    },
-    trackLiveSession(deviceId: string, closeSession: () => void) {
-      let set = liveSessions.get(deviceId);
-      if (!set) {
-        set = new Set();
-        liveSessions.set(deviceId, set);
-      }
-      set.add(closeSession);
-      return () => {
-        set?.delete(closeSession);
-        if (set && set.size === 0) liveSessions.delete(deviceId);
-      };
-    },
-  };
 }
 
 export interface ParsedPairingOffer {
@@ -219,6 +125,7 @@ export interface ParsedPairingOffer {
 interface StoredOffer {
   readonly secret: Buffer;
   readonly expiresAtMs: number;
+  readonly holder: unknown;
 }
 
 /**
@@ -249,6 +156,8 @@ export class PairingOfferManager {
     relayUrl: string;
     routeId: string;
     directUrls?: readonly string[];
+    /** Whom a phone paired with this offer acts for: handed back by `redeem`, never put in the URI. */
+    holder?: unknown;
   }): { uri: string; expiresAt: string } {
     const nowMs = this.now();
     this.pruneExpired(nowMs);
@@ -256,7 +165,7 @@ export class PairingOfferManager {
     const secret = randomBytes(32);
     const secretWithId = Buffer.concat([Buffer.from(offerId, "utf8"), Buffer.from(":"), secret]);
     const expiresAtMs = nowMs + this.ttlMs;
-    this.offers.set(offerId, { secret, expiresAtMs });
+    this.offers.set(offerId, { secret, expiresAtMs, holder: input.holder });
 
     const params = new URLSearchParams();
     params.set("hostPub", toBase64Url(input.hostPublicKey));
@@ -273,20 +182,25 @@ export class PairingOfferManager {
   }
 
   consumeSecret(pairSecretBytes: Uint8Array): boolean {
+    return this.redeem(pairSecretBytes) !== undefined;
+  }
+
+  /** Spends the secret, once, in its time: whom its offer was minted for; undefined when it is not one, was used, or is over. */
+  redeem(pairSecretBytes: Uint8Array): { holder: unknown } | undefined {
     const nowMs = this.now();
     this.pruneExpired(nowMs);
     const decoded = Buffer.from(pairSecretBytes).toString("utf8");
     const sep = decoded.indexOf(":");
-    if (sep <= 0) return false;
+    if (sep <= 0) return undefined;
     const offerId = decoded.slice(0, sep);
     const candidate = Buffer.from(pairSecretBytes).subarray(sep + 1);
     const stored = this.offers.get(offerId);
-    if (!stored || stored.expiresAtMs <= nowMs) return false;
-    if (candidate.byteLength !== stored.secret.byteLength) return false;
-    if (!timingSafeEqual(candidate, stored.secret)) return false;
+    if (!stored || stored.expiresAtMs <= nowMs) return undefined;
+    if (candidate.byteLength !== stored.secret.byteLength) return undefined;
+    if (!timingSafeEqual(candidate, stored.secret)) return undefined;
     stored.secret.fill(0);
     this.offers.delete(offerId);
-    return true;
+    return { holder: stored.holder };
   }
 }
 

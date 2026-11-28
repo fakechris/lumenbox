@@ -146,6 +146,39 @@ reconnection**:
   per-IP rate limits (honouring `X-Forwarded-For` only from explicitly configured proxy CIDRs),
   bounds per-socket heap and queued bytes, and sheds load cleanly under memory pressure.
 
+### 3.2.1 As built (INV-2327): one device store, one frame
+
+- **Turning it on.** `AGENTBOX_MOBILE_RELAY=wss://…` (environment or the config file's `env`; `ws://`
+  only to this machine) on a personal installation. The server connects out to the relay as it
+  starts and again after any drop (`src/web/phone-relay.ts`). Unset, phone access is off and
+  Settings → Mine → Phones says how to turn it on; an organisation never uses the relay this way.
+- **Pairing is the sign-in.** *Connect a phone* (the same button and route as organisation pairing,
+  `POST /api/devices/pairing`, after a sign-in in the last ten minutes) shows
+  `lumenbox://pair#hostPub=…&relay=…&route=…&pairSecret=…` instead of the organisation's
+  `server=…&code=…`. The `Noise_NK` pairing redeems the secret once, within two minutes, and signs
+  the phone in as the person who showed it — a device of the client API's own store
+  (`device-credentials.ts`, `devices.json`), method `pairing`, the device scopes every phone gets.
+  The pairing answer carries the device's first token pair (`tokens`, the shape of
+  `POST /api/v1/auth/pair`'s); the request may carry `stepUpKeyId` and `stepUpPublicKey` as that
+  operation's does. **There is no second store**: the device record keeps the phone's static key
+  beside its token hashes, so the Phones list, `GET/DELETE /api/v1/devices`, removal, a person's
+  access ending, refresh rotation and `access-removed` are the same for a phone paired through the
+  relay as for one paired with an organisation. Pairing the same phone key again ends its earlier
+  device. This replaces the separate `paired-devices.json` above: a concept has one home.
+- **The channel is a transport, not a credential.** A `Noise_IK` session admits a key whose device
+  is live and whose sign-in is still its person's; then every request in it carries
+  `Authorization: Bearer lbxd_…` and is answered by the client API's frame (route table,
+  credential, limits, scope, parameters, handler) in process, over an in-memory socket. Only
+  `/api/v1` is carried. A virtual HTTP request is answered as `http_response` + body. A stream
+  (`events`, `conversation-stream`: a `GET` under `/api/v1`) carries the HTTP/1.1 answer the frame
+  writes, bytes as they come; `vnc-ro` carries a WebSocket upgrade to `/vnc-ro/<n>/…` — never
+  `/vnc/` — answered by the server's own desktop gate. That gate accepts no device credential yet:
+  a phone watches a desktop over the relay once the view tickets of INV-2214 are accepted there.
+- **Removal.** Removing a phone ends its device; its relay sessions close at once, its key is
+  refused on reconnect, and its tokens answer `access-removed`. Other phones are untouched.
+- **Sleep.** The desktop app's suspend notice is `POST /api/mobile-relay/sleeping`; every connected
+  phone gets `host_sleeping`.
+
 ### 3.3 Mac sleep and lid-close behaviour
 
 macOS distinguishes idle sleep from hardware clamshell sleep (closing a MacBook lid with no

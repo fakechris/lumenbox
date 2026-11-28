@@ -439,8 +439,10 @@ export class RelayMux {
           return;
         }
         this.sendControl({ type: "stream_opened", streamId: frame.streamId });
-        Promise.resolve(
-          this.handlers.onOpenStream(
+        const onOpenStream = this.handlers.onOpenStream.bind(this.handlers);
+        // A handler that throws at once resets the stream like one that rejects: a phone's request never takes the host down.
+        Promise.resolve().then(() =>
+          onOpenStream(
             {
               target: frame.target,
               path: frame.path,

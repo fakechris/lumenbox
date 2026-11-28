@@ -245,6 +245,7 @@ import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts";
 import { SessionEpochs } from "./session-epochs.ts";
 import { OpenDesktops } from "./open-desktops.ts"; import { type DecisionWorld, decisionsFor } from "./decisions.ts"; import { type ApprovalAnswerDeps, answerApproval } from "./approval-answer.ts";
 import { type SecretAnswerDeps, type SecretRequest, answerSecret, dismissSecret } from "./secret-requests.ts"; import { personActions } from "./person-actions.ts"; import { deviceRoute } from "./device-routes.ts"; // a person's phones (INV-2214)
+import { pairingRelay, phoneRelayFor, phoneRelayRoute } from "./phone-relay.ts"; import { mobileRelayAddress } from "../config.ts"; // a personal installation's phones (INV-2327)
 import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
 import { Directories } from "../host/directory.ts"; import { Activations, activationRole } from "../host/activations.ts"; import { admission, activationRoute, joinRequestWords } from "./activation-routes.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
@@ -2997,7 +2998,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log, // /api/v1
     registry, tasks: () => orchestrator.tasks?.list() ?? [], working: id => orchestrator.bus.isActive(id), unavailable: unavailableHere, taskActive, checkPending,
     onTask: listener => { orchestrator.tasks?.onChange(listener); orchestrator.tasks?.onCreate(listener); }, // the change ledger hears the board (change-ledger.ts)
-    recordToken, doors: () => webSignInDoors(channelRecords, channelCredentialsSet, configuredPublicUrl()), publicUrl: () => configuredPublicUrl(), desktops: openDesktops, // devices (INV-2214)
+    recordToken, doors: () => webSignInDoors(channelRecords, channelCredentialsSet, configuredPublicUrl()), publicUrl: () => configuredPublicUrl(), // devices (INV-2214)
+    desktops: { recheck: () => { openDesktops.recheck(); phoneRelay?.recheck(); } }, // and a removed phone's relay sessions (INV-2327)
     arrived: (id, locale) => { const person = principals.byId(id); if (person) autoBoxes.arrive(person, tr("ui.personal.defaultName", locale, { name: person.name })); },
     decisions: { world: decisionWorld, approvals: approvalAnswers, secrets: secretAnswers, ...personActions({ board: () => orchestrator.tasks, workControl, questions, log, // what waits on a person, answered from /api/v1 (INV-2214)
       running: taskActive, message: (agentId, text, personId, conversation, onAdmitted) =>
@@ -3005,6 +3007,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       identitiesOf: id => [id, ...(principals.byId(id)?.identities ?? [])] }),
       drafts: { drafts: orchestrator.outboxDrafts, policy: orchestrator.policy, answered: (draft, how) => broadcast({ type: "approval_settled", id: draft.approvalId, agentId: draft.agentId, how }) } } });
 
+  const phoneRelay = phoneRelayFor(principals.installation().mode, mobileRelayAddress(), { home: agentboxHome(), devices: v1.relayDevices, handle: v1.handle, record: recordToken, log, // phones through the relay (INV-2327)
+    connection: socket => server.emit("connection", socket) });
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
@@ -4442,8 +4446,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // agent's prompt each one is spending.
         const clientTokens = await clientTokenRoute(route, { readJson: () => readJson(req), userId: caller.userId, role: callerRole, principals, tokens: mcpTokens, freshSignIn });
         if (clientTokens !== undefined) { send(res, clientTokens.status, clientTokens.body); return; } // personal and service tokens for /api/v1
-        const devicesReply = await deviceRoute(route, { readJson: () => readJson(req), userId: caller.userId, role: callerRole, principals, devices: v1.devices, freshSignIn, publicUrl: configuredPublicUrl });
+        const devicesReply = await deviceRoute(route, { readJson: () => readJson(req), userId: caller.userId, role: callerRole, principals, devices: v1.devices, freshSignIn, publicUrl: configuredPublicUrl,
+          relay: pairingRelay(phoneRelay, principals.installation().mode) }); // personal: through the relay (INV-2327)
         if (devicesReply !== undefined) { send(res, devicesReply.status, devicesReply.body); return; } // a person's phones (INV-2214)
+        const relayReply = await phoneRelayRoute(route, { relay: phoneRelay, role: callerRole, readJson: () => readJson(req) }); // the Mac going to sleep, told to phones (INV-2327)
+        if (relayReply !== undefined) { send(res, relayReply.status, relayReply.body); return; }
         if (route === "POST /api/mcp/tokens") {
           if (refusedRole("driver")) return;
           const fresh = freshSignIn(); if (!fresh.ok) { send(res, 403, fresh.error); return; }
@@ -6830,7 +6837,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   return () => {
     personalBoxesStopping = true;
     stopExecutionFeed?.();
-    events.close(); v1.close(); // the client API's streams and its agent watch
+    events.close(); v1.close(); void phoneRelay?.close(); // the client API's streams and its agent watch, and the relay
     // The backup timer, or an embedding that restarts the server in one process leaves the old one
     // firing alongside the new — two backups a tick, sharing a timestamp and a partial directory.
     backups?.stop();

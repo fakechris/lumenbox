@@ -165,4 +165,8 @@ test("the page's pairing and removal refuse what they cannot serve before anythi
   assert.deepEqual([refused.status, (refused.body as { code: string }).code, shown], [503, "public-url-too-long", 0], "no code made for a QR code that cannot be drawn");
   assert.equal((await deviceRoute("POST /api/devices/pairing", deps("https://box.example.test")))?.status, 200);
   assert.equal((await deviceRoute("POST /api/devices/remove", deps("https://box.example.test", null)))?.status, 400, "null is not a body");
+  // A personal installation with no public address and phone access off is told how to turn it on, not to set a public address (INV-2327).
+  const personal = await deviceRoute("POST /api/devices/pairing", { ...deps(""), relay: { on: false as const } });
+  assert.ok(personal !== undefined);
+  assert.deepEqual([personal.status, (personal.body as { code: string }).code, shown], [503, "phone-access-off", 1]);
 });

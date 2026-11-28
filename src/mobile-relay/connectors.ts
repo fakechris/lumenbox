@@ -40,6 +40,8 @@ export interface HostConnectorOptions {
 
 export interface RunningHostConnector {
   readonly directUrl?: string;
+  /** Settles when the relay's socket closes after registering (absent with no relay): the caller connects again. */
+  readonly relayClosed?: Promise<void>;
   broadcastHostSleeping(reason?: string): void;
   close(): Promise<void>;
 }
@@ -112,7 +114,8 @@ function attachHostSessionAdmission(
               if (!req || typeof req.pairSecret !== "string" || typeof req.deviceStaticPub !== "string") {
                 throw new NoiseError("invalid_pair_request", "Missing pairSecret or deviceStaticPub");
               }
-              if (!options.offerManager.consumeSecret(fromBase64Url(req.pairSecret))) {
+              const redeemed = options.offerManager.redeem(fromBase64Url(req.pairSecret));
+              if (!redeemed) {
                 throw new NoiseError("pair_secret_rejected", "Pairing secret expired or already used");
               }
               const platform =
@@ -121,9 +124,12 @@ function attachHostSessionAdmission(
                 publicKey: fromBase64Url(req.deviceStaticPub),
                 deviceName: typeof req.deviceName === "string" ? req.deviceName : "Phone",
                 platform,
+                holder: redeemed.holder,
+                request: req,
               });
               return Buffer.from(
                 JSON.stringify({
+                  ...registeredDevice.reply,
                   deviceId: registeredDevice.deviceId,
                   connId: registeredDevice.connId,
                   scopes: registeredDevice.scopes,
@@ -208,11 +214,16 @@ export async function startHostRelayConnector(
   let relayWs: MinimalWebSocket | null = null;
   let directServer: http.Server | null = null;
   let directUrl: string | undefined;
+  let relayClosed: Promise<void> | undefined;
 
   if (options.relayUrl) {
     const ws = await connectWebSocket(options.relayUrl);
     relayWs = ws;
     const sessions = new Map<string, ReturnType<typeof attachHostSessionAdmission>>();
+    let closedNow!: () => void;
+    relayClosed = new Promise<void>((resolve) => {
+      closedNow = resolve;
+    });
 
     await new Promise<void>((resolve, reject) => {
       let registered = false;
@@ -266,6 +277,7 @@ export async function startHostRelayConnector(
       ws.onClose((code, reason) => {
         for (const s of sessions.values()) s.dispose();
         sessions.clear();
+        closedNow();
         if (!registered) reject(new Error(`Relay registration closed (${code}: ${reason})`));
       });
       ws.sendText(JSON.stringify({ type: "host_register", routeId: options.routeId }));
@@ -305,6 +317,7 @@ export async function startHostRelayConnector(
 
   return {
     ...(directUrl ? { directUrl } : {}),
+    ...(relayClosed ? { relayClosed } : {}),
     broadcastHostSleeping(reason = "suspend") {
       const at = new Date().toISOString();
       for (const mux of activeMuxes) mux.notifyHostSleeping(reason, at);
@@ -364,7 +377,9 @@ export async function pairPhoneWithOffer(options: {
   deviceKeypair: X25519Keypair;
   deviceName: string;
   platform: "ios" | "android" | "other";
-}): Promise<{ deviceId: string; connId: string; scopes: string[]; mode: "direct" | "relay" }> {
+  /** More for the host in the pairing request: a step-up key (`stepUpKeyId`, `stepUpPublicKey`, docs/110 §4). */
+  extra?: Readonly<Record<string, string>>;
+}): Promise<{ deviceId: string; connId: string; scopes: string[]; mode: "direct" | "relay"; reply: Record<string, unknown> }> {
   const { ws, mode } = await openClientTransportChannel({
     directUrls: options.offer.directUrls,
     relayUrl: options.offer.relayUrl,
@@ -374,6 +389,7 @@ export async function pairPhoneWithOffer(options: {
   try {
     const reqJson = Buffer.from(
       JSON.stringify({
+        ...options.extra,
         pairSecret: toBase64Url(options.offer.pairSecret),
         deviceStaticPub: toBase64Url(options.deviceKeypair.publicKey),
         deviceName: options.deviceName,
@@ -387,7 +403,7 @@ export async function pairPhoneWithOffer(options: {
       payload: reqJson,
     });
 
-    const reply = await new Promise<{ deviceId: string; connId: string; scopes: string[] }>(
+    const reply = await new Promise<{ deviceId: string; connId: string; scopes: string[]; reply: Record<string, unknown> }>(
       (resolve, reject) => {
         let done = false;
         ws.onText((text) => {
@@ -408,6 +424,7 @@ export async function pairPhoneWithOffer(options: {
               scopes: Array.isArray(replyObj.scopes)
                 ? replyObj.scopes.filter((s): s is string => typeof s === "string")
                 : [],
+              reply: replyObj,
             });
           } catch (err) {
             done = true;

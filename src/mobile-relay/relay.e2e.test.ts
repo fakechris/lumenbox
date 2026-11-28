@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type http from "node:http";
 import os from "node:os";
@@ -7,10 +8,11 @@ import { test } from "node:test";
 import {
   connectPhoneIk,
   connectWebSocket,
-  createPairedDeviceStore,
   extractClientIp,
   generateX25519Keypair,
   loadOrCreateHostIdentity,
+  type PairedDeviceRecord,
+  type PairedDeviceStore,
   PairingError,
   PairingOfferManager,
   pairPhoneWithOffer,
@@ -19,6 +21,38 @@ import {
   startRelayServer,
   toBase64Url,
 } from "./index.ts";
+
+/** Paired phones in memory: what the connector needs of a store. The installation's is the client API's device store (src/web/phone-relay.ts). */
+function memoryStore(): PairedDeviceStore & { list(): PairedDeviceRecord[]; revoke(deviceId: string): boolean } {
+  const devices = new Map<string, PairedDeviceRecord>();
+  const live = new Map<string, Set<() => void>>();
+  return {
+    list: () => [...devices.values()],
+    findByPublicKey: (publicKey) => [...devices.values()].find((d) => d.publicKey === toBase64Url(publicKey)),
+    touchLastSeen: () => {},
+    register(input) {
+      const at = new Date().toISOString();
+      const record: PairedDeviceRecord = {
+        deviceId: `dev_${randomBytes(9).toString("base64url")}`, connId: `conn_${randomBytes(9).toString("base64url")}`, publicKey: toBase64Url(input.publicKey),
+        deviceName: input.deviceName, platform: input.platform, scopes: ["agents:read"], pairedAt: at, lastSeenAt: at,
+      };
+      devices.set(record.deviceId, record);
+      return record;
+    },
+    trackLiveSession(deviceId, close) {
+      const set = live.get(deviceId) ?? new Set<() => void>();
+      live.set(deviceId, set);
+      set.add(close);
+      return () => set.delete(close);
+    },
+    revoke(deviceId) {
+      const had = devices.delete(deviceId);
+      for (const close of [...(live.get(deviceId) ?? [])]) close();
+      live.delete(deviceId);
+      return had;
+    },
+  };
+}
 
 test("End-to-end: #fragment QR pairing, Noise_IK reconnect, concurrent /api/v1 + flow-controlled download without blocking POST /stop, VNC-ro stream, and single-device revocation", async () => {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "lumenbox-relay-e2e-"));
@@ -32,7 +66,7 @@ test("End-to-end: #fragment QR pairing, Noise_IK reconnect, concurrent /api/v1 +
     assert.deepEqual(reloaded.keypair.publicKey, hostIdentity.keypair.publicKey);
     assert.equal(fs.statSync(path.join(tmpHome, "relay-host-key.json")).mode & 0o777, 0o600);
 
-    const deviceStore = createPairedDeviceStore(tmpHome);
+    const deviceStore = memoryStore();
     const offerManager = new PairingOfferManager();
 
     let stopCalledWhileStreaming = false;
@@ -236,7 +270,7 @@ test("Direct LAN/tailnet candidate is preferred when reachable and falls back to
 
   try {
     const hostIdentity = loadOrCreateHostIdentity(tmpHome);
-    const deviceStore = createPairedDeviceStore(tmpHome);
+    const deviceStore = memoryStore();
     const offerManager = new PairingOfferManager();
 
     const hostConnector = await startHostRelayConnector({

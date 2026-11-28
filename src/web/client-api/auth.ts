@@ -57,7 +57,7 @@ export function startOAuth(call: Call) {
 }
 
 /** The device's own description of itself, checked: a name, a platform, and a step-up key that is a P-256 public key, or none. */
-function deviceOf(body: Record<string, unknown>): { name: string; platform: string; stepUpKey?: { id: string; publicKey: string } } {
+export function deviceOf(body: Record<string, unknown>): { name: string; platform: string; stepUpKey?: { id: string; publicKey: string } } {
   const platform = String(body.platform);
   if (!/^[a-z0-9-]{1,20}$/.test(platform)) return refuse("api-param-invalid", { name: "platform", why: "a lower-case word, at most 20 characters" });
   const keyId = body.stepUpKeyId as string | undefined, publicKey = body.stepUpPublicKey as string | undefined;
@@ -73,7 +73,7 @@ function deviceOf(body: Record<string, unknown>): { name: string; platform: stri
   return { name: String(body.deviceName), platform, ...(keyId !== undefined && publicKey !== undefined ? { stepUpKey: { id: keyId, publicKey } } : {}) };
 }
 
-function tokensOf(tokens: IssuedTokens, now: Date) {
+export function tokensOf(tokens: IssuedTokens, now: Date) {
   return {
     deviceId: tokens.deviceId, tokenType: "Bearer", accessToken: tokens.accessToken,
     expiresInSeconds: Math.max(0, Math.round((Date.parse(tokens.accessTokenExpiresAt) - now.getTime()) / 1000)),
