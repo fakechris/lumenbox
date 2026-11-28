@@ -270,7 +270,7 @@ import { QuestionWatch } from "../host/question-expiry.ts";
 import { compileSurface, parseActionText, SurfaceLedger, surfaceLedgerPath, type A2uiMessage } from "../host/show-ui.ts";
 import { appendLine } from "../host/jsonl.ts";
 import { seedStarterSkills } from "../host/starter-skills.ts";
-import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts"; import { PersonReach } from "../host/reach-person.ts";
+import { chatFilesRoot, firstRunCue } from "../host/prompt.ts"; import { ChatRoute } from "../host/chat-route.ts"; import { chatBoxFor, chatFiles } from "./chat-files.ts"; import { PersonReach } from "../host/reach-person.ts";
 import { attachedBox, tokenOf } from "../box/boxes.ts";
 import { catalogTemplate, describeTemplate, parseTemplate, resolveBundleRefs, rewriteFrontmatter, templatesEnabled, unresolvedPlaceholders } from "../host/template.ts";
 import { SKILL_FILENAME, authoringHints, parseSkillFile, slugify } from "../host/skills.ts";
@@ -1092,6 +1092,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const credentialWaits = new CredentialWaits({ tasks: () => orchestrator.tasks, check: (agentId, principalId) => orchestrator.credentials.forAgent(agentId, [], principalId), announce: event => broadcast(taskCredentialEvent(event)), log }); vault.onChange(() => { void credentialWaits.recheck(); }); // a credential that lands releases the work waiting on it (INV-1666)
   const guestDesk = new GuestDesk({ settings: join(agentboxHome(), "guests.jsonl"), turns: join(agentboxHome(), "guest-turns.jsonl"), reviews: join(agentboxHome(), "guest-reviews.jsonl") }); // who answers guests, what is public to them, their turns and the reviews of their answers (INV-1708, INV-1713, docs/97)
   // Who a chat message reaches, by who wrote it (INV-2221, docs/109 §4): the one place that decides it.
+  const chatBoxOf = chatBoxFor({ registry, boxClient: id => orchestrator.boxClient(id) });
   const chatRoute = new ChatRoute({ registry, principals, log, door: adapterName => channelRecords.find(record => record.id === adapterName),
     preparing: id => autoBoxes.view(id)?.state === "preparing", firstAgent: () => orchestrator.ensureDefaultAgent() });
   // An agent reaches its own person, and one path sends to a person through a door they hold (INV-2221, reach-person.ts).
@@ -1776,87 +1777,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         return "failed";
       },
     },
-    // A file dropped in the chat lands in that chat's inbox on the box, under a name
-    // that never overwrites: a second report.pdf becomes report-2.pdf, because the
-    // first one may be exactly what the agent is reading.
-    receiveFiles: async (chatKey, files) => {
-      const client = orchestrator.boxClient();
-      if (client === undefined) return undefined;
-      const dir = `${chatFilesRoot(conversationIdFor(chatKey), registry.defaultBox())}/inbox`;
-      await client.exec(`mkdir -p '${dir}'`, { actor: "host:chat-inbox" });
-      let existing: Set<string>;
-      try {
-        existing = new Set((await client.listDir(dir)).entries.map(entry => entry.name));
-      } catch {
-        existing = new Set();
-      }
-      const saved: string[] = [];
-      for (const file of files) {
-        const clean = file.name.replace(/[/\\\0]/g, "_").slice(0, 120) || "file";
-        let name = clean;
-        for (let n = 2; existing.has(name); n++) {
-          const dot = clean.lastIndexOf(".");
-          name = dot > 0 ? `${clean.slice(0, dot)}-${n}${clean.slice(dot)}` : `${clean}-${n}`;
-        }
-        existing.add(name);
-        await client.uploadFile(`${dir}/${name}`, file.base64);
-        saved.push(`inbox/${name}`);
-      }
-      return saved;
-    },
-    // The chat's outbox on the box: list, download, and — once pushed — move to
-    // sent/, so nothing is delivered twice and nothing undelivered is lost. A chat
-    // that never used files has no directory, and that is the cheap ordinary case.
-    // For a reply that named a deliverable instead of sending it. Confined to the work
-    // directory by the box's own upload/download guard, and refused above 25MB the same
-    // way the outbox is.
-    workDir: () => workRootOf(registry.defaultBox()), // the box readBoxFile reads, whose paths a reply names (INV-1737)
-    readBoxFile: async path => {
-      const client = orchestrator.boxClient();
-      if (client === undefined) return undefined;
-      try {
-        const file = await client.downloadFile(path);
-        const name = path.split("/").pop() ?? "file";
-        return { name, base64: file.base64 };
-      } catch {
-        return undefined;
-      }
-    },
-    collectOutbox: async chatKey => {
-      const client = orchestrator.boxClient();
-      if (client === undefined) return [];
-      const dir = `${chatFilesRoot(conversationIdFor(chatKey), registry.defaultBox())}/outbox`;
-      let entries: { name: string; type: string; size: number }[];
-      try {
-        entries = (await client.listDir(dir)).entries;
-      } catch {
-        return [];
-      }
-      const files: { name: string; base64: string }[] = [];
-      for (const entry of entries) {
-        if (entry.type !== "file") continue;
-        if (entry.size > 25 * 1024 * 1024) {
-          log(`outbox: ${entry.name} skipped (${entry.size} bytes is past the 25MB cap)`);
-          continue;
-        }
-        try {
-          files.push({ name: entry.name, base64: (await client.downloadFile(`${dir}/${entry.name}`)).base64 });
-        } catch (error) {
-          log(`outbox: could not read ${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      // Smallest first: if a push dies midway, the cheap ones made it out.
-      return files.sort((a, b) => a.base64.length - b.base64.length);
-    },
-    outboxDelivered: async (chatKey, names) => {
-      const client = orchestrator.boxClient();
-      if (client === undefined) return;
-      const dir = `${chatFilesRoot(conversationIdFor(chatKey), registry.defaultBox())}/outbox`;
-      const quoted = names.map(name => `'${name.replace(/'/g, `'\\''`)}'`).join(" ");
-      await client.exec(`mkdir -p '${dir}/../sent' && cd '${dir}' && mv -- ${quoted} ../sent/`, {
-        actor: "host:outbox-delivered",
-      });
-    },
+    ...chatFiles({ boxOf: chatBoxOf, workRoot: workRootOf, log }), // a chat's inbox, outbox and named files, on the box of the agent it is for (INV-2261, chat-files.ts)
     // The desktop as it is right now, for "屏幕" and for the finished-task poster.
     // Captured with the agent's own owner token, the same proof a turn presents; an
     // agent whose desktop never started answers undefined and the chat is told so.
