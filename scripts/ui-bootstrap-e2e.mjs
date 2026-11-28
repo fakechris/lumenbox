@@ -4,14 +4,12 @@
  * Starts `startWebServer({ host: "0.0.0.0", port: 0, useBox: false })` with `AGENTBOX_EXPOSURE=local`
  * and NO `AGENTBOX_PUBLIC_URL` or pre-set token — matching a port-forwarded k3s organisation pod —
  * and drives headless Chromium through every click:
- *   1. `/` -> `Set up the first administrator` -> `/bootstrap`
- *   2. Click `Open the operator's channel settings.` -> lands on operator unlock (never loops back to `/bootstrap`!)
- *   3. Enter `ui-token` -> lands straight on `/?ui=next&once=1&view=settings&pane=doors`
- *   4. Click `Use current origin` + `Save` for `AGENTBOX_PUBLIC_URL`, then `Set credentials` on `dingtalk`,
- *      verify `/auth/dingtalk/callback` hint is visible, enter Client ID + Secret, click `Save`
- *   5. Click `First administrator setup is incomplete. Continue setup` -> `/bootstrap`
- *   6. Verify Readiness checks are green (`Ready` + `DingTalk`), enter `bootstrap-code`, click `Sign in with DingTalk`,
- *      follow OAuth callback -> land in the workspace as `admin` (`dingtalk:ana-staff`), and confirm `/bootstrap` is 404.
+ *   1. `/` -> `Set up the first administrator` -> `/bootstrap`, which is only the operator unlock
+ *   2. Enter the operator credential -> back to `/bootstrap`, now only the callback address
+ *   3. `Use current origin` -> only the vendor choice -> DingTalk -> both credentials, with the exact callback
+ *   4. Save -> the review, and only `Confirm and continue` reaches the one-use code
+ *   5. Enter `bootstrap-code`, click `Sign in with DingTalk`, follow the mocked OAuth callback,
+ *      land as `admin` (`dingtalk:ana-staff`), and confirm `/bootstrap` is 404.
  */
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -89,47 +87,37 @@ try {
   await page.waitForURL(`${base}/bootstrap`);
   assert.match(await page.locator("h1").textContent(), /First administrator/);
 
-  // Step 2: Click `Open the operator's channel settings.` directly (the exact click that caused the user's loop!)
-  await page.locator('a[href*="pane=doors"]').click();
-  await page.waitForSelector("#op-unlock");
-  // Verify we are at `/?ui=next&once=1&view=settings&pane=doors` with the operator unlock form, NOT trapped in a dead end
-  assert.equal(new URL(page.url()).searchParams.get("pane"), "doors");
+  // Step 2: The first screen is only the operator credential. It does not ask for the one-use code.
+  await page.waitForSelector('[data-step="unlock"] #op-unlock');
+  assert.equal(await page.locator("#code").count(), 0);
   await page.locator("#op-cred").fill(uiCred);
   await page.locator("#op-unlock button[type='submit']").click();
 
-  // Step 3: Lands directly inside Settings -> Channels (`pane=doors`)
-  await page.waitForSelector("section.setting h2.group");
-  assert.match(await page.locator("section.setting").first().textContent(), /Chat channels/);
-
-  // Step 4: Set callback base URL via `Use current origin` + `Save`
-  await page.getByRole("button", { name: "Use current origin" }).click();
-  const urlSection = page.locator("section.setting .fact").first();
-  await urlSection.getByRole("button", { name: "Save" }).click();
-  await page.waitForFunction(expected => {
-    const inputs = [...document.querySelectorAll("section.setting input")];
-    return inputs.some(i => i.value === expected);
-  }, base);
-
-  // Step 5: Click `Set credentials` on the `dingtalk` row, check OAuth callback hint, enter credentials & Save
-  const dingRow = page.locator("section.setting .fact").filter({ hasText: "dingtalk" });
-  await dingRow.getByRole("button", { name: "Set credentials" }).click();
-  const callbackHint = page.locator("section.setting p.why").filter({ hasText: `${base}/auth/dingtalk/callback` });
-  await callbackHint.waitFor();
-  await page.getByLabel("App id").fill("ding-client-id");
-  await page.getByLabel("App secret (never shown after saving)").fill("ding-client-secret");
-  await page.locator("section.setting .acts").last().getByRole("button", { name: "Save" }).click();
-  await page.locator("section.setting .fact").filter({ hasText: "dingtalk" }).getByRole("button", { name: "Update credentials" }).waitFor();
-
-  // Step 6: Click `Continue setup` link back to `/bootstrap`
-  await page.locator('a[href="/bootstrap"]').click();
-  await page.waitForURL(`${base}/bootstrap`);
-  // Operator cookie is active, so `#op-unlock` is gone, Readiness is green, and `Sign in with DingTalk` is live!
+  // Step 3: One decision, the callback address. Using this browser's origin warns that the vendor cannot call it.
+  await page.waitForSelector('[data-step="url"] #use-origin');
+  assert.match(await page.locator("#url-loopback").textContent(), /cannot call it/);
   assert.equal(await page.locator("#op-unlock").count(), 0);
-  const checksText = await page.locator(".checks").textContent();
-  assert.match(checksText, /Public HTTPS addressReady/);
-  assert.match(checksText, /Sign-in channelDingTalk/);
+  assert.equal(await page.locator("#code").count(), 0);
+  await page.locator("#use-origin").click();
 
-  // Step 7: Enter one-use bootstrap code and click `Sign in with DingTalk` -> OAuth redirect -> lands in workspace as Admin!
+  // Step 4: Pick DingTalk, then both of its credentials, with the exact callback.
+  await page.waitForSelector('[data-step="vendor"]');
+  await page.locator('a[href*="vendor=dingtalk"]').click();
+  await page.waitForSelector('[data-step="credentials"] #cred-step');
+  assert.match(await page.locator('[data-step="credentials"]').textContent(), new RegExp(`${base}/auth/dingtalk/callback`));
+  await page.locator("#app-id").fill("ding-client-id");
+  await page.locator("#app-secret").fill("ding-client-secret");
+  await page.locator("#cred-step button[type='submit']").click();
+
+  // Step 5: The review lists what was decided and does not submit. Confirm is what opens the code.
+  await page.waitForSelector('[data-step="review"] #confirm');
+  assert.equal(await page.locator("#code").count(), 0);
+  assert.equal(await page.locator("#op-unlock").count(), 0);
+  await page.locator("#confirm").click();
+  await page.waitForSelector('[data-step="signin"] #code');
+  assert.equal(await page.locator("#op-unlock").count(), 0);
+
+  // Step 6: Enter the one-use code and sign in with DingTalk -> mocked OAuth -> the workspace, as Admin.
   await page.locator("#code").fill(bootstrapCode);
   await page.getByRole("button", { name: "Sign in with DingTalk" }).click();
   await page.waitForURL(url => url.origin === base && url.pathname === "/");
@@ -146,7 +134,7 @@ try {
   assert.match(await page.textContent("body"), /already has an administrator/);
 
   assert.deepEqual(pageErrors, [], `unexpected browser errors: ${pageErrors.join("; ")}`);
-  console.log("[ui-bootstrap-e2e] ok: / -> /bootstrap -> operator unlock -> Settings -> Channels -> DingTalk OAuth -> Admin session");
+  console.log("[ui-bootstrap-e2e] ok: /bootstrap wizard -> review -> DingTalk OAuth -> Admin session");
 } finally {
   await browser?.close();
   stop?.();

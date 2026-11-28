@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { startWebServer } from "./server.ts";
+import { bootstrapPage, type BootstrapPageInput } from "./server-pages.ts";
 import { Principals } from "../host/principals.ts";
 
 test("bootstrap HTTP flow uses only vendor identity, never leaks the code and admits one concurrent callback", async () => {
@@ -37,7 +38,8 @@ test("bootstrap HTTP flow uses only vendor identity, never leaks the code and ad
     const code = readFileSync(join(home, "bootstrap-code"), "utf8").trim();
     assert.equal((await fetch(base + "/bootstrap")).status, 200);
     const page = await (await fetch(base + "/bootstrap?lang=en")).text();
-    assert.match(page, /pane=doors[\s\S]+Add channel[\s\S]+OAuth callback URL[\s\S]+scan the QR code[\s\S]+<button name="door" value="fixture">Sign in with Feishu<\/button>/, "local: the token still opens the settings, and the channel is named by its type");
+    assert.match(page, /data-step="signin"[\s\S]*<button name="door" value="fixture">Sign in with Feishu<\/button>/, "a channel already set up: the page is the one-use code and that channel");
+    assert.doesNotMatch(page, /id="op-unlock"|Add channel|CHANNEL_ID|Action needed|On server|data-step="unlock"/);
     assert.ok(page.includes(join(home, "bootstrap-code")));
     assert.ok(!page.includes(code), "never put the setup code in the page");
     assert.ok(logs.some(line => line.includes(join(home, "bootstrap-code"))));
@@ -154,8 +156,8 @@ test("at the private level the first Admin needs no token anywhere: the environm
   }) as typeof fetch;
   const { home, base } = await fresh({ DINGTALK_CLIENT_ID: "ding-app", DINGTALK_CLIENT_SECRET: "ding-secret" }, loginFetch);
   const zh = await (await fetch(`${base}/bootstrap?lang=zh`, { headers: browser })).text();
-  assert.match(zh, /<button[^>]*value="dingtalk"[^>]*>用钉钉登录<\/button>/, "the DingTalk channel the environment set up, named by its type");
-  assert.doesNotMatch(zh, /token|pane=doors|飞书/i, "no page opened with a token, and no channel that cannot sign in");
+  assert.match(zh, /data-step="signin"[\s\S]*<button[^>]*value="dingtalk"[^>]*>用钉钉登录<\/button>/, "the DingTalk channel the environment set up, named by its type");
+  assert.doesNotMatch(zh, /token|pane=doors|飞书|id="op-unlock"|data-step="unlock"/i, "no page opened with a token, and no channel that cannot sign in");
   assert.ok(zh.includes(join(home, "bootstrap-code")), "where the code is");
   const en = await (await fetch(`${base}/bootstrap?lang=en`, { headers: browser })).text();
   assert.match(en, />Sign in with DingTalk<\/button>/);
@@ -180,11 +182,12 @@ test("at the private level the first Admin needs no token anywhere: the environm
   const empty = await fresh({});
   for (const [lang, words] of [["zh", /部署的 Secret/], ["en", /the deployment&#39;s Secret/]] as const) {
     const page = await (await fetch(`${empty.base}/bootstrap?lang=${lang}`, { headers: browser })).text();
+    assert.match(page, /data-step="env"/);
     assert.match(page, words);
     for (const name of ["DINGTALK_CLIENT_ID", "DINGTALK_CLIENT_SECRET", "FEISHU_APP_ID", "FEISHU_APP_SECRET", "https://org.example.test/auth/dingtalk/callback", "https://org.example.test/auth/feishu/callback"]) {
       assert.ok(page.includes(name), `${lang}: the page names ${name}`);
     }
-    assert.doesNotMatch(page, /token|pane=doors|<button|REPLACE_WITH_PUBLIC_HOST/i, `${lang}: no token page, no dead button, and no placeholder warning when public URL is real`);
+    assert.doesNotMatch(page, /token|pane=doors|<button|id="code"|id="op-unlock"|REPLACE_WITH_PUBLIC_HOST/i, `${lang}: no token page, no dead button, and no placeholder warning when public URL is real`);
   }
   const placeholder = await fresh({ AGENTBOX_PUBLIC_URL: "https://REPLACE_WITH_PUBLIC_HOST" });
   const placeholderPage = await (await fetch(`${placeholder.base}/bootstrap?lang=en`, { headers: browser })).text();
@@ -218,7 +221,9 @@ test("local port-forward bootstrap breaks the 401 loop: operator unlock opens Se
 
   // 1. Unauthenticated /bootstrap shows the inline operator unlock form; clicking the channel settings link directly also offers operator unlock (never a dead loop).
   const bootUnauth = await (await fetch(`${base}/bootstrap?lang=en`, { headers: { accept: "text/html" } })).text();
-  assert.match(bootUnauth, /id="op-unlock"[\s\S]*data-next="\/\?ui=next&amp;once=1&amp;view=settings&amp;pane=doors"/);
+  assert.match(bootUnauth, /data-step="unlock"[\s\S]*id="op-unlock"[\s\S]*data-next="\/bootstrap\?lang=en"/);
+  assert.match(bootUnauth, /does not make you an administrator/);
+  assert.doesNotMatch(bootUnauth, /data-step="url"|data-step="signin"|id="code"|bootstrap-code|Add channel|CHANNEL_ID|Action needed|On server/);
   const settingsUnauth = await fetch(`${base}/?ui=next&once=1&view=settings&pane=doors&lang=en`, { headers: { accept: "text/html" } });
   assert.equal(settingsUnauth.status, 401);
   const recoveryHtml = await settingsUnauth.text();
@@ -250,9 +255,13 @@ test("local port-forward bootstrap breaks the 401 loop: operator unlock opens Se
   });
   assert.equal(((await evilUnlock.json()) as { redirect: string }).redirect, "/");
 
-  // 4. With opCookie, Settings -> Channels loads 200 OK, and /bootstrap no longer shows #op-unlock.
+  // 4. With opCookie, Settings -> Channels still loads, and /bootstrap moves to the callback address. The operator credential is gone.
   assert.equal((await fetch(`${base}/?ui=next&once=1&view=settings&pane=doors`, { headers: { cookie: opCookie, accept: "text/html" } })).status, 200);
-  assert.doesNotMatch(await (await fetch(`${base}/bootstrap?lang=en`, { headers: { cookie: opCookie } })).text(), /id="op-unlock"/);
+  const bootUrl = await (await fetch(`${base}/bootstrap?lang=en`, { headers: { cookie: opCookie } })).text();
+  assert.match(bootUrl, /data-step="url"/);
+  assert.match(bootUrl, /Use current origin/);
+  assert.match(bootUrl, /DingTalk and Feishu servers cannot call it/);
+  assert.doesNotMatch(bootUrl, /id="op-unlock"|id="code"|ui-token|data-step="unlock"/);
 
   // 5. Save publicUrl via POST /api/channels/public-url, validate bad URL rejection, and verify live propagation to /api/channels and /bootstrap.
   const badUrl = await fetch(`${base}/api/channels/public-url`, {
@@ -268,6 +277,16 @@ test("local port-forward bootstrap breaks the 401 loop: operator unlock opens Se
   });
   assert.equal(saveUrl.status, 200);
   assert.equal(((await saveUrl.json()) as { publicUrl: string }).publicUrl, base);
+
+  const bootVendor = await (await fetch(`${base}/bootstrap?lang=en`, { headers: { cookie: opCookie } })).text();
+  assert.match(bootVendor, /data-step="vendor"/);
+  assert.match(bootVendor, /href="\/bootstrap\?vendor=dingtalk&amp;lang=en"/);
+  assert.doesNotMatch(bootVendor, /id="code"|id="cred-step"|id="op-unlock"/);
+  const bootCred = await (await fetch(`${base}/bootstrap?lang=en&vendor=dingtalk`, { headers: { cookie: opCookie } })).text();
+  assert.match(bootCred, /data-step="credentials"/);
+  assert.ok(bootCred.includes(`${base}/auth/dingtalk/callback`), "the exact callback for the chosen vendor");
+  assert.match(bootCred, />Set credentials</);
+  assert.doesNotMatch(bootCred, /CHANNEL_ID|id="code"|Add channel|id="op-unlock"/);
 
   // Partial credential save (only appSecret without appId) is rejected with 400 channel-app-unset.
   const partialDing = await fetch(`${base}/api/channels/records`, {
@@ -289,8 +308,14 @@ test("local port-forward bootstrap breaks the 401 loop: operator unlock opens Se
   assert.equal(channelsAfter.feishuCallbackTemplate, `${base}/auth/CHANNEL_ID/callback`);
   assert.equal(channelsAfter.records.find((r: { id: string }) => r.id === "dingtalk").credentialsSet, true);
 
+  const bootReview = await (await fetch(`${base}/bootstrap?lang=en&review=1`, { headers: { cookie: opCookie } })).text();
+  assert.match(bootReview, /data-step="review"/);
+  assert.match(bootReview, /id="confirm"/);
+  assert.doesNotMatch(bootReview, /id="code"|id="op-unlock"|ui-token|bootstrap-code/);
+
   const bootReady = await (await fetch(`${base}/bootstrap?lang=en`, { headers: { cookie: opCookie } })).text();
-  assert.match(bootReady, />Sign in with DingTalk<\/button>/);
+  assert.match(bootReady, /data-step="signin"[\s\S]*>Sign in with DingTalk<\/button>/);
+  assert.doesNotMatch(bootReady, /id="op-unlock"|data-step="review"|Add channel|Action needed|On server/);
 
   // 6. On private exposure, POST /api/operator-session is strictly refused (403 token-not-here) and /api/channels/public-url refuses plain http://.
   stop(); stop = undefined;
@@ -315,4 +340,63 @@ test("local port-forward bootstrap breaks the 401 loop: operator unlock opens Se
   });
   assert.equal(lockedUrl.status, 409);
   assert.equal((await lockedUrl.json()).code, "public-url-from-env");
+
+  const privPage = await (await fetch(`${privUrl}/bootstrap?lang=en`, { headers: { "x-forwarded-for": "203.0.113.9", "x-forwarded-proto": "https", accept: "text/html" } })).text();
+  assert.match(privPage, /data-step="env"/);
+  assert.doesNotMatch(privPage, /id="op-unlock"|id="code"|<button/i);
+});
+
+test("the bootstrap wizard renders one step, and never both secrets, even if a caller asks for the operator form off local (INV-2294)", () => {
+  const door = { id: "dingtalk", name: "DingTalk", type: "dingtalk" as const };
+  const toSet = [
+    { id: "dingtalk", type: "dingtalk" as const, keys: { id: "DINGTALK_CLIENT_ID", secret: "DINGTALK_CLIENT_SECRET" }, callback: "https://org.example.test/auth/dingtalk/callback" },
+    { id: "feishu", type: "feishu" as const, keys: { id: "FEISHU_APP_ID", secret: "FEISHU_APP_SECRET" }, callback: "https://org.example.test/auth/feishu/callback" },
+  ];
+  const page = (over: Partial<BootstrapPageInput>): string => bootstrapPage({
+    doors: [], toSet, local: true, canEdit: false, locale: "en", codePath: "/state/bootstrap-code",
+    operatorUnlock: { credPath: "/state/ui-token", next: "/bootstrap?lang=en" }, ...over,
+  });
+  const steps = ["unlock", "url", "vendor", "credentials", "review", "signin", "env"];
+  const only = (html: string, step: string) => {
+    assert.match(html, new RegExp(`data-step="${step}"`));
+    for (const other of steps) if (other !== step) assert.equal(html.includes(`data-step="${other}"`), false, other);
+  };
+  const unlock = page({});
+  only(unlock, "unlock");
+  assert.match(unlock, /ui-token/);
+  assert.doesNotMatch(unlock, /bootstrap-code|id="code"/);
+
+  const url = page({ canEdit: true, operatorUnlock: undefined });
+  only(url, "url");
+  assert.match(url, /id="url-loopback"/);
+  assert.doesNotMatch(url, /id="op-unlock"|id="code"|ui-token/);
+
+  const vendor = page({ canEdit: true, operatorUnlock: undefined, publicUrl: "https://org.example.test" });
+  only(vendor, "vendor");
+  assert.match(vendor, /vendor=feishu/);
+  assert.doesNotMatch(vendor, /id="cred-step"|id="code"/);
+
+  const credentials = page({ canEdit: true, operatorUnlock: undefined, publicUrl: "https://org.example.test", vendor: "feishu" });
+  only(credentials, "credentials");
+  assert.match(credentials, /https:\/\/org\.example\.test\/auth\/feishu\/callback/);
+  assert.match(credentials, />Set credentials</);
+  assert.doesNotMatch(credentials, /CHANNEL_ID|Add channel|id="code"/);
+
+  const review = page({
+    canEdit: true, operatorUnlock: undefined, publicUrl: "https://org.example.test", review: true, doors: [door],
+  });
+  only(review, "review");
+  assert.match(review, /id="confirm"/);
+  assert.match(review, /DingTalk/);
+  assert.doesNotMatch(review, /id="code"|ui-token|bootstrap-code|id="op-unlock"/);
+
+  const signin = page({ operatorUnlock: undefined, publicUrl: "https://org.example.test", doors: [door] });
+  only(signin, "signin");
+  assert.match(signin, /id="code"/);
+  assert.match(signin, /bootstrap-code/);
+  assert.doesNotMatch(signin, /id="op-unlock"|ui-token|Action needed|On server/);
+
+  const offLocal = page({ local: false, publicUrl: "https://org.example.test" });
+  only(offLocal, "env");
+  assert.doesNotMatch(offLocal, /id="op-unlock"|id="code"|<button/);
 });

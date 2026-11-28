@@ -50,28 +50,32 @@ const SERVER_PAGE_CSS = [
   ".cmd{display:flex;align-items:center;gap:8px;background:var(--rail);border:1px solid var(--border);border-radius:9px;padding:8px 11px;margin:6px 0 12px}",
   ".cmd pre{margin:0;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text);white-space:pre-wrap;overflow-wrap:anywhere;flex:1;user-select:all}",
   ".copy-link{flex:none;font-size:12px;font-weight:500;color:var(--accent);text-decoration:none;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);cursor:pointer;user-select:none}",
-  "form#bootstrap,form#op-unlock{display:flex;flex-direction:column;gap:12px;margin-top:8px}",
-  "form#bootstrap label,form#op-unlock label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--soft)}",
-  "form#bootstrap input,form#op-unlock input{width:100%;padding:10px 12px;font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;border-radius:10px;border:1px solid var(--strong);background:var(--surface);color:var(--text)}",
-  "form#bootstrap input:focus,form#op-unlock input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}",
+  "form#bootstrap,form#op-unlock,form.step{display:flex;flex-direction:column;gap:12px;margin-top:8px}",
+  "form#bootstrap label,form#op-unlock label,form.step label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;color:var(--soft)}",
+  "form#bootstrap input,form#op-unlock input,form.step input{width:100%;padding:10px 12px;",
+  "font:14px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;border-radius:10px;border:1px solid var(--strong);background:var(--surface);color:var(--text)}",
+  "form#bootstrap input:focus,form#op-unlock input:focus,form.step input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}",
+  ".step-now{margin:0 0 12px;font-size:12.5px;font-weight:600;letter-spacing:.02em;color:var(--accent)}",
   ".btn-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:2px}",
   "button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 16px;font:600 14px/1.3 inherit;",
   "border-radius:10px;border:1px solid transparent;background:var(--accent);color:var(--accent-fg);text-decoration:none;cursor:pointer}",
   "button:hover,.btn:hover{filter:brightness(1.06)}button:disabled{opacity:.55;cursor:not-allowed}",
   ".btn-secondary{background:var(--surface);color:var(--text);border-color:var(--strong)}",
   ".acts{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px;align-items:center}",
-  "#status,#op-status{margin:10px 0 0;font-size:13px;color:var(--muted)}#status[data-err='1'],#op-status[data-err='1']{color:var(--bad);font-weight:500}",
+  "#status,#op-status,#url-status,#cred-status{margin:10px 0 0;font-size:13px;color:var(--muted)}",
+  "#status[data-err='1'],#op-status[data-err='1'],#url-status[data-err='1'],#cred-status[data-err='1']{color:var(--bad);font-weight:500}",
   "@media(max-width:520px){body{padding:16px 12px}.card{padding:20px 18px}}",
 ].join("");
 
 function pageShell(options: {
   locale: Locale; title: string; badge?: string; width?: number; bodyAttrs?: string;
-  langLinks?: boolean; content: string; script?: string;
+  langLinks?: boolean; langKeep?: string; content: string; script?: string;
 }): string {
-  const { locale, title, badge, width = 540, bodyAttrs = "", langLinks = false, content, script = "" } = options;
+  const { locale, title, badge, width = 540, bodyAttrs = "", langLinks = false, langKeep = "", content, script = "" } = options;
+  const keep = langKeep === "" ? "" : `&${langKeep}`;
   const switcher = langLinks
-    ? `<nav class="langs" aria-label="Language"><a href="?lang=zh"${locale === "zh" ? ' aria-current="true"' : ""}>中文</a>` +
-      `<a href="?lang=en"${locale === "en" ? ' aria-current="true"' : ""}>EN</a></nav>`
+    ? `<nav class="langs" aria-label="Language"><a href="?lang=zh${keep}"${locale === "zh" ? ' aria-current="true"' : ""}>中文</a>` +
+      `<a href="?lang=en${keep}"${locale === "en" ? ' aria-current="true"' : ""}>EN</a></nav>`
     : "";
   const badgeHtml = badge ? `<span class="badge">${escapeHtml(badge)}</span>` : "";
   return `<!doctype html><html lang="${lang(locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
@@ -163,100 +167,200 @@ function copyRow(command: string, copyLabel: string): string {
   return `<div class="cmd"><pre>${escaped}</pre><a class="copy-link" href="#copy" role="link" data-copy="${escaped}">${escapeHtml(copyLabel)}</a></div>`;
 }
 
+/** One screen of GET /bootstrap. A step already decided by the environment is not in the list. */
+export type BootstrapWizardStep = "unlock" | "url" | "vendor" | "credentials" | "review" | "signin" | "env";
+
+export interface BootstrapPageInput {
+  doors: readonly { id: string; name: string; type: "feishu" | "dingtalk" }[];
+  toSet: readonly DoorToSet[];
+  local: boolean;
+  /** The operator cookie is present, so this browser may save the callback address and the app. */
+  canEdit: boolean;
+  locale: Locale;
+  codePath: string;
+  publicUrl?: string;
+  /** AGENTBOX_PUBLIC_URL came from the process environment, so the page cannot change it. */
+  publicUrlLocked?: boolean;
+  callbackTemplate?: string;
+  operatorUnlock?: OperatorUnlock;
+  /** The vendor this browser chose on the previous screen. Not saved until the credentials are. */
+  vendor?: "feishu" | "dingtalk";
+  /** Set after the credentials screen, so the review is shown once and the next load is the sign-in. */
+  review?: boolean;
+}
+
+function publicUrlPlaceholder(page: BootstrapPageInput): boolean {
+  return (page.publicUrl ?? "").includes("REPLACE_WITH_PUBLIC_HOST") ||
+    (page.callbackTemplate ?? "").includes("REPLACE_WITH_PUBLIC_HOST") ||
+    page.toSet.some(door => (door.callback ?? "").includes("REPLACE_WITH_PUBLIC_HOST"));
+}
+
+function hasChosenPublicUrl(page: BootstrapPageInput): boolean {
+  return Boolean(page.publicUrl?.trim()) && !publicUrlPlaceholder(page);
+}
+
 /**
- * GET /bootstrap: the one-use code, and one button per channel that can sign in now, named by its
- * type. Off the local level the operator cannot open a page with the installation token (R2,
- * docs/106 §5), so nothing here sends them to one: a channel's app comes from the server's
- * environment (docs/109 §2 step o), and with none set the page says which variables, and which
- * callback address to register with the vendor. At the local level the token still opens the
- * settings, and the steps say so as they always have.
+ * Which one thing this load asks. Credentials already in the environment skip straight to the
+ * one-use code. Off local there is no operator form (docs/106 §5, docs/109 §2 step o).
  */
-export function bootstrapPage(page: {
-  doors: readonly { id: string; name: string; type: "feishu" | "dingtalk" }[]; toSet: readonly DoorToSet[];
-  local: boolean; locale: Locale; codePath: string; callbackTemplate?: string; operatorUnlock?: OperatorUnlock;
-}): string {
+export function bootstrapWizardStep(page: BootstrapPageInput): BootstrapWizardStep {
+  const ready = page.doors.length > 0 && !publicUrlPlaceholder(page);
+  if (ready && page.review) return "review";
+  if (ready) return "signin";
+  if (!page.local || (!page.canEdit && !page.operatorUnlock)) return "env";
+  if (!page.canEdit) return "unlock";
+  if (!hasChosenPublicUrl(page)) return "url";
+  if (page.vendor !== "feishu" && page.vendor !== "dingtalk") return "vendor";
+  return "credentials";
+}
+
+function wizardHref(locale: Locale, extra: Record<string, string> = {}): string {
+  return `/bootstrap?${new URLSearchParams({ ...extra, lang: locale === "zh" ? "zh" : "en" }).toString()}`;
+}
+
+function wizardPlan(page: BootstrapPageInput, step: BootstrapWizardStep): BootstrapWizardStep[] {
+  if (step === "review") return ["review", "signin"];
+  if (step === "signin" || step === "env") return [step];
+  const steps: BootstrapWizardStep[] = [];
+  if (!page.canEdit) steps.push("unlock");
+  if (!hasChosenPublicUrl(page)) steps.push("url");
+  steps.push("vendor", "credentials", "review", "signin");
+  return steps;
+}
+
+function originCallback(publicUrl: string | undefined, id: string): string | undefined {
+  const base = publicUrl?.trim().replace(/\/+$/, "") ?? "";
+  if (base === "" || base.includes("REPLACE_WITH_PUBLIC_HOST")) return undefined;
+  return `${base}/auth/${id}/callback`;
+}
+
+function urlStepJs(): string {
+  return "var form=document.getElementById('url-step');if(form){" +
+    "var use=document.getElementById('use-origin');if(use)use.onclick=function(){" +
+    "document.getElementById('public-url').value=location.origin;if(form.requestSubmit)form.requestSubmit();};" +
+    "form.onsubmit=async function(ev){ev.preventDefault();var status=document.getElementById('url-status');" +
+    "status.textContent='';status.removeAttribute('data-err');this.querySelectorAll('button').forEach(function(b){b.disabled=true;});" +
+    "try{var res=await fetch('/api/channels/public-url',{method:'POST',headers:{'content-type':'application/json'}," +
+    "body:JSON.stringify({publicUrl:document.getElementById('public-url').value})});var data=await res.json();" +
+    "if(!res.ok)throw new Error(data.error||'Denied');location.assign(form.getAttribute('data-next')||'/bootstrap');}" +
+    "catch(e){status.setAttribute('data-err','1');status.textContent=e.message;" +
+    "form.querySelectorAll('button').forEach(function(b){b.disabled=false;});}};}";
+}
+
+function credStepJs(): string {
+  return "var form=document.getElementById('cred-step');if(form){form.onsubmit=async function(ev){ev.preventDefault();" +
+    "var status=document.getElementById('cred-status');status.textContent='';status.removeAttribute('data-err');" +
+    "this.querySelectorAll('button').forEach(function(b){b.disabled=true;});" +
+    "try{var res=await fetch('/api/channels/records',{method:'POST',headers:{'content-type':'application/json'}," +
+    "body:JSON.stringify({id:form.getAttribute('data-id'),type:form.getAttribute('data-type')," +
+    "appId:document.getElementById('app-id').value,appSecret:document.getElementById('app-secret').value})});" +
+    "var data=await res.json();if(!res.ok)throw new Error(data.error||'Denied');" +
+    "document.getElementById('app-id').value='';document.getElementById('app-secret').value='';" +
+    "location.assign(form.getAttribute('data-next')||'/bootstrap');}" +
+    "catch(e){status.setAttribute('data-err','1');status.textContent=e.message;" +
+    "form.querySelectorAll('button').forEach(function(b){b.disabled=false;});}};}";
+}
+
+/**
+ * GET /bootstrap, one decision per screen (INV-2294). The operator credential and the one-use code
+ * are never on the same screen. Off local the page names the environment variables and does not
+ * offer the operator credential. When a channel can already sign in, the page is only the code.
+ */
+export function bootstrapPage(page: BootstrapPageInput): string {
   const { doors, locale } = page;
   const say = (key: string) => escapeHtml(tr(key, locale));
-  const code = `<code>${escapeHtml(page.codePath)}</code>`;
-  const hasPlaceholderUrl = (page.callbackTemplate ?? "").includes("REPLACE_WITH_PUBLIC_HOST") ||
-    page.toSet.some(door => (door.callback ?? "").includes("REPLACE_WITH_PUBLIC_HOST"));
-  const hasPublicUrl = Boolean(page.callbackTemplate || page.toSet.some(door => Boolean(door.callback))) && !hasPlaceholderUrl;
-  const channelReady = doors.length > 0;
+  const step = bootstrapWizardStep(page);
+  const plan = wizardPlan(page, step);
   const copyWord = tr("page.bootstrap.copy", locale);
   const copiedWord = escapeHtml(tr("page.bootstrap.copied", locale));
-
-  const checks = `<div class="checks">` +
-    `<div class="check"><span class="check-k">${say("page.bootstrap.check-url")}</span>` +
-    `<span class="check-v"><span class="dot ${hasPublicUrl ? "dot-ok" : "dot-warn"}"></span>${say(hasPublicUrl ? "page.bootstrap.state-ready" : "page.bootstrap.state-needed")}</span></div>` +
-    `<div class="check"><span class="check-k">${say("page.bootstrap.check-channel")}</span>` +
-    `<span class="check-v"><span class="dot ${channelReady ? "dot-ok" : "dot-warn"}"></span>` +
-    `${channelReady ? escapeHtml(doors.map(d => tr(`page.bootstrap.vendor-${d.type}`, locale)).join(" · ")) : say("page.bootstrap.state-needed")}</span></div>` +
-    `<div class="check"><span class="check-k">${say("page.bootstrap.check-code")}</span>` +
-    `<span class="check-v"><span class="dot dot-accent"></span>${say("page.bootstrap.state-file")}</span></div>` +
-    `</div>`;
-
-  const urlAlert = hasPlaceholderUrl
-    ? `<div class="callout callout-warn">${say("page.bootstrap.placeholder-warn")}</div>`
-    : !hasPublicUrl && !page.local
-      ? `<div class="callout callout-warn">${say("page.bootstrap.url-unset-warn")}</div>`
-      : "";
-
-  const label = (door: (typeof doors)[number]) =>
-    say(`page.bootstrap.with-${door.type}`) + (doors.filter(other => other.type === door.type).length > 1 ? ` (${escapeHtml(door.name)})` : "");
-  const buttons = doors.map(door => `<button name="door" value="${escapeHtml(door.id)}">${label(door)}</button>`).join(" ");
-  const codeInput = `<input id="code" type="password" autocomplete="off" maxlength="128" placeholder="${say("page.bootstrap.code-placeholder")}" required>`;
-  const form = `<form id="bootstrap"><label>${say("page.bootstrap.code")} ${codeInput}</label><div class="btn-row">${buttons}</div></form>`;
-  const toSet = page.toSet.map(door =>
-    `<li><div>${say(`page.bootstrap.set-${door.type}`)} <code>${escapeHtml(door.keys.id)}</code>, <code>${escapeHtml(door.keys.secret)}</code>` +
-    `${say("page.bootstrap.set-callback")}<code>${escapeHtml(door.callback ?? "")}</code></div></li>`,
-  ).join("");
   const readCmd = page.codePath === "/state/bootstrap-code"
     ? "kubectl -n agentbox exec deploy/agentbox-organisation -- cat /state/bootstrap-code"
     : `cat ${shellQuotePath(page.codePath)}`;
-
-  const localUnlock = page.local && page.operatorUnlock
-    ? `<div class="panel"><div class="panel-h">${say("page.bootstrap.operator-title")}</div>` +
-      `<p>${say("page.bootstrap.operator-cmd")}</p>${copyRow(operatorReadCmd(page.operatorUnlock.credPath), copyWord)}` +
-      `<form id="op-unlock" data-next="${escapeHtml(page.operatorUnlock.next)}">` +
-      `<label>${say("page.bootstrap.operator-label")} <input id="op-cred" type="password" autocomplete="off" placeholder="${say("page.bootstrap.operator-placeholder")}" required></label>` +
-      `<div class="btn-row"><button type="submit">${say("page.bootstrap.operator-open")}</button></div>` +
-      `</form><p id="op-status"></p></div>`
+  const lead: Record<BootstrapWizardStep, string> = {
+    unlock: "page.bootstrap.unlock-do",
+    url: "page.bootstrap.url-do",
+    vendor: "page.bootstrap.vendor-do",
+    credentials: "page.bootstrap.cred-do",
+    review: "page.bootstrap.review-do",
+    signin: "page.bootstrap.signin-do",
+    env: "page.bootstrap.none",
+  };
+  const progress = plan.length > 1
+    ? `<p class="step-now">${escapeHtml(tr("page.bootstrap.progress", locale, { n: plan.indexOf(step) + 1, total: plan.length }))}</p>`
     : "";
 
-  const steps = page.local
-    ? `${localUnlock}<div class="panel"><ol class="steps"><li><a href="/?ui=next&amp;once=1&amp;view=settings&amp;pane=doors">${say("page.bootstrap.operator")}</a> ${say("page.bootstrap.operator-how")}</li>
-<li>${say("page.bootstrap.configure")}</li><li>${say("page.bootstrap.register")} ${page.callbackTemplate ? `<code>${escapeHtml(page.callbackTemplate)}</code>` : say("page.bootstrap.public-url")}</li>
-<li>${say("page.bootstrap.scan")} ${code}.${copyRow(readCmd, copyWord)}</li></ol></div>`
-    : doors.length > 0
-      ? `<div class="panel"><div class="panel-h">${say("page.bootstrap.step-sign-title")}</div><p>${say("page.bootstrap.enter")} ${code}</p>` +
-        `<p>${say("page.bootstrap.cmd-read-label")}</p>${copyRow(readCmd, copyWord)}</div>`
-      : `<div class="panel"><div class="panel-h">${say("page.bootstrap.step-env-title")}</div><p>${say("page.bootstrap.none")}</p>` +
-        `<ul class="provider-list">${toSet}</ul><p>${say("page.bootstrap.cmd-restart-label")}</p>` +
-        `${copyRow("kubectl -n agentbox rollout restart deploy/agentbox-organisation", copyWord)}</div>` +
-        `<div class="panel"><div class="panel-h">${say("page.bootstrap.step-code-title")}</div><p>${say("page.bootstrap.then")} ${code}</p>` +
-        `${copyRow(readCmd, copyWord)}</div>`;
+  let body = "";
+  if (step === "unlock" && page.operatorUnlock) {
+    body = `<p>${say("page.bootstrap.operator-cmd")}</p>${copyRow(operatorReadCmd(page.operatorUnlock.credPath), copyWord)}` +
+      `<form id="op-unlock" data-next="${escapeHtml(page.operatorUnlock.next)}">` +
+      `<label>${say("page.bootstrap.operator-label")} <input id="op-cred" type="password" autocomplete="off" placeholder="${say("page.bootstrap.operator-placeholder")}" required></label>` +
+      `<div class="btn-row"><button type="submit">${say("page.bootstrap.unlock-continue")}</button></div>` +
+      `</form><p id="op-status"></p>`;
+  } else if (step === "url") {
+    body = page.publicUrlLocked
+      ? `${publicUrlPlaceholder(page) ? `<div class="callout callout-warn">${say("page.bootstrap.placeholder-warn")}</div>` : ""}<p>${say("page.bootstrap.url-locked")}</p>`
+      : `<div class="callout callout-warn" id="url-loopback">${say("page.bootstrap.url-loopback")}</div>` +
+        `<form id="url-step" class="step" data-next="${escapeHtml(wizardHref(locale))}">` +
+        `<label>${say("page.bootstrap.url-label")} <input id="public-url" autocomplete="off" placeholder="${say("page.bootstrap.url-placeholder")}" required></label>` +
+        `<div class="btn-row"><button type="button" id="use-origin">${say("page.bootstrap.url-use-origin")}</button>` +
+        `<button type="submit">${say("page.bootstrap.url-save")}</button></div></form><p id="url-status"></p>`;
+  } else if (step === "vendor") {
+    body = `<div class="btn-row"><a class="btn" href="${escapeHtml(wizardHref(locale, { vendor: "dingtalk" }))}">${say("page.bootstrap.vendor-pick-dingtalk")}</a>` +
+      `<a class="btn btn-secondary" href="${escapeHtml(wizardHref(locale, { vendor: "feishu" }))}">${say("page.bootstrap.vendor-pick-feishu")}</a></div>`;
+  } else if (step === "credentials" && (page.vendor === "feishu" || page.vendor === "dingtalk")) {
+    const callback = originCallback(page.publicUrl, page.vendor);
+    const idLabel = page.vendor === "dingtalk" ? "page.bootstrap.field-client-id" : "page.bootstrap.field-app-id";
+    const secretLabel = page.vendor === "dingtalk" ? "page.bootstrap.field-client-secret" : "page.bootstrap.field-app-secret";
+    body = `${callback ? `<p>${say("page.bootstrap.cred-callback")} <code>${escapeHtml(callback)}</code></p>` : ""}` +
+      `<form id="cred-step" class="step" data-id="${escapeHtml(page.vendor)}" data-type="${escapeHtml(page.vendor)}" data-next="${escapeHtml(wizardHref(locale, { review: "1" }))}">` +
+      `<label>${say(idLabel)} <input id="app-id" autocomplete="off" required></label>` +
+      `<label>${say(secretLabel)} <input id="app-secret" type="password" autocomplete="off" required></label>` +
+      `<div class="btn-row"><button type="submit">${say("page.bootstrap.cred-save")}</button></div></form><p id="cred-status"></p>`;
+  } else if (step === "review") {
+    const vendors = doors.map(door => escapeHtml(tr(`page.bootstrap.vendor-${door.type}`, locale))).join(" · ");
+    body = `<ul class="provider-list">` +
+      `<li><strong>${say("page.bootstrap.review-url")}</strong> <code>${escapeHtml(page.publicUrl ?? "")}</code></li>` +
+      `<li><strong>${say("page.bootstrap.review-channel")}</strong> ${vendors}</li>` +
+      `<li><strong>${say("page.bootstrap.review-credentials")}</strong> ${say("page.bootstrap.review-credentials-set")}</li>` +
+      `</ul><div class="btn-row"><a class="btn" id="confirm" href="${escapeHtml(wizardHref(locale))}">${say("page.bootstrap.review-confirm")}</a></div>`;
+  } else if (step === "signin") {
+    const label = (door: (typeof doors)[number]) =>
+      say(`page.bootstrap.with-${door.type}`) + (doors.filter(other => other.type === door.type).length > 1 ? ` (${escapeHtml(door.name)})` : "");
+    const buttons = doors.map(door => `<button name="door" value="${escapeHtml(door.id)}">${label(door)}</button>`).join(" ");
+    body = `<p>${say("page.bootstrap.cmd-read-label")}</p>${copyRow(readCmd, copyWord)}` +
+      `<form id="bootstrap"><label>${say("page.bootstrap.code")} <input id="code" type="password" autocomplete="off" maxlength="128" placeholder="${say("page.bootstrap.code-placeholder")}" required></label>` +
+      `<div class="btn-row">${buttons}</div></form><p id="status">${say("page.bootstrap.expires")}</p>`;
+  } else {
+    const rows = page.toSet.map(door =>
+      `<li><div>${say(`page.bootstrap.set-${door.type}`)} <code>${escapeHtml(door.keys.id)}</code>, <code>${escapeHtml(door.keys.secret)}</code>` +
+      `${say("page.bootstrap.set-callback")}<code>${escapeHtml(door.callback ?? "")}</code></div></li>`,
+    ).join("");
+    const warn = publicUrlPlaceholder(page)
+      ? `<div class="callout callout-warn">${say("page.bootstrap.placeholder-warn")}</div>`
+      : !hasChosenPublicUrl(page)
+        ? `<div class="callout callout-warn">${say("page.bootstrap.url-unset-warn")}</div>`
+        : "";
+    body = `${warn}<ul class="provider-list">${rows}</ul><p>${say("page.bootstrap.cmd-restart-label")}</p>` +
+      `${copyRow("kubectl -n agentbox rollout restart deploy/agentbox-organisation", copyWord)}<p>${say("page.bootstrap.env-next")}</p>`;
+  }
 
-  const body = page.local || doors.length > 0
-    ? `${checks}${urlAlert}${steps}<div class="panel">${form}<p id="status">${doors.length ? say("page.bootstrap.expires") : say("page.bootstrap.no-channel")}</p></div>`
-    : `${checks}${urlAlert}${steps}`;
-
-  const copyJs = copyJsSnippet(copiedWord);
-  const unlockJs = page.local && page.operatorUnlock ? operatorUnlockJs() : "";
-  const submitJs = doors.length === 0 ? "" : "document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();" +
+  const submitJs = step !== "signin" ? "" :
+    "document.getElementById('bootstrap').onsubmit=async function(event){event.preventDefault();" +
     "var buttons=this.querySelectorAll('button'),door=(event.submitter||buttons[0]).value,status=document.getElementById('status');" +
     "status.removeAttribute('data-err');buttons.forEach(function(b){b.disabled=true;});try{var response=await fetch('/auth/'+encodeURIComponent(door),{method:'POST'," +
     "headers:{'content-type':'application/json'},body:JSON.stringify({bootstrapCode:document.getElementById('code').value})});" +
     "var data=await response.json();if(!response.ok)throw new Error(data.error);document.getElementById('code').value='';location.assign(data.url);}" +
     "catch(error){status.setAttribute('data-err','1');status.textContent=error.message;buttons.forEach(function(b){b.disabled=false;});}};";
-
+  const keep = step === "credentials" && page.vendor ? `vendor=${page.vendor}` : step === "review" ? "review=1" : "";
   return pageShell({
     locale,
     title: tr("page.bootstrap.title", locale),
     badge: tr("page.bootstrap.badge", locale),
     width: 660,
     langLinks: true,
-    content: `<h1>${say("page.bootstrap.title")}</h1><p class="sub">${say("page.bootstrap.subtitle")}</p>${body}`,
-    script: `<script>${copyJs}${unlockJs}${submitJs}</script>`,
+    langKeep: keep,
+    content: `<section data-step="${step}">${progress}<h1>${say("page.bootstrap.title")}</h1><p class="sub">${say(lead[step])}</p><div class="panel">${body}</div></section>`,
+    script: `<script>${copyJsSnippet(copiedWord)}${step === "unlock" ? operatorUnlockJs() : ""}${step === "url" && !page.publicUrlLocked ? urlStepJs() : ""}${step === "credentials" ? credStepJs() : ""}${submitJs}</script>`,
   });
 }
 /** Signed in with the vendor, unknown here: the knock path, as a page a person can act on. */
