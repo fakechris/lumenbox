@@ -2636,14 +2636,14 @@ export class Orchestrator {
    *
    * **Only when empty.** A person who deletes one does not get it back on the next start, and an
    * upgrade does not repopulate a team someone has curated. **Only where it can work** (INV-2310):
-   * undefined, nothing made, where the installation does not start with one; the caller says so.
+   * where the installation does not start with one there is no default agent: undefined, nothing made.
    *
    * Deliberately not done: a hidden first turn per agent so each introduces itself. It reads well and
    * it spends four model calls before the user has said anything, which is not a cost to impose by
    * default.
    */
   ensureDefaultAgent(): AgentRecord | undefined {
-    return this.registry.list()[0] ?? seedStarterTeam(this.registry, this.options.starterTeam !== false)[0];
+    return this.options.starterTeam === false ? undefined : this.registry.list()[0] ?? seedStarterTeam(this.registry, true)[0];
   }
 }
 /** The starter team, made in an empty registry where the installation starts with one (INV-2310); what was made. */

@@ -167,13 +167,16 @@ export class ChatRoute {
 
   /**
    * Who a call from this person that names no agent reaches when it came through no door (the MCP
-   * side door, INV-2310): on a single-machine installation its first agent, as always; elsewhere
-   * their home agent, else the one agent they may reach; else nobody, and the caller says so.
+   * side door's "the coordinator", INV-2310): on a single-machine installation its first agent, as
+   * always; elsewhere their home agent, else the first in a box of their own, else the first in a
+   * box they may enter; with no agent at all, the first one made (none where there is no starter
+   * team); else nobody, and the caller says so. Never one in a box that cannot run.
    */
   coordinatorFor(principalId: string): AgentRecord | undefined {
-    if (this.deps.principals.installation().mode === "single-machine") return this.deps.registry.list()[0] ?? this.deps.firstAgent();
-    const reach = this.reachable(principalId).filter(entry => entry.agent.profile.hidden !== true);
-    return this.homeOf(principalId) ?? (reach.length === 1 ? reach[0]!.agent : undefined);
+    const { registry } = this.deps;
+    if (this.deps.principals.installation().mode === "single-machine") return registry.list()[0] ?? this.deps.firstAgent();
+    const mayUse = registry.list().filter(agent => agent.profile.hidden !== true && mayEnterBox(registry.boxOf(agent.id), principalId));
+    return this.homeOf(principalId) ?? mayUse.find(agent => soleMember(registry.boxOf(agent.id)) === principalId) ?? mayUse[0] ?? (registry.list().length === 0 ? this.deps.firstAgent() : undefined);
   }
 
   /** The agent a direct message from this person reaches now, when they have one they may still enter. What the page marks. */
