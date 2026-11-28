@@ -29,6 +29,7 @@ this file and the headers disagree. Edit the header, not this table.
 | [106-stable-surface-and-client-api](106-stable-surface-and-client-api.md) | What stays stable: release lines, the stable list, remote access, and the client API | current | 2026-11-27 |
 | [109-organisation-onboarding](109-organisation-onboarding.md) | Joining an organisation: activation, a box and an agent each, the first chat, and what boxes share | current | 2026-11-28 |
 | [11-roadmap](11-roadmap.md) | Roadmap and backlog | current | 2026-09-28 |
+| [111-organisation-administration](111-organisation-administration.md) | Administering an organisation: who may do what, what is recorded, and the Admin's console | current | 2026-11-29 |
 | [21-dingtalk-wire](21-dingtalk-wire.md) | The DingTalk wire | current | 2026-08-28 |
 | [22-domain-model](22-domain-model.md) | The domain model: people, doors, workers, rooms | current | 2026-11-27 |
 | [27-testing-and-release](27-testing-and-release.md) | Testing and release stability: ours, against OpenClaw and Hermes | current | 2026-11-27 |

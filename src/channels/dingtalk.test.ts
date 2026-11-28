@@ -810,3 +810,29 @@ test("a notice pushed at a person names the conversation their reply arrives in"
   // under a guessed key would put it where no reply can arrive.
   assert.equal(await state.adapter.send("dingtalk:staff-unknown", "…"), undefined);
 });
+
+// A reply into a direct chat, through the real `transmit` (the tests above replace it). Its target is `route: "direct"`, and the
+// direct route needs a user id even when the session webhook is fresh; until #867 the target had none, so every reply into a
+// direct chat was refused before it left — the webhook never tried, the robot API never reached (INV-2221, INV-2261).
+test("a reply into a direct chat goes out: by its fresh webhook, and by the user's id once the webhook has expired", async () => {
+  const realFetch = globalThis.fetch;
+  const posted: { url: string; body: Record<string, unknown> }[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input), body = init?.body === undefined ? {} : JSON.parse(String(init.body)) as Record<string, unknown>;
+    if (url.endsWith("/v1.0/oauth2/accessToken")) return Response.json({ accessToken: "app-token", expireIn: 7200 });
+    posted.push({ url, body });
+    return Response.json(url.startsWith("https://hook.test/") ? { errcode: 0 } : { processQueryKey: "k" });
+  }) as typeof fetch;
+  try {
+    for (const [expiresAt, expected] of [[Date.now() + 600_000, "https://hook.test/ana"], [Date.now() - 1, "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend"]] as const) {
+      posted.length = 0;
+      const adapter = new DingTalkChannel("app", "secret", () => {});
+      const frame = JSON.stringify({ type: "CALLBACK", headers: { topic: TOPIC, messageId: `tr-${expiresAt}` }, data: JSON.stringify({
+        conversationId: "cid_ana", conversationType: "1", msgId: `m-${expiresAt}`, senderStaffId: "ana", senderNick: "Ana", msgtype: "text", text: { content: "hello" },
+        sessionWebhook: "https://hook.test/ana", sessionWebhookExpiredTime: expiresAt }) });
+      await adapter.receive(frame, { respond: () => {} }, async () => "hi Ana");
+      assert.deepEqual(posted.map(call => call.url), [expected], "the reply went out, once");
+      if (expected.includes("oToMessages")) assert.deepEqual(posted[0]!.body.userIds, ["ana"]);
+    }
+  } finally { globalThis.fetch = realFetch; }
+});

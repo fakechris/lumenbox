@@ -631,25 +631,25 @@ export interface ChannelManagerDeps {
    * Returns the saved names (as the chat should hear them), or undefined when there
    * is nowhere to store them — which the chat is told plainly.
    */
-  receiveFiles?: (chatKey: string, files: { name: string; base64: string }[]) => Promise<string[] | undefined>;
+  receiveFiles?: (chatKey: string, files: { name: string; base64: string }[], agent?: string) => Promise<string[] | undefined>; // agent: whose box they land in (INV-2261)
   credentials?: { gate: (taskId: string, start: () => Promise<void>) => string | undefined }; // before a new task's turn (INV-1666): a line for the chat when a credential it needs is missing; the task waits and `start` begins it once one lands
   /**
    * The files a finished turn left in this chat's outbox — name and bytes, smallest
    * first. Collected once per task, after the reply lands; an empty answer is the
    * ordinary case and costs one directory listing.
    */
-  collectOutbox?: (chatKey: string) => Promise<{ name: string; base64: string }[]>;
+  collectOutbox?: (chatKey: string, agent?: string) => Promise<{ name: string; base64: string }[]>; // agent: whose box's outbox (INV-2261); none, the installation's own
   /**
    * Reads one file out of the box by absolute path, for a reply that named a deliverable
    * instead of handing it over. Undefined when there is no box to read from.
    */
-  readBoxFile?: (path: string) => Promise<{ name: string; base64: string } | undefined>; /** The work directory of the box it reads (`workDir`, box-paths.ts): only paths under it are offered (INV-1737); the image's when not given. */ workDir?: () => string;
+  readBoxFile?: (path: string, agent?: string) => Promise<{ name: string; base64: string } | undefined>; /** The work directory of the box it reads (`workDir`, box-paths.ts): only paths under it are offered (INV-1737); the image's when not given. */ workDir?: (agent?: string) => string;
   /**
    * Marks collected files delivered — moved to sent/ — after their pushes succeeded.
    * Only what was actually pushed: a file whose push failed stays in the outbox and
    * goes out with the next task rather than vanishing.
    */
-  outboxDelivered?: (chatKey: string, names: string[]) => Promise<void>;
+  outboxDelivered?: (chatKey: string, names: string[], agent?: string) => Promise<void>;
   /**
    * Redeems an invite code for this identity and returns the line to send back —
    * "you're in as driver", or why not. Reached *before* the allow check, because the
@@ -1178,7 +1178,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       return Promise.resolve({ delivered: false, why });
     }
     // The same file duty the reply door has (a report naming its long version by box path, 2026-09-01).
-    const files = () => this.deliverFiles(adapter, chatKey, chatKey, text, undefined, line => adapter.sendToChat === undefined ? Promise.resolve() : adapter.sendToChat(chatKey, line));
+    const files = () => this.deliverFiles(adapter, chatKey, chatKey, text, undefined, line => adapter.sendToChat === undefined ? Promise.resolve() : adapter.sendToChat(chatKey, line), purpose.kind === "notice" ? purpose.from : undefined);
     if (this.deps.outbox !== undefined) return this.deps.outbox.send({ adapter: { sendToChat: (key, line) => adapter.sendToChat!(key, line) }, chatKey, text, purpose }, files);
     return adapter.sendToChat(chatKey, text).then(files).then(() => ({ delivered: true })).catch((error: unknown) => {
       const why = `could not send to ${chatKey} — ${error instanceof Error ? error.message : String(error)}`;
@@ -1201,13 +1201,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
     outboxKey: string,
     text: string,
     anchor: PushOptions | undefined,
-    sayInChat: (line: string) => Promise<void>
+    sayInChat: (line: string) => Promise<void>,
+    agent?: string // whose box the outbox and the named files are on (INV-2261)
   ): Promise<void> {
     if (this.deps.collectOutbox === undefined) return;
     const failed: string[] = [];
     const held: string[] = [];
     try {
-      const files = await this.deps.collectOutbox(outboxKey);
+      const files = await this.deps.collectOutbox(outboxKey, agent);
       const delivered: string[] = [];
       for (const file of files) {
         // A file that cannot be opened as its name says is held, not sent (INV-692): it stays in the outbox, and the failure below says which and why. The agent was told the same
@@ -1238,14 +1239,14 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         }
       }
       if (delivered.length > 0) {
-        await this.deps.outboxDelivered?.(outboxKey, delivered);
+        await this.deps.outboxDelivered?.(outboxKey, delivered, agent);
       }
 
       // A file the text *names* but never handed over. An agent wrote its research to a path under the work directory and said "the full version is at «path»", which is a real
       // file in the box and an unopenable string to the person reading it in a chat — they had to ask for it again. The outbox convention is in the prompt and was not followed, and whether it was is a path comparison rather than a judgement, so the harness checks rather than asks harder. Never retry an ambiguous failed send via the named-path fallback in this turn.
-      const named = undelivered(boxPathsNamed(text, this.deps.workDir?.() ?? DOCKER_WORK), files.map(file => file.name));
+      const named = undelivered(boxPathsNamed(text, this.deps.workDir?.(agent) ?? DOCKER_WORK), files.map(file => file.name));
       for (const path of named.slice(0, 3)) {
-        const file = await this.deps.readBoxFile?.(path).catch(() => undefined);
+        const file = await this.deps.readBoxFile?.(path, agent).catch(() => undefined);
         if (file === undefined) {
           failed.push(path);
           // Said out loud: the silent skip here is why a missing named file used to
@@ -1870,10 +1871,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // the conversation's directory, and after conversations began following threads the
       // two disagreed — the agent was sent to a path nothing wrote and nothing read, which
       // it noticed and reported. One key for both, and the room stays the delivery address.
-      const saved = await this.deps.receiveFiles(
-        message.threadKey ?? chatKey,
-        message.files ?? []
-      );
+      const saved = await this.deps.receiveFiles(message.threadKey ?? chatKey, message.files ?? [], message.to?.agent ?? message.to?.fallback); // into the box of the agent the message is for (INV-2261)
       if (saved === undefined) {
         await this.deliver(
           adapter,
@@ -2230,7 +2228,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
         // still go (an act, not a sentence). The task settles as done: it completed with nothing to say (INV-801).
         this.deps.log(`channel ${adapter.name}: ${agentName ?? "agent"} stayed silent — ${asked.silent.reason.slice(0, 120)}`);
         await interimDelivery;
-        await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, "", anchor, line => deliver(line));
+        await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, "", anchor, line => deliver(line), agentName);
         const settled = taskId !== undefined ? this.settle(taskId, agentName, runningKey) : undefined;
         if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
         finishCard(settled === "review" || settled === "working" ? settled : "done");
@@ -2269,9 +2267,7 @@ ${input.options.map(option => `· ${option}`).join("\n")}`
       // Whatever the turn left in the chat's outbox follows the reply — images shown
       // as images, everything else as a file. What was pushed is marked delivered;
       // what failed stays in the outbox for the next task rather than vanishing.
-      await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, reply, anchor, line =>
-        deliver(line)
-      );
+      await this.deliverFiles(adapter, targetChatKey, message.threadKey ?? chatKey, reply, anchor, line => deliver(line), agentName);
       // A generated answer is not yet a delivered answer. Settle only after text/files.
       const settled = taskId !== undefined ? this.settle(taskId, agentName, runningKey) : undefined;
       if (taskId !== undefined && options?.recoveryOperationId !== undefined) this.deps.recover?.finished(taskId, options.recoveryOperationId, "completed");
