@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
 import { test } from "node:test";
-import { boxResources, cleanEnv, cleanup, disturbed, dmgName, expectedDigest, ownProcess, parseArgs, runBundles, summarize } from "./onboarding-e2e.mjs";
+import { appEnv, boxResources, cleanup, disturbed, dmgName, expectedDigest, ownProcess, parseArgs, runBundles, summarize } from "./onboarding-e2e.mjs";
 
 test("arguments: a version is required, the default app's port is refused, and cleanup needs no version", () => {
   const run = parseArgs(["--version", "0.3.8", "--key-env", "MINIMAX_API_KEY"]);
@@ -45,10 +45,13 @@ test("the DMG a person downloads, and the digest SHA256SUMS publishes for exactl
   assert.equal(expectedDigest(sums, "LumenBox-0.3.8-arm64-mac.zip"), undefined);
 });
 
-test("the app's environment keeps a login session's basics and nothing else from the operator's shell", () => {
-  const env = cleanEnv({ HOME: "/Users/x", PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-secret", MINIMAX_API_KEY: "mm", AGENTBOX_HOME: "/Users/x/.agentbox", DOCKER_HOST: "tcp://elsewhere" }, { AGENTBOX_HOME: "/run/home" });
-  assert.equal(env.HOME, "/Users/x");
-  assert.equal(env.AGENTBOX_HOME, "/run/home");
+test("the app's environment keeps a login session's basics and nothing else from the operator's shell, and points it at the run's own home and logs", () => {
+  const operator = { HOME: "/Users/x", PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-secret", MINIMAX_API_KEY: "mm", AGENTBOX_HOME: "/Users/x/.agentbox", DOCKER_HOST: "tcp://elsewhere", LUMENBOX_LOGS_DIR: "/Users/x/elsewhere" };
+  const env = appEnv(operator, { home: "/run/full/home", logs: "/run/full/logs", container: "lumenbox-onboard-1", port: 7796 });
+  assert.equal(env.HOME, "/Users/x", "the real HOME is kept, so the shell's default logs directory would be the owner's");
+  assert.equal(env.LUMENBOX_LOGS_DIR, "/run/full/logs", "so the run names its own (INV-2307)");
+  assert.deepEqual([env.AGENTBOX_HOME, env.AGENTBOX_CONTAINER, env.LUMENBOX_PORT], ["/run/full/home", "lumenbox-onboard-1", "7796"]);
+  assert.equal(appEnv(operator, { home: "/h", logs: "/l", container: "c" }, { ELECTRON_RUN_AS_NODE: "1" }).LUMENBOX_LOGS_DIR, "/l", "the server started alone gets one too");
   for (const leak of ["ANTHROPIC_API_KEY", "MINIMAX_API_KEY", "DOCKER_HOST"]) assert.equal(env[leak], undefined, `${leak} does not reach the app`);
   assert.match(env.PATH, /\/usr\/local\/bin/, "Docker's usual places are on PATH, as a GUI launch has them");
 });

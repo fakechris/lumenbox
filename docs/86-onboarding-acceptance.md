@@ -77,6 +77,10 @@ Expect 10–40 minutes, most of it the first pull.
 Exit 0 is PASS, 1 is a failed step, 2 is a script error. The report is
 `<run-dir>/report.md` (default run dir `~/lumenbox-onboarding/<version>-<stamp>/`), beside
 `report.json`, `manifest.json`, the screenshots, each phase's `app.log` and `full/box-start.log`.
+Each app the run starts writes its shell logs (`server.log`, `supervision.log`, `memguard.log`)
+to `<run-dir>/<phase>/logs/`, set through `LUMENBOX_LOGS_DIR`, and the report's last line names
+them: the run keeps the real `HOME`, and without it every app it starts would append to the
+owner's `~/Library/Logs/LumenBox/server.log` and could rotate the owner's `server.log.1` away.
 
 ## Upgrade mode: the previous release, used, then the candidate on its data
 

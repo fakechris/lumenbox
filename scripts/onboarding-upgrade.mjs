@@ -217,7 +217,9 @@ function containerId(kit) {
 function serverExit(kit, appRoot, home, timeoutMs) {
   const resources = join(appRoot, "LumenBox.app", "Contents", "Resources", "app");
   const binary = join(appRoot, "LumenBox.app", "Contents", "MacOS", "LumenBox");
-  const env = kit.cleanEnv(process.env, { AGENTBOX_HOME: home, AGENTBOX_CONTAINER: kit.run.container, ELECTRON_RUN_AS_NODE: "1" });
+  const logs = join(kit.run.dir, "downgrade", "server-logs");
+  const env = kit.appEnv(process.env, { home, logs, container: kit.run.container }, { ELECTRON_RUN_AS_NODE: "1" });
+  kit.run.recordLogs(logs);
   return new Promise(done => {
     const child = spawn(binary, ["--experimental-transform-types", join(resources, "src", "cli.ts"), "web", "--port", String(kit.run.options.port), "--desktop"], { cwd: resources, env, stdio: ["ignore", "pipe", "pipe"] });
     kit.run.recordProcess(child.pid);
@@ -248,7 +250,7 @@ function windowShot(kit, pid, file) {
 }
 
 /**
- * The walk. `kit`: { run, App, firstUse, sh, cleanEnv }. The previous app was installed into
+ * The walk. `kit`: { run, App, firstUse, sh, appEnv }. The previous app was installed into
  * `<run>/previous`, the candidate into `<run>`; both use `<run>/upgrade/home` and
  * `<run>/upgrade/user-data`, as one person's machine does across an upgrade.
  */

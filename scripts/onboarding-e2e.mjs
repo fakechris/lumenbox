@@ -129,6 +129,16 @@ export function cleanEnv(base, extra) {
   return { ...env, ...extra };
 }
 
+/**
+ * What an app the run starts is given: the clean environment, its own home, box container and
+ * port, and its own logs directory — the shell otherwise writes server.log, supervision.log and
+ * memguard.log into ~/Library/Logs/LumenBox, the owner's, and can rotate the owner's server.log.1
+ * away (INV-2307). `where`: `{ home, logs, container, port }` (no port for a server given --port).
+ */
+export function appEnv(base, where, extra = {}) {
+  return cleanEnv(base, { AGENTBOX_HOME: where.home, LUMENBOX_LOGS_DIR: where.logs, AGENTBOX_CONTAINER: where.container, ...(where.port !== undefined ? { LUMENBOX_PORT: String(where.port) } : {}), ...extra });
+}
+
 /** What changed among containers that existed before the run: anything removed or restarted. */
 export function disturbed(before, after) {
   const now = new Map(after.map(c => [c.name, c]));
@@ -241,7 +251,7 @@ class Run {
     this.dir = resolve(options.runDir ?? join(homedir(), "lumenbox-onboarding", `${options.upgradeFrom !== undefined ? `${options.upgradeFrom}-to-` : ""}${options.version}-${stamp}`));
     this.container = `lumenbox-onboard-${stamp.slice(5, 16).replace(/[-T]/g, "").toLowerCase()}`;
     this.steps = [];
-    this.manifest = { createdAt: new Date().toISOString(), version: options.version, runDir: this.dir, box: boxResources(this.container), image: `${IMAGE_REPO}:${options.version}`, imageWasCached: undefined, appProcesses: [], ...(options.upgradeFrom !== undefined ? { upgradeFrom: options.upgradeFrom, previousImage: `${IMAGE_REPO}:${options.upgradeFrom}`, previousImageWasCached: undefined } : {}) };
+    this.manifest = { createdAt: new Date().toISOString(), version: options.version, runDir: this.dir, box: boxResources(this.container), image: `${IMAGE_REPO}:${options.version}`, imageWasCached: undefined, appProcesses: [], logs: [], ...(options.upgradeFrom !== undefined ? { upgradeFrom: options.upgradeFrom, previousImage: `${IMAGE_REPO}:${options.upgradeFrom}`, previousImageWasCached: undefined } : {}) };
   }
 
   async step(name, fn) {
@@ -260,6 +270,11 @@ class Run {
     }
   }
 
+  /** A logs directory an app of the run was given, for the report. */
+  recordLogs(dir) {
+    if (!this.manifest.logs.includes(dir)) this.manifest.logs.push(dir);
+  }
+
   /** A process the run started, with when, so --cleanup can tell it from a later holder of the number. */
   recordProcess(pid) {
     if (pid !== undefined) this.manifest.appProcesses.push({ pid, startedAt: new Date().toISOString() });
@@ -273,7 +288,7 @@ class Run {
   save() {
     writeFileSync(join(this.dir, "manifest.json"), JSON.stringify(this.manifest, null, 2));
     const summary = summarize(this.steps);
-    writeFileSync(join(this.dir, "report.json"), JSON.stringify({ ...summary, version: this.options.version, steps: this.steps }, null, 2));
+    writeFileSync(join(this.dir, "report.json"), JSON.stringify({ ...summary, version: this.options.version, logs: this.manifest.logs, steps: this.steps }, null, 2));
     const md = [
       `# ${this.options.upgradeFrom !== undefined ? `Upgrade acceptance — LumenBox ${this.options.upgradeFrom} → ${this.options.version}` : `Onboarding acceptance — LumenBox ${this.options.version}`}`,
       "",
@@ -289,6 +304,8 @@ class Run {
       `- image ${this.manifest.image} (${this.manifest.imageWasCached ? "was already on this machine" : "pulled by this run"})`,
       ...(this.manifest.previousImage !== undefined && this.manifest.previousImage !== this.manifest.image ? [`- image ${this.manifest.previousImage} (${this.manifest.previousImageWasCached ? "was already on this machine" : "pulled by this run"})`] : []),
       `- run directory ${this.dir}`,
+      "",
+      `Logs of the apps it started (server.log, supervision.log, memguard.log): ${this.manifest.logs.length === 0 ? "none started" : this.manifest.logs.join(", ")}`,
     ].join("\n");
     writeFileSync(join(this.dir, "report.md"), `${md}\n`);
     return summary;
@@ -305,6 +322,7 @@ class App {
     this.appRoot = where.appRoot ?? run.dir;
     this.home = where.home ?? join(run.dir, phase, "home");
     this.userData = where.userData ?? join(run.dir, phase, "user-data");
+    this.logs = join(run.dir, phase, "logs");
     mkdirSync(this.home, { recursive: true });
     mkdirSync(this.userData, { recursive: true });
     mkdirSync(join(run.dir, phase), { recursive: true });
@@ -313,7 +331,8 @@ class App {
   start() {
     const { options } = this.run;
     const binary = join(this.appRoot, "LumenBox.app", "Contents", "MacOS", "LumenBox");
-    const env = cleanEnv(process.env, { AGENTBOX_HOME: this.home, LUMENBOX_PORT: String(options.port), AGENTBOX_CONTAINER: this.run.container, ...this.extraEnv });
+    const env = appEnv(process.env, { home: this.home, logs: this.logs, container: this.run.container, port: options.port }, this.extraEnv);
+    this.run.recordLogs(this.logs);
     const log = join(this.run.dir, this.phase, "app.log");
     this.child = spawn(binary, [`--user-data-dir=${this.userData}`, `--remote-debugging-port=${options.cdpPort}`], { env, stdio: ["ignore", "pipe", "pipe"], detached: false });
     this.run.recordProcess(this.child.pid);
@@ -685,7 +704,7 @@ async function main() {
     if (previousReady && (await fetchArtifacts(run))) {
       if (options.phases.includes("nodocker")) await phaseNoDocker(run);
       if (options.phases.includes("full")) await phaseFull(run);
-      if (options.phases.includes("upgrade")) await phaseUpgrade({ run, App, firstUse, sh, cleanEnv });
+      if (options.phases.includes("upgrade")) await phaseUpgrade({ run, App, firstUse, sh, appEnv });
     }
   } finally {
     await run.step("nothing else touched", async () => {
