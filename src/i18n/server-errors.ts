@@ -270,6 +270,8 @@ export const SERVER_ERRORS = {
   "err.model-test-region": ["供应商拒绝了密钥。请核对密钥；如果密钥来自另一区域，请选择{provider}后重新测试。", "The provider rejected the key. Check the key, or if it came from the other region, select {provider} and test again."],
   "err.host-exec-needs-dir": ["开启本机执行命令需要一个工作目录。", "Turning host execution on needs a working directory for its commands."],
   "err.search-needs-provider": ["请为这个 key 选一个搜索 provider，或选 none 清除它。", "Pick a search provider for the key, or clear it with none."],
+  "err.user-agent-too-long": ["User-Agent 最多 200 个字符。留空则用 LumenBox 自己的。", "A User-Agent is at most 200 characters. Leave it empty for LumenBox's own."],
+  "err.user-agent-not-ascii": ["User-Agent 只能是一行可打印的 ASCII 字符。留空则用 LumenBox 自己的。", "A User-Agent is one line of printable ASCII. Leave it empty for LumenBox's own."],
   "err.search-provider-unknown": ["没有搜索 provider \"{provider}\"。可选：{known}，或 none。", "Unknown search provider \"{provider}\". Known: {known}, or none."],
   "err.model-saved-not-applied": ["已保存，但没有生效：{label}没有{env}。仍在使用原来的模型。", "Saved, but not applied: no {env} for {label}. The previous model stays in use."],
   "err.jev-point-unknown": ["没有判断点 \"{point}\"。", "Unknown judgement point \"{point}\"."],

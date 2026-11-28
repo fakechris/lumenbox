@@ -28,7 +28,7 @@ import {
   existsSync,
   statSync,
 } from "node:fs";
-import { appendLine } from "../host/jsonl.ts";
+import { appendLine } from "../host/jsonl.ts"; import { withModelSession } from "../host/model-session.ts";
 import { guardMemoryCandidate } from "../host/memory-guard.ts"; import type { ToolPermissions } from "../host/tool-permissions.ts"; import { admitted } from "../host/memory-scope.ts";
 import { BOX_RECORD_FILENAME, ensureBoxRecord, type BoxRecord } from "../box/identity.ts";
 import { BOXES_FILENAME, type BoxEntry, ensureBoxes, saveBoxes } from "../box/boxes.ts";
@@ -313,7 +313,7 @@ export class AgentRegistry {
     const context = inherited?.agentId === agentId && inherited.conversation === conversation
       ? inherited : { agentId, conversation, ...this.contextStore(agentId, conversation).current() };
     this.assertContextCurrent(context);
-    return this.contextScope.run(context, run);
+    return this.contextScope.run(context, () => withModelSession(agentId, conversation, run)); // the model session follows the context (INV-2325)
   }
 
   contextStore(agentId: string, conversation = MAIN_CONVERSATION): ContextEpochStore {

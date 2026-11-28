@@ -20,6 +20,8 @@
 import { envNumber } from "../config.ts";
 import Anthropic from "@anthropic-ai/sdk";
 import { OpenAIWireClient } from "./openai-wire.ts";
+import { buildInfo } from "./build-info.ts";
+import { modelSessionId } from "./model-session.ts";
 import { accountOf, gateClient } from "./provider-rest.ts";
 import { startRemainsPolling } from "./quota-window.ts";
 import { currentRedactor } from "./secret-redaction.ts";
@@ -86,6 +88,12 @@ export interface ProviderProfile {
    * OpenAI, OpenRouter and SiliconFlow sit in the same catalog as everyone else.
    */
   wire?: "anthropic" | "openai";
+  /**
+   * The header in which the endpoint asks for the conversation's session id (INV-2325): OpenCode Go's
+   * `x-opencode-session`. Absent everywhere else, so no other vendor is told which conversation a
+   * request belongs to.
+   */
+  sessionHeader?: string;
 }
 
 const ANTHROPIC: ProviderProfile = {
@@ -278,6 +286,27 @@ const SILICONFLOW_GLOBAL: ProviderProfile = {
 };
 
 /**
+ * OpenCode Go (INV-2325): one subscription, many vendors' models, on its own Anthropic-compatible
+ * address. Go watches its traffic for clients that are not coding agents, and asks each one to
+ * name itself in its User-Agent (every client here does) and to send a stable session id per
+ * conversation, which only this profile sends. The `-free` models answer OpenCode alone and are
+ * left out. Every capability starts off, as for every compatible endpoint, until measured.
+ */
+const OPENCODE_GO: ProviderProfile = {
+  label: "OpenCode Go",
+  baseUrl: "https://opencode.ai/inference/go/anthropic",
+  model: "minimax-m3",
+  maxTokens: 32_000,
+  vision: false,
+  adaptiveThinking: false,
+  effort: false,
+  promptCaching: false,
+  auth: "bearer",
+  keyEnv: "OPENCODE_API_KEY",
+  sessionHeader: "x-opencode-session",
+};
+
+/**
  * Model suggestions per preset, for the settings dialog's picker.
  *
  * Suggestions, not a gate: the field stays free text because vendors ship models
@@ -313,6 +342,9 @@ export const PRESET_MODELS: Record<string, readonly string[]> = {
     "Qwen/Qwen3-Coder-480B-A35B-Instruct",
     "zai-org/GLM-4.6",
   ],
+  // The models Go serves on the Messages API natively (GET /inference/go/v1/models, 2026-11-28); the
+  // others are translated from OpenAI's API and stay off this list until a tool-using turn is measured.
+  "opencode-go": ["minimax-m3", "qwen4-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "claude-haiku-5-5"],
   custom: [],
 };
 
@@ -356,6 +388,7 @@ const PRESETS: Record<string, () => ProviderProfile> = {
   openrouter: () => ({ ...OPENROUTER }),
   siliconflow: () => ({ ...SILICONFLOW }),
   "siliconflow-global": () => ({ ...SILICONFLOW_GLOBAL }),
+  "opencode-go": () => ({ ...OPENCODE_GO }),
   custom: compatible,
   compatible,
 };
@@ -374,6 +407,7 @@ export function providerNames(): string[] {
     "openrouter",
     "siliconflow",
     "siliconflow-global",
+    "opencode-go",
     "custom",
   ];
 }
@@ -533,7 +567,47 @@ function clientFor(
   options?: { maxRetries?: number; timeout?: number }
 ): Anthropic {
   // Past the account's rest (INV-1577): an account out of usage is not called again until it may be back.
-  return gateClient(withRedaction(wireClientFor(profile, key, options)), accountOf(profile, key), profile.label);
+  return gateClient(withRedaction(withRequestHeaders(wireClientFor(profile, key, options), profile)), accountOf(profile, key), profile.label);
+}
+
+/** What every request says it is, unless Settings names something else (INV-2325). */
+export function defaultUserAgent(): string {
+  return `LumenBox/${buildInfo().version}`;
+}
+
+/** Why a User-Agent would not do, or undefined: printable ASCII on one line, at most 200 characters. */
+export function userAgentProblem(value: string): "too-long" | "not-ascii" | undefined {
+  if (value.length > 200) return "too-long";
+  if (!/^[\x20-\x7e]+$/.test(value)) return "not-ascii";
+  return undefined;
+}
+
+/** The User-Agent in force now: the saved one when it is usable, else LumenBox's own. Read per request, so a save needs no restart. */
+export function clientUserAgent(): string {
+  const saved = process.env.AGENTBOX_USER_AGENT?.trim() ?? "";
+  return saved !== "" && userAgentProblem(saved) === undefined ? saved : defaultUserAgent();
+}
+
+/**
+ * The headers every request carries (INV-2325), added per request rather than once at construction:
+ * the default client lives as long as the server, and a User-Agent saved in Settings must reach it.
+ * The SDK would otherwise name itself (`Anthropic/JS …`), which OpenCode Go refuses to take for a
+ * coding agent. The session id goes only to a profile that asks for one, under its own header; a
+ * request outside any conversation gets the installation's background session.
+ */
+function withRequestHeaders(client: Anthropic, profile: ProviderProfile): Anthropic {
+  const messages = client.messages as unknown as Record<string, unknown>;
+  for (const method of ["create", "stream"] as const) {
+    const original = messages[method];
+    if (typeof original !== "function") continue;
+    const bound = (original as (...args: unknown[]) => unknown).bind(messages);
+    messages[method] = (params: unknown, options?: { headers?: Record<string, string> } & Record<string, unknown>, ...rest: unknown[]) => {
+      const headers: Record<string, string> = { "User-Agent": clientUserAgent() };
+      if (profile.sessionHeader !== undefined) headers[profile.sessionHeader] = modelSessionId(process.env.AGENTBOX_HOME ?? "");
+      return bound(params, { ...options, headers: { ...headers, ...options?.headers } }, ...rest);
+    };
+  }
+  return client;
 }
 
 /**

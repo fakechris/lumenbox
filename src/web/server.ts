@@ -81,7 +81,7 @@ import { mcpServerTools } from "./mcp-tools.ts";
 import { BackupSchedule, backupRoot } from "../host/backup.ts";
 import { ALL_TOOLS, Orchestrator } from "../host/orchestrator.ts"; import { installationBoxRuns, runnableAgents, startsWithStarterTeam, strandedAgentsRoute } from "./installation-box-here.ts";
 import { setupRoute, yoursOf } from "./first-screen-route.ts";
-import { describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, type ProviderProfile } from "../host/provider.ts";
+import { defaultUserAgent, describeProvider, providerForChoice, providerNames, resolveProvider, testProvider, userAgentProblem, type ProviderProfile } from "../host/provider.ts";
 import { modelConfigured } from "../host/model-readiness.ts";
 import { modelReady, modelReadinessRoute } from "./model-readiness.ts";
 import { modelPresets, modelTestError } from "./model-settings.ts";
@@ -5283,6 +5283,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
             settings: {
               vision: config.env?.AGENTBOX_VISION === "1" ? "on" : config.env?.AGENTBOX_VISION === "0" ? "off" : "auto",
               summaryModel: config.env?.AGENTBOX_SUMMARY_MODEL ?? null,
+              userAgent: config.env?.AGENTBOX_USER_AGENT ?? null, userAgentDefault: defaultUserAgent(), // what every model request calls itself (INV-2325)
             },
             config: {
               provider: config.provider ?? null,
@@ -5371,6 +5372,11 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           else if (body.vision === "off") envChange.AGENTBOX_VISION = "0";
           else if (body.vision === "auto") envChange.AGENTBOX_VISION = null;
           if (body.summaryModel !== undefined) envChange.AGENTBOX_SUMMARY_MODEL = field(body.summaryModel) ?? null;
+          if (body.userAgent !== undefined) { // INV-2325: one line of printable ASCII, or empty for LumenBox's own
+            const userAgent = field(body.userAgent), problem = userAgent ? userAgentProblem(userAgent) : undefined;
+            if (problem !== undefined) { send(res, 400, apiError(`user-agent-${problem}`)); return; }
+            envChange.AGENTBOX_USER_AGENT = userAgent ?? null;
+          }
           if (key !== undefined && key !== null) {
             const name = typeof providerValue === "string" ? providerValue : loadConfig().provider;
             const profile = name ? providerForChoice(name, orchestrator.provider) : orchestrator.provider;

@@ -21,6 +21,8 @@ function loadModel() {
 /** What a save sends for the model settings. An empty model or address clears it; a key is sent only when one was typed. */
 function modelBody(form) {
   var body = { provider: form.provider, model: form.model.trim() || null, baseUrl: form.provider === "custom" ? form.baseUrl.trim() || null : null, vision: form.vision, summaryModel: form.summaryModel.trim() || null };
+  // INV-2325: sent only when changed, like the search choice; an emptied field is null, which is LumenBox's own.
+  if (form.userAgent !== undefined && form.userAgent.trim() !== (form.userAgentWas || "")) body.userAgent = form.userAgent.trim() || null;
   if (form.key.trim()) body.key = form.key.trim();
   if (form.searchKey.trim()) { body.searchProvider = form.searchProvider; body.searchKey = form.searchKey.trim(); }
   else if (form.searchProvider !== form.searchWas) body.searchProvider = form.searchProvider;
@@ -48,6 +50,8 @@ function modelForm() {
   var chosen = saved.provider || effective.provider || "", searchWas = (search.filter(function (row) { return row.keyPresent; })[0] || {}).name || "";
   var provider = selectOf(presets.map(function (preset) { return [preset.name, preset.label + " · " + preset.model + " · " + modelKeySource(preset)]; }), chosen);
   var name = el("input"), address = el("input"), key = el("input"), keyNote = el("p", "why"), summary = el("input"), searchKey = el("input"), list = el("datalist");
+  var userAgent = el("input"); userAgent.id = "set-user-agent"; userAgent.spellcheck = false; userAgent.maxLength = 200;
+  userAgent.value = (config.settings || {}).userAgent || ""; userAgent.placeholder = (config.settings || {}).userAgentDefault || "";
   var vision = selectOf([["auto", t("ui.next.model.vision.auto")], ["on", t("ui.next.model.vision.on")], ["off", t("ui.next.model.vision.off")]], (config.settings || {}).vision || "auto");
   var searchProvider = selectOf([["", t("ui.next.model.noSearch")]].concat(search.map(function (row) { return [row.name, row.name]; })), searchWas);
   name.value = saved.model || ""; address.value = saved.baseUrl || ""; summary.value = (config.settings || {}).summaryModel || "";
@@ -73,11 +77,12 @@ function modelForm() {
   // Named, because the first-run acceptance drives these four through the window (scripts/onboarding-e2e.mjs).
   provider.id = "set-provider"; key.id = "set-key";
   var form = function () {
-    return { provider: provider.value, model: name.value, baseUrl: address.value, key: key.value, vision: vision.value, summaryModel: summary.value, searchProvider: searchProvider.value, searchKey: searchKey.value, searchWas: searchWas };
+    return { provider: provider.value, model: name.value, baseUrl: address.value, key: key.value, vision: vision.value, summaryModel: summary.value, searchProvider: searchProvider.value, searchKey: searchKey.value, searchWas: searchWas,
+      userAgent: userAgent.value, userAgentWas: (config.settings || {}).userAgent || "" };
   };
   [labelled(t("ui.next.config.provider"), provider), labelled(t("ui.next.model.name"), name), addressLabel, labelled(t("ui.next.model.key"), key), keyNote,
     labelled(t("ui.next.model.vision"), vision), labelled(t("ui.next.model.summary"), summary), labelled(t("ui.next.model.search"), searchProvider),
-    labelled(t("ui.next.model.searchKey"), searchKey), list].forEach(function (node) { box.appendChild(node); });
+    labelled(t("ui.next.model.searchKey"), searchKey), labelled(t("ui.next.model.userAgent"), userAgent), el("p", "why", t("ui.next.model.userAgentNote")), list].forEach(function (node) { box.appendChild(node); });
   var acts = el("div", "acts"), save = el("button", "act-primary", t("ui.next.settings.save")), test = el("button", "act", t("ui.next.model.test"));
   save.addEventListener("click", function () {
     if (searchKey.value.trim() && !searchProvider.value) { toast(t("ui.next.model.searchNeedsProvider")); searchProvider.focus(); return; }
