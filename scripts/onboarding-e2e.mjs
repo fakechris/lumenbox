@@ -169,7 +169,7 @@ export function ownProcess(entry, now, bundles) {
   if (recordedAt !== undefined && now.startedAt !== undefined && now.startedAt > recordedAt) {
     return { pid, stop: false, why: `not ours, left alone: it started ${new Date(now.startedAt).toISOString()}, after the run recorded it` };
   }
-  const unknown = recordedAt !== undefined && now.startedAt === undefined ? "; its start time could not be read, so the executable alone decides" : "";
+  const unknown = recordedAt === undefined ? "; the manifest has no start time, so the executable alone decides" : now.startedAt === undefined ? "; its start time could not be read, so the executable alone decides" : "";
   return { pid, stop: true, why: `this run's app (${now.executable})${unknown}; stopped with --yes` };
 }
 
@@ -657,7 +657,8 @@ export async function cleanup(options, io = {}) {
   const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
   const { container, volumes, network } = manifest.box;
   const bundles = runBundles(realpathSync(dir));
-  const processes = () => (manifest.appProcesses ?? []).map(entry => ownProcess(entry, processNow(typeof entry === "number" ? entry : entry.pid), bundles));
+  const judge = entry => ownProcess(entry, processNow(typeof entry === "number" ? entry : entry.pid), bundles);
+  const processes = () => (manifest.appProcesses ?? []).map(judge);
   const list = [
     `container ${container}${ok("docker", ["inspect", container]) ? "" : " (absent)"}`,
     ...volumes.map(v => `volume    ${v}${ok("docker", ["volume", "inspect", v]) ? "" : " (absent)"}`),
@@ -673,8 +674,9 @@ export async function cleanup(options, io = {}) {
     return 0;
   }
   if (!container.startsWith("lumenbox-onboard-")) throw new Error(`refusing: ${container} is not a name this script makes`);
-  // Read again at the moment of the signal: the list may have been read hours ago.
-  for (const entry of processes()) {
+  // Each one read again just before its own signal: the list may have been read hours ago.
+  for (const recorded of manifest.appProcesses ?? []) {
+    const entry = judge(recorded);
     if (!entry.stop) continue;
     try { process.kill(entry.pid, "SIGTERM"); log(`Stopped process ${entry.pid}.`); } catch {}
   }

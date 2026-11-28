@@ -80,7 +80,7 @@ test("cleanup stops a recorded process only while it is provably the run's own: 
   const t = Date.parse(at);
   assert.equal(ownProcess({ pid: 5, startedAt: at }, { executable: app, startedAt: t - 1000 }, bundles).stop, true);
   assert.equal(ownProcess({ pid: 5, startedAt: at }, { executable: "/runs/r1/previous/LumenBox.app/Contents/Frameworks/x", startedAt: t }, bundles).stop, true, "the previous release's app is the run's too");
-  assert.equal(ownProcess(5, { executable: app, startedAt: t }, bundles).stop, true, "a manifest without start times is judged by the executable alone");
+  assert.match(ownProcess(5, { executable: app, startedAt: t }, bundles).why, /no start time, so the executable alone decides; stopped/, "a manifest without start times is judged by the executable alone, and says so");
   assert.match(ownProcess({ pid: 5, startedAt: at }, { executable: app, startedAt: undefined }, bundles).why, /executable alone decides; stopped/, "where ps cannot run, the executable still proves it");
   for (const [entry, now, why] of [
     [{ pid: 5, startedAt: at }, undefined, /no longer running/],

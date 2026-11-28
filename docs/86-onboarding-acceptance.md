@@ -142,7 +142,10 @@ node scripts/onboarding-e2e.mjs --cleanup ~/lumenbox-onboarding/<run>
 
 That prints the container, volumes, network and the app processes the run recorded, and removes
 nothing. A recorded process is stopped only if what holds that number now runs from one of the
-run's own installed apps and started before the run recorded it; anything else is listed as
+run's own installed apps; when the manifest has the time the run recorded it and the process's
+start time can be read, it must also have started no later than that. A bare number (a manifest
+from before INV-2306) or an unreadable start time leaves the executable alone to decide, and the
+list says so. Anything else is listed as
 "not ours, left alone" and never signalled — the run stopped its apps itself, so by cleanup time
 a number may belong to anything on the machine. After a person has read
 the list and said yes, run it again with `--yes`. The image is removed only with
