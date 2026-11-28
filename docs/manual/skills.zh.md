@@ -28,6 +28,7 @@ LumenBox 还为*其他*编程 agent 提供一个 skill：`agentbox skill install
 - **查看 skill：** 在聊天框开头输入 `/`。菜单会列出这个 agent 所在 box 里的 skill；选中一个，聊天框里就会写好 "Use the … skill."，由你发送。
 - **审阅导入的 skill：** 点 app 顶部的 *教学草稿*。
 - **把一个 skill 发布给整个组织**（管理员）：设置 → 团队 → *组织 skill* → *发布或更新一个 skill*。选择这台电脑上的 skill 文件夹、模板文件里的 skill，或你能进入的某个 box 里的 skill，然后点 *发布*。发布一个已有的名字就是一个新版本。*撤下* 会把它从所有 box 移除。勾选 *必需*，则 box 里有同名 skill 时也用组织的这一个。
+- **把你的 skill 提交给组织：** 设置 → 我的 → *把我的 skill 提交给组织*：选一个 box 和其中的 skill，点 *提交*。管理员在 设置 → 团队 → *组织 skill* 里看到它的全部文件，批准（随即发布给所有人）或写明理由拒绝；结果在同一页能看到。
 
 ### 在聊天里
 
@@ -54,7 +55,7 @@ agentbox skill install [--claude] [--codex]             # 给 Claude Code / Code
 
 - 一个 skill 只在一个 box 里。其他 box 的 agent 看不到它，除非管理员把它发布为组织 skill。
 - 组织 skill 不能带密码或 key，也不能带定时或触发；这样的发布会被拒绝并说明原因。没连接的 box 在重新连上时拿到它。
-- 成员还不能自己把 skill 提交给组织；由管理员从他们的 box 里发布。
+- skill 可以写明要安装什么、需要哪个登录。组织要求的这类 skill，会在你第一次对话时由 agent 装好，并给你链接或验证码让你自己登录；它不会索要你的密码，也只提一次。
 - 只有没人改过的入门 skill 才会随新版本更新。
 - MCP token 只显示一次。签发时就复制下来；撤销后立即失效。
 

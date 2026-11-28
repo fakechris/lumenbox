@@ -39,6 +39,10 @@ Code or Codex a skill that drives LumenBox through its MCP endpoint.
   template file, or a skill in a box you may enter, and press *Publish*. Publishing a name that
   is already there makes a new version. *Withdraw* removes it from every box. Tick *Required*
   to have it read even in a box that has its own skill of the same name.
+- **Offer a skill of yours to the organisation:** Settings → Mine → *Offer a skill of mine to
+  the organisation*: choose a box and one of its skills, press *Offer it*. An Admin sees it under
+  Settings → Team → *Organisation skills*, with every file it holds, and approves it (it is then
+  published to everybody) or declines it with a reason you read on the same page.
 
 ### In a chat
 
@@ -75,8 +79,9 @@ The app must be running.
   as an organisation skill.
 - An organisation skill cannot carry a password or a key, a schedule or a trigger; publishing
   one is refused and says why. A box that is not connected gets it when it comes back.
-- A member cannot yet offer their own skill to the organisation; an Admin publishes it from
-  their box.
+- A skill can say what it installs and which sign-in it needs. When the organisation requires
+  such a skill, your agent sets it up in your first conversation and gives you the link or code
+  to sign in yourself; it never asks for your password, and it mentions this once.
 - A starter skill is updated by a release only if nobody changed it.
 - An MCP token is shown once. Copy it when you issue it; revoking it stops it at once.
 
