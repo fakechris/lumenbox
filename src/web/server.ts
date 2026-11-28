@@ -1,10 +1,7 @@
 import { WorkGovernance, resourceKey } from "../host/work-governance.ts";
-import { CodeAttempts } from "./code-attempts.ts";
-import { governanceResources } from "./work-governance-resources.ts";
-import { governanceRoute } from "./work-governance-routes.ts";
-import { surfaceActionWork } from "../host/surface-action.ts";
-import { workReading, workReference } from "../host/work-reading.ts";
-import { evidenceDigest } from "../host/review-dispatch.ts";
+import { CodeAttempts } from "./code-attempts.ts"; import { governanceResources } from "./work-governance-resources.ts";
+import { governanceRoute } from "./work-governance-routes.ts"; import { surfaceActionWork } from "../host/surface-action.ts";
+import { workReading, workReference } from "../host/work-reading.ts"; import { evidenceDigest } from "../host/review-dispatch.ts";
 import { resultCheckRoute } from "./result-check-routes.ts";
 import { verificationRoute } from "./verification-routes.ts";
 import { reportAttention, reportsDir, VerificationReports } from "../host/verification-report.ts";
