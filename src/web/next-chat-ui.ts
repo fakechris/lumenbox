@@ -85,7 +85,10 @@ function openChat(agentId) {
   chat.find = ""; $("find").hidden = true; $("find-text").value = "";
   // Another agent's half-written words and its thread are not this one's.
   if (agentId !== chat.agentId) { chat.live = null; chat.loadedFor = ""; chat.entries = []; chat.conversation = "main"; chat.plan = null; chat.liveSurfaces = {}; }
-  chat.agentId = agentId; next.view = "chat"; document.body.dataset.open = "1";
+  chat.agentId = agentId;
+  // Out of another view, the address leaves it too: else ?view=settings stayed and a reload went back to Settings (INV-2324).
+  if (next.view !== "chat") { selectView("chat"); writeViewAddress("chat"); }
+  document.body.dataset.open = "1";
   if (agentId) firstScreenSee("opened"); // getting started's "Your agent" is done (first-screen-ui.ts)
   if (next.agents[agentId] && next.agents[agentId].boxId) chat.box = next.agents[agentId].boxId; // an agent on another computer brings its computer with it
   render();

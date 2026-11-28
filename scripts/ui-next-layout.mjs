@@ -191,6 +191,20 @@ try {
   await overview.waitFor();
   assert.equal(new URL(settings.url()).searchParams.has("pane"), false);
 
+  // An agent opened from the sidebar while in Settings: the address is the conversation's, so a reload stays in it (INV-2324).
+  await settings.goto(`${meta.base}/?ui=next&lang=en&view=settings&pane=doors`);
+  await settings.getByRole("heading", { name: "Chat channels", exact: true }).waitFor();
+  await settings.locator("#agents .agent").first().click();
+  await settings.locator("#composer-text").waitFor();
+  const back = new URL(settings.url()).searchParams;
+  assert.equal(back.has("view") || back.has("pane"), false, `the conversation's address still says Settings: ${settings.url()}`);
+  assert.equal(back.get("agent"), meta.agent, "the address names the agent whose conversation is open");
+  await settings.reload();
+  await settings.locator("#composer-text").waitFor();
+  assert.equal(await settings.evaluate(() => document.body.dataset.view), "chat", "a reload lands in the conversation, not in Settings");
+  await settings.goBack();
+  await settings.getByRole("heading", { name: "Chat channels", exact: true }).waitFor();
+
   const deepLink = await admin.newPage();
   await deepLink.goto(teamUrl.replace("pane=team", "pane=constructor"));
   await deepLink.getByRole("heading", { name: "Other settings", exact: true }).waitFor();
