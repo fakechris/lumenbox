@@ -7,12 +7,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
 import { makeSession, newWebIdentity, readSession, sessionCookie, sessionKey } from "./session.ts";
 
 test("a session round-trips, and a tampered one is nobody", () => {
   const key = sessionKey("the-ui-token");
-  const cookie = makeSession("web:abc123", key);
-  assert.deepEqual(readSession(cookie, key), { identity: "web:abc123", epoch: 0 });
+  const cookie = makeSession("web:abc123", key, 0, 1_795_000_000);
+  assert.deepEqual(readSession(cookie, key), { identity: "web:abc123", epoch: 0, signedAt: 1_795_000_000 });
 
   // The identity cannot be edited without the signature falling apart.
   assert.equal(readSession(cookie.replace("web:abc123", "web:someoneelse"), key), undefined);
@@ -21,32 +22,35 @@ test("a session round-trips, and a tampered one is nobody", () => {
   assert.equal(readSession(undefined, key), undefined);
 
   // An identity containing dots still round-trips: the signature is after the last one.
-  const dotted = makeSession("feishu:ou_a.b.c", key);
-  assert.deepEqual(readSession(dotted, key), { identity: "feishu:ou_a.b.c", epoch: 0 });
+  const dotted = makeSession("feishu:ou_a.b.c", key, 0, 1_795_000_000);
+  assert.deepEqual(readSession(dotted, key), { identity: "feishu:ou_a.b.c", epoch: 0, signedAt: 1_795_000_000 });
 
-  // A cookie from before generations existed is generation zero: an upgrade does not sign
-  // the installation out.
-  const legacy = `web:abc123.${makeSession("web:abc123", key).split(".").pop()}`;
-  void legacy;
+  // A cookie from before generations, or before the sign-in time (INV-2318), still reads: an upgrade signs
+  // nobody out. It carries no sign-in time, so it is never a recent sign-in (recent-sign-in.ts).
+  const signed = (payload: string) => `${payload}.${createHmac("sha256", key).update(payload).digest("hex").slice(0, 32)}`;
+  assert.deepEqual(readSession(signed("web:abc123"), key), { identity: "web:abc123", epoch: 0 });
+  assert.deepEqual(readSession(signed("web:abc123|2"), key), { identity: "web:abc123", epoch: 2 });
+  // The time is signed with the rest: a fresher one written by hand is nobody.
+  assert.equal(readSession(cookie.replace("|1795000000.", `|${1_795_000_000 + 3_600}.`), key), undefined);
 });
 
 test("a generation travels in the cookie, and only that person's sessions move with it", () => {
   const key = sessionKey("the-ui-token");
-  const first = makeSession("feishu:ou_dana", key, 0);
-  const second = makeSession("feishu:ou_dana", key, 1);
-  assert.deepEqual(readSession(first, key), { identity: "feishu:ou_dana", epoch: 0 });
-  assert.deepEqual(readSession(second, key), { identity: "feishu:ou_dana", epoch: 1 });
+  const first = makeSession("feishu:ou_dana", key, 0, 1_795_000_000);
+  const second = makeSession("feishu:ou_dana", key, 1, 1_795_000_000);
+  assert.deepEqual(readSession(first, key), { identity: "feishu:ou_dana", epoch: 0, signedAt: 1_795_000_000 });
+  assert.deepEqual(readSession(second, key), { identity: "feishu:ou_dana", epoch: 1, signedAt: 1_795_000_000 });
   // The generation is signed with the identity: raising it by hand does not verify.
-  const forged = first.replace("|0.", "|9.");
+  const forged = first.replace("|0|", "|9|");
   assert.equal(readSession(forged, key), undefined);
-  assert.match(sessionCookie("feishu:ou_dana", key, 3), /agentbox_who=feishu%3Aou_dana%7C3\./);
+  assert.match(sessionCookie("feishu:ou_dana", key, 3, false, 1_795_000_000), /agentbox_who=feishu%3Aou_dana%7C3%7C1795000000\./);
 });
 
 test("rotating the UI token invalidates every session issued under the old one", () => {
   const before = sessionKey("old-token");
   const after = sessionKey("new-token");
-  const cookie = makeSession("web:abc123", before);
-  assert.deepEqual(readSession(cookie, before), { identity: "web:abc123", epoch: 0 });
+  const cookie = makeSession("web:abc123", before, 0, 1_795_000_000);
+  assert.deepEqual(readSession(cookie, before), { identity: "web:abc123", epoch: 0, signedAt: 1_795_000_000 });
   assert.equal(readSession(cookie, after), undefined);
 });
 

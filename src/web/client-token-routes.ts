@@ -9,7 +9,8 @@
  *   what its view names, and only while they are an Admin; its scopes are read scopes.
  *
  * The secret is in the answer to the mint and nowhere else; `tokens.jsonl` records who minted and
- * revoked what (token-ledger.ts).
+ * revoked what (token-ledger.ts). A mint from a page session needs a recent sign-in (recent-sign-in.ts,
+ * INV-2318), and its record says when that was.
  */
 
 import { type Principals, type Role, roleAtLeast, soleAdmin } from "../host/principals.ts";
@@ -28,6 +29,8 @@ export interface ClientTokenDeps {
   role: Role;
   principals: Pick<Principals, "list" | "resolve" | "isKnown" | "byId">;
   tokens: Pick<McpTokenStore, "mintClient" | "listClient" | "revokeClient">;
+  /** Whether this request's sign-in is recent enough to mint (recent-sign-in.ts): its time, or the refusal. */
+  freshSignIn(): { ok: true; signedInAt?: string } | { ok: false; error: ApiError };
   now?: () => Date;
 }
 
@@ -71,6 +74,8 @@ export async function clientTokenRoute(route: string, deps: ClientTokenDeps): Pr
     return done ? { status: 200, body: { revoked: true } } : { status: 404, body: apiError("token-not-yours") };
   }
 
+  const fresh = deps.freshSignIn();
+  if (!fresh.ok) return { status: 403, body: fresh.error };
   const kind = body.kind === "service" ? "service" : body.kind === undefined || body.kind === "personal" ? "personal" : undefined;
   if (kind === undefined) return refused("kind is personal or service");
   // The operator may name the person, as for side-door tokens: an installation with several Admins has no one to assume.
@@ -89,7 +94,7 @@ export async function clientTokenRoute(route: string, deps: ClientTokenDeps): Pr
   const now = (deps.now ?? (() => new Date()))();
   const minted = deps.tokens.mintClient({
     kind, principalId: holder, label: String(body.label ?? ""), scopes: scopes as Scope[], expiresAt: new Date(now.getTime() + days * DAY_MS), by, now,
-    ...(view !== undefined ? { view } : {}),
+    ...(view !== undefined ? { view } : {}), ...(fresh.signedInAt !== undefined ? { signedInAt: fresh.signedInAt } : {}),
   });
   return { status: 200, body: { token: minted.token, credential: minted.credential } };
 }

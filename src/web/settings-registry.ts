@@ -71,10 +71,10 @@ export const SETTINGS_PANES: readonly SettingsPane[] = [
     key: "mine",
     title: "Mine",
     titleZh: "我的",
-    about: "What is yours: your MCP tokens, your standing approvals, what the gate would have asked you, and what agents know about you.",
-    aboutZh: "属于你的东西：你的 MCP token、你的长期批准、闸门本会问你的事，以及 agent 对你的了解。",
+    about: "What is yours: your phones, your MCP tokens, your standing approvals, what the gate would have asked you, and what agents know about you.",
+    aboutZh: "属于你的东西：你的手机、你的 MCP token、你的长期批准、闸门本会问你的事，以及 agent 对你的了解。",
     config: [],
-    apis: ["/api/mcp/tokens", "/api/policy", "/api/person"],
+    apis: ["/api/devices", "/api/mcp/tokens", "/api/policy", "/api/person"],
     mounted: "page",
   },
   {

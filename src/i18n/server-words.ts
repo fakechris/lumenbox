@@ -138,5 +138,6 @@ export const SERVER_WORDS: Record<string, readonly [zh: string, en: string]> = {
   "api.board.review": ["待验收", "In review"],
   "api.board.done": ["完成", "Done"],
   "api.board.dropped": ["已放弃", "Dropped"],
+  "device.asked-to-join": ["你在这里还没有被激活。你的加入申请已经交给管理员；激活之后，再登录一次就可以了。", "You have not been activated here yet. Your request to join is with the Admins; once they activate you, sign in again."],
   "page.desktop.box-down": ["沙盒暂时不可用。用 agentbox box up 启动它。", "The sandbox is not available. Start it with agentbox box up."],
 };

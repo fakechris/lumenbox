@@ -13,7 +13,8 @@
 
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash, createHmac, generateKeyPairSync, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openApiDocument } from "./openapi.ts";
@@ -29,7 +30,8 @@ const PROVED_ELSEWHERE: Partial<Record<ApiErrorCode, string>> = {
   "api-internal": "frame.test.ts: a handler that throws answers 500 with the request id, and the log has the stack",
 };
 
-async function server(t: TestContext) {
+/** `door`: an organisation's DingTalk door a phone signs in through (INV-2214); off, the installation has none, as the read slice's tests were written for. */
+async function server(t: TestContext, options: { door?: boolean } = {}) {
   const { Principals } = await import("../../host/principals.ts");
   const { McpTokenStore } = await import("../mcp-tokens.ts");
   const { startWebServer } = await import("../server.ts");
@@ -38,10 +40,16 @@ async function server(t: TestContext) {
   for (const key of KEYS) delete process.env[key];
   Object.assign(process.env, { AGENTBOX_HOME: home, AGENTBOX_PUBLIC_URL: "https://box.example.test" });
   mkdirSync(join(home, "agents"), { recursive: true });
-  const roster = [
+  // An organisation's DingTalk door: what a phone signs in through (INV-2214), faked below as the vendor.
+  if (options.door === true) {
+    writeFileSync(join(home, "channels.json"), JSON.stringify({ channels: [{ id: "ding", name: "DingTalk", type: "dingtalk", incarnation: 1, boxId: "default", createdAt: new Date().toISOString() }] }));
+    writeFileSync(join(home, "config.json"), JSON.stringify({ env: { DING_CLIENT_ID: "ding-app", DING_CLIENT_SECRET: "secret" } }));
+  }
+  const roster: { id: string; name: string; role: "admin" | "driver" | "viewer"; identities: string[] }[] = [
     { id: "ann", name: "Ann", role: "admin" as const, identities: [] },
     { id: "ada", name: "Ada", role: "admin" as const, identities: [] },
-    { id: "dee", name: "Dee", role: "driver" as const, identities: [] },
+    { id: "dee", name: "Dee", role: "driver" as const, identities: ["ding:dee-staff"] },
+    { id: "ivy", name: "Ivy", role: "driver" as const, identities: ["ding:ivy-staff"] },
     { id: "vic", name: "Vic", role: "viewer" as const, identities: [] },
     { id: "gus", name: "Gus", role: "driver" as const, identities: [] },
     { id: "pat", name: "Pat", role: "driver" as const, identities: [] },
@@ -68,9 +76,34 @@ async function server(t: TestContext) {
   const ids = { writer: writer.id, hidden: hidden.id, patBot: patBot.id, t1: t1.id, t2: t2.id, t3: t3.id, t4: t4.id, t5: t5.id };
   // One token whose time is over, minted before the server reads the store.
   const expired = new McpTokenStore(join(home, "mcp-tokens.json")).mintClient({ kind: "personal", principalId: "dee", label: "old", scopes: SCOPE_NAMES, expiresAt: new Date(Date.now() - 60_000), by: "test" }).token;
+  // And a device signed in 31 days ago and never used since: its refresh token's time is over.
+  const { DeviceStore } = await import("../device-credentials.ts");
+  const staleRefresh = new DeviceStore(join(home, "devices.json"), () => {}, () => {}, () => new Date(Date.now() - 31 * 24 * 3_600_000))
+    .signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "old phone", platform: "ios", scopes: SCOPE_NAMES, by: "test" }).tokens.refreshToken;
+  // And one whose refresh token was spent 90 seconds ago, past the 30 seconds a device's own retry gets: presented again, it ends the device.
+  let then = Date.now() - 120_000;
+  const rotating = new DeviceStore(join(home, "devices.json"), () => {}, () => {}, () => new Date(then));
+  const spent = rotating.signIn({ principalId: "dee", identity: "dee", via: "person", method: "pairing", name: "copied phone", platform: "android", scopes: SCOPE_NAMES, by: "test" }).tokens;
+  then += 30_000;
+  const current = rotating.refresh(spent.refreshToken, () => true);
+  assert.ok("tokens" in current);
+  const reused = { deviceId: spent.deviceId, spent: spent.refreshToken, current: current.tokens.refreshToken, access: current.tokens.accessToken };
+  // DingTalk, faked: the code is the unionId it vouches for; Dee, Ivy and Bob work there, and only Dee and Ivy are on the roster.
+  const employees: Record<string, string> = { "union-dee": "dee-staff", "union-ivy": "ivy-staff", "union-bob": "bob-staff" };
+  const loginFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input)), body = init?.body === undefined ? {} : JSON.parse(String(init.body)) as Record<string, string>;
+    if (url.href === "https://api.dingtalk.com/v1.0/oauth2/userAccessToken") return Response.json({ accessToken: body.code });
+    if (url.href === "https://api.dingtalk.com/v1.0/contact/users/me") { const unionId = new Headers(init?.headers).get("x-acs-dingtalk-access-token")!; return Response.json({ unionId, nick: unionId }); }
+    if (url.href === "https://api.dingtalk.com/v1.0/oauth2/accessToken") return Response.json({ accessToken: "app-token" });
+    if (url.origin + url.pathname === "https://oapi.dingtalk.com/topapi/user/getbyunionid") {
+      const userid = employees[body.unionid!];
+      return Response.json(userid !== undefined ? { errcode: 0, result: { userid, contact_type: 0 } } : { errcode: 60121, errmsg: "none" });
+    }
+    throw new Error(`unexpected vendor call ${url.href}`);
+  }) as typeof fetch;
   let base = "";
   const logs: string[] = [];
-  const start = () => startWebServer({ port: 0, host: "0.0.0.0", token: "t0k", useBox: false, onLog: line => logs.push(line), onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); } });
+  const start = () => startWebServer({ port: 0, host: "0.0.0.0", token: "t0k", useBox: false, loginFetch, onLog: line => logs.push(line), onReady: url => { base = url.replace("0.0.0.0", "127.0.0.1"); } });
   let stop = await start();
   /** The server stops and another starts on the same home: what a client finds after a restart. */
   const restart = async () => { stop(); stop = await start(); };
@@ -91,12 +124,70 @@ async function server(t: TestContext) {
   /** An address nobody else in this file uses: a limit tripped from it trips nothing else. */
   const fresh = () => { address += 1; return `203.0.113.${address}`; };
   /** A request for an operation; `{id}` is an agent the caller reaches, or work they may read, unless `id` says which. */
-  const call = (operation: Operation, init: { token?: string; query?: string; headers?: Record<string, string>; from?: string; id?: string } = {}) =>
+  const call = (operation: Operation, init: { token?: string; query?: string; headers?: Record<string, string>; from?: string; id?: string; body?: unknown } = {}) =>
     fetch(`${base}/api/v1${operation.path.replace("{id}", encodeURIComponent(init.id ?? (operation.path.startsWith("/agents") ? writer.id : t1.id)))}${init.query ?? ""}`, { method: operation.method, headers: {
-      "x-forwarded-for": init.from ?? fresh(), ...(init.token !== undefined ? { authorization: `Bearer ${init.token}` } : {}), ...init.headers,
-    } });
-  return { base, home, logs, expired, roster, mint, fresh, call, operator, Principals, ids, restart, url: () => base };
+      "x-forwarded-for": init.from ?? fresh(), ...(init.token !== undefined ? { authorization: `Bearer ${init.token}` } : {}), ...(init.body !== undefined ? { "content-type": "application/json" } : {}), ...init.headers,
+    }, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) });
+  const op = (id: string) => OPERATIONS.find(operation => operation.operationId === id) as Operation;
+  /** A page session for `identity` (a sign-in) that signed in `ago` ms ago, signed as the server signs one (session.ts). */
+  const { makeSession, sessionKey, SESSION_COOKIE } = await import("../session.ts");
+  const session = (identity: string, ago = 0) => `${SESSION_COOKIE}=${encodeURIComponent(makeSession(identity, sessionKey("t0k"), 0, Math.floor((Date.now() - ago) / 1000)))}`;
+  /** Through the door as a phone: PKCE start, the door's entry and callback in one browser, and where the browser is sent back to. */
+  const doorCode = async (unionId: string, start: Record<string, unknown> = {}) => {
+    const verifier = randomBytes(32).toString("base64url");
+    const started = await call(op("startOAuth"), { body: { provider: "ding", codeChallenge: createHash("sha256").update(verifier).digest("base64url"), codeChallengeMethod: "S256", redirectUri: "lumenbox://oauth/callback", state: "app-state", ...start } });
+    const { authorizationUrl } = await started.json() as { authorizationUrl: string };
+    assert.equal(started.status, 200, authorizationUrl);
+    const entry = await fetch(`${base}${new URL(authorizationUrl).pathname}${new URL(authorizationUrl).search}`, { redirect: "manual" });
+    assert.equal(entry.status, 302, "the door hands the phone's browser to the vendor");
+    const state = new URL(entry.headers.get("location")!).searchParams.get("state")!;
+    const back = await fetch(`${base}/auth/ding/callback?state=${state}&code=${unionId}`, { redirect: "manual", headers: { cookie: entry.headers.getSetCookie()[0]!.split(";")[0]! } });
+    assert.equal(back.status, 302);
+    assert.deepEqual(back.headers.getSetCookie(), [], "a phone's sign-in sets no page session");
+    const location = new URL(back.headers.get("location")!);
+    return { location, code: location.searchParams.get("code") ?? undefined, verifier, authorizationUrl };
+  };
+  type SignIn = { status: string; tokens: { deviceId: string; accessToken: string; refreshToken: string; scopes: string[] }; me: { id: string; credential: { kind: string; id: string } } };
+  /** A phone signed in for Dee (or `unionId`) through the door: the exchange's answer. */
+  const phone = async (unionId = "union-dee"): Promise<SignIn> => {
+    const { code, verifier } = await doorCode(unionId);
+    const answer = await call(op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, deviceName: "Dee's phone", platform: "ios" } });
+    const body = await answer.json() as SignIn;
+    assert.equal(answer.status, 200, JSON.stringify(body));
+    return body;
+  };
+  /** A pairing code shown on `identity`'s signed-in page, as the QR code holds it. */
+  const pairingCode = async (identity = "ding:dee-staff") => {
+    const shown = await fetch(`${base}/api/devices/pairing`, { method: "POST", headers: { cookie: session(identity), "content-type": "application/json" }, body: "{}" });
+    const body = await shown.json() as { link: string; qrSvg: string; expiresAt: string };
+    assert.equal(shown.status, 200, JSON.stringify(body));
+    return { ...body, code: new URLSearchParams(new URL(body.link).hash.slice(1)).get("code")! };
+  };
+  return { base, home, logs, expired, staleRefresh, reused, roster, mint, fresh, call, op, operator, Principals, ids, restart, url: () => base, session, doorCode, phone, pairingCode };
 }
+
+/** A body each operation that takes one accepts as well-formed (what it then finds in it is another matter). */
+const VERIFIER = "v".repeat(43);
+const WELL_FORMED: Record<string, Record<string, unknown>> = {
+  startOAuth: { provider: "ding", codeChallenge: createHash("sha256").update(VERIFIER).digest("base64url"), codeChallengeMethod: "S256", redirectUri: "lumenbox://oauth/callback", state: "s" },
+  exchangeOAuthCode: { code: "no-such-code", codeVerifier: VERIFIER, deviceName: "Phone", platform: "ios" },
+  pairDevice: { code: "no-such-code", deviceName: "Phone", platform: "ios" },
+  refreshDeviceToken: { refreshToken: `lbxr_${"0".repeat(64)}` },
+};
+
+type Box = Awaited<ReturnType<typeof server>>;
+/** Each operation that changes something, made to answer 200 on a real server (`token`: Dee's personal token with every scope). */
+const SUCCEED: Record<string, (box: Box, token: string) => Promise<Response>> = {
+  startOAuth: box => box.call(box.op("startOAuth"), { body: WELL_FORMED.startOAuth }),
+  exchangeOAuthCode: async box => {
+    const { code, verifier } = await box.doorCode("union-dee");
+    return box.call(box.op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, deviceName: "Dee's phone", platform: "android" } });
+  },
+  pairDevice: async box => box.call(box.op("pairDevice"), { body: { code: (await box.pairingCode()).code, deviceName: "Dee's tablet", platform: "ios" } }),
+  refreshDeviceToken: async box => box.call(box.op("refreshDeviceToken"), { body: { refreshToken: (await box.phone()).tokens.refreshToken } }),
+  signOutDevice: async box => box.call(box.op("signOutDevice"), { token: (await box.phone()).tokens.accessToken }),
+  deleteDevice: async (box, token) => box.call(box.op("deleteDevice"), { token, id: (await box.phone()).tokens.deviceId }),
+};
 
 /** An error answer is the documented shape, with the code asked for and the request id of its header. */
 async function assertRefusal(answer: Response, code: ApiErrorCode, what: string): Promise<Record<string, unknown>> {
@@ -109,7 +200,7 @@ async function assertRefusal(answer: Response, code: ApiErrorCode, what: string)
 }
 
 test("every operation in the document answers its resource — every field documented, none missing — with ETag, 304 and a request id", async t => {
-  const box = await server(t);
+  const box = await server(t, { door: true });
   const all = await box.mint({ principalId: "dee", label: "script", scopes: SCOPE_NAMES });
   const doc = openApiDocument() as Doc;
   const inDoc = Object.values(doc.paths).flatMap(methods => Object.values(methods).map(operation => operation.operationId)).sort();
@@ -123,6 +214,17 @@ test("every operation in the document answers its resource — every field docum
       assert.match(opened.headers.get("content-type") ?? "", /^text\/event-stream/);
       assert.match(opened.headers.get("x-request-id") ?? "", /^[0-9a-f-]{36}$/);
       await opened.body?.cancel();
+      continue;
+    }
+    if (operation.method !== "GET") {
+      // What changes something is made to work for real, once: a phone signed in, a code exchanged, a device ended.
+      const answer = await SUCCEED[operation.operationId]!(box, all.token);
+      const body = await answer.json();
+      assert.equal(answer.status, 200, `${operation.operationId}: ${JSON.stringify(body)}`);
+      assert.deepEqual(problemsOf(body, SCHEMAS[operation.response] as Schema), [], `${operation.operationId} answers exactly its documented ${operation.response}`);
+      assert.match(answer.headers.get("x-request-id") ?? "", /^[0-9a-f-]{36}$/);
+      assert.equal(answer.headers.get("etag"), null, `${operation.operationId} changes something: no validator`);
+      if (operation.secret === true) assert.equal(answer.headers.get("cache-control"), "no-store", `${operation.operationId} holds a token: stored nowhere on the way`);
       continue;
     }
     const required = operation.operationId === "getChanges" ? "?since=0" : "";
@@ -181,11 +283,44 @@ test("what meta and me say: the revision, the stable operations, the person, the
 });
 
 test("every error the document lists for an operation is provoked on it, and an operation with a scope refuses a token without it", async t => {
-  const box = await server(t);
+  const box = await server(t, { door: true });
   const doc = openApiDocument() as Doc;
   const gone = await box.mint({ principalId: "gus", label: "leaver", scopes: SCOPE_NAMES });
-  new box.Principals().save(box.roster.filter(person => person.id !== "gus"));
+  const staying = box.roster.filter(person => person.id !== "gus");
+  new box.Principals().save(staying);
   const bogus = `lbxp_${"0".repeat(48)}`;
+  const dee = (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token;
+  /** Ivy is let in, then removed before her phone finishes signing in: it is told her access is gone. */
+  const ivyLeavesBefore = async (finish: () => Promise<Response>) => {
+    new box.Principals().save(staying.filter(person => person.id !== "ivy"));
+    try { return await finish(); } finally { new box.Principals().save(staying); }
+  };
+  const bodyOf = (operation: Operation) => (operation.requestBody !== undefined ? { body: WELL_FORMED[operation.operationId] } : {});
+  const CONFLICT_FIELD: Record<string, string> = { startOAuth: "state", exchangeOAuthCode: "code", pairDevice: "code", refreshDeviceToken: "refreshToken" };
+  /** Where an operation is made to answer a code its own way: a credential in the body, not in `Authorization`. */
+  const special: Record<string, Partial<Record<ApiErrorCode, () => Promise<Response>>>> = {
+    refreshDeviceToken: {
+      "api-credential-invalid": () => box.call(box.op("refreshDeviceToken"), { body: WELL_FORMED.refreshDeviceToken }),
+      "api-credential-expired": () => box.call(box.op("refreshDeviceToken"), { body: { refreshToken: box.staleRefresh } }),
+      "access-removed": async () => {
+        const signedIn = await box.phone();
+        await (await box.call(box.op("deleteDevice"), { token: dee, id: signedIn.tokens.deviceId })).body?.cancel();
+        return box.call(box.op("refreshDeviceToken"), { body: { refreshToken: signedIn.tokens.refreshToken } });
+      },
+    },
+    exchangeOAuthCode: {
+      "access-removed": async () => {
+        const { code, verifier } = await box.doorCode("union-ivy");
+        return ivyLeavesBefore(() => box.call(box.op("exchangeOAuthCode"), { body: { code, codeVerifier: verifier, deviceName: "Ivy's phone", platform: "ios" } }));
+      },
+    },
+    pairDevice: {
+      "access-removed": async () => {
+        const { code } = await box.pairingCode("ding:ivy-staff");
+        return ivyLeavesBefore(() => box.call(box.op("pairDevice"), { body: { code, deviceName: "Ivy's phone", platform: "ios" } }));
+      },
+    },
+  };
 
   const provoke: Record<ApiErrorCode, ((operation: Operation) => Promise<Response>) | undefined> = {
     "api-credential-needed": operation => box.call(operation),
@@ -195,7 +330,8 @@ test("every error the document lists for an operation is provoked on it, and an 
     "sign-in-limited": async operation => {
       const from = box.fresh();
       for (let tries = 0; tries < 20; tries += 1) {
-        const answer = await box.call(operation, { token: bogus, from });
+        // A credential in the body is tried in the body; any other, as a bearer.
+        const answer = await box.call(operation, operation.signIn === true ? { from, body: WELL_FORMED[operation.operationId] } : { token: bogus, from });
         if (answer.status === 429) return answer;
         await answer.body?.cancel();
       }
@@ -219,15 +355,31 @@ test("every error the document lists for an operation is provoked on it, and an 
     },
     "api-param-invalid": async operation => {
       const token = (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token;
+      // A body's string field given as a number.
+      if (operation.requestBody !== undefined) return box.call(operation, { body: { ...WELL_FORMED[operation.operationId], [CONFLICT_FIELD[operation.operationId]!]: 12345 } });
       return (operation.query ?? []).some(param => param.name === "limit") ? box.call(operation, { token, query: "?limit=0" }) : box.call(operation, { token, id: "x".repeat(201) });
     },
     "api-not-found": async operation => box.call(operation, { token: (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token, id: "no-such-thing" }),
     "api-cursor-invalid": async operation => box.call(operation, { token: (await box.mint({ principalId: "dee", label: "p", scopes: SCOPE_NAMES })).token, query: "?cursor=bm90LW91cnM" }),
     "api-operation-unknown": undefined,
     "api-method-not-allowed": undefined,
-    "api-idempotency-key-invalid": undefined,
-    "api-idempotency-conflict": undefined,
+    "api-idempotency-key-invalid": operation => box.call(operation, { token: dee, ...bodyOf(operation), headers: { "idempotency-key": "short" } }),
+    "api-idempotency-conflict": async operation => {
+      const key = `key-${randomBytes(6).toString("hex")}`, body = WELL_FORMED[operation.operationId]!, field = CONFLICT_FIELD[operation.operationId]!;
+      await (await box.call(operation, { token: dee, body, headers: { "idempotency-key": key } })).body?.cancel();
+      return box.call(operation, { token: dee, body: { ...body, [field]: `${String(body[field])}x` }, headers: { "idempotency-key": key } });
+    },
     "api-internal": undefined,
+    "auth-provider-unknown": () => box.call(box.op("startOAuth"), { body: { ...WELL_FORMED.startOAuth, provider: "nope" } }),
+    "auth-redirect-invalid": () => box.call(box.op("startOAuth"), { body: { ...WELL_FORMED.startOAuth, redirectUri: "https://evil.example/callback" } }),
+    "auth-code-invalid": () => box.call(box.op("exchangeOAuthCode"), { body: WELL_FORMED.exchangeOAuthCode }),
+    "pairing-code-invalid": () => box.call(box.op("pairDevice"), { body: WELL_FORMED.pairDevice }),
+    "refresh-superseded": async () => {
+      const { refreshToken } = (await box.phone()).tokens;
+      await (await box.call(box.op("refreshDeviceToken"), { body: { refreshToken } })).body?.cancel();
+      return box.call(box.op("refreshDeviceToken"), { body: { refreshToken } });
+    },
+    "device-credential-needed": () => box.call(box.op("signOutDevice"), { token: dee }),
   };
 
   for (const operation of OPERATIONS as readonly Operation[]) {
@@ -235,9 +387,9 @@ test("every error the document lists for an operation is provoked on it, and an 
     if (operation.scope !== undefined) assert.ok(documented.includes("api-scope-needed"), `${operation.operationId} documents its scope refusal`);
     for (const code of documented) {
       if (PROVED_ELSEWHERE[code] !== undefined) continue;
-      const how = provoke[code];
-      assert.ok(how !== undefined, `${operation.operationId} documents ${code}: say here how a real server is made to answer it`);
-      const answer = await how(operation);
+      const own = special[operation.operationId]?.[code], how = provoke[code];
+      assert.ok(own !== undefined || how !== undefined, `${operation.operationId} documents ${code}: say here how a real server is made to answer it`);
+      const answer = own !== undefined ? await own() : await how!(operation);
       await assertRefusal(answer, code, `${operation.operationId} → ${code}`);
       if (ERRORS[code].status === 429) assert.match(answer.headers.get("retry-after") ?? "", /^\d+$/, `${code} says how long to wait`);
     }
@@ -299,7 +451,11 @@ test("tokens: a viewer mints their own, only an Admin mints a service token and 
 
 test("the generation check's fixtures stand for a newer server: each fits its schema once unknowns are allowed, and each has an unknown field and an unknown value", () => {
   // clients/codegen decodes these with the Swift and Kotlin code generated from the document (CI's client-codegen job).
-  const fixtures: [string, keyof typeof SCHEMAS][] = [["meta.json", "Meta"], ["me.json", "Me"], ["error.json", "Error"], ["work-page.json", "WorkPage"], ["changes.json", "Changes"]];
+  const fixtures: [string, keyof typeof SCHEMAS][] = [
+    ["meta.json", "Meta"], ["me.json", "Me"], ["error.json", "Error"], ["work-page.json", "WorkPage"], ["changes.json", "Changes"],
+    // A device's sign-in (INV-2214): a provider type, a sign-in status, a token type, a platform and a sign-in method added later.
+    ["auth-providers.json", "AuthProviderList"], ["device-sign-in.json", "DeviceSignIn"], ["device-sign-in-other.json", "DeviceSignIn"], ["device-page.json", "DevicePage"],
+  ];
   for (const [file, name] of fixtures) {
     const body = JSON.parse(readFileSync(new URL(`../../../clients/codegen/fixtures/${file}`, import.meta.url), "utf8")) as unknown;
     assert.deepEqual(problemsOf(body, SCHEMAS[name] as Schema, false), [], `${file} is a ${name}, as a newer server would send it`);
@@ -502,3 +658,138 @@ async function eventsUntilReadyOrReset(answer: Response): Promise<string> {
   await reader.cancel();
   return text;
 }
+
+test("a phone signs in through the organisation's door with PKCE or a page's pairing code, rotates its refresh token, and is ended — by reuse, by its person, by an Admin — with its stream closed at once and every step on the record without a token (INV-2214)", async t => {
+  const box = await server(t, { door: true });
+  const { op } = box;
+  const post = (id: string, body: unknown, init: { token?: string; headers?: Record<string, string> } = {}) => box.call(op(id), { body, ...init });
+  const json = async <T>(answer: Promise<Response> | Response, status = 200): Promise<T> => {
+    const response = await answer, body = await response.json() as T;
+    assert.equal(response.status, status, JSON.stringify(body));
+    return body;
+  };
+  type Tokens = { deviceId: string; accessToken: string; refreshToken: string; scopes: string[] };
+  const dee = (await box.mint({ principalId: "dee", label: "script", scopes: SCOPE_NAMES })).token;
+
+  // The channels, named in the reader's language.
+  assert.deepEqual((await json<{ items: unknown[] }>(box.call(op("listAuthProviders"), { headers: { "accept-language": "en" } }))).items, [{ id: "ding", type: "dingtalk", displayName: "DingTalk" }]);
+  assert.deepEqual((await json<{ items: { displayName: string }[] }>(box.call(op("listAuthProviders"), { headers: { "accept-language": "zh-CN" } }))).items[0]!.displayName, "钉钉");
+
+  // PKCE: the address the app opens is this server's door, and the browser comes back to the app with a code and the app's state.
+  const first = await box.doorCode("union-dee");
+  assert.equal(new URL(first.authorizationUrl).origin, "https://box.example.test");
+  assert.deepEqual([first.location.protocol, first.location.searchParams.get("state")], ["lumenbox:", "app-state"]);
+  const exchange = (code: string | undefined, codeVerifier: string) => post("exchangeOAuthCode", { code, codeVerifier, deviceName: "Dee's phone", platform: "ios" });
+  await assertRefusal(await exchange(first.code, randomBytes(32).toString("base64url")), "auth-code-invalid", "a verifier that is not the challenge's");
+  await assertRefusal(await exchange(first.code, first.verifier), "auth-code-invalid", "and the code is spent by the wrong try: it works once");
+  const opened = await fetch(`${box.base}${new URL(first.authorizationUrl).pathname}${new URL(first.authorizationUrl).search}`, { redirect: "manual" });
+  assert.equal(opened.status, 400, "the start's address works once too");
+  await opened.body?.cancel();
+
+  const signedIn = await box.phone();
+  assert.equal(signedIn.status, "authenticated");
+  assert.match(signedIn.tokens.accessToken, /^lbxd_[0-9a-f]{64}$/);
+  assert.match(signedIn.tokens.refreshToken, /^lbxr_[0-9a-f]{64}$/);
+  assert.deepEqual(signedIn.tokens.scopes, SCOPE_NAMES.filter(scope => scope !== "desktop:control"), "everything but driving a desktop (docs/110 §4)");
+  assert.deepEqual([signedIn.me.id, signedIn.me.credential.kind, signedIn.me.credential.id], ["dee", "device", signedIn.tokens.deviceId]);
+  assert.equal((await json<{ credential: { kind: string } }>(box.call(op("getMe"), { token: signedIn.tokens.accessToken }))).credential.kind, "device");
+
+  // Somebody the organisation has not let in: their request goes to the Admins, and no credential comes back.
+  const bob = await box.doorCode("union-bob");
+  const asked = await json<{ status: string; tokens?: unknown; message: string }>(exchange(bob.code, bob.verifier));
+  assert.deepEqual([asked.status, asked.tokens], ["asked_to_join", undefined]);
+  assert.match(asked.message, /管理员/, "in the reader's language");
+  // Somebody outside the organisation: the app is told why, with no code at all.
+  const outsider = await box.doorCode("union-zed");
+  assert.deepEqual([outsider.code, outsider.location.searchParams.get("error"), outsider.location.searchParams.get("error_description")], [undefined, "access_denied", "not-a-member"]);
+
+  // A refresh rotates: a new pair; the spent token again within 30 seconds ends nothing; a retry with its Idempotency-Key gets the same pair.
+  const refresh = (refreshToken: string, key?: string) => post("refreshDeviceToken", { refreshToken }, key !== undefined ? { headers: { "idempotency-key": key } } : {});
+  const rotated = await json<Tokens>(refresh(signedIn.tokens.refreshToken, "refresh-0001"));
+  assert.notEqual(rotated.refreshToken, signedIn.tokens.refreshToken);
+  assert.deepEqual(await json<Tokens>(refresh(signedIn.tokens.refreshToken, "refresh-0001")), rotated, "a lost answer, asked again with its key: the same pair");
+  await assertRefusal(await refresh(signedIn.tokens.refreshToken), "refresh-superseded", "the other process lost the race");
+  assert.equal((await box.call(op("getMe"), { token: rotated.accessToken })).status, 200, "and nothing ended");
+
+  // A spent refresh token presented past those 30 seconds: two holders of one token. The device ends, for both of them.
+  await assertRefusal(await refresh(box.reused.spent), "access-removed", "the copy");
+  await assertRefusal(await refresh(box.reused.current), "access-removed", "and the device's own current token");
+  await assertRefusal(await box.call(op("getMe"), { token: box.reused.access }), "access-removed", "and its access token, at once");
+
+  // Pairing: a QR code on Dee's signed-in page; the code signs in once.
+  const shown = await box.pairingCode();
+  assert.match(shown.qrSvg, /^<svg xmlns="http:\/\/www.w3.org\/2000\/svg"/);
+  assert.match(shown.link, /^lumenbox:\/\/pair#server=https%3A%2F%2Fbox\.example\.test&code=[A-Za-z0-9_-]{43}$/);
+  assert.ok(Date.parse(shown.expiresAt) - Date.now() <= 120_000, "two minutes");
+  const paired = await json<{ tokens: Tokens }>(post("pairDevice", { code: shown.code, deviceName: "Dee's tablet", platform: "ios" }));
+  await assertRefusal(await post("pairDevice", { code: shown.code, deviceName: "again", platform: "ios" }), "pairing-code-invalid", "once");
+
+  // Dee's devices; the one asking is marked.
+  const listed = await json<{ items: { id: string; signInMethod: string; current: boolean }[] }>(box.call(op("listDevices"), { token: paired.tokens.accessToken }));
+  assert.deepEqual(listed.items.map(device => [device.id, device.signInMethod, device.current]).slice(0, 2), [[paired.tokens.deviceId, "pairing", true], [signedIn.tokens.deviceId, "oauth", false]]);
+
+  // A device deleted: its open stream ends at once (not at the next ping), and it is told to wipe what it kept.
+  const stream = await box.call(op("streamEvents"), { token: rotated.accessToken });
+  const reader = stream.body!.getReader();
+  let text = "";
+  while (!/event: ready\n/.test(text)) text += new TextDecoder().decode((await reader.read()).value);
+  const deleted = Date.now();
+  await json(box.call(op("deleteDevice"), { token: dee, id: signedIn.tokens.deviceId }));
+  for (;;) { const { done } = await reader.read(); if (done) break; }
+  assert.ok(Date.now() - deleted < 5_000, "the stream closed when the device ended");
+  await assertRefusal(await box.call(op("getMe"), { token: rotated.accessToken }), "access-removed", "a deleted device");
+  await assertRefusal(await refresh(rotated.refreshToken), "access-removed", "and its refresh token");
+  await assertRefusal(await box.call(op("deleteDevice"), { token: dee, id: signedIn.tokens.deviceId }), "api-not-found", "deleted once");
+
+  // A device signs itself out; then an Admin removes Dee, and her last device ends with her.
+  const third = await box.phone();
+  await json(box.call(op("signOutDevice"), { token: third.tokens.accessToken }));
+  await assertRefusal(await box.call(op("getMe"), { token: third.tokens.accessToken }), "access-removed", "signed out");
+  assert.equal((await fetch(`${box.base}/api/principals/remove`, { method: "POST", headers: box.operator, body: JSON.stringify({ principalId: "dee" }) })).status, 200);
+  await assertRefusal(await box.call(op("getMe"), { token: paired.tokens.accessToken }), "access-removed", "a removed person's device");
+
+  // On the record: who signed in which device, each rotation, each end and why — and no token anywhere.
+  const ledger = readFileSync(join(box.home, "tokens.jsonl"), "utf8"), lines = ledger.trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
+  const of = (id: string) => lines.filter(line => line.kind === "device" && line.id === id).map(line => [line.event, line.reason ?? line.method, line.by]);
+  assert.deepEqual(of(signedIn.tokens.deviceId), [["minted", "oauth", "ding:dee-staff"], ["rotated", undefined, "dee"], ["revoked", "removed", "dee"]]);
+  assert.deepEqual(of(box.reused.deviceId), [["revoked", "refresh-reuse", "refresh-reuse"]], "the family ended for a reuse");
+  assert.deepEqual(of(third.tokens.deviceId).at(-1), ["revoked", "signed-out", "dee"]);
+  assert.deepEqual(of(paired.tokens.deviceId), [["minted", "pairing", "dee"], ["revoked", "access-ended", "operator"]]);
+  assert.ok(lines.some(line => line.event === "pairing-shown" && line.for === "dee" && line.by === "ding:dee-staff" && typeof line.signedInAt === "string"));
+  const stored = readFileSync(join(box.home, "devices.json"), "utf8");
+  for (const token of [signedIn.tokens.accessToken, signedIn.tokens.refreshToken, rotated.refreshToken, paired.tokens.accessToken, shown.code]) {
+    assert.ok(!ledger.includes(token) && !stored.includes(token), "never a token or a code on disk");
+  }
+  assert.ok(!readFileSync(join(box.home, "client-api-idempotency.jsonl"), { encoding: "utf8", flag: "a+" }).includes("lbxr_"), "a replayed pair is kept in memory, never in the file");
+  assert.match(readFileSync(join(box.home, "sign-ins.jsonl"), "utf8"), /"door":"client-api","outcome":"failed"[^\n]*"reason":"auth-code"/, "a code that did not work is a sign-in try");
+});
+
+test("minting a token or showing a pairing code needs a sign-in in the last ten minutes; an older session or one from before the field still reads the page (INV-2318)", async t => {
+  const box = await server(t, { door: true });
+  const { sessionKey, SESSION_COOKIE } = await import("../session.ts");
+  const post = (path: string, cookie: string, body: unknown) => fetch(`${box.base}${path}`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify(body) });
+  const mints: [string, unknown][] = [["/api/client-tokens", { scopes: ["work:read"] }], ["/api/mcp/tokens", { label: "ide" }], ["/api/devices/pairing", {}]];
+  // A cookie from before the sign-in time was signed into it: `identity|epoch`, as the server signed one before.
+  const payload = "ding:dee-staff|0";
+  const legacy = `${SESSION_COOKIE}=${encodeURIComponent(`${payload}.${createHmac("sha256", sessionKey("t0k")).update(payload).digest("hex").slice(0, 32)}`)}`;
+  for (const [cookie, what] of [[legacy, "a cookie with no sign-in time"], [box.session("ding:dee-staff", 11 * 60_000), "a sign-in eleven minutes ago"]] as const) {
+    assert.equal((await fetch(`${box.base}/api/me`, { headers: { cookie } })).status, 200, `${what} reads the page`);
+    for (const [path, body] of mints) {
+      const refused = await post(path, cookie, body);
+      const answer = await refused.json() as { code: string; error: string };
+      assert.deepEqual([refused.status, answer.code], [403, "sign-in-again"], `${what} mints nothing at ${path}`);
+      assert.match(answer.error, /10/, "and says how recent");
+    }
+  }
+  // Signed in again through the door: the new cookie carries the time, and the mint names it on the record.
+  const entry = await fetch(`${box.base}/auth/ding`, { redirect: "manual" });
+  const state = new URL(entry.headers.get("location")!).searchParams.get("state")!;
+  const back = await fetch(`${box.base}/auth/ding/callback?state=${state}&code=union-dee`, { redirect: "manual", headers: { cookie: entry.headers.getSetCookie()[0]!.split(";")[0]! } });
+  const cookie = back.headers.getSetCookie()[0]!.split(";")[0]!;
+  for (const [path, body] of mints) assert.equal((await post(path, cookie, body)).status, 200, `a fresh sign-in mints at ${path}`);
+  const minted = readFileSync(join(box.home, "tokens.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as { event: string; kind: string; by: string; signedInAt?: string }).filter(line => line.by === "ding:dee-staff");
+  assert.deepEqual(minted.map(line => [line.event, line.kind]), [["minted", "personal"], ["minted", "side-door"], ["pairing-shown", "device"]]);
+  assert.ok(minted.every(line => line.signedInAt !== undefined && Date.now() - Date.parse(line.signedInAt) < 60_000), "each names the sign-in it relied on");
+  // The installation's own credential is not asked: the operator is the token holder, not a cookie somebody copied.
+  assert.equal((await fetch(`${box.base}/api/client-tokens`, { method: "POST", headers: box.operator, body: JSON.stringify({ principalId: "dee", scopes: ["work:read"] }) })).status, 200);
+});

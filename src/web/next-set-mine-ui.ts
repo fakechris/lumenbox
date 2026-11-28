@@ -4,7 +4,7 @@
  * sees their own; none of it is the installation's.
  */
 export const NEXT_SET_MINE_JS = `
-var mine = { person: null, tokens: null, policy: null, setup: null, needsPerson: false, error: "", issued: "" };
+var mine = { person: null, tokens: null, policy: null, setup: null, needsPerson: false, error: "", issued: "", again: "" };
 var PERSON_FIELDS = ["responsibilities", "projects", "goals", "interests", "habits", "preferences"];
 
 function loadMine() {
@@ -65,6 +65,7 @@ function tokensBlock() {
   box.appendChild(el("h2", "group", t("ui.next.mine.tokens")));
   box.appendChild(el("p", "why", t("ui.next.mine.tokensNote")));
   var notice = tokenSetupNotice(); if (notice) box.appendChild(notice);
+  if (mine.again) box.appendChild(signInAgainNotice(mine.again)); // a sign-in too old to mint (INV-2318)
   if (mine.issued) {
     // Shown this once: it is stored nowhere it could be read back from.
     var once = el("div", "needbox"), copy = el("button", "act", t("ui.next.msg.copy")), secret = mine.issued;
@@ -81,8 +82,9 @@ function tokensBlock() {
   label.placeholder = t("ui.next.mine.tokenLabel");
   issue.addEventListener("click", function () {
     postJson("/api/mcp/tokens", { label: label.value.trim() }).then(function (got) {
-      mine.needsPerson = false; mine.issued = got.token || ""; loadMine();
+      mine.needsPerson = false; mine.issued = got.token || ""; mine.again = ""; loadMine();
     }, function (error) {
+      if (error.data && error.data.code === "sign-in-again") { mine.again = error.message; render(); return; }
       if (!error.data || error.data.code !== "token-needs-person") { failed(error); return; }
       mine.needsPerson = true; mine.issued = ""; loadMine();
     });
@@ -115,6 +117,6 @@ function standingBlock() {
 function renderMinePane(view) {
   if (mine.person === null) { view.appendChild(el("p", "empty", t("ui.next.auto.reading"))); loadMine(); return; }
   if (mine.error) view.appendChild(el("p", "why", mine.error));
-  [aboutMeBlock(), tokensBlock(), standingBlock(), consentBlock(), offerSkillBlock()].forEach(function (block) { if (block) view.appendChild(block); });
+  [aboutMeBlock(), phonesBlock(), tokensBlock(), standingBlock(), consentBlock(), offerSkillBlock()].forEach(function (block) { if (block) view.appendChild(block); });
 }
 `;

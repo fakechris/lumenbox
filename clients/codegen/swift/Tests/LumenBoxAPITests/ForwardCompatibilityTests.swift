@@ -57,6 +57,32 @@ final class ForwardCompatibilityTests: XCTestCase {
         XCTAssertEqual(changes.durableSeq, 9007199254740001, "a sequence past 2^32 decodes")
     }
 
+    // A device's sign-in (INV-2214): what a phone app built today does with a newer server's providers, statuses and devices.
+    func testProvidersOfATypeThisClientDoesNotKnow() async throws {
+        let providers = try await client(.ok, "auth-providers.json").listAuthProviders().ok.body.json
+        XCTAssertEqual(providers.items.map(\._type), ["dingtalk", "wecom"], "a sign-in channel added later arrives as itself")
+    }
+
+    func testASignInWithUnknownFieldsAndValues() async throws {
+        let body = Components.Schemas.OAuthExchange(code: "c", codeVerifier: String(repeating: "v", count: 43), deviceName: "phone", platform: "ios")
+        let signedIn = try await client(.ok, "device-sign-in.json").exchangeOAuthCode(body: .json(body)).ok.body.json
+        XCTAssertEqual(signedIn.status, "authenticated")
+        XCTAssertEqual(signedIn.tokens?.tokenType, "DPoP", "a token type added later arrives as itself")
+        XCTAssertEqual(signedIn.tokens?.expiresInSeconds, 900)
+        XCTAssertEqual(signedIn.me?.credential.kind, "device")
+        let other = try await client(.ok, "device-sign-in-other.json").exchangeOAuthCode(body: .json(body)).ok.body.json
+        XCTAssertEqual(other.status, "mfa_required", "a status added later: the app shows the message and points to the web")
+        XCTAssertNil(other.tokens)
+        XCTAssertEqual(other.message, "Confirm on your other device.")
+    }
+
+    func testDevicesOfAPlatformThisClientDoesNotKnow() async throws {
+        let page = try await client(.ok, "device-page.json").listDevices().ok.body.json
+        XCTAssertEqual(page.items.map(\.platform), ["visionos", "ios"])
+        XCTAssertEqual(page.items.first?.signInMethod, "passkey")
+        XCTAssertEqual(page.items.first?.current, true)
+    }
+
     func testAnErrorWithAnUnknownCode() async throws {
         let answer = try await client(.unauthorized, "error.json").getMe()
         guard case .unauthorized(let refusal) = answer else { return XCTFail("401 is the documented refusal: \(answer)") }

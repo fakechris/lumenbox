@@ -1,0 +1,6 @@
+{
+  "items": [
+    { "id": "ding", "type": "dingtalk", "displayName": "钉钉" },
+    { "id": "wecom-hq", "type": "wecom", "displayName": "企业微信", "iconUrl": "https://box.example.test/wecom.svg" }
+  ]
+}

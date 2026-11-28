@@ -91,6 +91,39 @@ export function readParams(operation: Operation, pathParams: Record<string, stri
   return { values };
 }
 
+/**
+ * A request's JSON body as the operation's `requestBody` declares it, or the first refusal. A field it does not
+ * declare is refused, as an unknown query parameter is; `null` is the same as absent (a generated client may send
+ * it for an optional field); a known value of an open enumeration is not enforced here — what the handler needs
+ * of one, it checks. An operation that declares no body takes none.
+ */
+export function readBody(operation: Operation, raw: unknown): { values: Record<string, unknown> } | Refusal {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { code: "api-param-invalid", vars: { name: "body", why: "a JSON object" } };
+  const shape = operation.requestBody === undefined ? { properties: {}, required: [] } : resolve({ $ref: `#/components/schemas/${operation.requestBody}` });
+  const values: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    const declared = shape.properties?.[name];
+    if (declared === undefined) return { code: "api-param-unknown", vars: { name } };
+    if (value === null) continue;
+    const invalid = (why: string): Refusal => ({ code: "api-param-invalid", vars: { name, why } });
+    if (declared.type === "string") {
+      if (typeof value !== "string") return invalid("a string");
+      if (declared.minLength !== undefined && value.length < declared.minLength) return invalid(`at least ${declared.minLength} characters`);
+      if (declared.maxLength !== undefined && value.length > declared.maxLength) return invalid(`at most ${declared.maxLength} characters`);
+      if (declared.pattern !== undefined && !new RegExp(declared.pattern).test(value)) return invalid(`of the form ${declared.pattern}`);
+    } else if (declared.type === "integer") {
+      if (!Number.isInteger(value)) return invalid("a whole number");
+    } else if (declared.type === "boolean") {
+      if (typeof value !== "boolean") return invalid("true or false");
+    } else if (declared.type === "array") {
+      if (!Array.isArray(value)) return invalid("a list");
+    } else if (declared.type === "object" && (typeof value !== "object" || Array.isArray(value))) return invalid("an object");
+    values[name] = value;
+  }
+  for (const name of shape.required ?? []) if (values[name] === undefined) return { code: "api-param-invalid", vars: { name, why: "required" } };
+  return { values };
+}
+
 // --- checking a body against the schema (the contract tests, and nothing at run time) ------------
 
 function resolve(schema: Schema): Schema {

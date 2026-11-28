@@ -29,7 +29,7 @@ import { NEXT_PANEL_MORE_JS } from "./next-panel-more-ui.ts";
 import { NEXT_ACTIVITY_JS } from "./next-activity-ui.ts"; import { NEXT_HISTORY_SEARCH_JS } from "./next-history-search-ui.ts";
 import { NEXT_MANAGE_JS } from "./next-manage-ui.ts";
 import { NEXT_TEACH_JS } from "./next-teach-ui.ts";
-import { NEXT_SET_MINE_JS } from "./next-set-mine-ui.ts";
+import { NEXT_SET_MINE_JS } from "./next-set-mine-ui.ts"; import { NEXT_SET_PHONES_JS } from "./next-set-phones-ui.ts";
 import { NEXT_SET_MODEL_JS } from "./next-set-model-ui.ts";
 import { NEXT_SET_DOORS_JS } from "./next-set-doors-ui.ts";
 import { NEXT_SET_TEAM_JS } from "./next-set-team-ui.ts"; import { NEXT_SET_DIRECTORY_CSS, NEXT_SET_DIRECTORY_JS } from "./next-set-directory-ui.ts";
@@ -336,7 +336,7 @@ body.electron-mac .side { padding-top: 40px; }
 .panel .inner { padding: 18px; overflow: auto; flex: 1; }
 .panel h3 { font-size: 18px; margin: 0 0 6px; overflow-wrap: anywhere; }
 .panel .asked { color: var(--soft); margin: 0 0 16px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow: auto; }
-.needbox { background: var(--warn-soft); border-radius: 12px; padding: 12px 14px; margin-bottom: 18px; }
+.needbox { background: var(--warn-soft); border-radius: 12px; padding: 12px 14px; margin-bottom: 18px; } .needbox .pair-qr { display: block; width: 220px; height: 220px; }
 .needbox .acts { margin-top: 10px; flex-wrap: wrap; }
 .needbox textarea { width: 100%; margin-top: 10px; min-height: 64px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px; font: inherit; background: var(--surface); }
 .file { display: flex; justify-content: space-between; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 6px 0; font-size: 13px; text-decoration: none; }
@@ -522,6 +522,7 @@ ${NEXT_HISTORY_SEARCH_JS}
 ${NEXT_MANAGE_JS}
 ${NEXT_TEACH_JS}
 ${NEXT_SET_MINE_JS}
+${NEXT_SET_PHONES_JS}
 ${NEXT_SET_MODEL_JS}
 ${NEXT_SET_DOORS_JS}
 ${NEXT_SET_TEAM_JS}

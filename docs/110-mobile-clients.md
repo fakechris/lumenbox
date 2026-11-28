@@ -2,7 +2,7 @@
      title: Native mobile clients: two repositories, one API over two transports, encrypted relay, and wake-only push
      family: decision
      status: current
-     updated: 2026-11-27
+     updated: 2026-11-28
 -->
 # Native mobile clients: two repositories, one API over two transports, encrypted relay, and wake-only push
 
@@ -223,6 +223,12 @@ below.
      never echo through chat messages.
    - Desktop viewing in v1 requests `"view"` tickets only (60 s single-use ticket routed to
      `/vnc-ro/<index>/`, docs/106 §5 R6), preventing accidental touch clicks on a live desktop.
+   - *As built (INV-2214 part 1, docs/106 §8.1):* the 30-second grace answers `409 refresh-superseded`
+     and issues nothing; only a retry with the first request's `Idempotency-Key` gets the pair again.
+     One refresh family per device sign-in, so a family revoked is that device ended. Refresh tokens
+     last thirty days from issue and never past a year from the sign-in. The step-up key is registered
+     at the exchange or the pairing (`stepUpKeyId`, `stepUpPublicKey`: P-256 SPKI). Organisation pairing
+     is `lumenbox://pair#server=<origin>&code=<code>`, shown after a sign-in in the last ten minutes.
 5. **Encrypted local cache and automatic remote wipe.** Each organisation connection on the phone
    stores its offline SQLite cache under a distinct 256-bit key held in the hardware keychain.
    Whenever any call or background refresh receives `401` with `code: "access-removed"`, the app

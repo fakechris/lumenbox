@@ -1,0 +1,6 @@
+{
+  "items": [
+    { "id": "dev_1", "name": "Dee's goggles", "platform": "visionos", "signInMethod": "passkey", "scopes": ["work:read"], "createdAt": "2026-11-28T10:00:00Z", "current": true, "stepUpKey": false, "trust": "managed" },
+    { "id": "dev_2", "name": "Dee's phone", "platform": "ios", "signInMethod": "oauth", "providerId": "ding", "scopes": ["work:read"], "createdAt": "2026-11-27T10:00:00Z", "lastUsedAt": "2026-11-28T09:59:00Z", "current": false, "stepUpKey": true }
+  ]
+}

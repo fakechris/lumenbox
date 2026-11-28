@@ -1,0 +1,21 @@
+{
+  "status": "authenticated",
+  "tokens": {
+    "deviceId": "dev_0011223344556677",
+    "tokenType": "DPoP",
+    "accessToken": "lbxd_0000000000000000000000000000000000000000000000000000000000000000",
+    "expiresInSeconds": 900,
+    "accessTokenExpiresAt": "2026-11-28T10:15:00Z",
+    "refreshToken": "lbxr_0000000000000000000000000000000000000000000000000000000000000000",
+    "refreshTokenExpiresAt": "2026-12-28T10:00:00Z",
+    "scopes": ["work:read", "time:travel"],
+    "boundKeyThumbprint": "abc"
+  },
+  "me": {
+    "id": "dee",
+    "name": "Dee",
+    "role": "driver",
+    "credential": { "id": "dev_0011223344556677", "kind": "device", "label": "Dee's phone", "scopes": ["work:read"], "createdAt": "2026-11-28T10:00:00Z", "expiresAt": "2026-11-28T10:15:00Z" }
+  },
+  "nextStep": "set-passcode"
+}

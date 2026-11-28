@@ -53,11 +53,17 @@ export interface Session {
    * person, their cookies stop verifying, and everyone else keeps working.
    */
   epoch: number;
+  /**
+   * When the person signed in, in whole seconds since 1970 (INV-2318): signed with the rest, so a
+   * cookie cannot claim a fresher sign-in than it had. Absent on a cookie issued before the field,
+   * which keeps reading the page and counts as not a recent sign-in (recent-sign-in.ts).
+   */
+  signedAt?: number;
 }
 
-/** The cookie value: who, which generation, and proof it was issued here. */
-export function makeSession(identity: string, key: string, epoch = 0): string {
-  const payload = `${identity}|${epoch}`;
+/** The cookie value: who, which generation, when they signed in, and proof it was issued here. */
+export function makeSession(identity: string, key: string, epoch = 0, signedAt = Math.floor(Date.now() / 1000)): string {
+  const payload = `${identity}|${epoch}|${signedAt}`;
   return `${payload}.${sign(payload, key)}`;
 }
 
@@ -71,6 +77,8 @@ export function readSession(value: string | undefined, key: string): Session | u
   const expected = Buffer.from(sign(payload, key), "utf8");
   if (presented.length !== expected.length) return undefined;
   if (!timingSafeEqual(presented, expected)) return undefined;
+  const timed = /^(.*)\|(\d{1,16})\|(\d{1,12})$/.exec(payload);
+  if (timed !== null) return { identity: timed[1]!, epoch: Number(timed[2]), signedAt: Number(timed[3]) };
   // Cookies issued before generations existed carry no bar and are generation zero, so a
   // browser signed in yesterday is not signed out by an upgrade.
   const bar = payload.lastIndexOf("|");
@@ -96,9 +104,9 @@ export function readSession(value: string | undefined, key: string): Session | u
 export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 3_600;
 
 /** The Set-Cookie line for a fresh session. HttpOnly: nothing in the page reads it. */
-export function sessionCookie(identity: string, key: string, epoch = 0, secure = false): string {
+export function sessionCookie(identity: string, key: string, epoch = 0, secure = false, signedAt?: number): string {
   return (
-    `${SESSION_COOKIE}=${encodeURIComponent(makeSession(identity, key, epoch))}; Path=/; ` +
+    `${SESSION_COOKIE}=${encodeURIComponent(makeSession(identity, key, epoch, signedAt))}; Path=/; ` +
     // Under TLS the cookie says so, and the browser stops offering it over plain HTTP —
     // which is the case this flag exists for (INV-578). Not set on a loopback or an
     // explicitly insecure publish, where marking it Secure would stop it being stored.

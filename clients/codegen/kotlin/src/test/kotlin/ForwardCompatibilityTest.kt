@@ -5,12 +5,16 @@ import com.lumenopen.lumenbox.generated.infrastructure.Serializer
 import com.lumenopen.lumenbox.generated.models.Me
 import com.lumenopen.lumenbox.generated.models.Meta
 import com.lumenopen.lumenbox.generated.models.Changes
+import com.lumenopen.lumenbox.generated.models.AuthProviderList
+import com.lumenopen.lumenbox.generated.models.DevicePage
+import com.lumenopen.lumenbox.generated.models.DeviceSignIn
 import com.lumenopen.lumenbox.generated.models.WorkPage
 import com.lumenopen.lumenbox.generated.models.Error as ApiError
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class ForwardCompatibilityTest {
     private fun fixture(name: String) = File("../fixtures/$name").readText()
@@ -42,6 +46,27 @@ class ForwardCompatibilityTest {
         val changes = json.decodeFromString(Changes.serializer(), fixture("changes.json"))
         assertEquals(listOf("work", "conversation"), changes.items.map { it.type })
         assertEquals(9007199254740001L, changes.durableSeq)
+    }
+
+    @Test fun providersOfATypeThisClientDoesNotKnow() {
+        val providers = json.decodeFromString(AuthProviderList.serializer(), fixture("auth-providers.json"))
+        assertEquals(listOf("dingtalk", "wecom"), providers.items.map { it.type })
+    }
+
+    @Test fun aSignInWithUnknownFieldsAndValues() {
+        val signedIn = json.decodeFromString(DeviceSignIn.serializer(), fixture("device-sign-in.json"))
+        assertEquals("authenticated", signedIn.status)
+        assertEquals("DPoP", signedIn.tokens?.tokenType)
+        assertEquals("device", signedIn.me?.credential?.kind)
+        val other = json.decodeFromString(DeviceSignIn.serializer(), fixture("device-sign-in-other.json"))
+        assertEquals("mfa_required", other.status)
+        assertNull(other.tokens)
+    }
+
+    @Test fun devicesOfAPlatformThisClientDoesNotKnow() {
+        val page = json.decodeFromString(DevicePage.serializer(), fixture("device-page.json"))
+        assertEquals(listOf("visionos", "ios"), page.items.map { it.platform })
+        assertEquals("passkey", page.items.first().signInMethod)
     }
 
     @Test fun anErrorWithAnUnknownCode() {

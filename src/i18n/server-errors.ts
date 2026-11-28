@@ -310,7 +310,7 @@ export const SERVER_ERRORS = {
   // ── the client API, /api/v1 (docs/106 §4, INV-2213): a program reads the code; these words are for the person reading its log ──
   "err.api-operation-unknown": ["/api/v1 没有{route}这个操作。可用的操作见 GET /api/v1/meta。", "/api/v1 has no operation {route}. GET /api/v1/meta lists those it has."],
   "err.api-method-not-allowed": ["这个地址不接受{method}，只接受{allowed}。", "This path does not take {method}. It takes {allowed}."],
-  "err.api-credential-needed": ["请在 Authorization: Bearer 中带上个人令牌或服务令牌。", "Send a personal or service token in Authorization: Bearer."],
+  "err.api-credential-needed": ["请在 Authorization: Bearer 中带上个人令牌、服务令牌或设备凭据。", "Send a personal token, a service token or a device's access token in Authorization: Bearer."],
   "err.api-credential-invalid": ["这个令牌无效：不是本安装签发的，或已被吊销。", "This token is not valid: this installation did not issue it, or it was revoked."],
   "err.api-credential-expired": ["这个令牌已过期。请在 LumenBox 页面重新签发一个。", "This token has expired. Mint a new one on the LumenBox page."],
   "err.access-removed": ["这个令牌所代表的人已没有访问权限。", "The person this token acts for no longer has access."],
@@ -324,6 +324,15 @@ export const SERVER_ERRORS = {
   "err.api-rate-limited": ["请求太多。请{seconds}秒后再试。", "Too many requests. Try again in {seconds}s."],
   "err.client-token-invalid": ["令牌未签发：{why}。", "Token not minted: {why}."],
   "err.api-internal": ["服务器出错了。请求编号：{requestId}。", "The server failed. Request id: {requestId}."],
+  // ── a device's sign-in and its credential (docs/110 §4, INV-2214); a recent sign-in to mint (INV-2318) ──
+  "err.auth-provider-unknown": ["这里没有这个登录方式。可用的登录方式见 GET /api/v1/auth/providers。", "No sign-in of this name works here. GET /api/v1/auth/providers lists those that do."],
+  "err.auth-redirect-invalid": ["redirectUri 必须是应用自己的地址：lumenbox: 开头，或桌面客户端的 http://127.0.0.1:端口。", "redirectUri must be the app's own address: a lumenbox: address, or http://127.0.0.1:<port> for a desktop client."],
+  "err.auth-code-invalid": ["这个登录码无效、已用过或已超过一分钟。请重新登录。", "This sign-in code is not valid, was used, or is over a minute old. Sign in again."],
+  "err.pairing-code-invalid": ["这个配对码无效、已用过或已超过两分钟。请在页面上重新生成二维码。", "This pairing code is not valid, was used, or is over two minutes old. Show a new QR code on the page."],
+  "err.refresh-superseded": ["这个刷新令牌刚在30秒内用过，设备已拿到新的令牌，什么都没有被吊销。", "This refresh token was used in the last 30 seconds: the device has the new pair, and nothing was ended."],
+  "err.device-credential-needed": ["只有设备凭据能这样退出登录；个人令牌和服务令牌请在页面上吊销。", "Only a device credential signs itself out this way; revoke a personal or service token on the page."],
+  "err.sign-in-again": ["为了安全，请先重新登录：签发令牌或连接手机需要在{minutes}分钟内登录过。", "For safety, sign in again first: minting a token or connecting a phone needs a sign-in in the last {minutes} minutes."],
+  "err.device-unknown": ["没有这台设备，或它不是你的。", "No such device, or it is not yours."],
 } as const satisfies Record<string, readonly [zh: string, en: string]>;
 
 /** A refusal's stable name: the key without `err.`. */

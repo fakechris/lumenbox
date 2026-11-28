@@ -20,7 +20,7 @@ import type { TokenRecord } from "./token-ledger.ts";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Principals } from "../host/principals.ts";
-import type { ClientTokenKind, Scope, ServiceView } from "./client-api/schema.ts";
+import type { ClientTokenKind, CredentialKind, Scope, ServiceView } from "./client-api/schema.ts";
 
 export interface StoredToken {
   hash: string;
@@ -41,10 +41,10 @@ export interface StoredToken {
   view?: ServiceView;
 }
 
-/** A client token as its holder and the page see it: never the secret, never the hash. */
+/** A client credential as its holder and the page see it: never the secret, never the hash. A device's is built by device-credentials.ts. */
 export interface ClientCredential {
   id: string;
-  kind: ClientTokenKind;
+  kind: CredentialKind;
   principalId: string;
   label: string;
   scopes: Scope[];
@@ -99,12 +99,12 @@ export class McpTokenStore {
   }
 
   /** A new token for a person; the secret is in the answer and nowhere else. */
-  mint(principalId: string, label: string, now: Date = new Date(), via: "sign-in" | "person" = "sign-in", by?: string): { token: string; label: string; createdAt: string } {
+  mint(principalId: string, label: string, now: Date = new Date(), via: "sign-in" | "person" = "sign-in", by?: string, signedInAt?: string): { token: string; label: string; createdAt: string } {
     const token = `lmbx_${randomBytes(24).toString("hex")}`;
     const entry: StoredToken = { hash: hashOf(token), principalId, via, label: label.trim().slice(0, 60) || "unnamed", createdAt: now.toISOString() };
     this.tokens.push(entry);
     this.save();
-    this.record({ at: entry.createdAt, event: "minted", kind: "side-door", for: principalId, label: entry.label, via, by: by ?? principalId });
+    this.record({ at: entry.createdAt, event: "minted", kind: "side-door", for: principalId, label: entry.label, via, by: by ?? principalId, ...(signedInAt !== undefined ? { signedInAt } : {}) });
     return { token, label: entry.label, createdAt: entry.createdAt };
   }
 
@@ -122,7 +122,9 @@ export class McpTokenStore {
    * A client API token for a person (INV-2213): shown once, kept as its hash. `principalId` is a roster
    * id — for a service token, the Admin it reads for. On the record with who minted it, never the secret.
    */
-  mintClient(input: { kind: ClientTokenKind; principalId: string; label: string; scopes: readonly Scope[]; expiresAt: Date; view?: ServiceView; by: string; now?: Date }): { token: string; credential: ClientCredential } {
+  mintClient(input: {
+    kind: ClientTokenKind; principalId: string; label: string; scopes: readonly Scope[]; expiresAt: Date; view?: ServiceView; by: string; now?: Date; signedInAt?: string;
+  }): { token: string; credential: ClientCredential } {
     const now = input.now ?? new Date();
     const token = `${CLIENT_PREFIX[input.kind]}${randomBytes(24).toString("hex")}`;
     const entry: StoredToken = {
@@ -134,7 +136,7 @@ export class McpTokenStore {
     this.save();
     this.record({
       at: entry.createdAt, event: "minted", kind: input.kind, id: entry.id!, for: entry.principalId, label: entry.label, scopes: entry.scopes!, expiresAt: entry.expiresAt!,
-      ...(entry.view !== undefined ? { view: entry.view } : {}), by: input.by,
+      ...(entry.view !== undefined ? { view: entry.view } : {}), by: input.by, ...(input.signedInAt !== undefined ? { signedInAt: input.signedInAt } : {}),
     });
     return { token, credential: credentialOf(entry) };
   }

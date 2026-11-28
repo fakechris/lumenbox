@@ -90,7 +90,7 @@ import type { TurnEvent } from "../host/turn.ts";
 import { LOGIN_PAGE, pageChoice, localeOf, localizeScript, requestLocaleOf } from "./page-locale.ts"; import { apiError, localizedBody } from "./api-error.ts"; import { bootstrapPage, desktopWaitingPage, oauthResultPage, signInRecoveryPage } from "./server-pages.ts"; import { doorSignInFor, doorSignInHandler } from "./door-sign-in.ts"; import { signInCallbackUrl, parsePublicUrlInput, invitationLink, loginPageWithDoors, signsInOnWeb, webSignInDoors, wantsHtml, type WebSignInType } from "./sign-in.ts";
 import { HSTS, isDirectLocal, resolveExposure, type Exposure } from "./exposure.ts";
 import { originRefusal, securityHeaders } from "./browser-guard.ts";
-import { TOKENS_LEDGER, tokenLedger } from "./token-ledger.ts"; import { boxTokenRoute } from "./box-token-routes.ts"; // R7, R8 (docs/106 §5)
+import { TOKENS_LEDGER, tokenLedger } from "./token-ledger.ts"; import { recentSignIn } from "./recent-sign-in.ts"; import { boxTokenRoute } from "./box-token-routes.ts"; // R7, R8 (docs/106 §5)
 import {
   DESKTOP_IDLE_MS, DESKTOP_SESSIONS_LEDGER, DesktopStreams, DesktopTickets, REVOKED_CLOSE_CODE, closeFrame, desktopSessionLedger, grantedMode, pageAddressWith, ticketIn,
   withReopenNotice, withoutTicket, type HeldStream, type ReopenWords, type StreamEnd, type StreamOpen,
@@ -243,7 +243,7 @@ import { MemoryAdmin } from "../host/memory-admin.ts";
 import { ConnectCodeStore } from "../box/connect-codes.ts";
 import { FollowUpBudget, type FollowUpItem } from "../host/follow-up-budget.ts"; import { quietWiring } from "./quiet-wiring.ts"; import { explainIdlePause } from "../host/routine-idle.ts";
 import { SessionEpochs } from "./session-epochs.ts";
-import { OpenDesktops } from "./open-desktops.ts";
+import { OpenDesktops } from "./open-desktops.ts"; import { deviceRoute } from "./device-routes.ts"; // a person's phones (INV-2214)
 import { leavesNoAdmin, peopleRoute } from "./people-routes.ts"; import { InviteStore } from "./invite-store.ts";
 import { Directories } from "../host/directory.ts"; import { Activations, activationRole } from "../host/activations.ts"; import { admission, activationRoute, joinRequestWords } from "./activation-routes.ts";
 import { directoryHelpers } from "../channels/directory-sources.ts";
@@ -2984,12 +2984,14 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
   const sideDoorIdempotency = new IdempotencyStore({ ttlMs: 24 * 60 * 60_000, persistTo: join(agentboxHome(), "mcp-idempotency.jsonl") });
   const v1 = mountClientApi({ tokens: mcpTokens, principals, homeOf: id => chatRoute.homeOf(id), version: build.version, signIns: () => signIns, attemptFrom, home: agentboxHome(), log, // /api/v1
     registry, tasks: () => orchestrator.tasks?.list() ?? [], working: id => orchestrator.bus.isActive(id), unavailable: unavailableHere, taskActive, checkPending,
-    onTask: listener => { orchestrator.tasks?.onChange(listener); orchestrator.tasks?.onCreate(listener); } }); // the change ledger hears the board (change-ledger.ts)
+    onTask: listener => { orchestrator.tasks?.onChange(listener); orchestrator.tasks?.onCreate(listener); }, // the change ledger hears the board (change-ledger.ts)
+    recordToken, doors: () => webSignInDoors(channelRecords, channelCredentialsSet, configuredPublicUrl()), publicUrl: () => configuredPublicUrl(), desktops: openDesktops, // devices (INV-2214)
+    arrived: (id, locale) => { const person = principals.byId(id); if (person) autoBoxes.arrive(person, tr("ui.personal.defaultName", locale, { name: person.name })); } });
 
   const configuredPublicUrl = (): string | undefined => process.env.AGENTBOX_PUBLIC_URL ?? loadConfig().env?.AGENTBOX_PUBLIC_URL;
   // Admission by an Admin's activation, and "left" after a directory sync (INV-2202, docs/107): activation-routes.ts.
   const admissionDeps = { activations: new Activations(), directories, principals, credentials: directoryCredentials, fetch: options.directoryFetch ?? fetch,
-    signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); }, log,
+    signOut: (id: string) => { epochs.bump(id); }, revokeTokens: (ids: readonly string[], signInOnly?: boolean) => { mcpTokens.revokeFor(ids, signInOnly); v1.endAccess(ids, signInOnly === true, "directory"); }, log,
     boxes: (people: readonly { id: string; name: string }[]) => autoBoxes.activated(people, person => tr("ui.personal.defaultName", localeOfPerson(person.id), { name: person.name })) };
   const onboarding = members.attach({ activations: admissionDeps.activations, reach, autoBoxes, publicUrl: () => configuredPublicUrl(), sourceOf: door => directoryCredentials(door)?.source,
     quotaOf: id => personalQuotaFor(id, loadConfig(), directories.membership([id], directorySources())) }); // estimate, progress, telling people (INV-2220)
@@ -3003,7 +3005,7 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
     publicUrl: configuredPublicUrl, feishuDomain: () => process.env.FEISHU_DOMAIN ?? "feishu", fetch: options.loginFetch ?? fetch,
     bootstrap, setupPending: bootstrapPending, principals, send, log, admit: (...who) => orgAdmission.admit(...who),
     sessionCookie: (identity, principalId) => sessionCookie(identity, sessionSecret, epochs.of(principalId), secureCookies),
-    secureCookies: () => secureCookies,
+    secureCookies: () => secureCookies, device: v1.doorSignIn, // a phone's sign-in through the same door (INV-2214)
     attempts: {
       blocked: res => signIns.blocked(attemptFrom(res.req, "door")),
       failed: (res, reason, account, counts) => signIns.failed(attemptFrom(res.req, "door", account), reason, counts),
@@ -3217,9 +3219,10 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
       // by a key derived from the token that authorised it.
       principals.reload();
       const gatewayCaller = callerOf(req.headers, decision.allow, trustsGatewayIdentity());
-      const webIdentity = decision.allow
-        ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret)?.identity
-        : undefined;
+      const webSession = decision.allow ? readSession(parseCookies(req.headers.cookie).get(SESSION_COOKIE), sessionSecret) : undefined, webIdentity = webSession?.identity;
+      // Minting a token or pairing a phone asks for a recent sign-in, read from the session's signed time (INV-2318).
+      const freshSignIn = () => recentSignIn(exposure?.level ?? "local", gatewayCaller.userId !== undefined ? { via: "gateway" }
+        : webSession !== undefined ? { via: "session", ...(webSession.signedAt !== undefined ? { signedAt: webSession.signedAt } : {}) } : { via: "operator" });
       const caller =
         gatewayCaller.userId === undefined && webIdentity !== undefined
           ? { ...gatewayCaller, userId: webIdentity }
@@ -4455,17 +4458,20 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
         // use them. The roster is the access-control list now, not a flat allow list.
         // The bridges to other people's tools: what is running, and how much of every
         // agent's prompt each one is spending.
-        const clientTokens = await clientTokenRoute(route, { readJson: () => readJson(req), userId: caller.userId, role: callerRole, principals, tokens: mcpTokens });
+        const clientTokens = await clientTokenRoute(route, { readJson: () => readJson(req), userId: caller.userId, role: callerRole, principals, tokens: mcpTokens, freshSignIn });
         if (clientTokens !== undefined) { send(res, clientTokens.status, clientTokens.body); return; } // personal and service tokens for /api/v1
+        const devicesReply = await deviceRoute(route, { readJson: () => readJson(req), userId: caller.userId, role: callerRole, principals, devices: v1.devices, freshSignIn, publicUrl: configuredPublicUrl });
+        if (devicesReply !== undefined) { send(res, devicesReply.status, devicesReply.body); return; } // a person's phones (INV-2214)
         if (route === "POST /api/mcp/tokens") {
           if (refusedRole("driver")) return;
+          const fresh = freshSignIn(); if (!fresh.ok) { send(res, 403, fresh.error); return; }
           const body = await readJson(req);
           const owner = caller.userId ?? (String(body.principalId ?? "") || (soleAdmin(principals.list()) ?? "")); // nobody signed in: the one admin (INV-1681)
           if (owner === "" || (caller.userId === undefined && !principals.list().some(person => person.id === owner))) {
             send(res, 400, apiError("token-needs-person", { admins: principals.list().filter(person => person.role === "admin").length }));
             return;
           }
-          const minted = mcpTokens.mint(owner, String(body.label ?? ""), new Date(), caller.userId === undefined ? "person" : "sign-in", caller.userId ?? "operator");
+          const minted = mcpTokens.mint(owner, String(body.label ?? ""), new Date(), caller.userId === undefined ? "person" : "sign-in", caller.userId ?? "operator", fresh.signedInAt);
           log(`mcp token issued to ${owner} (${minted.label})`);
           send(res, 200, { token: minted.token, label: minted.label, createdAt: minted.createdAt });
           return;
@@ -4762,7 +4768,8 @@ export async function startWebServer(options: WebOptions): Promise<() => void> {
           return;
         }
 
-        const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req), signOut: id => epochs.bump(id),
+        const peopleReply = await peopleRoute(route, { principals, invites, newCode: newInviteCode, refusedAdmin: () => refusedRole("admin", currentCallerRole()), readJson: () => readJson(req),
+          signOut: id => { v1.endAccess([id], false, caller.userId ?? "operator"); return epochs.bump(id); }, // removed, or signed out everywhere: their devices too (INV-2214)
           currentSessionIdentity: "sessionIdentity" in decision && gatewayCaller.userId === undefined ? decision.sessionIdentity : undefined,
           usableSignIns, retiredSignIn, planRemoval: (person, kept, disposition) => planBoxDispositions(personalBoxes, person, kept, disposition, personalQuota, mayProvision, residentRules, { identity: caller.userId, record: adminRecord }),
           boxesOf: id => ({ quota: personalQuotaFor(id, loadConfig(), directoryQuotaContext(id)) ?? null, held: personalBoxesOf(registry.listBoxes(), id).length }), lastActive: people => lastActiveByPrincipal(mergePaths(), people),
