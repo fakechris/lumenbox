@@ -2,6 +2,8 @@
  * Team memory review (INV-1581): the setting, what waits, and a person's decision. Admin only.
  * Each waiting write names the box whose agents read it once approved: team memory is the box's
  * (INV-1727 retired the agent-set `audience: "everyone"`, and with it the every-box list).
+ * Only writes by agents in a box the caller may enter are listed or decided: the box is the
+ * boundary, for Admins too (docs/111 §1 rule 1, INV-2297).
  */
 
 import type { AgentRegistry } from "../agents/registry.ts";
@@ -17,6 +19,8 @@ export async function teamMemoryReviewRoute(
     refusedAdmin: () => boolean;
     by: () => string;
     log: (line: string) => void;
+    /** The server's inner gate (server.ts `mayReadAgent`): may this caller open the writer's box. */
+    mayReadAgent: (agentId: string) => boolean;
   }
 ): Promise<{ status: number; body: unknown } | undefined> {
   if (!route.startsWith("GET /api/memory/team-review") && !route.startsWith("POST /api/memory/team-review")) return undefined;
@@ -27,7 +31,7 @@ export async function teamMemoryReviewRoute(
     const shared = deps.registry.readSharedMemory();
     return {
       on: teamReviewOn(),
-      pending: pendingReviews(shared).map(item => ({
+      pending: pendingReviews(shared).filter(item => deps.mayReadAgent(item.writer)).map(item => ({
         writer: item.writer,
         writerName: nameOf(item.writer),
         version: item.version,
@@ -49,6 +53,7 @@ export async function teamMemoryReviewRoute(
   if (route === "POST /api/memory/team-review/decide") {
     const decision = body.decision === "approved" || body.decision === "rejected" ? body.decision : undefined;
     if (decision === undefined) return { status: 400, body: apiError("memory-review-decision") };
+    if (!deps.mayReadAgent(String(body.writer ?? ""))) return { status: 403, body: apiError("box-not-yours") };
     const result = decideReview(deps.registry, String(body.writer ?? ""), String(body.version ?? ""), decision, deps.by());
     if (!result.ok) return { status: 409, body: { error: result.why, ...view() } };
     deps.log(`team memory: ${deps.by()} ${decision} a write by ${String(body.writer)}`);

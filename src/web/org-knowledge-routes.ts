@@ -6,6 +6,11 @@
  * too, owned by that Admin — and each waiting item names its scope and who will read it once
  * approved, so nobody approves an installation-wide line without being told it is one. There is
  * no setting: organisation review is always on (org-promotion.ts).
+ *
+ * The box is the boundary, for Admins too (docs/111 §1 rule 1, INV-2297): what an Admin promotes
+ * or reads here is only what they could open — an agent's memory in a box they may enter, a task
+ * they may read, a receipt about one. A member's personal agent offers its own (the agent's
+ * Promote, org-promotion.ts); an Admin does not fetch it.
  */
 
 import type { AgentRegistry } from "../agents/registry.ts";
@@ -42,6 +47,9 @@ export interface OrgKnowledgeRouteDeps {
   by: () => string;
   nameOf: (principalId: string) => string;
   log: (line: string) => void;
+  /** The server's inner gates (server.ts `mayReadAgent`, `mayReadTask`): may this caller open it. */
+  mayReadAgent: (agentId: string) => boolean;
+  mayReadTask: (task: Task) => boolean;
 }
 
 export async function orgKnowledgeRoute(route: string, deps: OrgKnowledgeRouteDeps): Promise<{ status: number; body: unknown } | undefined> {
@@ -71,6 +79,9 @@ export async function orgKnowledgeRoute(route: string, deps: OrgKnowledgeRouteDe
   if (route === "GET /api/org-knowledge/review") return { status: 200, body: view() };
   if (route === "GET /api/org-knowledge/receipts") {
     const task = deps.params.get("task") ?? "";
+    const known = deps.tasks()?.get(task);
+    if (known === undefined) return { status: 404, body: apiError("task-unknown", { task }) };
+    if (!deps.mayReadTask(known)) return { status: 403, body: apiError("box-not-yours") };
     return { status: 200, body: { receipts: deps.receipts.forSubject(`task:${task}`).map(receipt => ({ id: receiptId(receipt), at: receipt.at, by: receipt.byName ?? receipt.by, decision: receipt.decision, because: receipt.because ?? "" })) } };
   }
   const body = await deps.readJson();
@@ -86,6 +97,7 @@ export async function orgKnowledgeRoute(route: string, deps: OrgKnowledgeRouteDe
     const source = sourceOf(deps, body);
     if (source === undefined) return { status: 400, body: apiError("org-promote-source") };
     if (typeof source === "string") return { status: 404, body: apiError("org-promote-source-unknown", { source }) };
+    if (!mayOpen(deps, source)) return { status: 403, body: apiError("box-not-yours") };
     // "box" is the box named, or the one the thing came from: the memory's agent's, the task's assignee's.
     const near = typeof body.agent === "string" ? body.agent : deps.tasks()?.get(String(body.task ?? ""))?.assigneeId;
     const boxId = typeof body.box === "string" && body.box !== "" ? body.box : near !== undefined && deps.registry.tryGet(near) !== undefined ? deps.registry.boxOf(near).id : undefined;
@@ -98,6 +110,17 @@ export async function orgKnowledgeRoute(route: string, deps: OrgKnowledgeRouteDe
     return { status: 200, body: view() };
   }
   return { status: 404, body: apiError("route-unknown", { route }) };
+}
+
+/** Whether the caller could open what they promote: the memory's agent, the task, the task or agent a receipt is about. */
+function mayOpen(deps: OrgKnowledgeRouteDeps, source: PromotionSource): boolean {
+  if (source.kind === "memory") return deps.mayReadAgent(source.holder);
+  const taskOf = (id: string) => deps.tasks()?.get(id);
+  if (source.kind === "task") { const task = taskOf(source.task.id); return task !== undefined && deps.mayReadTask(task); }
+  const { subject, by } = source.receipt;
+  const task = subject.startsWith("task:") ? taskOf(subject.slice("task:".length)) : undefined;
+  if (task !== undefined && !deps.mayReadTask(task)) return false;
+  return deps.registry.tryGet(by) === undefined || deps.mayReadAgent(by);
 }
 
 /** The thing promoted, found where it lives; a string names what was asked for and is not there. */
