@@ -735,6 +735,20 @@ test("an account holder rotates the tenant box's tokens: the store, the Secret a
     assert.equal(opens(before.ui), false);
     assert.deepEqual(await through(), { status: 200, bearer: after.ui });
 
+    // Two rotations asked at once run one after the other: the Secret, the store and the last pod's start agree.
+    clock = Date.now();
+    // The first one's last Secret write is slow: long enough for the second to run whole, if it were let in.
+    const applySecret = fake.api.applySecret.bind(fake.api);
+    let slow = true;
+    fake.api.applySecret = async secret => {
+      if (slow && secret.data.AGENTBOX_UI_TOKEN_PREVIOUS === undefined) { slow = false; await new Promise(resolve => setTimeout(resolve, 50)); }
+      await applySecret(secret);
+    };
+    await Promise.all([allocator.rotateTokens(handle), allocator.rotateTokens(handle)]);
+    assert.equal(decode(secretOf().AGENTBOX_UI_TOKEN), store.readToken(handle.id, "ui"));
+    assert.equal(decode(secretOf().BOXD_TOKEN), store.readToken(handle.id, "box"));
+    assert.ok(atStart.every(start => start.accepted) && opens(store.readToken(handle.id, "ui")!), "each pod took the token the store held when it started");
+
     const audit = store.recentAudit().filter(row => row.tenantId === acme.id);
     assert.ok(audit.some(row => row.action === "admin.box.rotate-tokens"), "asked for, on the record before it happened");
     assert.ok(audit.some(row => row.action === "rotate-tokens"), "and done");

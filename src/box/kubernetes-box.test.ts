@@ -199,22 +199,18 @@ test("a rotated token reaches the box's Secret once the box accepts it: a restar
     assert.equal((await rotate()).status, 200);
     assert.notEqual(hostToken(), first);
     assert.equal(secretToken(), hostToken(), "the Secret carries the token the host holds");
-    daemon = start();
-    assert.ok(daemon.accepts(hostToken()) && !daemon.accepts(first), "a restarted pod opens with the new token only");
-    fake.pods.delete(record.name);
-    await open().recover(() => {});
-    daemon = start();
-    assert.equal(secretToken(), hostToken());
-    assert.ok(daemon.accepts(hostToken()), "a re-created pod too");
+    const restarted = new BoxdTokens(secretToken(), `${stateFile}.copy`);
+    assert.ok(restarted.accepts(hostToken()) && !restarted.accepts(first), "a pod restarted now opens with the new token only");
 
-    // The Secret cannot be written: the rotation still lands, says so, and the box still opens with the host's token.
+    // A second rotation, with no restart in between, whose Secret cannot be written: it still lands and says so,
+    // and a pod restarted afterwards — booting with the Secret's token from the first rotation — opens with the host's.
     failSecret = true;
     const before = hostToken(), answer = await rotate();
     assert.equal(answer.status, 200);
     assert.match((answer.body as { note: string }).note, /was not updated \(the apiserver said no\)/);
-    assert.equal(secretToken(), before, "the Secret still holds the old token");
+    assert.equal(secretToken(), before, "the Secret still holds the first rotation's token");
     daemon = start();
-    assert.ok(daemon.accepts(hostToken()), "a pod restarted now takes the new token from its config volume");
+    assert.ok(daemon.accepts(hostToken()), "a pod restarted now takes the newest token from its config volume");
     failSecret = false;
     fake.pods.delete(record.name);
     await open().recover(() => {});

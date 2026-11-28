@@ -222,6 +222,8 @@ Where else a box is started from is changed with it (INV-2299):
   accepts the new token and the host holds it, before the switch is confirmed. A pod restarted
   before that takes the new token from its config volume; one re-created after it boots with it. A
   Secret that cannot be written is said, and the next start from this installation writes it again.
+  The box's daemon keeps its rotated token across a start whose `BOXD_TOKEN` is any token it has had
+  (a Secret one or more rotations behind), and obeys only one it never had.
 - **A tenant's box on the control plane**: an account holder asks `POST /api/admin/box/rotate-tokens`
   on the control plane, not the tenant's box — the tokens are in the control plane's store, which the
   gateway reads on every request, and in a Secret the box cannot write. Both the box token and the

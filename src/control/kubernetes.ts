@@ -228,8 +228,13 @@ export class KubernetesAllocator extends StoreBackedAllocator {
    * grow a dead promise per tenant.
    */
   override async allocate(tenantId: string, spec: BoxSpec): Promise<BoxHandle> {
+    return this.oneAtATime(tenantId, () => super.allocate(tenantId, spec));
+  }
+
+  /** What changes a tenant's box — an allocation, a rotation of its tokens — runs behind the one before it for that tenant. */
+  private async oneAtATime<T>(tenantId: string, work: () => Promise<T>): Promise<T> {
     const gate = (this.allocations.get(tenantId) ?? Promise.resolve()).catch(() => {});
-    const run = gate.then(() => super.allocate(tenantId, spec));
+    const run = gate.then(work);
     this.allocations.set(tenantId, run);
     try {
       return await run;
@@ -320,6 +325,14 @@ export class KubernetesAllocator extends StoreBackedAllocator {
    * time in the Secret; asking again finishes it, from the store's token, without the box's help.
    */
   async rotateTokens(handle: BoxHandle, overlapSeconds = TOKEN_OVERLAP_SECONDS): Promise<{ overlapUntil: string }> {
+    // Behind any other change to this tenant's box, and from the tokens the store holds once it is this one's turn.
+    return this.oneAtATime(handle.tenantId, async () => {
+      const current = { ...handle, tokens: { ...handle.tokens, ui: this.store.readToken(handle.id, "ui") ?? handle.tokens.ui } };
+      return this.rotateNow(current, overlapSeconds);
+    });
+  }
+
+  private async rotateNow(handle: BoxHandle, overlapSeconds: number): Promise<{ overlapUntil: string }> {
     const row = this.store.getBox(handle.id);
     if (row === undefined) throw new KubernetesError(`cannot rotate ${handle.externalId}'s tokens: the store has lost its row`);
     const next: BoxTokens = { box: newToken(), ui: newToken(), ...(handle.tokens.relay !== undefined ? { relay: handle.tokens.relay } : {}) };

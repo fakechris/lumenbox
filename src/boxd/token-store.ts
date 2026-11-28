@@ -13,10 +13,11 @@
  *    any other process on the host still holding the old file, finish; after that it opens nothing.
  *
  * **Across a restart.** What the box accepts is written to `stateFile` (mode 0600, in the box's
- * config volume, which outlives the container) with a digest of the boot token it replaced. On the
- * next start the file is used only while `BOXD_TOKEN` is still that boot token: an operator who sets
- * a new `BOXD_TOKEN` on purpose (`box attach --replace` with a fresh token, a re-created Secret) is
- * obeyed and the file is discarded. A restart during the overlap drops the old token — the overlap
+ * config volume, which outlives the container) with digests of the boot token and of every token a
+ * rotation has named since. On the next start the file is used while `BOXD_TOKEN` is one of those:
+ * the boot token, or one a host wrote back where the box is started from (a Kubernetes Secret),
+ * however far behind the rotations that copy is. An operator who sets a token the box has never had
+ * (`box attach --replace` with a fresh token, a re-created Secret) is obeyed and the file is discarded. A restart during the overlap drops the old token — the overlap
  * is for requests in flight, which a restart has ended anyway.
  *
  * Inside the box this is no new exposure: an agent with a shell can already read `BOXD_TOKEN` from
@@ -38,7 +39,10 @@ function same(presented: string, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-interface Persisted { token: string; pending?: string; base: string; rotatedAt: string }
+interface Persisted { token: string; pending?: string; base: string; rotatedAt: string; seen?: string[] }
+
+/** How many tokens a rotation named are remembered as this box's own: far more than a copy is ever behind. */
+const SEEN_LIMIT = 32;
 
 export class BoxdTokens {
   private current: string;
@@ -46,6 +50,8 @@ export class BoxdTokens {
   private pending: string | undefined;
   private previous: { token: string; until: number } | undefined;
   private readonly base: string;
+  /** Digests of the boot token and of every token a rotation named: a start with one of these is this box's own chain. */
+  private seen: string[];
 
   constructor(
     bootToken: string,
@@ -54,17 +60,20 @@ export class BoxdTokens {
     private readonly log: (line: string) => void = () => {},
   ) {
     this.base = digest(bootToken);
+    this.seen = [this.base];
     this.current = bootToken;
     if (stateFile === undefined || !existsSync(stateFile)) return;
     try {
       const saved = JSON.parse(readFileSync(stateFile, "utf8")) as Partial<Persisted>;
-      if (saved.base === this.base && typeof saved.token === "string" && saved.token.length >= MIN_TOKEN_LENGTH) {
+      const chain = [...(Array.isArray(saved.seen) ? saved.seen.filter(item => typeof item === "string") : []), ...(typeof saved.base === "string" ? [saved.base] : [])];
+      if (chain.includes(this.base) && typeof saved.token === "string" && saved.token.length >= MIN_TOKEN_LENGTH) {
+        this.seen = [...new Set([...chain, this.base])].slice(-SEEN_LIMIT);
         this.current = saved.token;
         if (typeof saved.pending === "string" && saved.pending.length >= MIN_TOKEN_LENGTH) this.pending = saved.pending;
-        log(`token: using the token rotated in at ${saved.rotatedAt ?? "an earlier start"}${this.pending !== undefined ? ", and the one a rotation named and has not confirmed" : ""} (BOXD_TOKEN is still the one it replaced)`);
+        log(`token: using the token rotated in at ${saved.rotatedAt ?? "an earlier start"}${this.pending !== undefined ? ", and the one a rotation named and has not confirmed" : ""} (BOXD_TOKEN is one this box has had)`);
         return;
       }
-      // BOXD_TOKEN was changed on purpose since the rotation: that is the operator's word, and it wins.
+      // BOXD_TOKEN is one this box never had: changed on purpose, which is the operator's word, and it wins.
       rmSync(stateFile, { force: true });
       log("token: BOXD_TOKEN changed since the last rotation; using it and forgetting the rotated one");
     } catch {
@@ -98,6 +107,7 @@ export class BoxdTokens {
     }
     if (same(next, this.current)) throw new Error("the new token is the current one");
     this.pending = next;
+    this.seen = [...this.seen.filter(item => item !== digest(next)), digest(next)].slice(-SEEN_LIMIT);
     this.save();
     this.log("token: a rotation named a new token; both are accepted until it is confirmed");
     return { pending: true };
@@ -133,7 +143,7 @@ export class BoxdTokens {
     if (this.stateFile === undefined) return;
     mkdirSync(dirname(this.stateFile), { recursive: true, mode: 0o700 });
     const temp = `${this.stateFile}.${process.pid}.tmp`;
-    const saved: Persisted = { token: this.current, ...(this.pending !== undefined ? { pending: this.pending } : {}), base: this.base, rotatedAt: new Date(this.now()).toISOString() };
+    const saved: Persisted = { token: this.current, ...(this.pending !== undefined ? { pending: this.pending } : {}), base: this.base, rotatedAt: new Date(this.now()).toISOString(), seen: this.seen };
     writeFileSync(temp, `${JSON.stringify(saved)}\n`, { mode: 0o600 });
     renameSync(temp, this.stateFile);
     chmodSync(this.stateFile, 0o600);
